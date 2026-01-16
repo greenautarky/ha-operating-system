@@ -13,3 +13,8 @@ function gadget_console() {
 if [ "${BOARD_ID}" == "ihost" ]; then
     gadget_console
 fi
+
+# add post-build scripts for setting passwords etc.:
+for s in /build/buildroot-ihost/board/sonoff/ihost/post-build.d/*.sh; do
+  [ -x "$s" ] && "$s" "$TARGET_DIR"
+done
