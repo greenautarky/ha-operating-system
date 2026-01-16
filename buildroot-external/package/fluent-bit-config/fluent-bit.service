@@ -1,0 +1,24 @@
+[Unit]
+Description=Fluent Bit log agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Ensure writable dirs exist
+ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit
+ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit/storage
+
+# If no runtime config exists yet, seed it from the read-only default
+ExecStartPre=/bin/sh -c '[ -f /mnt/data/fluent-bit/fluent-bit.conf ] || cp /etc/fluent-bit/fluent-bit.conf /mnt/data/fluent-bit/fluent-bit.conf'
+ExecStartPre=/bin/sh -c '[ -f /mnt/data/fluent-bit/parsers.conf ] || cp /etc/fluent-bit/parsers.conf /mnt/data/fluent-bit/parsers.conf'
+
+# Always run with the writable copy
+ExecStart=/usr/bin/fluent-bit -c /mnt/data/fluent-bit/fluent-bit.conf
+
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

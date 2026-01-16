@@ -19,3 +19,7 @@ source "$BR2_EXTERNAL_HASSOS_PATH/package/tempio/Config.in.host"
 source "$BR2_EXTERNAL_HASSOS_PATH/package/udisks2/Config.in"
 source "$BR2_EXTERNAL_HASSOS_PATH/package/vcgencmd/Config.in"
 source "$BR2_EXTERNAL_HASSOS_PATH/package/xe-guest-utilities/Config.in"
+# GA packages, fluentbit-config, due to already existing package
+source "$BR2_EXTERNAL_HASSOS_PATH/package/netbird/Config.in"
+source "$BR2_EXTERNAL_HASSOS_PATH/package/telegraf/Config.in"
+source "$BR2_EXTERNAL_HASSOS_PATH/package/fluent-bit-config/Config.in"

@@ -1,0 +1,29 @@
+[Unit]
+Description=Telegraf metrics agent
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Ensure writable directory for runtime config and state
+ExecStartPre=/bin/mkdir -p /mnt/data/telegraf
+
+# Seed runtime config on first start:
+# If /mnt/data/telegraf/telegraf.conf does not exist yet,
+# copy the packaged default from the read-only rootfs.
+ExecStartPre=/bin/sh -c '[ -f /mnt/data/telegraf/telegraf.conf ] || { \
+  if [ -f /etc/telegraf/telegraf.conf ]; then \
+    cp /etc/telegraf/telegraf.conf /mnt/data/telegraf/telegraf.conf; \
+  fi; \
+}'
+
+# Run Telegraf using the writable config so it can be modified per-device
+ExecStart=/usr/bin/telegraf --config /mnt/data/telegraf/telegraf.conf
+
+Restart=on-failure
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

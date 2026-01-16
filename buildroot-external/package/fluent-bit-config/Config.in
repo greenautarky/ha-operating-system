@@ -1,0 +1,5 @@
+config BR2_PACKAGE_FLUENT_BIT_CONFIG
+    bool "Fluent Bit config + systemd integration"
+    select BR2_PACKAGE_FLUENT_BIT
+    help
+      Install systemd service and default config for Fluent Bit on iHost/HAOS.
