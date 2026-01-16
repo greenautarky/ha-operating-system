@@ -203,5 +203,5 @@ BR2_ROOTFS_POST_FAKEROOT_SCRIPT="$(BR2_EXTERNAL_IHOST_PATH)/board/sonoff/ihost/p
 
 
 #For extracting compressed images, currently unused 
-#BR2_PACKAGE_XZ=y
+BR2_PACKAGE_XZ=y
 
