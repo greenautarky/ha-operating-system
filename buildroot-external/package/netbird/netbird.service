@@ -1,0 +1,28 @@
+[Unit]
+Description=NetBird VPN client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/mnt/data/netbird/netbird.env
+
+ExecStartPre=/bin/mkdir -p /mnt/data/netbird /dev/net /run
+ExecStartPre=/bin/sh -c '[ -c /dev/net/tun ] || mknod -m 0666 /dev/net/tun c 10 200'
+ExecStartPre=/bin/rm -f /var/run/netbird.sock
+
+Environment="HOME=/mnt/data/netbird"
+Environment="XDG_CONFIG_HOME=/mnt/data/netbird/.config"
+Environment="XDG_CACHE_HOME=/mnt/data/netbird/.cache"
+
+ExecStart=/usr/bin/netbird service run \
+  --config /mnt/data/netbird/config.json \
+  --log-level warning \
+  --daemon-addr unix:///var/run/netbird.sock
+
+Restart=on-failure
+RestartSec=5
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+config BR2_PACKAGE_TELEGRAF
+    bool "telegraf"
+    depends on BR2_PACKAGE_HOST_GO_TARGET_ARCH_SUPPORTS
+    depends on BR2_PACKAGE_HOST_GO_TARGET_CGO_LINKING_SUPPORTS
+    depends on BR2_TOOLCHAIN_HAS_THREADS
+    depends on BR2_USE_MMU   # for logrotate
+    depends on BR2_USE_WCHAR # for logrotate
+    select BR2_PACKAGE_LOGROTATE
+    help
+      Telegraf metrics agent (InfluxData).
+      https://github.com/influxdata/telegraf
