@@ -87,10 +87,12 @@ fi
 #   BR2EXT_IHOST     - Path to buildroot-ihost external tree (default: /build/buildroot-ihost)
 #   BR2EXT_NETBIRD   - Path to buildroot-external tree (default: /build/buildroot-external)
 #   OUT              - Output directory (default: /build/ga_output)
-#   NETBIRD_TAG      - NetBird version tag (default: v0.61.0)
-#   GO_VER           - Go version for NetBird build (default: 1.24.10)
+#   NETBIRD_TAG      - NetBird version tag (default: v0.64.4)
+#   GO_VER           - Go version for NetBird build (default: 1.25.6)
 #   GO_SHA256        - Expected SHA256 of Go tarball (for verification)
 #   GA_BUILD_TIMESTAMP - Override build timestamp (default: auto-generated)
+#   GA_PROVISIONING  - Set to "true" to create provisioning image (default: false)
+#   GA_LEGAL_INFO    - Set to "true" to generate legal-info archive (default: false)
 #
 # -----------------------------------------------------------------------------
 
@@ -914,264 +916,99 @@ CONTAINEREOF
 # Software Bill of Materials (SBOM) generation
 # -----------------------------------------------------------------------------
 
-# Generate a JSON SBOM containing all software components in the build
+# Generate SBOMs:
+#   1) CycloneDX SBOM for Buildroot packages (standards-compliant, fast)
+#   2) Container image inventory (not covered by Buildroot's tooling)
 generate_sbom() {
-  local sbom_file="${OUT}/images/sbom.json"
-  local images_dir="${OUT}/build/hassio-"*/images
-  local version_json="${OUT}/build/hassio-"*/version.json
+  echo "=== Generating Software Bill of Materials ==="
 
-  echo "=== Generating Software Bill of Materials (SBOM) ==="
+  # --- 1) CycloneDX SBOM from Buildroot (packages only) ---
+  local cyclonedx="${OUT}/images/sbom-cyclonedx.json"
+  local generate_tool="${BUILDROOT_DIR}/utils/generate-cyclonedx"
 
-  # Expand globs
-  images_dir="$(ls -d ${OUT}/build/hassio-*/images 2>/dev/null | head -n 1 || true)"
-  version_json="$(ls ${OUT}/build/hassio-*/version.json 2>/dev/null | head -n 1 || true)"
-
-  # Start JSON structure
-  local sbom_tmp="${OUT}/build/sbom_tmp.json"
-
-  # Build metadata
-  local build_date kernel_version buildroot_version
-  build_date="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  kernel_version="$(ls -d "${OUT}"/build/linux-* 2>/dev/null | head -n 1 | sed 's/.*linux-//' || echo "unknown")"
-  buildroot_version="$(cat "${BUILDROOT_DIR}/Makefile" 2>/dev/null | grep -E '^export BR2_VERSION' | cut -d= -f2 | tr -d ' "' || echo "unknown")"
-
-  # Get git info if available
-  local git_commit git_branch
-  git_commit="$(cd "${BR2EXT_NETBIRD}" && git rev-parse HEAD 2>/dev/null || echo "unknown")"
-  git_branch="$(cd "${BR2EXT_NETBIRD}" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")"
-
-  # Start building JSON
-  cat > "$sbom_tmp" <<EOF
-{
-  "sbom_version": "1.0.0",
-  "build": {
-    "timestamp": "${build_date}",
-    "build_id": "${GA_BUILD_TIMESTAMP}",
-    "mode": "${MODE}",
-    "defconfig": "${DEFCONFIG}",
-    "git_commit": "${git_commit}",
-    "git_branch": "${git_branch}"
-  },
-  "system": {
-    "kernel_version": "${kernel_version}",
-    "buildroot_version": "${buildroot_version}",
-    "architecture": "armv7",
-    "machine": "ihost"
-  },
-  "standalone_components": {
-    "netbird": {
-      "version": "${NETBIRD_TAG}",
-      "source": "https://github.com/netbirdio/netbird",
-      "go_version": "${GO_VER}",
-      "build_flags": "CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7"
-    }
-  },
-  "containers": [
-EOF
-
-  # Parse container images from downloaded tars or version.json
-  local first=true
-  local container_json=""
-
-  # Method 1: Parse from version.json if available
-  if [[ -f "$version_json" ]]; then
-    echo "Parsing container versions from: $version_json"
-
-    # Extract versions using jq
-    local supervisor_ver dns_ver audio_ver cli_ver multicast_ver observer_ver core_ver channel
-    supervisor_ver="$(jq -r '.supervisor // "unknown"' "$version_json")"
-    dns_ver="$(jq -r '.dns // "unknown"' "$version_json")"
-    audio_ver="$(jq -r '.audio // "unknown"' "$version_json")"
-    cli_ver="$(jq -r '.cli // "unknown"' "$version_json")"
-    multicast_ver="$(jq -r '.multicast // "unknown"' "$version_json")"
-    observer_ver="$(jq -r '.observer // "unknown"' "$version_json")"
-    core_ver="$(jq -r '.core // "unknown"' "$version_json")"
-    channel="$(jq -r '.channel // "stable"' "$version_json")"
-
-    # Get image registry paths
-    local supervisor_img dns_img audio_img cli_img multicast_img observer_img core_img
-    supervisor_img="$(jq -r '.images.supervisor // "ghcr.io/ihost-open-source-project/{arch}-hassio-supervisor"' "$version_json" | sed 's/{arch}/armv7/g')"
-    dns_img="$(jq -r '.images.dns // "ghcr.io/home-assistant/{arch}-hassio-dns"' "$version_json" | sed 's/{arch}/armv7/g')"
-    audio_img="$(jq -r '.images.audio // "ghcr.io/home-assistant/{arch}-hassio-audio"' "$version_json" | sed 's/{arch}/armv7/g')"
-    cli_img="$(jq -r '.images.cli // "ghcr.io/home-assistant/{arch}-hassio-cli"' "$version_json" | sed 's/{arch}/armv7/g')"
-    multicast_img="$(jq -r '.images.multicast // "ghcr.io/home-assistant/{arch}-hassio-multicast"' "$version_json" | sed 's/{arch}/armv7/g')"
-    observer_img="$(jq -r '.images.observer // "ghcr.io/home-assistant/{arch}-hassio-observer"' "$version_json" | sed 's/{arch}/armv7/g')"
-    core_img="$(jq -r '.images.core // "ghcr.io/home-assistant/{machine}-homeassistant"' "$version_json" | sed 's/{machine}/tinker/g')"
-
-    cat >> "$sbom_tmp" <<EOF
-    {
-      "name": "supervisor",
-      "image": "${supervisor_img}",
-      "version": "${supervisor_ver}",
-      "type": "hassio-component"
-    },
-    {
-      "name": "dns",
-      "image": "${dns_img}",
-      "version": "${dns_ver}",
-      "type": "hassio-component"
-    },
-    {
-      "name": "audio",
-      "image": "${audio_img}",
-      "version": "${audio_ver}",
-      "type": "hassio-component"
-    },
-    {
-      "name": "cli",
-      "image": "${cli_img}",
-      "version": "${cli_ver}",
-      "type": "hassio-component"
-    },
-    {
-      "name": "multicast",
-      "image": "${multicast_img}",
-      "version": "${multicast_ver}",
-      "type": "hassio-component"
-    },
-    {
-      "name": "observer",
-      "image": "${observer_img}",
-      "version": "${observer_ver}",
-      "type": "hassio-component"
-    },
-    {
-      "name": "core",
-      "image": "${core_img}",
-      "version": "${core_ver}",
-      "type": "homeassistant-core"
-    }
-EOF
-
-  # Method 2: Parse from tar filenames in images directory
-  elif [[ -d "$images_dir" ]]; then
-    echo "Parsing container info from tar filenames in: $images_dir"
-
-    for tarfile in "$images_dir"/*.tar; do
-      [[ -f "$tarfile" ]] || continue
-
-      local basename filename registry repo tag digest
-      basename="$(basename "$tarfile" .tar)"
-
-      # Parse: ghcr.io_home-assistant_armv7-hassio-audio_2025.08.0@sha256_425378ab...
-      # Format: registry_org_repo_version@sha256_digest
-      if [[ "$basename" =~ ^([^_]+)_(.+)_([^_]+)@sha256_([a-f0-9]+)$ ]]; then
-        registry="${BASH_REMATCH[1]}"
-        # The middle part contains org/repo which may have underscores
-        local middle="${BASH_REMATCH[2]}"
-        tag="${BASH_REMATCH[3]}"
-        digest="${BASH_REMATCH[4]}"
-
-        # Extract repo name (last underscore-separated segment before version)
-        repo="${middle##*_}"
-        local org="${middle%_*}"
-
-        # Reconstruct full image path
-        local full_image="${registry}/${org//_/\/}/${repo}"
-
-        # Determine component type
-        local comp_type="hassio-component"
-        local comp_name="$repo"
-        if [[ "$repo" == *"homeassistant"* ]]; then
-          comp_type="homeassistant-core"
-          comp_name="core"
-        elif [[ "$repo" == *"supervisor"* ]]; then
-          comp_name="supervisor"
-        elif [[ "$repo" == *"dns"* ]]; then
-          comp_name="dns"
-        elif [[ "$repo" == *"audio"* ]]; then
-          comp_name="audio"
-        elif [[ "$repo" == *"cli"* ]]; then
-          comp_name="cli"
-        elif [[ "$repo" == *"multicast"* ]]; then
-          comp_name="multicast"
-        elif [[ "$repo" == *"observer"* ]]; then
-          comp_name="observer"
-        fi
-
-        [[ "$first" == "true" ]] || echo "," >> "$sbom_tmp"
-        first=false
-
-        cat >> "$sbom_tmp" <<EOF
-    {
-      "name": "${comp_name}",
-      "image": "${registry}/${org//_/\\/}/${repo}",
-      "version": "${tag}",
-      "digest": "sha256:${digest}",
-      "type": "${comp_type}"
-    }
-EOF
+  if [[ -x "$generate_tool" ]] || [[ -f "$generate_tool" ]]; then
+    echo "Generating CycloneDX SBOM via Buildroot show-info..."
+    if make -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" \
+        show-info 2>/dev/null | python3 "$generate_tool" > "$cyclonedx" 2>/dev/null; then
+      echo "CycloneDX SBOM generated: $cyclonedx"
+      # Validate if jq available
+      if command -v jq &>/dev/null; then
+        jq . "$cyclonedx" > "${cyclonedx}.tmp" 2>/dev/null && mv "${cyclonedx}.tmp" "$cyclonedx"
       fi
-    done
-  else
-    echo "WARN: No version.json or images directory found for SBOM container parsing"
-  fi
-
-  # Close containers array and add checksums section
-  cat >> "$sbom_tmp" <<EOF
-  ],
-  "artifacts": {
-EOF
-
-  # Add image file checksums if they exist
-  local img_base="${GA_IMAGE_BASENAME:-}"
-  if [[ -n "$img_base" ]]; then
-    local img_xz="${img_base}.img.xz"
-    local raucb="${img_base}.raucb"
-    local prov_xz="${img_base}_provisioning.img.xz"
-
-    echo "    \"images\": [" >> "$sbom_tmp"
-    first=true
-
-    for artifact in "$img_xz" "$raucb" "$prov_xz"; do
-      if [[ -f "$artifact" ]]; then
-        local sha256 size fname
-        sha256="$(sha256sum "$artifact" | cut -d' ' -f1)"
-        size="$(stat -c%s "$artifact")"
-        fname="$(basename "$artifact")"
-
-        [[ "$first" == "true" ]] || echo "," >> "$sbom_tmp"
-        first=false
-
-        cat >> "$sbom_tmp" <<EOF
-      {
-        "filename": "${fname}",
-        "sha256": "${sha256}",
-        "size_bytes": ${size}
-      }
-EOF
-      fi
-    done
-
-    echo "    ]" >> "$sbom_tmp"
-  else
-    echo "    \"images\": []" >> "$sbom_tmp"
-  fi
-
-  # Close JSON
-  cat >> "$sbom_tmp" <<EOF
-  }
-}
-EOF
-
-  # Validate and format JSON
-  if command -v jq &>/dev/null; then
-    if jq . "$sbom_tmp" > "$sbom_file" 2>/dev/null; then
-      echo "SBOM generated: $sbom_file"
-      rm -f "$sbom_tmp"
     else
-      echo "WARN: JSON validation failed, saving raw SBOM"
-      mv "$sbom_tmp" "$sbom_file"
+      echo "WARN: CycloneDX generation failed, falling back to package list"
+      rm -f "$cyclonedx"
     fi
   else
-    mv "$sbom_tmp" "$sbom_file"
-    echo "SBOM generated (jq not available for validation): $sbom_file"
+    echo "WARN: generate-cyclonedx not found at $generate_tool, skipping CycloneDX SBOM"
   fi
 
-  # Also copy SBOM into target rootfs for runtime access
+  # --- 2) Container image inventory ---
+  local containers_file="${OUT}/images/sbom-containers.json"
+  local version_json
+  version_json="$(ls ${OUT}/build/hassio-*/version.json 2>/dev/null | head -n 1 || true)"
+  local images_dir
+  images_dir="$(ls -d ${OUT}/build/hassio-*/images 2>/dev/null | head -n 1 || true)"
+
+  echo "Generating container image inventory..."
+  {
+    echo "{"
+    echo '  "generated": "'$(date -u '+%Y-%m-%dT%H:%M:%SZ')'",'
+    echo '  "build_id": "'${GA_BUILD_TIMESTAMP}'",'
+    echo '  "standalone": {'
+    echo '    "netbird": { "version": "'${NETBIRD_TAG}'", "go": "'${GO_VER}'" }'
+    echo '  },'
+    echo '  "containers": ['
+
+    local first=true
+
+    if [[ -f "$version_json" ]] && command -v jq &>/dev/null; then
+      # Parse from version.json (preferred — has all metadata)
+      for comp in supervisor dns audio cli multicast observer; do
+        local ver img
+        ver="$(jq -r ".${comp} // \"unknown\"" "$version_json")"
+        img="$(jq -r ".images.${comp} // \"unknown\"" "$version_json" | sed 's/{arch}/armv7/g')"
+        [[ "$first" == "true" ]] || echo ","
+        first=false
+        echo "    { \"name\": \"${comp}\", \"image\": \"${img}\", \"version\": \"${ver}\" }"
+      done
+      # core uses {machine} not {arch}
+      local core_ver core_img
+      core_ver="$(jq -r '.core // "unknown"' "$version_json")"
+      core_img="$(jq -r '.images.core // "unknown"' "$version_json" | sed 's/{machine}/tinker/g')"
+      echo ","
+      echo "    { \"name\": \"core\", \"image\": \"${core_img}\", \"version\": \"${core_ver}\" }"
+
+    elif [[ -d "$images_dir" ]]; then
+      # Fallback: parse from tar filenames
+      for tarfile in "$images_dir"/*.tar; do
+        [[ -f "$tarfile" ]] || continue
+        local bn
+        bn="$(basename "$tarfile" .tar)"
+        if [[ "$bn" =~ ^([^_]+)_(.+)_([^_]+)@sha256_([a-f0-9]+)$ ]]; then
+          [[ "$first" == "true" ]] || echo ","
+          first=false
+          local img="${BASH_REMATCH[1]}/${BASH_REMATCH[2]//_//}:${BASH_REMATCH[3]}"
+          echo "    { \"image\": \"${img}\", \"digest\": \"sha256:${BASH_REMATCH[4]}\" }"
+        fi
+      done
+    fi
+
+    echo "  ]"
+    echo "}"
+  } > "$containers_file"
+
+  # Validate
+  if command -v jq &>/dev/null; then
+    jq . "$containers_file" > "${containers_file}.tmp" 2>/dev/null && \
+      mv "${containers_file}.tmp" "$containers_file"
+  fi
+  echo "Container inventory generated: $containers_file"
+
+  # Install to target rootfs
   mkdir -p "${OUT}/target/etc"
-  cp "$sbom_file" "${OUT}/target/etc/ga-sbom.json"
-  echo "SBOM also installed to: ${OUT}/target/etc/ga-sbom.json"
+  [[ -f "$cyclonedx" ]] && cp "$cyclonedx" "${OUT}/target/etc/ga-sbom-cyclonedx.json"
+  cp "$containers_file" "${OUT}/target/etc/ga-sbom-containers.json"
 
   echo "=== SBOM generation complete ==="
 }
@@ -1721,21 +1558,29 @@ rebuild_artifacts
 log_build_step "Rename images"
 rename_images_with_build_id
 
-# Ensure genimage exists for provisioning image generation
-log_build_step "Ensure genimage"
-ensure_host_genimage
-
 # 7) Create provisioning image (factory image with embedded .img.xz)
-log_build_step "Create provisioning image"
-create_provisioning_image
+#    Disabled by default — enable with GA_PROVISIONING=true
+if [[ "${GA_PROVISIONING:-false}" == "true" ]]; then
+  log_build_step "Ensure genimage"
+  ensure_host_genimage
+  log_build_step "Create provisioning image"
+  create_provisioning_image
+else
+  echo "Skipping provisioning image (set GA_PROVISIONING=true to enable)"
+fi
 
 # 8) Archive build configurations and pin all sources
 log_build_step "Archive build configs"
 archive_build_configs
 
 # 9) Archive legal-info (licenses)
-log_build_step "Archive legal-info"
-archive_legal_info
+#    Disabled by default — enable with GA_LEGAL_INFO=true (slow, ~1.7GB output)
+if [[ "${GA_LEGAL_INFO:-false}" == "true" ]]; then
+  log_build_step "Archive legal-info"
+  archive_legal_info
+else
+  echo "Skipping legal-info archive (set GA_LEGAL_INFO=true to enable)"
+fi
 
 # 10) Generate Software Bill of Materials (SBOM)
 log_build_step "Generate SBOM"
@@ -1744,16 +1589,55 @@ generate_sbom
 # Finalize build log
 finalize_build_log 0
 
+cat <<'BANNER'
+
+  ____  _   _ ___ _     ____    ____  _   _  ____ ____ _____ ____ ____
+ | __ )| | | |_ _| |   |  _ \  / ___|| | | |/ ___/ ___| ____/ ___/ ___|
+ |  _ \| | | || || |   | | | | \___ \| | | | |  | |   |  _| \___ \___ \
+ | |_) | |_| || || |___| |_| |  ___) | |_| | |__| |___| |___ ___) |__) |
+ |____/ \___/|___|_____|____/  |____/ \___/ \____\____|_____|____/____/
+
+BANNER
+
+# Build summary
+local kernel_ver buildroot_ver nb_ver img_size raucb_size
+kernel_ver="$(ls -d "${OUT}"/build/linux-* 2>/dev/null | head -n 1 | sed 's/.*linux-//' || echo "unknown")"
+buildroot_ver="$(grep -E '^export BR2_VERSION' "${BUILDROOT_DIR}/Makefile" 2>/dev/null | cut -d= -f2 | tr -d ' "' || echo "unknown")"
+nb_ver="$("${OUT}/target/usr/bin/netbird" version 2>/dev/null || echo "${NETBIRD_TAG}")"
+
+echo "  Build ID:       ${GA_BUILD_TIMESTAMP}"
+echo "  Mode:           ${MODE}"
+echo "  Defconfig:      ${DEFCONFIG}"
+echo "  Buildroot:      ${buildroot_ver}"
+echo "  Kernel:         ${kernel_ver}"
+echo "  NetBird:        ${nb_ver} (Go ${GO_VER})"
 echo ""
-echo "=== Build complete ==="
-echo "Build timestamp: ${GA_BUILD_TIMESTAMP}"
-echo "Images in: ${OUT}/images/"
-ls -la "${OUT}/images/"*.img.xz "${OUT}/images/"*.raucb "${OUT}/images/"*.json 2>/dev/null || true
+
+echo "  Output images:"
+for f in "${OUT}/images/"*.img.xz "${OUT}/images/"*.raucb; do
+  if [[ -f "$f" ]]; then
+    local sz
+    sz="$(du -h "$f" | cut -f1)"
+    echo "    $(basename "$f")  ${sz}"
+  fi
+done
 echo ""
-echo "Build configs archived in: ${OUT}/images/configs/"
-ls -la "${OUT}/images/configs/" 2>/dev/null || true
+
+echo "  SBOMs:"
+[[ -f "${OUT}/images/sbom-cyclonedx.json" ]] && echo "    sbom-cyclonedx.json   (Buildroot packages, CycloneDX 1.6)"
+[[ -f "${OUT}/images/sbom-containers.json" ]] && echo "    sbom-containers.json  (Container images + standalone tools)"
 echo ""
-echo "Legal info archived in: ${OUT}/images/legal-info/"
-ls -la "${OUT}/images/legal-info/" 2>/dev/null || true
+
+echo "  Configs:  ${OUT}/images/configs/"
+if [[ "${GA_PROVISIONING:-false}" == "true" ]]; then
+  echo "  Provisioning image: enabled"
+else
+  echo "  Provisioning image: skipped (GA_PROVISIONING=true to enable)"
+fi
+if [[ "${GA_LEGAL_INFO:-false}" == "true" ]]; then
+  echo "  Legal info: ${OUT}/images/legal-info/"
+else
+  echo "  Legal info: skipped (GA_LEGAL_INFO=true to enable)"
+fi
 echo ""
-echo "Build log: ${BUILD_LOG}"
+echo "  Build log: ${BUILD_LOG}"
