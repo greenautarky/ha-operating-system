@@ -1,0 +1,192 @@
+#!/bin/sh
+# ga_flasher
+set -eu
+
+log() { echo "$(date '+%F %T') $*"; }
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ga_flasher --flash [--device /dev/mmcblk0]
+  ga_flasher --erase [--device /dev/mmcblk0]
+  ga_flasher --help
+
+Behavior:
+  - By default: DOES NOTHING (requires an explicit mode).
+  - --flash:  unmount eMMC partitions, wipe GPT headers, flash latest image from /mnt/data/images/
+  - --erase:  unmount eMMC partitions, wipe GPT headers only (no flashing)
+
+Examples:
+  ./ga_flasher --erase
+  ./ga_flasher --flash
+EOF
+}
+
+require_root() {
+  [ "$(id -u)" -eq 0 ] || die "run as root"
+}
+
+ensure_root_on_sd() {
+  root_src="$(awk '$2=="/"{print $1}' /proc/mounts || true)"
+
+  root_real="$root_src"
+  if [ "$root_src" = "/dev/root" ]; then
+    rr="$(readlink -f /dev/root 2>/dev/null || true)"
+    [ -n "$rr" ] && root_real="$rr"
+  fi
+
+  case "$root_real" in
+    /dev/mmcblk2p*) return 0 ;;
+  esac
+
+  if awk '$2=="/" && $1 ~ "^/dev/mmcblk2p"' /proc/mounts >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "FATAL: This helper is only allowed when root (/) is on mmcblk2 (SD card)." >&2
+  echo "       / appears to be on: $root_real (from $root_src)" >&2
+  exit 20
+}
+
+pick_latest_img() {
+  set +e
+  f=$(ls -1t \
+        /mnt/data/images/*.img \
+        /mnt/data/images/*.img.gz \
+        /mnt/data/images/*.img.xz \
+        2>/dev/null | head -n1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] && [ -n "${f:-}" ] && { echo "$f"; return 0; }
+  return 1
+}
+
+unmount_partitions() {
+  dev="$1"
+  awk -v d="$dev" '$1 ~ "^"d {print $2}' /proc/mounts | while read -r mp; do
+    log "umount $mp"
+    umount "$mp" || true
+  done
+}
+
+wipe_gpt_headers() {
+  dev="$1"
+  devname="${dev##*/}"
+
+  log "Wiping first 8 MiB on $dev"
+  dd if=/dev/zero of="$dev" bs=1M count=8 conv=fsync
+
+  if [ -r "/sys/block/$devname/size" ]; then
+    sz_sect=$(cat "/sys/block/$devname/size")
+    sz_mib=$(( sz_sect / 2048 ))
+    if [ "$sz_mib" -gt 16 ]; then
+      seek=$(( sz_mib - 8 ))
+      log "Wiping last 8 MiB (seek=$seek MiB)"
+      dd if=/dev/zero of="$dev" bs=1M seek="$seek" count=8 conv=fsync
+    else
+      log "WARN: device too small to tail-wipe; skipping"
+    fi
+  fi
+  sync
+}
+
+flash_image() {
+  img="$1"
+  dev="$2"
+
+  case "$img" in
+    *.img.xz)
+      log "Flashing (xz stream) $img -> $dev (overwrites entire device)"
+      if command -v xz >/dev/null 2>&1; then
+        xz -dc "$img" | dd of="$dev" bs=4M conv=fsync
+      elif command -v xzcat >/dev/null 2>&1; then
+        xzcat "$img" | dd of="$dev" bs=4M conv=fsync
+      else
+        die "xz/xzcat not found; cannot handle .img.xz"
+      fi
+      ;;
+    *.img.gz)
+      log "Flashing (gzip stream) $img -> $dev (overwrites entire device)"
+      if command -v gunzip >/dev/null 2>&1; then
+        gunzip -c "$img" | dd of="$dev" bs=4M conv=fsync
+      elif command -v zcat >/dev/null 2>&1; then
+        zcat "$img" | dd of="$dev" bs=4M conv=fsync
+      else
+        die "gunzip/zcat not found; cannot handle .img.gz"
+      fi
+      ;;
+    *.img)
+      log "Flashing $img -> $dev (overwrites entire device)"
+      dd if="$img" of="$dev" bs=4M conv=fsync
+      ;;
+    *)
+      die "Unsupported image format: $img (supported: .img, .img.gz, .img.xz)"
+      ;;
+  esac
+
+  sync
+}
+
+# -------------------------
+# Argument parsing (default: do nothing)
+# -------------------------
+MODE=""
+EMMC="/dev/mmcblk0"
+
+if [ $# -eq 0 ]; then
+  log "No mode specified. Doing nothing."
+  usage
+  exit 0
+fi
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --flash)
+      MODE="flash"
+      shift
+      ;;
+    --erase|--wipe)
+      MODE="erase"
+      shift
+      ;;
+    --device)
+      [ $# -ge 2 ] || die "--device requires a value"
+      EMMC="$2"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1 (use --help)"
+      ;;
+  esac
+done
+
+[ -n "$MODE" ] || { log "No mode specified. Doing nothing."; usage; exit 0; }
+
+# --- main ---
+require_root
+ensure_root_on_sd
+
+[ -b "$EMMC" ] || die "block device $EMMC not found"
+log "Target device: $EMMC"
+log "Mode: $MODE"
+
+unmount_partitions "$EMMC"
+wipe_gpt_headers "$EMMC"
+
+if [ "$MODE" = "erase" ]; then
+  log "Erase completed (partition table wiped; no image flashed)."
+  exit 0
+fi
+
+IMG="$(pick_latest_img || true)"
+[ -n "${IMG:-}" ] && [ -f "$IMG" ] || die "no .img/.img.gz/.img.xz found under /mnt/data/images/."
+log "Using image: $IMG"
+
+flash_image "$IMG" "$EMMC"
+
+log "Flashing completed."

@@ -1,0 +1,10 @@
+[Unit]
+Description=Disk space guard (cleanup logs/tmp when low)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga_disk_guard
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

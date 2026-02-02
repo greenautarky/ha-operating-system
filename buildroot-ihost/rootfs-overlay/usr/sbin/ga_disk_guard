@@ -1,0 +1,257 @@
+#!/bin/sh
+# ga_disk_guard - robust, conservative disk guard for HA host with Docker journald logging
+set -eu
+
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+
+###############################################################################
+# CONFIG (edit only here)
+###############################################################################
+
+# Paths whose underlying filesystem should be monitored.
+# The guard triggers if ANY monitored filesystem drops below thresholds.
+MONITOR_PATHS="/ /mnt/data /mnt/data/docker "
+
+# Thresholds (MiB) - conservative defaults for embedded
+SOFT_FREE_MIB=300       # below -> soft cleanup
+HARD_FREE_MIB=120       # below -> hard cleanup
+TARGET_FREE_MIB=450     # try to recover to at least this on the worst FS
+
+# Allowlist: the script will only delete/truncate inside these roots.
+# Keep this short and explicit.
+ALLOWLIST="/tmp /var/tmp /var/log /mnt/data/"
+
+# Cleanup rules: one per line: ACTION|PATH|PARAM
+# ACTIONS:
+#   del_age_days   => delete files older than PARAM days
+#   del_glob       => delete files matching glob PARAM
+#   trunc_size_mib => truncate files larger than PARAM MiB (keeps inode)
+RULES="$(cat <<'EOF'
+del_age_days|/tmp|3
+del_age_days|/var/tmp|3
+
+# rotated/compressed logs (safe)
+del_glob|/var/log|*.gz
+del_glob|/var/log|*.xz
+del_glob|/var/log|*.bz2
+del_glob|/var/log|*.1
+del_glob|/var/log|*.old
+
+# truncate very large active logs (safe, inode preserved)
+trunc_size_mib|/var/log|20
+EOF
+)"
+
+# journald vacuum is the primary lever with Docker log-driver=journald
+ENABLE_JOURNALD_VACUUM=1
+JOURNALD_VACUUM_SOFT="200M"
+JOURNALD_VACUUM_HARD="80M"
+
+# Optional: emit state for debugging/HA visibility (host-side)
+STATE_DIR="/run/ga_disk_guard"
+STATE_FILE="$STATE_DIR/state.json"
+
+# Lock to avoid concurrent runs
+LOCKDIR="/run/ga_disk_guard.lock"
+
+###############################################################################
+# INTERNALS
+###############################################################################
+log() {
+  if command -v logger >/dev/null 2>&1; then
+    logger -t ga_disk_guard "$*"
+  else
+    echo "ga_disk_guard: $*"
+  fi
+}
+
+now_iso() {
+  date -Iseconds 2>/dev/null || date
+}
+
+acquire_lock() {
+  if mkdir "$LOCKDIR" 2>/dev/null; then
+    : # ok
+  else
+    exit 0
+  fi
+}
+
+release_lock() {
+  rmdir "$LOCKDIR" 2>/dev/null || true
+}
+
+trap release_lock EXIT INT TERM
+
+is_allowed_path() {
+  p="$1"
+  for a in $ALLOWLIST; do
+    case "$p" in
+      "$a"|"$a"/*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# Return "MOUNT FREE_MIB" for a given path
+path_free_mib() {
+  p="$1"
+  # df -Pm: MiB units. output: Filesystem 1024-blocks Used Available Capacity Mounted on
+  df -Pm "$p" 2>/dev/null | awk 'NR==2 {print $6, $4}'
+}
+
+# Determine the "worst" monitored filesystem (lowest free MiB).
+# Prints: worst_free_mib worst_mountpoint
+worst_fs() {
+  worst_free=""
+  worst_mnt=""
+  for p in $MONITOR_PATHS; do
+    set -- $(path_free_mib "$p" || true)
+    mnt="${1:-}"
+    free="${2:-}"
+    [ -n "$mnt" ] || continue
+    [ -n "$free" ] || continue
+
+    if [ -z "$worst_free" ] || [ "$free" -lt "$worst_free" ]; then
+      worst_free="$free"
+      worst_mnt="$mnt"
+    fi
+  done
+
+  if [ -z "$worst_free" ]; then
+    echo "0 unknown"
+  else
+    echo "$worst_free" "$worst_mnt"
+  fi
+}
+
+write_state() {
+  phase="$1"
+  before="$2"
+  after="$3"
+  mnt="$4"
+  actions="$5"
+
+  mkdir -p "$STATE_DIR"
+  cat >"$STATE_FILE" <<EOF
+{
+  "timestamp": "$(now_iso)",
+  "phase": "$phase",
+  "worst_mountpoint": "$mnt",
+  "worst_free_mib_before": $before,
+  "worst_free_mib_after": $after,
+  "worst_freed_mib": $((after-before)),
+  "actions": "$(echo "$actions" | tr '\n' ' ' | sed 's/"/\\"/g')"
+}
+EOF
+}
+
+run_rules() {
+  mode="$1"   # soft|hard
+  actions=""
+
+  # Apply file rules (using here-doc to avoid subshell from pipe)
+  while IFS='|' read -r action path param; do
+    [ -n "${action:-}" ] || continue
+
+    # allow comments / blank
+    case "$action" in
+      \#*|"") continue ;;
+    esac
+
+    if ! is_allowed_path "$path"; then
+      log "Refusing rule outside allowlist: $action|$path|$param"
+      continue
+    fi
+
+    # Skip if path doesn't exist
+    [ -d "$path" ] || continue
+
+    case "$action" in
+      del_age_days)
+        find "$path" -xdev -type f -mtime +"$param" -print -delete 2>/dev/null || true
+        actions="${actions}${action}:${path}(>${param}d);"
+        ;;
+      del_glob)
+        find "$path" -xdev -type f -name "$param" -print -delete 2>/dev/null || true
+        actions="${actions}${action}:${path}/${param};"
+        ;;
+      trunc_size_mib)
+        find "$path" -xdev -type f -size +"${param}"M -print -exec sh -c ': > "$1"' _ {} \; 2>/dev/null || true
+        actions="${actions}${action}:${path}(>${param}MiB);"
+        ;;
+      *)
+        log "Unknown rule action: $action"
+        ;;
+    esac
+  done <<EOF
+$RULES
+EOF
+
+  # journald vacuum
+  if [ "${ENABLE_JOURNALD_VACUUM:-0}" = "1" ] && command -v journalctl >/dev/null 2>&1; then
+    if [ "$mode" = "hard" ]; then
+      journalctl --vacuum-size="${JOURNALD_VACUUM_HARD}" >/dev/null 2>&1 || true
+      actions="${actions}journald_vacuum:${JOURNALD_VACUUM_HARD};"
+    else
+      journalctl --vacuum-size="${JOURNALD_VACUUM_SOFT}" >/dev/null 2>&1 || true
+      actions="${actions}journald_vacuum:${JOURNALD_VACUUM_SOFT};"
+    fi
+  fi
+
+  echo "$actions"
+}
+
+main() {
+  acquire_lock
+
+  set -- $(worst_fs)
+  before="$1"
+  mnt="$2"
+
+  # If we cannot determine, do nothing
+  if [ "$before" -le 0 ]; then
+    log "Could not determine free space; aborting"
+    exit 0
+  fi
+
+  # No action needed
+  if [ "$before" -ge "$SOFT_FREE_MIB" ]; then
+    write_state "idle" "$before" "$before" "$mnt" "none"
+    exit 0
+  fi
+
+  log "Low space detected: worst=${before}MiB on ${mnt} -> soft cleanup"
+  actions="$(run_rules soft)"
+
+  set -- $(worst_fs)
+  after="$1"
+  mnt2="$2"
+  write_state "soft" "$before" "$after" "$mnt2" "$actions"
+
+  # Done if we recovered sufficiently
+  if [ "$after" -ge "$TARGET_FREE_MIB" ]; then
+    log "Recovered: worst=${after}MiB on ${mnt2}"
+    exit 0
+  fi
+
+  # Hard cleanup if critically low
+  if [ "$after" -lt "$HARD_FREE_MIB" ]; then
+    log "Critical space: worst=${after}MiB on ${mnt2} -> hard cleanup"
+    before2="$after"
+    actions2="$(run_rules hard)"
+
+    set -- $(worst_fs)
+    after2="$1"
+    mnt3="$2"
+    write_state "hard" "$before2" "$after2" "$mnt3" "$actions2"
+
+    if [ "$after2" -lt "$HARD_FREE_MIB" ]; then
+      log "WARNING: still critically low: worst=${after2}MiB on ${mnt3}"
+    else
+      log "Recovered after hard cleanup: worst=${after2}MiB on ${mnt3}"
+    fi
+  fi
+}
+
+main "$@"

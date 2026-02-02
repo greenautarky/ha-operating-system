@@ -4,12 +4,25 @@
 # Build output dirs
 /release
 output*/
+ga_output*/
+
+# Buildroot-external generated helper files (local/ephemeral)
+.br2-external.*
 
 # Certificates
 *.pem
+buildroot-ihost/rootfs-overlay/etc/shadow
+
+# Local build secrets
+scripts/local.env
+secrets/
+*.env.local
 
 # vscode generated files
 .vscode*
 
 # local history files
 *.history
+
+# Container image tarballs
+images/*.tar
