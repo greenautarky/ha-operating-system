@@ -109,11 +109,11 @@ OUT="${OUT:-/build/ga_output}"
 if [[ "$OUT" != /* ]]; then OUT="/build/${OUT}"; fi
 
 # ---- NetBird standalone build settings ----
-NETBIRD_TAG="${NETBIRD_TAG:-v0.61.0}"
-GO_VER="${GO_VER:-1.24.10}"
+NETBIRD_TAG="${NETBIRD_TAG:-v0.64.4}"
+GO_VER="${GO_VER:-1.25.6}"
 # SHA256 checksum for Go tarball verification (from https://go.dev/dl/)
 # Update this when changing GO_VER - get hash from https://go.dev/dl/
-GO_SHA256="${GO_SHA256:-dd52b974e3d9c5a7bbfb222c685806def6be5d6f7efd10f9caa9ca1fa2f47955}"
+GO_SHA256="${GO_SHA256:-f022b6aad78e362bcba9b0b94d09ad58c5a70c6ba3b7582905fababf5fe0181a}"
 
 # Systemd unit to install (from your external package tree)
 NETBIRD_SERVICE_SRC="${NETBIRD_SERVICE_SRC:-${BR2EXT_NETBIRD}/package/netbird/netbird.service}"
@@ -1667,15 +1667,10 @@ run_logged() {
 cd "$BUILDROOT_DIR"
 DEFCONFIG="ga_ihost_full_defconfig"
 
-# Initialize build logging
-start_build_log
-
 # Ensure dev-ca.pem exists for post-build script (link/copy from rel-ca.pem)
-log_build_step "Ensure dev-ca.pem"
 ensure_dev_ca_from_rel_ca
 
 # 1) Configure
-log_build_step "Configure ($MODE mode)"
 if [[ "$MODE" == "full" ]]; then
   rm -rf "$OUT"
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "$DEFCONFIG"
@@ -1695,6 +1690,10 @@ else
   echo "Usage: $0 [full|partial|kernel|update]"
   exit 1
 fi
+
+# Initialize build logging (after configure, so $OUT/images/ survives rm -rf in full mode)
+start_build_log
+log_build_step "Configure ($MODE mode)" "completed"
 
 # 2) Prevent Buildroot from building netbird (Go requirement mismatch)
 log_build_step "Disable Buildroot netbird"
