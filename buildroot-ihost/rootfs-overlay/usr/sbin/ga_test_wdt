@@ -1,0 +1,205 @@
+#!/usr/bin/env sh
+# ga_watchdog_test.sh
+# Watchdog test helper for Home Assistant OS / systemd RuntimeWatchdog.
+# - status: show watchdog + systemd settings
+# - prep:   set RuntimeWatchdogSec to a given timeout (via /run override) and daemon-reexec
+# - trigger: force a kernel crash via SysRq to validate the watchdog actually reboots the machine
+# - restore: remove the override and daemon-reexec
+# - post:   show status + try to show previous boot kernel log hints (journalctl -b -1)
+
+set -eu
+
+SCRIPT_NAME="$(basename "$0")"
+OVR_DIR="/run/systemd/system.conf.d"
+OVR_FILE="$OVR_DIR/10-ga-watchdog-test.conf"
+MARKER="/mnt/data/ga_watchdog_test.marker"
+
+log() { printf '%s %s\n' "$(date '+%F %T')" "$*"; }
+die() { log "ERROR: $*"; exit 1; }
+
+need_root() {
+  [ "$(id -u)" -eq 0 ] || die "Run as root."
+}
+
+have_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+show_status() {
+  log "Systemd watchdog settings:"
+  if have_cmd systemctl; then
+    systemctl show --no-pager -p RuntimeWatchdogUSec -p RebootWatchdogUSec -p ShutdownWatchdogUSec 2>/dev/null || true
+  else
+    log "systemctl not found."
+  fi
+
+  log "Owner of /dev/watchdog0 (if any):"
+  if [ -e /dev/watchdog0 ]; then
+    # Minimal fd scan (busybox-friendly)
+    found=""
+    for p in /proc/[0-9]*; do
+      pid="${p##*/}"
+      for fd in "$p"/fd/*; do
+        [ -L "$fd" ] || continue
+        tgt="$(readlink "$fd" 2>/dev/null || true)"
+        [ "$tgt" = "/dev/watchdog0" ] && { echo "PID $pid holds /dev/watchdog0"; found="yes"; break; }
+      done
+      [ -n "$found" ] && break
+    done
+    [ -n "$found" ] || echo "(no process currently holds /dev/watchdog0)"
+  else
+    echo "(missing /dev/watchdog0)"
+  fi
+
+  WD="/sys/class/watchdog/watchdog0"
+  log "Sysfs watchdog node: $WD"
+  if [ -d "$WD" ]; then
+    for f in identity status state bootstatus options nowayout min_timeout max_timeout timeout timeleft fw_version pretimeout; do
+      if [ -e "$WD/$f" ]; then
+        v="$(cat "$WD/$f" 2>/dev/null || true)"
+        printf '%s: %s\n' "$f" "$v"
+      else
+        printf '%s: (missing)\n' "$f"
+      fi
+    done
+  else
+    log "No watchdog0 sysfs directory found."
+  fi
+
+  # DT status / compatible, if available
+  DT_NODE="/sys/devices/platform/ff680000.watchdog/of_node"
+  if [ -L "$DT_NODE" ] || [ -d "$DT_NODE" ]; then
+    log "DeviceTree properties (if exposed):"
+    [ -e "$DT_NODE/status" ] && { printf 'dt.status: %s\n' "$(tr -d '\0' < "$DT_NODE/status" 2>/dev/null || true)"; }
+    [ -e "$DT_NODE/compatible" ] && { printf 'dt.compatible: %s\n' "$(tr -d '\0' < "$DT_NODE/compatible" 2>/dev/null || true)"; }
+  fi
+}
+
+prep_watchdog() {
+  need_root
+
+  timeout_s="${1:-10}"
+  case "$timeout_s" in
+    *[!0-9]*|"") die "Timeout must be an integer seconds value, e.g. 10" ;;
+  esac
+
+  mkdir -p "$OVR_DIR"
+
+  log "Writing systemd override: RuntimeWatchdogSec=${timeout_s}s -> $OVR_FILE"
+  cat >"$OVR_FILE" <<EOF
+[Manager]
+RuntimeWatchdogSec=${timeout_s}s
+EOF
+
+  log "Re-executing systemd (daemon-reexec) to apply setting"
+  systemctl daemon-reexec
+
+  # Marker for after reboot / audit trail
+  if [ -d "$(dirname "$MARKER")" ]; then
+    log "Writing marker: $MARKER"
+    {
+      echo "ts=$(date -Iseconds)"
+      echo "runtime_watchdog_sec=${timeout_s}"
+      echo "note=If trigger is used, system should reboot within ~${timeout_s}s after crash."
+    } >"$MARKER" 2>/dev/null || true
+  fi
+
+  show_status
+}
+
+restore_watchdog() {
+  need_root
+
+  if [ -f "$OVR_FILE" ]; then
+    log "Removing override: $OVR_FILE"
+    rm -f "$OVR_FILE"
+    log "Re-executing systemd (daemon-reexec) to restore defaults"
+    systemctl daemon-reexec
+  else
+    log "No override file present at $OVR_FILE"
+  fi
+
+  show_status
+}
+
+trigger_crash() {
+  need_root
+
+  # Make sure sysrq exists
+  [ -w /proc/sysrq-trigger ] || die "/proc/sysrq-trigger is not writable (sysrq not available)."
+
+  log "Disabling automatic reboot on kernel panic (so only watchdog causes reboot)."
+  # Ignore failure in case sysctl is absent; fallback to /proc
+  if have_cmd sysctl; then
+    sysctl -w kernel.panic=0 >/dev/null 2>&1 || true
+  fi
+  echo 0 >/proc/sys/kernel/panic 2>/dev/null || true
+
+  log "Enabling SysRq (kernel.sysrq=1)."
+  if have_cmd sysctl; then
+    sysctl -w kernel.sysrq=1 >/dev/null 2>&1 || true
+  fi
+  echo 1 >/proc/sys/kernel/sysrq 2>/dev/null || true
+
+  log "About to trigger a kernel crash via SysRq in 5 seconds."
+  log "This is intentional. The hardware watchdog should reboot the device shortly after."
+  i=5
+  while [ "$i" -gt 0 ]; do
+    log "Crash in $i..."
+    sleep 1
+    i=$((i-1))
+  done
+
+  # This will crash the kernel immediately.
+  echo c >/proc/sysrq-trigger
+
+  # Not reached
+  exit 0
+}
+
+post_check() {
+  show_status
+
+  if [ -f "$MARKER" ]; then
+    log "Marker file found:"
+    cat "$MARKER" || true
+  else
+    log "No marker file found at $MARKER (not critical)."
+  fi
+
+  if have_cmd journalctl; then
+    log "Trying to show previous boot kernel log watchdog hints (journalctl -b -1 -k):"
+    journalctl -b -1 -k 2>/dev/null | grep -i watchdog || true
+  else
+    log "journalctl not available."
+  fi
+
+  log "Current boot dmesg watchdog hints:"
+  dmesg 2>/dev/null | grep -i watchdog || true
+}
+
+usage() {
+  cat <<EOF
+Usage:
+  $SCRIPT_NAME status
+  $SCRIPT_NAME prep [timeout_seconds]     # e.g. prep 10
+  $SCRIPT_NAME trigger                   # causes intentional crash/reboot test
+  $SCRIPT_NAME restore
+  $SCRIPT_NAME post                      # run after reboot to inspect logs
+
+Notes:
+  - Run this on the HAOS host shell (not inside a container).
+  - You can get a host shell via: ha host shell
+EOF
+}
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  status)  show_status ;;
+  prep)    prep_watchdog "${1:-10}" ;;
+  trigger) trigger_crash ;;
+  restore) restore_watchdog ;;
+  post)    post_check ;;
+  ""|-h|--help|help) usage ;;
+  *) die "Unknown command: $cmd (use --help)" ;;
+esac
