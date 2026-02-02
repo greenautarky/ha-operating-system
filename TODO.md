@@ -30,9 +30,8 @@
 - [ ] Add error recovery / rollback logic to `ga_flasher` for failed flashes
 
 ### Build Script (`scripts/ga_build.sh`)
-- [ ] Make NetBird version (`v0.62.0`) and Go version (`1.24.10`) easier to bump
 - [ ] Make Fluent-Bit output endpoints configurable via environment variables
-- [ ] Validate genimage.cfg path resolution (multiple fallback searches, lines ~1389-1421)
+- [ ] Validate genimage.cfg path resolution (multiple fallback searches)
 
 ## Low Priority
 
@@ -50,12 +49,17 @@
 - [ ] Create integration tests for build artifacts
 
 ## Completed
+- [x] Bump NetBird to v0.64.4, Go to 1.25.6 (verified ARMv7 cross-compile)
+- [x] Replace custom SBOM with Buildroot CycloneDX + lean container inventory
+- [x] Make provisioning image opt-in (`GA_PROVISIONING=true`)
+- [x] Make legal-info archive opt-in (`GA_LEGAL_INFO=true`)
+- [x] Fix build log wiped by `rm -rf $OUT` in full mode
+- [x] Add build success banner with version/artifact summary
 - [x] Add disk guard service + timer (`ga-disk-guard.service`, `ga-disk-guard.timer`)
 - [x] Add crash bundle collector (`collect_crash_bundle.sh`)
 - [x] Add watchdog test helper (`ga_test_wdt`)
 - [x] Add eMMC flasher (`ga_flasher`)
 - [x] Optimize journald config
 - [x] Add container import script for build setup
-- [x] Generate SBOM in build script
-- [x] Archive legal-info / licenses in build
 - [x] Add `.gitignore` entries for image tarballs, build secrets, build output dirs
+- [x] Clean up repo: removed accidental `:56:` file, duplicate copy scripts
