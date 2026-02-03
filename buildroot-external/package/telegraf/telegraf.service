@@ -1,6 +1,6 @@
 [Unit]
 Description=Telegraf metrics agent
-After=network-online.target docker.service
+After=network-online.target docker.service hassio-supervisor.service
 Wants=network-online.target
 
 [Service]
@@ -8,6 +8,10 @@ Type=simple
 
 # Ensure writable directory for runtime config and state
 ExecStartPre=/bin/mkdir -p /mnt/data/telegraf
+
+# Read device UUID into env file for telegraf.conf to use
+ExecStartPre=/bin/sh -c 'UUID=$( grep "uuid" /mnt/data/supervisor/homeassistant/.storage/core.uuid 2>/dev/null | tr -d " \"," | cut -d: -f2 ); echo "DEVICE_UUID=${UUID:-unknown}" > /mnt/data/telegraf/env'
+EnvironmentFile=-/mnt/data/telegraf/env
 
 # Seed runtime config on first start:
 # If /mnt/data/telegraf/telegraf.conf does not exist yet,
@@ -21,8 +25,10 @@ ExecStartPre=/bin/sh -c '[ -f /mnt/data/telegraf/telegraf.conf ] || { \
 # Run Telegraf using the writable config so it can be modified per-device
 ExecStart=/usr/bin/telegraf --config /mnt/data/telegraf/telegraf.conf
 
-Restart=on-failure
+Restart=always
 RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=10
 Nice=10
 
 [Install]
