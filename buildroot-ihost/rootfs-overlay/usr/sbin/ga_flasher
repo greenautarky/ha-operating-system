@@ -8,18 +8,21 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 usage() {
   cat <<'EOF'
 Usage:
-  ga_flasher --flash [--device /dev/mmcblk0]
-  ga_flasher --erase [--device /dev/mmcblk0]
+  ga_flasher --flash        [--device /dev/mmcblk0]
+  ga_flasher --erase        [--device /dev/mmcblk0]
+  ga_flasher --secure-erase [--device /dev/mmcblk0]
   ga_flasher --help
 
 Behavior:
   - By default: DOES NOTHING (requires an explicit mode).
-  - --flash:  unmount eMMC partitions, wipe GPT headers, flash latest image from /mnt/data/images/
-  - --erase:  unmount eMMC partitions, wipe GPT headers only (no flashing)
+  - --flash:         unmount eMMC partitions, wipe GPT headers, flash latest image from /mnt/data/images/
+  - --erase:         unmount eMMC partitions, wipe GPT headers only (no flashing)
+  - --secure-erase:  unmount eMMC partitions, wipe ENTIRE device (all data unrecoverable)
 
 Examples:
   ./ga_flasher --erase
   ./ga_flasher --flash
+  ./ga_flasher --secure-erase
 EOF
 }
 
@@ -91,6 +94,33 @@ wipe_gpt_headers() {
   sync
 }
 
+secure_erase() {
+  dev="$1"
+  devname="${dev##*/}"
+
+  if command -v blkdiscard >/dev/null 2>&1; then
+    log "Secure erase via blkdiscard (hardware TRIM) on $dev"
+    if blkdiscard -f "$dev" 2>/dev/null; then
+      log "blkdiscard completed"
+      sync
+      return 0
+    fi
+    log "WARN: blkdiscard failed, falling back to dd zero-fill"
+  fi
+
+  if [ -r "/sys/block/$devname/size" ]; then
+    sz_sect=$(cat "/sys/block/$devname/size")
+    sz_mib=$(( sz_sect / 2048 ))
+  else
+    die "cannot determine device size for $dev"
+  fi
+
+  log "Zeroing entire device: $dev (${sz_mib} MiB) — this will take a while"
+  dd if=/dev/zero of="$dev" bs=4M conv=fsync status=progress 2>&1 || true
+  sync
+  log "Full zero-fill completed"
+}
+
 flash_image() {
   img="$1"
   dev="$2"
@@ -150,6 +180,10 @@ while [ $# -gt 0 ]; do
       MODE="erase"
       shift
       ;;
+    --secure-erase)
+      MODE="secure-erase"
+      shift
+      ;;
     --device)
       [ $# -ge 2 ] || die "--device requires a value"
       EMMC="$2"
@@ -176,6 +210,13 @@ log "Target device: $EMMC"
 log "Mode: $MODE"
 
 unmount_partitions "$EMMC"
+
+if [ "$MODE" = "secure-erase" ]; then
+  secure_erase "$EMMC"
+  log "Secure erase completed — all data on $EMMC has been destroyed."
+  exit 0
+fi
+
 wipe_gpt_headers "$EMMC"
 
 if [ "$MODE" = "erase" ]; then
