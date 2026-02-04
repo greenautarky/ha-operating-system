@@ -60,6 +60,9 @@
 - [x] Add watchdog test helper (`ga_test_wdt`)
 - [x] Add eMMC flasher (`ga_flasher`) with `--secure-erase` full wipe mode
 - [x] Add SFTP support via `gesftpserver` (Dropbear has no built-in SFTP)
+- [x] Add dev/prod environment flag (`/etc/ga-env.conf` + `/mnt/data/ga-env.conf` override)
+- [x] Fix CycloneDX SBOM error handling (split pipe, log errors)
+- [x] Fix `local` keyword outside function in build banner
 - [x] Optimize journald config
 - [x] Add container import script for build setup
 - [x] Add `.gitignore` entries for image tarballs, build secrets, build output dirs
