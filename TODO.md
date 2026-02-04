@@ -62,7 +62,10 @@
 - [x] Add SFTP support via `gesftpserver` (Dropbear has no built-in SFTP)
 - [x] Add dev/prod environment flag (`/etc/ga-env.conf` + `/mnt/data/ga-env.conf` override)
 - [x] Fix CycloneDX SBOM error handling (split pipe, log errors)
+- [x] Fix CycloneDX SBOM empty output: clear stale `MAKEFLAGS` (jobserver FDs) before `make show-info`
+- [x] Fix banner Buildroot version showing literal `$(BR2_VERSION)` (grep pattern fix)
 - [x] Fix `local` keyword outside function in build banner
+- [x] Pipe SBOM generation output to build log for post-build diagnostics
 - [x] Optimize journald config
 - [x] Add container import script for build setup
 - [x] Add `.gitignore` entries for image tarballs, build secrets, build output dirs
