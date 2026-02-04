@@ -58,7 +58,8 @@
 - [x] Add disk guard service + timer (`ga-disk-guard.service`, `ga-disk-guard.timer`)
 - [x] Add crash bundle collector (`collect_crash_bundle.sh`)
 - [x] Add watchdog test helper (`ga_test_wdt`)
-- [x] Add eMMC flasher (`ga_flasher`)
+- [x] Add eMMC flasher (`ga_flasher`) with `--secure-erase` full wipe mode
+- [x] Add SFTP support via `gesftpserver` (Dropbear has no built-in SFTP)
 - [x] Optimize journald config
 - [x] Add container import script for build setup
 - [x] Add `.gitignore` entries for image tarballs, build secrets, build output dirs
