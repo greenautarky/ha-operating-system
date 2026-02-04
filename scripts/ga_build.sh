@@ -91,6 +91,7 @@ fi
 #   GO_VER           - Go version for NetBird build (default: 1.25.6)
 #   GO_SHA256        - Expected SHA256 of Go tarball (for verification)
 #   GA_BUILD_TIMESTAMP - Override build timestamp (default: auto-generated)
+#   GA_ENV           - Environment stamp: "dev" or "prod" (default: dev)
 #   GA_PROVISIONING  - Set to "true" to create provisioning image (default: false)
 #   GA_LEGAL_INFO    - Set to "true" to generate legal-info archive (default: false)
 #
@@ -185,14 +186,29 @@ write_build_id_into_target() {
   printf '%s\n' "$ts_human" > "${OUT}/target/etc/ga-build-id"
   echo "Wrote build id: $ts_human -> ${OUT}/target/etc/ga-build-id"
 
+  # Stamp environment config into /etc/ga-env.conf
+  local ga_env_conf="${OUT}/target/etc/ga-env.conf"
+  local env_val="${GA_ENV:-dev}"
+  if [[ -f "$ga_env_conf" ]]; then
+    sed -i "s/^GA_ENV=.*/GA_ENV=${env_val}/" "$ga_env_conf"
+  else
+    cat > "$ga_env_conf" <<ENVEOF
+GA_ENV=${env_val}
+GA_LOG_LEVEL=$([ "$env_val" = "prod" ] && echo "warning" || echo "debug")
+GA_TELEMETRY=$([ "$env_val" = "prod" ] && echo "minimal" || echo "verbose")
+ENVEOF
+  fi
+  echo "Stamped GA_ENV=${env_val} -> $ga_env_conf"
+
   # Append GA build info to /etc/os-release for easy identification
   local os_release="${OUT}/target/etc/os-release"
   if [[ -f "$os_release" ]]; then
-    # Remove any previous GA_BUILD entries to avoid duplicates on rebuilds
-    sed -i '/^GA_BUILD_ID=/d; /^GA_BUILD_TIMESTAMP=/d' "$os_release"
+    # Remove any previous GA entries to avoid duplicates on rebuilds
+    sed -i '/^GA_BUILD_ID=/d; /^GA_BUILD_TIMESTAMP=/d; /^GA_ENV=/d' "$os_release"
     # Append new build info
     printf 'GA_BUILD_ID="%s"\n' "$ts_human" >> "$os_release"
     printf 'GA_BUILD_TIMESTAMP="%s"\n' "$GA_BUILD_TIMESTAMP" >> "$os_release"
+    printf 'GA_ENV="%s"\n' "$env_val" >> "$os_release"
     echo "Appended GA build info to: $os_release"
   else
     echo "WARN: $os_release not found, skipping os-release update"
