@@ -61,6 +61,7 @@
 - [x] Add eMMC flasher (`ga_flasher`) with `--secure-erase` full wipe mode
 - [x] Add SFTP support via `gesftpserver` (Dropbear has no built-in SFTP)
 - [x] Add dev/prod environment flag (`/etc/ga-env.conf` + `/mnt/data/ga-env.conf` override)
+- [x] Add dev/prod tag to image filenames (`ga_build.sh [mode] [dev|prod]`, default: dev)
 - [x] Fix CycloneDX SBOM error handling (split pipe, log errors)
 - [x] Fix CycloneDX SBOM empty output: clear stale `MAKEFLAGS` (jobserver FDs) before `make show-info`
 - [x] Fix banner Buildroot version showing literal `$(BR2_VERSION)` (grep pattern fix)
