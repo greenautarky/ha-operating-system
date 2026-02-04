@@ -947,8 +947,15 @@ generate_sbom() {
     local sbom_err="${OUT}/images/.sbom-err.log"
     local show_info_json="${OUT}/images/.show-info.json"
     # Step 1: collect show-info JSON (separate from pipe so errors are visible)
-    if make -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" \
+    if make --no-print-directory -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" \
         show-info > "$show_info_json" 2>"$sbom_err"; then
+      # Verify JSON is non-empty before feeding to generator
+      if [[ ! -s "$show_info_json" ]]; then
+        echo "WARN: make show-info produced empty output, skipping CycloneDX SBOM"
+        cat "$sbom_err" 2>/dev/null | head -10
+        rm -f "$show_info_json" "$sbom_err"
+        return
+      fi
       # Step 2: feed JSON into the CycloneDX generator
       if python3 "$generate_tool" -i "$show_info_json" > "$cyclonedx" 2>>"$sbom_err"; then
         echo "CycloneDX SBOM generated: $cyclonedx"
@@ -1627,7 +1634,7 @@ BANNER
 
 # Build summary
 kernel_ver="$(ls -d "${OUT}"/build/linux-* 2>/dev/null | head -n 1 | sed 's/.*linux-//' || echo "unknown")"
-buildroot_ver="$(grep -E '^export BR2_VERSION' "${BUILDROOT_DIR}/Makefile" 2>/dev/null | cut -d= -f2 | tr -d ' "' || echo "unknown")"
+buildroot_ver="$(grep -E '^export BR2_VERSION :=' "${BUILDROOT_DIR}/Makefile" 2>/dev/null | sed 's/.*:= *//' || echo "unknown")"
 nb_ver="$("${OUT}/target/usr/bin/netbird" version 2>/dev/null || echo "${NETBIRD_TAG}")"
 
 echo "  Build ID:       ${GA_BUILD_TIMESTAMP}"
