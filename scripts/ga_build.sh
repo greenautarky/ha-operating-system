@@ -928,17 +928,27 @@ generate_sbom() {
 
   if [[ -x "$generate_tool" ]] || [[ -f "$generate_tool" ]]; then
     echo "Generating CycloneDX SBOM via Buildroot show-info..."
+    local sbom_err="${OUT}/images/.sbom-err.log"
+    local show_info_json="${OUT}/images/.show-info.json"
+    # Step 1: collect show-info JSON (separate from pipe so errors are visible)
     if make -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" \
-        show-info 2>/dev/null | python3 "$generate_tool" > "$cyclonedx" 2>/dev/null; then
-      echo "CycloneDX SBOM generated: $cyclonedx"
-      # Validate if jq available
-      if command -v jq &>/dev/null; then
-        jq . "$cyclonedx" > "${cyclonedx}.tmp" 2>/dev/null && mv "${cyclonedx}.tmp" "$cyclonedx"
+        show-info > "$show_info_json" 2>"$sbom_err"; then
+      # Step 2: feed JSON into the CycloneDX generator
+      if python3 "$generate_tool" -i "$show_info_json" > "$cyclonedx" 2>>"$sbom_err"; then
+        echo "CycloneDX SBOM generated: $cyclonedx"
+        if command -v jq &>/dev/null; then
+          jq . "$cyclonedx" > "${cyclonedx}.tmp" 2>/dev/null && mv "${cyclonedx}.tmp" "$cyclonedx"
+        fi
+      else
+        echo "WARN: CycloneDX generator failed (see ${sbom_err}):"
+        cat "$sbom_err" 2>/dev/null | head -20
+        rm -f "$cyclonedx"
       fi
     else
-      echo "WARN: CycloneDX generation failed, falling back to package list"
-      rm -f "$cyclonedx"
+      echo "WARN: make show-info failed (see ${sbom_err}):"
+      cat "$sbom_err" 2>/dev/null | head -20
     fi
+    rm -f "$show_info_json" "$sbom_err"
   else
     echo "WARN: generate-cyclonedx not found at $generate_tool, skipping CycloneDX SBOM"
   fi
