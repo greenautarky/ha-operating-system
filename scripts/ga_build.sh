@@ -946,16 +946,40 @@ generate_sbom() {
     echo "Generating CycloneDX SBOM via Buildroot show-info..."
     local sbom_err="${OUT}/images/.sbom-err.log"
     local show_info_json="${OUT}/images/.show-info.json"
+
+    # Diagnostic: verify .config exists (required for show-info to list packages)
+    if [[ ! -f "${OUT}/.config" ]]; then
+      echo "WARN: ${OUT}/.config not found, show-info will produce empty output"
+    fi
+
+    # Clear MAKEFLAGS to prevent stale jobserver file descriptors from the
+    # previous parallel build from interfering with this standalone make call.
+    # GNU Make inherits MAKEFLAGS (including --jobserver-auth=R,W) via the
+    # environment; when the parent make has exited, those FDs are closed and
+    # the child make can fail silently on Make 4.3 (Debian Bullseye).
+    local saved_makeflags="${MAKEFLAGS:-}"
+    unset MAKEFLAGS
+
     # Step 1: collect show-info JSON (separate from pipe so errors are visible)
     if make --no-print-directory -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" \
         show-info > "$show_info_json" 2>"$sbom_err"; then
       # Verify JSON is non-empty before feeding to generator
       if [[ ! -s "$show_info_json" ]]; then
-        echo "WARN: make show-info produced empty output, skipping CycloneDX SBOM"
+        echo "WARN: make show-info exited 0 but produced empty output"
+        echo "  .config exists: $(test -f "${OUT}/.config" && echo yes || echo NO)"
+        echo "  BR2_HAVE_DOT_CONFIG: $(grep -c 'BR2_HAVE_DOT_CONFIG=y' "${OUT}/.config" 2>/dev/null || echo 'missing')"
+        echo "  make version: $(make --version 2>/dev/null | head -1)"
+        # Diagnostic: try show-targets (simpler, same PACKAGES variable)
+        local target_count
+        target_count="$(make --no-print-directory -C "$BUILDROOT_DIR" O="$OUT" \
+            BR2_EXTERNAL="$BR2_EXTERNAL_PATH" show-targets 2>/dev/null | wc -w)"
+        echo "  show-targets package count: ${target_count:-0}"
         cat "$sbom_err" 2>/dev/null | head -10
         rm -f "$show_info_json" "$sbom_err"
+        export MAKEFLAGS="$saved_makeflags"
         return
       fi
+      echo "  show-info JSON size: $(wc -c < "$show_info_json") bytes"
       # Step 2: feed JSON into the CycloneDX generator
       if python3 "$generate_tool" -i "$show_info_json" > "$cyclonedx" 2>>"$sbom_err"; then
         echo "CycloneDX SBOM generated: $cyclonedx"
@@ -968,10 +992,11 @@ generate_sbom() {
         rm -f "$cyclonedx"
       fi
     else
-      echo "WARN: make show-info failed (see ${sbom_err}):"
+      echo "WARN: make show-info failed (exit $?) (see ${sbom_err}):"
       cat "$sbom_err" 2>/dev/null | head -20
     fi
     rm -f "$show_info_json" "$sbom_err"
+    export MAKEFLAGS="$saved_makeflags"
   else
     echo "WARN: generate-cyclonedx not found at $generate_tool, skipping CycloneDX SBOM"
   fi
@@ -1617,7 +1642,7 @@ fi
 
 # 10) Generate Software Bill of Materials (SBOM)
 log_build_step "Generate SBOM"
-generate_sbom
+generate_sbom 2>&1 | tee -a "$BUILD_LOG"
 
 # Finalize build log
 finalize_build_log 0
