@@ -1600,7 +1600,6 @@ cat <<'BANNER'
 BANNER
 
 # Build summary
-local kernel_ver buildroot_ver nb_ver img_size raucb_size
 kernel_ver="$(ls -d "${OUT}"/build/linux-* 2>/dev/null | head -n 1 | sed 's/.*linux-//' || echo "unknown")"
 buildroot_ver="$(grep -E '^export BR2_VERSION' "${BUILDROOT_DIR}/Makefile" 2>/dev/null | cut -d= -f2 | tr -d ' "' || echo "unknown")"
 nb_ver="$("${OUT}/target/usr/bin/netbird" version 2>/dev/null || echo "${NETBIRD_TAG}")"
@@ -1616,7 +1615,6 @@ echo ""
 echo "  Output images:"
 for f in "${OUT}/images/"*.img.xz "${OUT}/images/"*.raucb; do
   if [[ -f "$f" ]]; then
-    local sz
     sz="$(du -h "$f" | cut -f1)"
     echo "    $(basename "$f")  ${sz}"
   fi
