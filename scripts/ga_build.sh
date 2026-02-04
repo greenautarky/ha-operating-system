@@ -74,7 +74,7 @@ fi
 #       - LICENSE-SUMMARY.txt
 #
 # Usage:
-#   ./scripts/ga_build.sh [full|partial|kernel|update]
+#   ./scripts/ga_build.sh [full|partial|kernel|update] [dev|prod]
 #
 # Modes:
 #   full    - Clean build from scratch (rm -rf $OUT)
@@ -82,7 +82,11 @@ fi
 #   kernel  - Rebuild with linux-dirclean only
 #   update  - Incremental build (reconfigure only)
 #
-# Environment Variables:
+# Environment:
+#   dev  (default) - Development build (debug logging, verbose telemetry)
+#   prod           - Production build (warning logging, minimal telemetry)
+#
+# Environment Variables (override defaults):
 #   BUILDROOT_DIR    - Path to Buildroot source (default: /build/buildroot)
 #   BR2EXT_IHOST     - Path to buildroot-ihost external tree (default: /build/buildroot-ihost)
 #   BR2EXT_NETBIRD   - Path to buildroot-external tree (default: /build/buildroot-external)
@@ -91,7 +95,7 @@ fi
 #   GO_VER           - Go version for NetBird build (default: 1.25.6)
 #   GO_SHA256        - Expected SHA256 of Go tarball (for verification)
 #   GA_BUILD_TIMESTAMP - Override build timestamp (default: auto-generated)
-#   GA_ENV           - Environment stamp: "dev" or "prod" (default: dev)
+#   GA_ENV           - Environment stamp (default: from 2nd argument, or "dev")
 #   GA_PROVISIONING  - Set to "true" to create provisioning image (default: false)
 #   GA_LEGAL_INFO    - Set to "true" to generate legal-info archive (default: false)
 #
@@ -100,6 +104,17 @@ fi
 unset BR2_EXTERNAL
 
 MODE="${1:-full}"   # full | partial | kernel | update
+
+# Environment: 2nd argument overrides GA_ENV env var; default is "dev"
+if [[ -n "${2:-}" ]]; then
+  GA_ENV="$2"
+fi
+GA_ENV="${GA_ENV:-dev}"
+if [[ "$GA_ENV" != "dev" && "$GA_ENV" != "prod" ]]; then
+  echo "ERROR: Invalid environment '$GA_ENV'. Must be 'dev' or 'prod'." >&2
+  exit 1
+fi
+echo "Building with GA_ENV=$GA_ENV"
 
 # ---- Paths inside container ----
 BUILDROOT_DIR="${BUILDROOT_DIR:-/build/buildroot}"
@@ -1091,17 +1106,18 @@ get_original_image_basename() {
   echo "$img"
 }
 
-# Rename images with ga-build-id timestamp suffix
-# haos_ihost-16.3.img.xz -> gaos_ihost-16.3_20260119123045.img.xz
-# haos_ihost-16.3.raucb  -> gaos_ihost-16.3_20260119123045.raucb
+# Rename images with ga-build-id timestamp suffix and environment tag
+# haos_ihost-16.3.img.xz -> gaos_ihost_CoreBox-16.3_dev_20260119123045.img.xz
+# haos_ihost-16.3.raucb  -> gaos_ihost_CoreBox-16.3_prod_20260119123045.raucb
 rename_images_with_build_id() {
   local orig_base new_base
   orig_base="$(get_original_image_basename)" || return 1
 
-  # Convert haos_ prefix to gaos_ and append timestamp
+  # Convert haos_ prefix to gaos_ and append environment + timestamp
   local orig_name new_name
+  local env_tag="${GA_ENV:-dev}"
   orig_name="$(basename "$orig_base")"
-  new_name="${orig_name/haos_/gaos_}_${GA_BUILD_TIMESTAMP}"
+  new_name="${orig_name/haos_/gaos_}_${env_tag}_${GA_BUILD_TIMESTAMP}"
   new_base="$(dirname "$orig_base")/${new_name}"
 
   echo "Renaming images: ${orig_name} -> ${new_name}"
@@ -1582,7 +1598,7 @@ elif [[ "$MODE" == "update" ]]; then
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "$DEFCONFIG"
 
 else
-  echo "Usage: $0 [full|partial|kernel|update]"
+  echo "Usage: $0 [full|partial|kernel|update] [dev|prod]"
   exit 1
 fi
 
@@ -1663,6 +1679,7 @@ buildroot_ver="$(grep -E '^export BR2_VERSION :=' "${BUILDROOT_DIR}/Makefile" 2>
 nb_ver="$("${OUT}/target/usr/bin/netbird" version 2>/dev/null || echo "${NETBIRD_TAG}")"
 
 echo "  Build ID:       ${GA_BUILD_TIMESTAMP}"
+echo "  Environment:    ${GA_ENV}"
 echo "  Mode:           ${MODE}"
 echo "  Defconfig:      ${DEFCONFIG}"
 echo "  Buildroot:      ${buildroot_ver}"
