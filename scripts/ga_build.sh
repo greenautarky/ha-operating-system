@@ -204,16 +204,22 @@ write_build_id_into_target() {
   # Stamp environment config into /etc/ga-env.conf
   local ga_env_conf="${OUT}/target/etc/ga-env.conf"
   local env_val="${GA_ENV:-dev}"
-  if [[ -f "$ga_env_conf" ]]; then
-    sed -i "s/^GA_ENV=.*/GA_ENV=${env_val}/" "$ga_env_conf"
-  else
-    cat > "$ga_env_conf" <<ENVEOF
+  local log_level="$([ "$env_val" = "prod" ] && echo "warning" || echo "debug")"
+  local telemetry="$([ "$env_val" = "prod" ] && echo "minimal" || echo "verbose")"
+  cat > "$ga_env_conf" <<ENVEOF
+# GreenAutarky environment configuration
+# Baked at build time — override at runtime via /mnt/data/ga-env.conf
+#
+# Values:
+#   GA_ENV:        dev | prod
+#   GA_LOG_LEVEL:  debug | info | warning
+#   GA_TELEMETRY:  verbose | minimal | off
+
 GA_ENV=${env_val}
-GA_LOG_LEVEL=$([ "$env_val" = "prod" ] && echo "warning" || echo "debug")
-GA_TELEMETRY=$([ "$env_val" = "prod" ] && echo "minimal" || echo "verbose")
+GA_LOG_LEVEL=${log_level}
+GA_TELEMETRY=${telemetry}
 ENVEOF
-  fi
-  echo "Stamped GA_ENV=${env_val} -> $ga_env_conf"
+  echo "Stamped GA_ENV=${env_val} (log=${log_level}, telemetry=${telemetry}) -> $ga_env_conf"
 
   # Append GA build info to /etc/os-release for easy identification
   local os_release="${OUT}/target/etc/os-release"
