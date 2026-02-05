@@ -83,8 +83,10 @@ fi
 #   update  - Incremental build (reconfigure only)
 #
 # Environment:
-#   dev  (default) - Development build (debug logging, verbose telemetry)
-#   prod           - Production build (warning logging, minimal telemetry)
+#   dev  (default) - Development build: fast, skips post-build artifacts
+#                    (no SBOMs, no config archive, no provisioning image)
+#   prod           - Production build: full artifacts for release
+#                    (SBOMs, config archive, provisioning if enabled)
 #
 # Environment Variables (override defaults):
 #   BUILDROOT_DIR    - Path to Buildroot source (default: /build/buildroot)
@@ -1638,33 +1640,39 @@ rebuild_artifacts
 log_build_step "Rename images"
 rename_images_with_build_id
 
-# 7) Create provisioning image (factory image with embedded .img.xz)
-#    Disabled by default — enable with GA_PROVISIONING=true
-if [[ "${GA_PROVISIONING:-false}" == "true" ]]; then
-  log_build_step "Ensure genimage"
-  ensure_host_genimage
-  log_build_step "Create provisioning image"
-  create_provisioning_image
+# --- Post-build artifacts (prod only for faster dev builds) ---
+if [[ "$GA_ENV" == "prod" ]]; then
+  # 7) Create provisioning image (factory image with embedded .img.xz)
+  #    Disabled by default — enable with GA_PROVISIONING=true
+  if [[ "${GA_PROVISIONING:-false}" == "true" ]]; then
+    log_build_step "Ensure genimage"
+    ensure_host_genimage
+    log_build_step "Create provisioning image"
+    create_provisioning_image
+  else
+    echo "Skipping provisioning image (set GA_PROVISIONING=true to enable)"
+  fi
+
+  # 8) Archive build configurations and pin all sources
+  log_build_step "Archive build configs"
+  archive_build_configs
+
+  # 9) Archive legal-info (licenses)
+  #    Disabled by default — enable with GA_LEGAL_INFO=true (slow, ~1.7GB output)
+  if [[ "${GA_LEGAL_INFO:-false}" == "true" ]]; then
+    log_build_step "Archive legal-info"
+    archive_legal_info
+  else
+    echo "Skipping legal-info archive (set GA_LEGAL_INFO=true to enable)"
+  fi
+
+  # 10) Generate Software Bill of Materials (SBOM)
+  log_build_step "Generate SBOM"
+  generate_sbom 2>&1 | tee -a "$BUILD_LOG"
 else
-  echo "Skipping provisioning image (set GA_PROVISIONING=true to enable)"
+  echo "Skipping post-build artifacts for dev build (SBOMs, config archive, provisioning)"
+  echo "  Use 'prod' environment for full artifact generation"
 fi
-
-# 8) Archive build configurations and pin all sources
-log_build_step "Archive build configs"
-archive_build_configs
-
-# 9) Archive legal-info (licenses)
-#    Disabled by default — enable with GA_LEGAL_INFO=true (slow, ~1.7GB output)
-if [[ "${GA_LEGAL_INFO:-false}" == "true" ]]; then
-  log_build_step "Archive legal-info"
-  archive_legal_info
-else
-  echo "Skipping legal-info archive (set GA_LEGAL_INFO=true to enable)"
-fi
-
-# 10) Generate Software Bill of Materials (SBOM)
-log_build_step "Generate SBOM"
-generate_sbom 2>&1 | tee -a "$BUILD_LOG"
 
 # Finalize build log
 finalize_build_log 0
