@@ -1713,8 +1713,9 @@ echo "  Kernel:         ${kernel_ver}"
 echo "  NetBird:        ${nb_ver} (Go ${GO_VER})"
 echo ""
 
-echo "  Output images:"
-for f in "${OUT}/images/"*.img.xz "${OUT}/images/"*.raucb; do
+echo "  Output images (this build):"
+# Only show images from this build (matching current timestamp)
+for f in "${OUT}/images/"*"${GA_BUILD_TIMESTAMP}"*.img.xz "${OUT}/images/"*"${GA_BUILD_TIMESTAMP}"*.raucb; do
   if [[ -f "$f" ]]; then
     sz="$(du -h "$f" | cut -f1)"
     echo "    $(basename "$f")  ${sz}"
