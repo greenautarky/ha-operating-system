@@ -20,6 +20,10 @@
 ## Medium Priority
 
 ### Crash & Diagnostics
+- [ ] Test crash detection: verify `ga-crash-marker.service` and `ga-boot-check.service` work correctly
+  - Simulate crash (watchdog timeout, power pull, `echo c > /proc/sysrq-trigger`)
+  - Verify `/mnt/data/crash_history.log` is populated
+  - Verify `journalctl -b -1` shows previous boot logs
 - [ ] Integrate `collect_crash_bundle.sh` with automated upload/reporting
 - [ ] Document watchdog test procedures using `ga_test_wdt`
 
@@ -73,3 +77,5 @@
 - [x] Add container import script for build setup
 - [x] Add `.gitignore` entries for image tarballs, build secrets, build output dirs
 - [x] Clean up repo: removed accidental `:56:` file, duplicate copy scripts
+- [x] Add crash detection services (`ga-crash-marker.service`, `ga-boot-check.service`)
+- [x] Configure journald for persistent multi-boot storage (`Storage=persistent`, 7-day retention)
