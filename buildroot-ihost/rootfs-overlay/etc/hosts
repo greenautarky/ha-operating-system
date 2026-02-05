@@ -1,0 +1,10 @@
+# /etc/hosts - static hostname resolution
+# Standard localhost entries
+127.0.0.1       localhost
+::1             localhost ip6-localhost ip6-loopback
+
+# GreenAutarky services (NetBird IPs)
+# Primary
+100.126.142.217 influx.greenautarky.com loki.greenautarky.com
+# Fallback
+100.73.212.98   influx-alt.greenautarky.com loki-alt.greenautarky.com
