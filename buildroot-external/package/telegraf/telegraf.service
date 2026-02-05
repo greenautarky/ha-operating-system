@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 
-# Ensure writable directory for runtime config and state
+# Ensure writable directory for env file
 ExecStartPre=/bin/mkdir -p /mnt/data/telegraf
 
 # Load GA environment (dev/prod) - check data partition override first, then rootfs default
@@ -15,13 +15,8 @@ ExecStartPre=/bin/sh -c '[ -f /mnt/data/ga-env.conf ] && . /mnt/data/ga-env.conf
 ExecStartPre=/bin/sh -c 'UUID=$(grep -o "\"uuid\": \"[^\"]*\"" /mnt/data/supervisor/homeassistant/.storage/core.uuid 2>/dev/null | cut -d\" -f4); echo "DEVICE_UUID=${UUID:-unknown}" >> /mnt/data/telegraf/env'
 EnvironmentFile=-/mnt/data/telegraf/env
 
-# Seed runtime config on first start:
-# If /mnt/data/telegraf/telegraf.conf does not exist yet,
-# copy the packaged default from the read-only rootfs.
-ExecStartPre=/bin/sh -c 'test -f /mnt/data/telegraf/telegraf.conf || cp /etc/telegraf/telegraf.conf /mnt/data/telegraf/telegraf.conf 2>/dev/null || true'
-
-# Run Telegraf using the writable config so it can be modified per-device
-ExecStart=/usr/bin/telegraf --config /mnt/data/telegraf/telegraf.conf
+# Run Telegraf from rootfs config (OTA-updatable, per-device values via env vars)
+ExecStart=/usr/bin/telegraf --config /etc/telegraf/telegraf.conf
 
 Restart=always
 RestartSec=5

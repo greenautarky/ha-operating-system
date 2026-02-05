@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 
-# Ensure writable dirs exist
+# Ensure writable dirs exist (for storage buffer and env file)
 ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit
 ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit/storage
 ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit/db
@@ -17,12 +17,8 @@ ExecStartPre=/bin/sh -c '[ -f /mnt/data/ga-env.conf ] && . /mnt/data/ga-env.conf
 ExecStartPre=/bin/sh -c 'UUID=$(grep -o "\"uuid\": \"[^\"]*\"" /mnt/data/supervisor/homeassistant/.storage/core.uuid 2>/dev/null | cut -d\" -f4); echo "DEVICE_UUID=${UUID:-unknown}" >> /mnt/data/fluent-bit/env'
 EnvironmentFile=-/mnt/data/fluent-bit/env
 
-# If no runtime config exists yet, seed it from the read-only default
-ExecStartPre=/bin/sh -c '[ -f /mnt/data/fluent-bit/fluent-bit.conf ] || cp /etc/fluent-bit/fluent-bit.conf /mnt/data/fluent-bit/fluent-bit.conf'
-ExecStartPre=/bin/sh -c '[ -f /mnt/data/fluent-bit/parsers.conf ] || cp /etc/fluent-bit/parsers.conf /mnt/data/fluent-bit/parsers.conf'
-
-# Always run with the writable copy
-ExecStart=/usr/bin/fluent-bit -c /mnt/data/fluent-bit/fluent-bit.conf
+# Run from rootfs config (OTA-updatable, per-device values via env vars)
+ExecStart=/usr/bin/fluent-bit -c /etc/fluent-bit/fluent-bit.conf
 
 Restart=always
 RestartSec=5
