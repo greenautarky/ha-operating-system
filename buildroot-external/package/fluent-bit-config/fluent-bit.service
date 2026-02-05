@@ -11,8 +11,10 @@ ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit
 ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit/storage
 ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit/db
 
+# Load GA environment (dev/prod) - check data partition override first, then rootfs default
+ExecStartPre=/bin/sh -c '[ -f /mnt/data/ga-env.conf ] && . /mnt/data/ga-env.conf || . /etc/ga-env.conf 2>/dev/null; echo "GA_ENV=${GA_ENV:-dev}" > /mnt/data/fluent-bit/env'
 # Read device UUID into env file for fluent-bit.conf to use
-ExecStartPre=/bin/sh -c 'UUID=$( grep "uuid" /mnt/data/supervisor/homeassistant/.storage/core.uuid 2>/dev/null | tr -d " \"," | cut -d: -f2 ); echo "DEVICE_UUID=${UUID:-unknown}" > /mnt/data/fluent-bit/env'
+ExecStartPre=/bin/sh -c 'UUID=$( grep "uuid" /mnt/data/supervisor/homeassistant/.storage/core.uuid 2>/dev/null | tr -d " \"," | cut -d: -f2 ); echo "DEVICE_UUID=${UUID:-unknown}" >> /mnt/data/fluent-bit/env'
 EnvironmentFile=-/mnt/data/fluent-bit/env
 
 # If no runtime config exists yet, seed it from the read-only default
