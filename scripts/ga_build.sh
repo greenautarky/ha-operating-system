@@ -75,12 +75,16 @@ fi
 #
 # Usage:
 #   ./scripts/ga_build.sh [full|partial|kernel|update] [dev|prod]
+#   ./scripts/ga_build.sh dev       # shorthand for "update dev"
+#   ./scripts/ga_build.sh prod      # shorthand for "update prod"
 #
 # Modes:
 #   full    - Clean build from scratch (rm -rf $OUT)
 #   partial - Rebuild with linux-dirclean and hassio-dirclean
 #   kernel  - Rebuild with linux-dirclean only
 #   update  - Incremental build (reconfigure only)
+#   dev     - Shorthand for "update dev"
+#   prod    - Shorthand for "update prod"
 #
 # Environment:
 #   dev  (default) - Development build: fast, skips post-build artifacts
@@ -105,11 +109,17 @@ fi
 
 unset BR2_EXTERNAL
 
-MODE="${1:-full}"   # full | partial | kernel | update
+MODE="${1:-full}"   # full | partial | kernel | update | dev | prod
 
-# Environment: 2nd argument overrides GA_ENV env var; default is "dev"
-if [[ -n "${2:-}" ]]; then
-  GA_ENV="$2"
+# Shorthand: "dev" or "prod" as first arg => "update dev" or "update prod"
+if [[ "$MODE" == "dev" || "$MODE" == "prod" ]]; then
+  GA_ENV="$MODE"
+  MODE="update"
+else
+  # Environment: 2nd argument overrides GA_ENV env var; default is "dev"
+  if [[ -n "${2:-}" ]]; then
+    GA_ENV="$2"
+  fi
 fi
 GA_ENV="${GA_ENV:-dev}"
 if [[ "$GA_ENV" != "dev" && "$GA_ENV" != "prod" ]]; then
@@ -1606,7 +1616,9 @@ elif [[ "$MODE" == "update" ]]; then
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "$DEFCONFIG"
 
 else
-  echo "Usage: $0 [full|partial|kernel|update] [dev|prod]"
+  echo "Usage: $0 [full|partial|kernel|update|dev|prod] [dev|prod]"
+  echo "       $0 dev   # shorthand for 'update dev'"
+  echo "       $0 prod  # shorthand for 'update prod'"
   exit 1
 fi
 
