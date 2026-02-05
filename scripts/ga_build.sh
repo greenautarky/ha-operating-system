@@ -204,11 +204,11 @@ ensure_dev_ca_from_rel_ca() {
 }
 
 # Global build timestamp (compact format for filenames, set once at script start)
-GA_BUILD_TIMESTAMP="${GA_BUILD_TIMESTAMP:-$(date -u '+%Y%m%d%H%M%S')}"
+GA_BUILD_TIMESTAMP="${GA_BUILD_TIMESTAMP:-$(date '+%Y%m%d%H%M%S')}"
 
 write_build_id_into_target() {
   local ts_human
-  ts_human="$(date -u '+%F %T')"  # Human-readable UTC for /etc/ga-build-id
+  ts_human="$(date '+%F %T')"  # Human-readable local time for /etc/ga-build-id
   mkdir -p "${OUT}/target/etc"
   printf '%s\n' "$ts_human" > "${OUT}/target/etc/ga-build-id"
   echo "Wrote build id: $ts_human -> ${OUT}/target/etc/ga-build-id"
@@ -519,7 +519,7 @@ archive_build_configs() {
     echo "Hardware Configuration Summary"
     echo "=========================================="
     echo "Build ID: ${GA_BUILD_TIMESTAMP}"
-    echo "Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+    echo "Generated: $(date '+%Y-%m-%d %H:%M:%S')"
     echo ""
 
     if [[ -f "$kernel_cfg" ]]; then
@@ -671,7 +671,7 @@ GITEOF
   # Collect git info for all relevant repos
   {
     echo "{"
-    echo '  "generated": "'$(date -u '+%Y-%m-%dT%H:%M:%SZ')'",'
+    echo '  "generated": "'$(date '+%Y-%m-%dT%H:%M:%S')'",'
     echo '  "build_id": "'${GA_BUILD_TIMESTAMP}'",'
     echo '  "repositories": {'
 
@@ -836,7 +836,7 @@ PKGEOF
     echo "GA Build Configuration Archive"
     echo "=========================================="
     echo "Build ID:        ${GA_BUILD_TIMESTAMP}"
-    echo "Build Date:      $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+    echo "Build Date:      $(date '+%Y-%m-%d %H:%M:%S')"
     echo "Defconfig:       ${DEFCONFIG}"
     echo ""
     echo "Contents:"
@@ -867,7 +867,7 @@ PKGEOF
 
   {
     echo "# Container Image Lockfile"
-    echo "# Generated: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    echo "# Generated: $(date '+%Y-%m-%dT%H:%M:%S')"
     echo "# Build ID: ${GA_BUILD_TIMESTAMP}"
     echo "#"
     echo "# Format: <full-image-reference>  <sha256-digest>  <tar-file-sha256>"
@@ -907,7 +907,7 @@ PKGEOF
   local container_lock_json="${cfg_dir}/container-images.lock.json"
   {
     echo "{"
-    echo '  "generated": "'$(date -u '+%Y-%m-%dT%H:%M:%SZ')'",'
+    echo '  "generated": "'$(date '+%Y-%m-%dT%H:%M:%S')'",'
     echo '  "build_id": "'${GA_BUILD_TIMESTAMP}'",'
     echo '  "images": ['
 
@@ -1044,7 +1044,7 @@ generate_sbom() {
   echo "Generating container image inventory..."
   {
     echo "{"
-    echo '  "generated": "'$(date -u '+%Y-%m-%dT%H:%M:%SZ')'",'
+    echo '  "generated": "'$(date '+%Y-%m-%dT%H:%M:%S')'",'
     echo '  "build_id": "'${GA_BUILD_TIMESTAMP}'",'
     echo '  "standalone": {'
     echo '    "netbird": { "version": "'${NETBIRD_TAG}'", "go": "'${GO_VER}'" }'
@@ -1457,7 +1457,7 @@ archive_legal_info() {
     echo "=========================================="
     echo "License Summary for GA Build ${GA_BUILD_TIMESTAMP}"
     echo "=========================================="
-    echo "Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+    echo "Generated: $(date '+%Y-%m-%d %H:%M:%S')"
     echo ""
 
     if [[ -f "$legal_dir/manifest.csv" ]]; then
@@ -1507,7 +1507,7 @@ start_build_log() {
     echo "GA Build Log"
     echo "=========================================="
     echo "Build ID:     ${GA_BUILD_TIMESTAMP}"
-    echo "Start time:   $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+    echo "Start time:   $(date '+%Y-%m-%d %H:%M:%S')"
     echo "Mode:         ${MODE}"
     echo "Defconfig:    ${DEFCONFIG:-ga_ihost_full_defconfig}"
     echo "Host:         $(hostname)"
@@ -1541,7 +1541,7 @@ log_build_step() {
 
   {
     echo ""
-    echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] === $step ($status) ==="
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] === $step ($status) ==="
   } >> "$BUILD_LOG"
 }
 
@@ -1554,7 +1554,7 @@ finalize_build_log() {
     echo "=========================================="
     echo "Build finished"
     echo "=========================================="
-    echo "End time:   $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+    echo "End time:   $(date '+%Y-%m-%d %H:%M:%S')"
     echo "Exit code:  $exit_code"
     echo ""
     echo "=== Final disk usage ==="
