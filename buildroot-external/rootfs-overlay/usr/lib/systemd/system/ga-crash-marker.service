@@ -1,0 +1,19 @@
+[Unit]
+Description=GreenAutarky crash detection marker
+Documentation=man:systemd.special(7)
+DefaultDependencies=no
+# Start early, before most services
+After=local-fs.target mnt-data.mount
+Before=basic.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# On start: create marker indicating "boot in progress"
+ExecStart=/bin/touch /mnt/data/.ga_unclean_shutdown
+# On stop (clean shutdown): remove marker
+ExecStop=/bin/rm -f /mnt/data/.ga_unclean_shutdown
+
+[Install]
+WantedBy=sysinit.target

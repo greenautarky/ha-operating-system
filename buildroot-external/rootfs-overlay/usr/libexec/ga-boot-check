@@ -1,0 +1,56 @@
+#!/bin/sh
+# ga-boot-check - Check for unclean shutdown and log crash events
+#
+# This script runs early at boot to detect if the previous boot was unclean
+# (crash, power loss, watchdog reset, kernel panic, etc.)
+
+MARKER_FILE="/mnt/data/.ga_unclean_shutdown"
+CRASH_LOG="/mnt/data/crash_history.log"
+MAX_LOG_SIZE=102400  # 100KB max log size
+
+log_crash() {
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local boot_id
+    boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo "unknown")
+
+    # Log to journal
+    logger -t ga-crash-detect -p daemon.warning "UNCLEAN SHUTDOWN DETECTED - previous boot did not complete cleanly"
+
+    # Append to persistent crash log
+    {
+        echo "=========================================="
+        echo "UNCLEAN SHUTDOWN DETECTED"
+        echo "Detected at: ${timestamp}"
+        echo "Current boot ID: ${boot_id}"
+        echo "Possible causes: kernel panic, watchdog reset, power loss, or forced reboot"
+        echo ""
+        echo "To investigate, run:"
+        echo "  journalctl -b -1    # Previous boot logs"
+        echo "  dmesg | head -50    # Current boot kernel messages"
+        echo "=========================================="
+        echo ""
+    } >> "$CRASH_LOG"
+
+    # Rotate log if too large
+    if [ -f "$CRASH_LOG" ]; then
+        log_size=$(stat -c%s "$CRASH_LOG" 2>/dev/null || echo 0)
+        if [ "$log_size" -gt "$MAX_LOG_SIZE" ]; then
+            tail -c "$MAX_LOG_SIZE" "$CRASH_LOG" > "${CRASH_LOG}.tmp"
+            mv "${CRASH_LOG}.tmp" "$CRASH_LOG"
+        fi
+    fi
+}
+
+main() {
+    # Check if marker exists from previous boot
+    if [ -f "$MARKER_FILE" ]; then
+        log_crash
+        # Remove the stale marker (new one will be created by ga-crash-marker.service)
+        rm -f "$MARKER_FILE"
+    else
+        logger -t ga-crash-detect -p daemon.info "Clean boot - previous shutdown was graceful"
+    fi
+}
+
+main "$@"

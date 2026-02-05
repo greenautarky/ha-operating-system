@@ -1,0 +1,14 @@
+[Unit]
+Description=GreenAutarky boot check - detect unclean shutdowns
+Documentation=man:systemd.special(7)
+DefaultDependencies=no
+# Must run after filesystem is mounted but before crash marker is created
+After=local-fs.target mnt-data.mount
+Before=ga-crash-marker.service basic.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/ga-boot-check
+
+[Install]
+WantedBy=sysinit.target
