@@ -13,6 +13,8 @@ ExecStartPre=/bin/mkdir -p /mnt/data/telegraf
 ExecStartPre=/bin/sh -c '[ -f /mnt/data/ga-env.conf ] && . /mnt/data/ga-env.conf || . /etc/ga-env.conf 2>/dev/null; echo "GA_ENV=${GA_ENV:-dev}" > /mnt/data/telegraf/env'
 # Read device UUID into env file for telegraf.conf to use
 ExecStartPre=/bin/sh -c 'UUID=$(grep -o "\"uuid\": \"[^\"]*\"" /mnt/data/supervisor/homeassistant/.storage/core.uuid 2>/dev/null | cut -d\" -f4); echo "DEVICE_UUID=${UUID:-unknown}" >> /mnt/data/telegraf/env'
+# Auto-detect default gateway for connectivity monitoring
+ExecStartPre=/bin/sh -c 'GW=$(ip route | grep "^default" | head -1 | awk "{print \$3}"); echo "GATEWAY_IP=${GW:-unknown}" >> /mnt/data/telegraf/env'
 EnvironmentFile=-/mnt/data/telegraf/env
 
 # Run Telegraf from rootfs config (OTA-updatable, per-device values via env vars)
