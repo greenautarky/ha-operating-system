@@ -14,8 +14,8 @@ log_crash() {
     local boot_id
     boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo "unknown")
 
-    # Log to journal
-    logger -t ga-crash-detect -p daemon.warning "UNCLEAN SHUTDOWN DETECTED - previous boot did not complete cleanly"
+    # Log to journal (echo goes to journal via systemd service stdout)
+    echo "WARNING: UNCLEAN SHUTDOWN DETECTED - previous boot did not complete cleanly"
 
     # Append to persistent crash log
     {
@@ -49,7 +49,7 @@ main() {
         # Remove the stale marker (new one will be created by ga-crash-marker.service)
         rm -f "$MARKER_FILE"
     else
-        logger -t ga-crash-detect -p daemon.info "Clean boot - previous shutdown was graceful"
+        echo "Clean boot - previous shutdown was graceful"
     fi
 }
 
