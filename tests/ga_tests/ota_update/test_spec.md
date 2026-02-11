@@ -57,3 +57,57 @@
 - **Action**: Verify journal history persists across update
 - **Command**: `journalctl --list-boots`
 - **Expected**: Boots from before and after OTA visible
+
+### OTA-09: Full RAUC update procedure (end-to-end)
+- **Action**: Transfer bundle to device and install via RAUC
+- **Procedure**:
+  1. Build image: `./scripts/ga_build.sh update` (on build host)
+  2. Locate bundle: `ls ga_output/images/*.raucb`
+  3. Transfer to device: `scp ga_output/images/*.raucb root@<device>:/tmp/`
+  4. Pre-flight checks on device:
+     ```
+     rauc status
+     echo "pre-ota-marker" > /mnt/data/ota_test_marker
+     cat /etc/os-release | grep GA_
+     ```
+  5. Install bundle:
+     ```
+     rauc install /tmp/*.raucb
+     ```
+  6. Verify installation:
+     ```
+     rauc status   # inactive slot should show "good"
+     ```
+  7. Reboot: `reboot`
+  8. Post-update verification:
+     ```
+     rauc status                          # booted from new slot
+     cat /etc/os-release | grep GA_       # new build info
+     cat /mnt/data/ota_test_marker        # persistent data intact
+     systemctl is-active telegraf fluent-bit  # services running
+     cat /mnt/data/telegraf/env           # UUID + GA_ENV populated
+     journalctl --list-boots              # previous boots visible
+     ```
+- **Expected**: All checks pass, device runs new image with persistent data intact
+- **Cleanup**: `rm /mnt/data/ota_test_marker && rm /tmp/*.raucb`
+
+### OTA-10: RAUC bundle signature validation
+- **Action**: Attempt to install an unsigned/tampered bundle
+- **Command**: `cp /tmp/valid.raucb /tmp/tampered.raucb && echo "x" >> /tmp/tampered.raucb && rauc install /tmp/tampered.raucb 2>&1`
+- **Expected**: Installation fails with signature verification error
+
+### OTA-11: RAUC update with insufficient space
+- **Action**: Verify RAUC handles full disk gracefully
+- **Command**: `rauc install /tmp/*.raucb` (monitor with `df -h`)
+- **Expected**: RAUC reports clear error if space insufficient, does not corrupt current slot
+
+### OTA-12: Services auto-populate env files after OTA
+- **Action**: Delete env files before OTA, verify they're recreated on first boot
+- **Command**:
+  - Before OTA: `rm -f /mnt/data/telegraf/env /mnt/data/fluent-bit/env`
+  - After OTA + reboot:
+    ```
+    cat /mnt/data/telegraf/env
+    cat /mnt/data/fluent-bit/env
+    ```
+- **Expected**: Both env files recreated with GA_ENV and DEVICE_UUID values
