@@ -3,8 +3,6 @@
 ## High Priority
 
 ### Fluent-Bit Configuration
-- [ ] Configure Loki endpoint (currently hardcoded to `loki.greenautarky.com` in `buildroot-external/package/fluent-bit-config/fluent-bit.conf`)
-- [ ] Implement per-device UUID generation (currently placeholder `XXX`)
 - [ ] Populate `buildroot-external/package/fluent-bit-config/parsers.conf` (currently empty)
 - [ ] Add fallback output if Loki is unreachable
 
@@ -20,10 +18,15 @@
 ## Medium Priority
 
 ### Crash & Diagnostics
-- [ ] Test crash detection: verify `ga-crash-marker.service` and `ga-boot-check.service` work correctly
-  - Simulate crash (watchdog timeout, power pull, `echo c > /proc/sysrq-trigger`)
-  - Verify `/mnt/data/crash_history.log` is populated
-  - Verify `journalctl -b -1` shows previous boot logs
+- [ ] Test crash detection on device:
+  - **Test 1 - Kernel panic:** `echo c > /proc/sysrq-trigger`, reboot, verify:
+    - `journalctl -t ga-crash-detect -b 0` → "UNCLEAN SHUTDOWN DETECTED"
+    - `cat /mnt/data/crash_history.log` → new entry with timestamp
+    - `journalctl -b -1` → previous boot logs visible
+  - **Test 2 - Clean reboot (control):** `reboot`, verify:
+    - `journalctl -t ga-crash-detect -b 0` → "Clean boot"
+    - `crash_history.log` → no new entry
+  - **Test 3 - Power pull:** unplug power, verify same as Test 1
 - [ ] Integrate `collect_crash_bundle.sh` with automated upload/reporting
 - [ ] Document watchdog test procedures using `ga_test_wdt`
 
@@ -34,7 +37,6 @@
 - [ ] Add error recovery / rollback logic to `ga_flasher` for failed flashes
 
 ### Build Script (`scripts/ga_build.sh`)
-- [ ] Make Fluent-Bit output endpoints configurable via environment variables
 - [ ] Validate genimage.cfg path resolution (multiple fallback searches)
 
 ## Low Priority
@@ -79,3 +81,11 @@
 - [x] Clean up repo: removed accidental `:56:` file, duplicate copy scripts
 - [x] Add crash detection services (`ga-crash-marker.service`, `ga-boot-check.service`)
 - [x] Configure journald for persistent multi-boot storage (`Storage=persistent`, 7-day retention)
+- [x] Loki endpoint configured (`loki.greenautarky.com` with static DNS)
+- [x] Per-device UUID loaded from HA `core.uuid` via env vars (Telegraf + Fluent-Bit)
+- [x] Configs run from rootfs `/etc/` (OTA-updatable), per-device values via environment
+- [x] Fix telegraf influxdb password (stray `^`)
+- [x] Fix fluent-bit UUID parsing (same `grep -o` fix as telegraf)
+- [x] Use local time instead of UTC for build timestamps
+- [x] Add network connectivity monitoring (`inputs.ping` with auto-detected gateway)
+- [x] Fluent-Bit endpoints configurable via env vars (removed from build script TODO)
