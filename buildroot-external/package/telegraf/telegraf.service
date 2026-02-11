@@ -15,7 +15,7 @@ Environment=GA_ENV=dev DEVICE_UUID=unknown GATEWAY_IP=unknown
 # Load GA environment (dev/prod) - check data partition override first, then rootfs default
 ExecStartPre=/bin/sh -c '[ -f /mnt/data/ga-env.conf ] && . /mnt/data/ga-env.conf || . /etc/ga-env.conf 2>/dev/null; echo "GA_ENV=${GA_ENV:-dev}" > /mnt/data/telegraf/env'
 # Read device UUID into env file for telegraf.conf to use (UUID regex avoids quote escaping issues)
-ExecStartPre=/bin/sh -c 'UUID=$(grep -oE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" /mnt/data/supervisor/homeassistant/.storage/core.uuid 2>/dev/null | head -1); echo "DEVICE_UUID=${UUID:-unknown}" >> /mnt/data/telegraf/env'
+ExecStartPre=/bin/sh -c 'UUID=$(grep -oE "[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}" /mnt/data/supervisor/homeassistant/.storage/core.uuid 2>/dev/null | head -1); echo "DEVICE_UUID=${UUID:-unknown}" >> /mnt/data/telegraf/env'
 # Auto-detect default gateway for connectivity monitoring
 ExecStartPre=/bin/sh -c 'GW=$(ip route | grep "^default" | head -1 | awk "{print \$3}"); echo "GATEWAY_IP=${GW:-unknown}" >> /mnt/data/telegraf/env'
 # EnvironmentFile overrides defaults above on subsequent starts
