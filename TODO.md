@@ -53,6 +53,17 @@
 ### Fluent-Bit Inputs
 - [ ] Consider enabling kernel/syslog input (currently commented out)
 
+### Testing
+- [ ] Implement automated tests from `tests/ga_tests/` test specs:
+  - `crash_detection/` (9 tests) - crash marker, journald persistence, log rotation
+  - `ping/` (7 tests) - native ICMP, gateway auto-detect, InfluxDB delivery
+  - `telemetry/` (12 tests) - telegraf/fluent-bit env vars, UUID, rootfs configs
+  - `network/` (6 tests) - static DNS, endpoint reachability, gateway detection
+  - `environment/` (8 tests) - dev/prod settings, runtime override, os-release
+  - `ota_update/` (8 tests) - RAUC config delivery, data persistence, rollback
+  - `watchdog/` (4 tests) - device presence, timeout, trigger, normal operation
+- [ ] Integrate ga_tests with existing labgrid/QEMU test framework
+
 ### Documentation
 - [ ] Build environment setup guide
 - [ ] Development workflow / contributing guide
