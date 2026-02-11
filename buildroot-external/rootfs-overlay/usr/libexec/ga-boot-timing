@@ -1,0 +1,66 @@
+#!/bin/sh
+# ga-boot-timing - Output boot timing metrics in InfluxDB line protocol
+# Called by telegraf inputs.exec to report boot milestones to InfluxDB
+#
+# Uses systemd monotonic timestamps (microseconds since boot) for per-service
+# timing, and systemd-analyze for kernel/userspace breakdown.
+
+# Get monotonic activation time for a systemd unit (seconds from boot)
+get_service_time() {
+    us=$(systemctl show -p ActiveEnterTimestampMonotonic "$1" 2>/dev/null | cut -d= -f2)
+    if [ -n "$us" ] && [ "$us" != "0" ]; then
+        echo "$us" | awk '{printf "%.3f", $1/1000000}'
+    fi
+}
+
+# Parse systemd-analyze for kernel + userspace totals
+parse_analyze() {
+    line=$(systemd-analyze 2>/dev/null | head -1)
+    [ -z "$line" ] && return
+
+    # Extract seconds values - handles "1.234s" format
+    # systemd-analyze: "Startup finished in 2.345s (kernel) + 12.456s (userspace) = 14.801s"
+    KERNEL=$(echo "$line" | grep -oE '[0-9.]+s \(kernel\)' | grep -oE '[0-9.]+')
+    USERSPACE=$(echo "$line" | grep -oE '[0-9.]+s \(userspace\)' | grep -oE '[0-9.]+')
+    TOTAL=$(echo "$line" | grep -oE '= [0-9.]+s' | grep -oE '[0-9.]+')
+}
+
+# --- Collect metrics ---
+
+parse_analyze
+
+BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null | tr -d '-')
+
+# Key service milestones (seconds from boot start)
+T_NETWORK=$(get_service_time "network-online.target")
+T_DOCKER=$(get_service_time "docker.service")
+T_HASSIO=$(get_service_time "hassio-supervisor.service")
+T_TELEGRAF=$(get_service_time "telegraf.service")
+T_FLUENTBIT=$(get_service_time "fluent-bit.service")
+T_CRASH=$(get_service_time "ga-crash-marker.service")
+T_MULTIUSER=$(get_service_time "multi-user.target")
+
+# --- Build InfluxDB line protocol ---
+# Format: measurement,tag=val field1=val1,field2=val2
+
+TAGS=""
+[ -n "$BOOT_ID" ] && TAGS=",boot_id=${BOOT_ID}"
+
+FIELDS=""
+[ -n "$KERNEL" ] && FIELDS="${FIELDS}kernel=${KERNEL},"
+[ -n "$USERSPACE" ] && FIELDS="${FIELDS}userspace=${USERSPACE},"
+[ -n "$TOTAL" ] && FIELDS="${FIELDS}total=${TOTAL},"
+[ -n "$T_NETWORK" ] && FIELDS="${FIELDS}network_online=${T_NETWORK},"
+[ -n "$T_DOCKER" ] && FIELDS="${FIELDS}docker=${T_DOCKER},"
+[ -n "$T_HASSIO" ] && FIELDS="${FIELDS}hassio_supervisor=${T_HASSIO},"
+[ -n "$T_TELEGRAF" ] && FIELDS="${FIELDS}telegraf=${T_TELEGRAF},"
+[ -n "$T_FLUENTBIT" ] && FIELDS="${FIELDS}fluent_bit=${T_FLUENTBIT},"
+[ -n "$T_CRASH" ] && FIELDS="${FIELDS}crash_marker=${T_CRASH},"
+[ -n "$T_MULTIUSER" ] && FIELDS="${FIELDS}multi_user=${T_MULTIUSER},"
+
+# Remove trailing comma
+FIELDS=$(echo "$FIELDS" | sed 's/,$//')
+
+if [ -n "$FIELDS" ]; then
+    echo "boot_timing${TAGS} ${FIELDS}"
+fi
