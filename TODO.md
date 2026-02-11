@@ -2,6 +2,15 @@
 
 ## High Priority
 
+### Dev/Prod Configuration Strategy (needs discussion)
+- [ ] Define which configs/behaviors differ between dev and prod builds
+  - Telegraf: endpoints, collection intervals, verbosity?
+  - Fluent-Bit: log level, output targets, retention?
+  - journald: log retention, max size?
+  - ga-env.conf: which values drive which behavior?
+- [ ] Decide: build-time baking vs runtime override strategy
+- [ ] Document the dev vs prod matrix for all services
+
 ### Fluent-Bit Configuration
 - [ ] Populate `buildroot-external/package/fluent-bit-config/parsers.conf` (currently empty)
 - [ ] Add fallback output if Loki is unreachable
