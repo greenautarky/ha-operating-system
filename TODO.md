@@ -60,7 +60,10 @@
   - `telemetry/` (12 tests) - telegraf/fluent-bit env vars, UUID, rootfs configs
   - `network/` (6 tests) - static DNS, endpoint reachability, gateway detection
   - `environment/` (8 tests) - dev/prod settings, runtime override, os-release
-  - `ota_update/` (8 tests) - RAUC config delivery, data persistence, rollback
+  - `ota_update/` (12 tests) - RAUC end-to-end procedure, signature validation, config delivery, rollback
+  - `sd_flash/` (14 tests) - image flashing, partition layout, first boot, provisioning image
+  - `boot_timing/` (10 tests) - boot milestones, systemd-analyze, telegraf exec integration
+  - `stress/` (10 tests) - CPU, memory, I/O, thermal, combined, 24h soak (stress-ng)
   - `watchdog/` (4 tests) - device presence, timeout, trigger, normal operation
 - [ ] Integrate ga_tests with existing labgrid/QEMU test framework
 
