@@ -10,7 +10,9 @@ PATH=/sbin:/bin:/usr/sbin:/usr/bin
 
 # Paths whose underlying filesystem should be monitored.
 # The guard triggers if ANY monitored filesystem drops below thresholds.
-MONITOR_PATHS="/ /mnt/data /mnt/data/docker "
+# NOTE: Do NOT include / — it is a read-only erofs rootfs with 0 free space,
+#       which causes the script to abort thinking it cannot determine free space.
+MONITOR_PATHS="/mnt/data /mnt/data/docker"
 
 # Thresholds (MiB) - conservative defaults for embedded
 SOFT_FREE_MIB=300       # below -> soft cleanup
@@ -58,9 +60,7 @@ LOCKDIR="/run/ga_disk_guard.lock"
 # INTERNALS
 ###############################################################################
 log() {
-  if command -v logger >/dev/null 2>&1; then
-    logger -t ga_disk_guard "$*"
-  else
+  if [ -t 1 ] || [ "${GA_DG_VERBOSE:-0}" = "1" ]; then
     echo "ga_disk_guard: $*"
   fi
 }
