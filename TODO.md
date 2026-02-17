@@ -64,6 +64,7 @@
   - `sd_flash/` (14 tests) - image flashing, partition layout, first boot, provisioning image
   - `boot_timing/` (10 tests) - boot milestones, systemd-analyze, telegraf exec integration
   - `stress/` (10 tests) - CPU, memory, I/O, thermal, combined, 24h soak (stress-ng)
+  - `disk_guard/` (14 tests) - thresholds, allowlist, cleanup rules, journald vacuum, lock, timer
   - `watchdog/` (4 tests) - device presence, timeout, trigger, normal operation
 - [ ] Integrate ga_tests with existing labgrid/QEMU test framework
 
