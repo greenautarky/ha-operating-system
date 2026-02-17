@@ -11,8 +11,13 @@ run_test "BOOT-01" "Boot timing script exists and executable" \
 run_test "BOOT-02" "Script produces InfluxDB line protocol" \
   "/usr/libexec/ga-boot-timing 2>/dev/null | grep -q '^boot_timing'"
 
-run_test "BOOT-03" "Kernel time present in output" \
-  "/usr/libexec/ga-boot-timing 2>/dev/null | grep -qE 'kernel=[0-9]'"
+# systemd-analyze may not be installed (HAOS minimal image)
+if command -v systemd-analyze >/dev/null 2>&1; then
+  run_test "BOOT-03" "Kernel time present in output" \
+    "/usr/libexec/ga-boot-timing 2>/dev/null | grep -qE 'kernel=[0-9]'"
+else
+  skip_test "BOOT-03" "Kernel time present in output" "systemd-analyze not available"
+fi
 
 run_test "BOOT-04a" "network_online milestone present" \
   "/usr/libexec/ga-boot-timing 2>/dev/null | grep -q 'network_online='"
