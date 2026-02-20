@@ -45,6 +45,13 @@
 ### Image Flasher
 - [ ] Add error recovery / rollback logic to `ga_flasher` for failed flashes
 
+### DNS Entries & Handling
+- [ ] Review static DNS entries in `/etc/hosts` (currently: `influx.greenautarky.com`, `loki.greenautarky.com`)
+- [ ] Decide on DNS strategy: static `/etc/hosts` vs dynamic resolution vs NetworkManager DNS
+- [ ] Handle DNS fallback when NetBird VPN is down (static entries point to VPN IP)
+- [ ] Make DNS entries configurable per environment (dev vs prod endpoints)
+- [ ] Consider adding health-check/retry logic for DNS-dependent services (telegraf, fluent-bit)
+
 ### Build Script (`scripts/ga_build.sh`)
 - [ ] Validate genimage.cfg path resolution (multiple fallback searches)
 
@@ -66,6 +73,16 @@
   - `stress/` (10 tests) - CPU, memory, I/O, thermal, combined, 24h soak (stress-ng)
   - `disk_guard/` (14 tests) - thresholds, allowlist, cleanup rules, journald vacuum, lock, timer
   - `watchdog/` (4 tests) - device presence, timeout, trigger, normal operation
+  - `power_cycle/` (10 tests) - HOST-SIDE: N-cycle power-off/on endurance, boot time stats, hang detection, filesystem integrity
+- [ ] Test power-cycle stress test script (`power_cycle/test.sh`):
+  - [ ] Validate with `--cycles 2 --off-time 3` in manual mode (basic loop)
+  - [ ] Verify CSV output format and boot timing accuracy
+  - [ ] Test two-phase boot detection (no false positive from stale serial buffer)
+  - [ ] Test Ctrl-C produces valid partial summary
+  - [ ] Test `--post-boot-check` runs PWR-04..07 via serial
+  - [ ] Test `--power-api` with host-power-service.py (uhubctl)
+  - [ ] Test `--power-cmd-off/on` with Tasmota or smart plug
+  - [ ] Run full 100-cycle endurance test and review results
 - [ ] Integrate ga_tests with existing labgrid/QEMU test framework
 
 ### Documentation
