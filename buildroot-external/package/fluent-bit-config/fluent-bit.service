@@ -12,12 +12,14 @@ ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit/storage
 ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit/db
 
 # Safe defaults (EnvironmentFile is read BEFORE ExecStartPre, so first boot needs these)
-Environment=GA_ENV=dev DEVICE_UUID=unknown
+Environment=GA_ENV=dev DEVICE_UUID=unknown DEVICE_LABEL=unknown
 
 # Load GA environment (dev/prod) - check data partition override first, then rootfs default
 ExecStartPre=/bin/sh -c '[ -f /mnt/data/ga-env.conf ] && . /mnt/data/ga-env.conf || . /etc/ga-env.conf 2>/dev/null; echo "GA_ENV=${GA_ENV:-dev}" > /mnt/data/fluent-bit/env'
 # Read device UUID into env file for fluent-bit.conf to use (UUID regex avoids quote escaping issues)
 ExecStartPre=/bin/sh -c 'UUID=$(grep -oE "[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}" /mnt/data/supervisor/homeassistant/.storage/core.uuid 2>/dev/null | head -1); echo "DEVICE_UUID=${UUID:-unknown}" >> /mnt/data/fluent-bit/env'
+# Read device label (QR code, e.g. KIB-SON-00001234) for log tagging
+ExecStartPre=/bin/sh -c 'LABEL=$(cat /mnt/data/ga-device-label 2>/dev/null); echo "DEVICE_LABEL=${LABEL:-unknown}" >> /mnt/data/fluent-bit/env'
 # EnvironmentFile overrides defaults above on subsequent starts
 EnvironmentFile=-/mnt/data/fluent-bit/env
 
