@@ -73,6 +73,7 @@
   - `stress/` (10 tests) - CPU, memory, I/O, thermal, combined, 24h soak (stress-ng)
   - `disk_guard/` (14 tests) - thresholds, allowlist, cleanup rules, journald vacuum, lock, timer
   - `watchdog/` (4 tests) - device presence, timeout, trigger, normal operation
+  - `config_verify/` (12 tests) - rootfs config content assertions, DEVICE_LABEL/UUID in telegraf+fluent-bit, safe defaults
   - `power_cycle/` (10 tests) - HOST-SIDE: N-cycle power-off/on endurance, boot time stats, hang detection, filesystem integrity
 - [ ] Test power-cycle stress test script (`power_cycle/test.sh`):
   - [ ] Validate with `--cycles 2 --off-time 3` in manual mode (basic loop)
@@ -83,6 +84,12 @@
   - [ ] Test `--power-api` with host-power-service.py (uhubctl)
   - [ ] Test `--power-cmd-off/on` with Tasmota or smart plug
   - [ ] Run full 100-cycle endurance test and review results
+- [ ] Run `config_verify` suite on device after next RAUC OTA update to confirm deployment
+- [ ] Build-time config manifest: generate `/etc/ga-config-manifest.json` with sha256 checksums
+  of critical config files (telegraf.conf, fluent-bit.conf, service files) during post-build
+- [ ] Runtime manifest verification test (CFG-13+): compare deployed file hashes against manifest
+- [ ] RAUC slot content verification: after RAUC install, verify inactive slot before rebooting
+- [ ] Automated post-OTA smoke test: run `config_verify` suite on first boot after OTA
 - [ ] Integrate ga_tests with existing labgrid/QEMU test framework
 
 ### Documentation
