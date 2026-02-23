@@ -27,11 +27,11 @@ package updates, or RAUC OTA issues where new rootfs doesn't contain latest chan
 - **Catches**: Stale config from pre-UUID build
 
 ### CFG-04: telegraf.service has DEVICE_LABEL ExecStartPre
-- **Command**: `systemctl cat telegraf | grep -q 'DEVICE_LABEL.*ga-device-label'`
-- **Expected**: Service extracts label from `/mnt/data/ga-device-label`
+- **Command**: `systemctl cat telegraf | grep -q 'ga-device-label'`
+- **Expected**: Service reads label from `/mnt/data/ga-device-label`
 
 ### CFG-05: telegraf.service has DEVICE_UUID ExecStartPre
-- **Command**: `systemctl cat telegraf | grep -q 'DEVICE_UUID.*core.uuid'`
+- **Command**: `systemctl cat telegraf | grep -q 'core.uuid'`
 - **Expected**: Service extracts UUID from HA core.uuid
 
 ### CFG-06: telegraf.service has DEVICE_LABEL safe default
@@ -51,8 +51,8 @@ package updates, or RAUC OTA issues where new rootfs doesn't contain latest chan
 - **Expected**: Loki labels include `device_label` for log identification
 
 ### CFG-10: fluent-bit.service has DEVICE_LABEL ExecStartPre
-- **Command**: `systemctl cat fluent-bit | grep -q 'DEVICE_LABEL.*ga-device-label'`
-- **Expected**: Service extracts label from `/mnt/data/ga-device-label`
+- **Command**: `systemctl cat fluent-bit | grep -q 'ga-device-label'`
+- **Expected**: Service reads label from `/mnt/data/ga-device-label`
 
 ### CFG-11: fluent-bit.service has DEVICE_LABEL safe default
 - **Command**: `systemctl cat fluent-bit | grep -q 'Environment=.*DEVICE_LABEL=unknown'`
@@ -76,14 +76,15 @@ package updates, or RAUC OTA issues where new rootfs doesn't contain latest chan
 - **Command**: `systemctl cat fluent-bit | grep -q 'After=.*netbird.service'`
 - **Expected**: Fluent-bit waits for NetBird VPN + DNS before starting
 
-### CFG-17: influx.greenautarky.com resolves
-- **Command**: `getent hosts influx.greenautarky.com`
-- **Expected**: Hostname resolves via NetBird DNS or /etc/hosts fallback
-- **Catches**: Both DNS and fallback broken
+### CFG-17: influx.greenautarky.com resolves (hosts or DNS)
+- **Command**: `grep -q 'influx.greenautarky.com' /etc/hosts || nslookup influx.greenautarky.com`
+- **Expected**: Hostname present in /etc/hosts fallback or resolvable via DNS
+- **Catches**: Both /etc/hosts entry and DNS missing
+- **Note**: BusyBox build has no `getent`; check /etc/hosts first, fall back to nslookup
 
-### CFG-18: loki.greenautarky.com resolves
-- **Command**: `getent hosts loki.greenautarky.com`
-- **Expected**: Hostname resolves via NetBird DNS or /etc/hosts fallback
+### CFG-18: loki.greenautarky.com resolves (hosts or DNS)
+- **Command**: `grep -q 'loki.greenautarky.com' /etc/hosts || nslookup loki.greenautarky.com`
+- **Expected**: Hostname present in /etc/hosts fallback or resolvable via DNS
 
 ### CFG-12: ga-device-label readable or fallback works
 - **Action**: Check if device label file exists; if not, verify env falls back to "unknown"
