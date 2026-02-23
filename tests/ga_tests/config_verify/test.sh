@@ -44,6 +44,25 @@ run_test "CFG-10" "fluent-bit.service has DEVICE_LABEL ExecStartPre" \
 run_test "CFG-11" "fluent-bit.service has DEVICE_LABEL safe default" \
   "systemctl cat fluent-bit 2>/dev/null | grep -q 'Environment=.*DEVICE_LABEL=unknown'"
 
+# --- DNS & service ordering ---
+run_test "CFG-13" "/etc/hosts has greenautarky fallback entry" \
+  "grep -q 'influx.greenautarky.com' /etc/hosts"
+
+run_test "CFG-14" "/etc/hosts has loki fallback entry" \
+  "grep -q 'loki.greenautarky.com' /etc/hosts"
+
+run_test "CFG-15" "telegraf.service ordered after netbird" \
+  "systemctl cat telegraf 2>/dev/null | grep -q 'After=.*netbird.service'"
+
+run_test "CFG-16" "fluent-bit.service ordered after netbird" \
+  "systemctl cat fluent-bit 2>/dev/null | grep -q 'After=.*netbird.service'"
+
+run_test "CFG-17" "influx.greenautarky.com resolves" \
+  "getent hosts influx.greenautarky.com >/dev/null 2>&1"
+
+run_test "CFG-18" "loki.greenautarky.com resolves" \
+  "getent hosts loki.greenautarky.com >/dev/null 2>&1"
+
 # --- Device label file ---
 if [ -f /mnt/data/ga-device-label ]; then
   run_test_show "CFG-12" "ga-device-label file has valid content" \

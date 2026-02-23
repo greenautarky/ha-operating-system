@@ -46,9 +46,12 @@
 - [ ] Add error recovery / rollback logic to `ga_flasher` for failed flashes
 
 ### DNS Entries & Handling
-- [ ] Review static DNS entries in `/etc/hosts` (currently: `influx.greenautarky.com`, `loki.greenautarky.com`)
-- [ ] Decide on DNS strategy: static `/etc/hosts` vs dynamic resolution vs NetworkManager DNS
-- [ ] Handle DNS fallback when NetBird VPN is down (static entries point to VPN IP)
+- [ ] **Configure NetBird DNS** in management UI:
+  - Add `influx.greenautarky.com` → ga-tools NetBird IP
+  - Add `loki.greenautarky.com` → ga-tools NetBird IP
+  - Assign nameserver group to device peer groups
+- [ ] Test NetBird DNS resolution on device after configuration (`nslookup influx.greenautarky.com`)
+- [ ] Verify `/etc/hosts` fallback works when NetBird DNS is down
 - [ ] Make DNS entries configurable per environment (dev vs prod endpoints)
 - [ ] Consider adding health-check/retry logic for DNS-dependent services (telegraf, fluent-bit)
 
@@ -73,7 +76,7 @@
   - `stress/` (10 tests) - CPU, memory, I/O, thermal, combined, 24h soak (stress-ng)
   - `disk_guard/` (14 tests) - thresholds, allowlist, cleanup rules, journald vacuum, lock, timer
   - `watchdog/` (4 tests) - device presence, timeout, trigger, normal operation
-  - `config_verify/` (12 tests) - rootfs config content assertions, DEVICE_LABEL/UUID in telegraf+fluent-bit, safe defaults
+  - `config_verify/` (18 tests) - rootfs config content assertions, DEVICE_LABEL/UUID, DNS fallback, NetBird service ordering
   - `power_cycle/` (10 tests) - HOST-SIDE: N-cycle power-off/on endurance, boot time stats, hang detection, filesystem integrity
 - [ ] Test power-cycle stress test script (`power_cycle/test.sh`):
   - [ ] Validate with `--cycles 2 --off-time 3` in manual mode (basic loop)
