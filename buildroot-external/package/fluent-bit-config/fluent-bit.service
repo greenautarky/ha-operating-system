@@ -1,6 +1,6 @@
 [Unit]
 Description=Fluent Bit log agent
-After=network-online.target hassio-supervisor.service
+After=network-online.target hassio-supervisor.service netbird.service
 Wants=network-online.target
 
 [Service]
