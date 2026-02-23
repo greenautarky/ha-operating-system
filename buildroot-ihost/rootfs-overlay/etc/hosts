@@ -3,5 +3,6 @@
 127.0.0.1       localhost
 ::1             localhost ip6-localhost ip6-loopback
 
-# GreenAutarky services (NetBird IP)
+# GreenAutarky services — fallback when NetBird DNS is unavailable
+# Primary resolution: NetBird DNS (managed via NetBird UI)
 100.126.142.217 influx.greenautarky.com loki.greenautarky.com

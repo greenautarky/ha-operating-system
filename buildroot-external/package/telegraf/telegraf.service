@@ -1,6 +1,6 @@
 [Unit]
 Description=Telegraf metrics agent
-After=network-online.target docker.service hassio-supervisor.service
+After=network-online.target docker.service hassio-supervisor.service netbird.service
 Wants=network-online.target
 
 [Service]

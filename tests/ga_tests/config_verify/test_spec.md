@@ -58,6 +58,33 @@ package updates, or RAUC OTA issues where new rootfs doesn't contain latest chan
 - **Command**: `systemctl cat fluent-bit | grep -q 'Environment=.*DEVICE_LABEL=unknown'`
 - **Expected**: Fallback value present for first-boot safety
 
+### CFG-13: /etc/hosts has influx fallback entry
+- **Command**: `grep -q 'influx.greenautarky.com' /etc/hosts`
+- **Expected**: Static fallback entry exists for when NetBird DNS is unavailable
+- **Catches**: Missing /etc/hosts after rootfs update
+
+### CFG-14: /etc/hosts has loki fallback entry
+- **Command**: `grep -q 'loki.greenautarky.com' /etc/hosts`
+- **Expected**: Static fallback entry exists for Loki endpoint
+
+### CFG-15: telegraf.service ordered after netbird
+- **Command**: `systemctl cat telegraf | grep -q 'After=.*netbird.service'`
+- **Expected**: Telegraf waits for NetBird VPN + DNS before starting
+- **Catches**: Stale service file without NetBird ordering
+
+### CFG-16: fluent-bit.service ordered after netbird
+- **Command**: `systemctl cat fluent-bit | grep -q 'After=.*netbird.service'`
+- **Expected**: Fluent-bit waits for NetBird VPN + DNS before starting
+
+### CFG-17: influx.greenautarky.com resolves
+- **Command**: `getent hosts influx.greenautarky.com`
+- **Expected**: Hostname resolves via NetBird DNS or /etc/hosts fallback
+- **Catches**: Both DNS and fallback broken
+
+### CFG-18: loki.greenautarky.com resolves
+- **Command**: `getent hosts loki.greenautarky.com`
+- **Expected**: Hostname resolves via NetBird DNS or /etc/hosts fallback
+
 ### CFG-12: ga-device-label readable or fallback works
 - **Action**: Check if device label file exists; if not, verify env falls back to "unknown"
 - **Expected**: Either label file present with valid content, or env shows `DEVICE_LABEL=unknown`
