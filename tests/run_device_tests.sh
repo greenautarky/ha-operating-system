@@ -62,7 +62,7 @@ usage() {
     echo "  -h, --help            Show this help"
     echo ""
     echo "Available suites:"
-    echo "  crash_detection telemetry environment network ping boot_timing disk_guard watchdog"
+    echo "  crash_detection telemetry environment network ping boot_timing disk_guard watchdog config_verify"
     exit 1
 }
 
@@ -186,7 +186,7 @@ run_serial() {
             if echo "$output" | grep -q "DL_OK"; then
                 echo "Downloaded test runner. Running tests..."
                 # Download all test files
-                for suite in crash_detection telemetry environment network ping boot_timing disk_guard watchdog; do
+                for suite in crash_detection telemetry environment network ping boot_timing disk_guard watchdog config_verify; do
                     "$SERIAL_TMUX" send "$port" "mkdir -p $REMOTE_DIR/$suite $REMOTE_DIR/lib"
                     sleep 0.5
                     "$SERIAL_TMUX" send "$port" "wget -q http://${host_ip}:${http_port}/$suite/test.sh -O $REMOTE_DIR/$suite/test.sh 2>/dev/null"
