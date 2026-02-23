@@ -14,14 +14,14 @@ define FLUENT_BIT_CONFIG_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0644 $(FLUENT_BIT_CONFIG_PKGDIR)/parsers.conf \
 		$(TARGET_DIR)/etc/fluent-bit/parsers.conf
 
-	# Install systemd service
-	#$(INSTALL) -D -m 0644 $(FLUENT_BIT_CONFIG_PKGDIR)/fluent-bit.service \
-	#	$(TARGET_DIR)/etc/systemd/system/fluent-bit.service
+	# Install systemd service (overrides upstream fluent-bit.service with GA version)
+	$(INSTALL) -D -m 0644 $(FLUENT_BIT_CONFIG_PKGDIR)/fluent-bit.service \
+		$(TARGET_DIR)/usr/lib/systemd/system/fluent-bit.service
 
 	# Enable at boot
-	#mkdir -p $(TARGET_DIR)/etc/systemd/system/multi-user.target.wants
-	#ln -sf ../fluent-bit.service \
-	#	$(TARGET_DIR)/etc/systemd/system/multi-user.target.wants/fluent-bit.service
+	mkdir -p $(TARGET_DIR)/etc/systemd/system/multi-user.target.wants
+	ln -sf /usr/lib/systemd/system/fluent-bit.service \
+		$(TARGET_DIR)/etc/systemd/system/multi-user.target.wants/fluent-bit.service
 endef
 
 $(eval $(generic-package))

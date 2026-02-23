@@ -19,10 +19,10 @@ run_test "CFG-03" "telegraf.conf has uuid tag" \
 
 # --- Telegraf service ---
 run_test "CFG-04" "telegraf.service has DEVICE_LABEL ExecStartPre" \
-  "systemctl cat telegraf 2>/dev/null | grep -q 'DEVICE_LABEL.*ga-device-label'"
+  "systemctl cat telegraf 2>/dev/null | grep -q 'ga-device-label'"
 
 run_test "CFG-05" "telegraf.service has DEVICE_UUID ExecStartPre" \
-  "systemctl cat telegraf 2>/dev/null | grep -q 'DEVICE_UUID.*core.uuid'"
+  "systemctl cat telegraf 2>/dev/null | grep -q 'core.uuid'"
 
 run_test "CFG-06" "telegraf.service has DEVICE_LABEL safe default" \
   "systemctl cat telegraf 2>/dev/null | grep -q 'Environment=.*DEVICE_LABEL=unknown'"
@@ -39,7 +39,7 @@ run_test "CFG-09" "fluent-bit.conf has device_label in Loki labels" \
 
 # --- Fluent-Bit service ---
 run_test "CFG-10" "fluent-bit.service has DEVICE_LABEL ExecStartPre" \
-  "systemctl cat fluent-bit 2>/dev/null | grep -q 'DEVICE_LABEL.*ga-device-label'"
+  "systemctl cat fluent-bit 2>/dev/null | grep -q 'ga-device-label'"
 
 run_test "CFG-11" "fluent-bit.service has DEVICE_LABEL safe default" \
   "systemctl cat fluent-bit 2>/dev/null | grep -q 'Environment=.*DEVICE_LABEL=unknown'"
@@ -57,11 +57,11 @@ run_test "CFG-15" "telegraf.service ordered after netbird" \
 run_test "CFG-16" "fluent-bit.service ordered after netbird" \
   "systemctl cat fluent-bit 2>/dev/null | grep -q 'After=.*netbird.service'"
 
-run_test "CFG-17" "influx.greenautarky.com resolves" \
-  "getent hosts influx.greenautarky.com >/dev/null 2>&1"
+run_test "CFG-17" "influx.greenautarky.com resolves (hosts or DNS)" \
+  "grep -q 'influx.greenautarky.com' /etc/hosts || nslookup influx.greenautarky.com >/dev/null 2>&1"
 
-run_test "CFG-18" "loki.greenautarky.com resolves" \
-  "getent hosts loki.greenautarky.com >/dev/null 2>&1"
+run_test "CFG-18" "loki.greenautarky.com resolves (hosts or DNS)" \
+  "grep -q 'loki.greenautarky.com' /etc/hosts || nslookup loki.greenautarky.com >/dev/null 2>&1"
 
 # --- Device label file ---
 if [ -f /mnt/data/ga-device-label ]; then

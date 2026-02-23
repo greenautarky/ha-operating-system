@@ -233,8 +233,15 @@ GA_TELEMETRY=${telemetry}
 ENVEOF
   echo "Stamped GA_ENV=${env_val} (log=${log_level}, telemetry=${telemetry}) -> $ga_env_conf"
 
-  # Append GA build info to /etc/os-release for easy identification
+}
+
+# Stamp GA build info into /etc/os-release (called after target-finalize which regenerates it)
+stamp_os_release() {
   local os_release="${OUT}/target/etc/os-release"
+  local ts_human
+  ts_human="$(date '+%F %T')"
+  local env_val="${GA_ENV:-dev}"
+
   if [[ -f "$os_release" ]]; then
     # Remove any previous GA entries to avoid duplicates on rebuilds
     sed -i '/^GA_BUILD_ID=/d; /^GA_BUILD_TIMESTAMP=/d; /^GA_ENV=/d' "$os_release"
@@ -242,9 +249,9 @@ ENVEOF
     printf 'GA_BUILD_ID="%s"\n' "$ts_human" >> "$os_release"
     printf 'GA_BUILD_TIMESTAMP="%s"\n' "$GA_BUILD_TIMESTAMP" >> "$os_release"
     printf 'GA_ENV="%s"\n' "$env_val" >> "$os_release"
-    echo "Appended GA build info to: $os_release"
+    echo "Stamped GA build info into: $os_release"
   else
-    echo "WARN: $os_release not found, skipping os-release update"
+    echo "WARN: $os_release not found, skipping os-release stamp"
   fi
 }
 
@@ -410,6 +417,10 @@ verify_outputs() {
 rebuild_artifacts() {
   # Your tree has no 'images' target; use 'all' after target-finalize
   make -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" target-finalize
+
+  # Re-stamp GA fields into os-release AFTER target-finalize (which regenerates it)
+  stamp_os_release
+
   make -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" -j"$(nproc)" all
 }
 
@@ -1153,6 +1164,15 @@ rename_images_with_build_id() {
     mv -v "${orig_base}.raucb" "${new_base}.raucb"
   fi
 
+  # Generate sha256 checksums for output images
+  echo "Generating sha256 checksums..."
+  for img in "${new_base}.img.xz" "${new_base}.img" "${new_base}.raucb"; do
+    if [[ -f "$img" ]]; then
+      sha256sum "$img" > "${img}.sha256"
+      echo "  $(basename "${img}.sha256")"
+    fi
+  done
+
   # Export for use by provisioning image creation
   export GA_IMAGE_BASENAME="${new_base}"
   echo "GA_IMAGE_BASENAME=${GA_IMAGE_BASENAME}"
@@ -1614,6 +1634,10 @@ elif [[ "$MODE" == "kernel" ]]; then
 
 elif [[ "$MODE" == "update" ]]; then
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "$DEFCONFIG"
+  # Force rebuild of GA config packages so changed configs/services are picked up
+  # (Buildroot doesn't track overlay/config file changes as package dependencies)
+  make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" \
+    telegraf-dirclean fluent-bit-config-dirclean 2>/dev/null || true
 
 else
   echo "Usage: $0 [full|partial|kernel|update|dev|prod] [dev|prod]"
@@ -1670,8 +1694,8 @@ if [[ "$GA_ENV" == "prod" ]]; then
   archive_build_configs
 
   # 9) Archive legal-info (licenses)
-  #    Disabled by default — enable with GA_LEGAL_INFO=true (slow, ~1.7GB output)
-  if [[ "${GA_LEGAL_INFO:-false}" == "true" ]]; then
+  #    Auto-enabled for prod builds; for dev builds, set GA_LEGAL_INFO=true to enable
+  if [[ "${GA_LEGAL_INFO:-false}" == "true" ]] || [[ "$GA_ENV" == "prod" ]]; then
     log_build_step "Archive legal-info"
     archive_legal_info
   else
@@ -1719,6 +1743,10 @@ for f in "${OUT}/images/"*"${GA_BUILD_TIMESTAMP}"*.img.xz "${OUT}/images/"*"${GA
   if [[ -f "$f" ]]; then
     sz="$(du -h "$f" | cut -f1)"
     echo "    $(basename "$f")  ${sz}"
+    if [[ -f "${f}.sha256" ]]; then
+      sha="$(cut -d' ' -f1 "${f}.sha256")"
+      echo "      sha256: ${sha}"
+    fi
   fi
 done
 echo ""
@@ -1734,10 +1762,10 @@ if [[ "${GA_PROVISIONING:-false}" == "true" ]]; then
 else
   echo "  Provisioning image: skipped (GA_PROVISIONING=true to enable)"
 fi
-if [[ "${GA_LEGAL_INFO:-false}" == "true" ]]; then
+if [[ "${GA_LEGAL_INFO:-false}" == "true" ]] || [[ "$GA_ENV" == "prod" ]]; then
   echo "  Legal info: ${OUT}/images/legal-info/"
 else
-  echo "  Legal info: skipped (GA_LEGAL_INFO=true to enable)"
+  echo "  Legal info: skipped (auto-enabled for prod, or set GA_LEGAL_INFO=true)"
 fi
 echo ""
 echo "  Build log: ${BUILD_LOG}"
