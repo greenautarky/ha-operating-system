@@ -63,6 +63,7 @@ usage() {
     echo ""
     echo "Available suites:"
     echo "  crash_detection telemetry environment network ping boot_timing disk_guard watchdog config_verify"
+    echo "  crash_panic (host-side: triggers kernel panic, waits for reboot, verifies detection)"
     exit 1
 }
 
@@ -137,6 +138,100 @@ run_ssh() {
 
     # Cleanup
     ssh $SSH_OPTS "$SSH_TARGET" "rm -rf $REMOTE_DIR" 2>/dev/null || true
+
+    # Run host-side destructive tests (opt-in only — must be explicitly requested)
+    if echo "$SUITES" | grep -qw "crash_panic"; then
+        run_crash_panic_test
+    fi
+}
+
+# --- Host-side: CRASH-04 kernel panic test ---
+# This test must run from the host because the device crashes mid-test.
+
+run_crash_panic_test() {
+    echo ""
+    echo "=== Crash Panic (host-side) ==="
+
+    # Save crash_history.log line count before panic
+    local before_count
+    # shellcheck disable=SC2086
+    before_count=$(ssh $SSH_OPTS "$SSH_TARGET" "wc -l < /mnt/data/crash_history.log 2>/dev/null || echo 0") || before_count=0
+
+    echo "  Triggering kernel panic via sysrq..."
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "$SSH_TARGET" "echo c > /proc/sysrq-trigger" 2>/dev/null &
+    local ssh_pid=$!
+    sleep 2
+    kill $ssh_pid 2>/dev/null || true
+    wait $ssh_pid 2>/dev/null || true
+
+    # Wait for device to come back
+    echo "  Waiting for reboot..."
+    local attempts=0
+    local max_attempts=60
+    while [ $attempts -lt $max_attempts ]; do
+        sleep 3
+        # shellcheck disable=SC2086
+        if ssh $SSH_OPTS "$SSH_TARGET" "echo OK" 2>/dev/null; then
+            break
+        fi
+        attempts=$((attempts + 1))
+    done
+
+    if [ $attempts -ge $max_attempts ]; then
+        printf "\033[0;31m  FAIL\033[0m  CRASH-04a: Device did not come back after panic (waited %ds)\n" $((max_attempts * 3))
+        echo ""
+        echo "--- Crash Panic: 0 passed, 1 failed, 0 skipped (1 total) ---"
+        echo '{"suite":"Crash Panic","pass":0,"fail":1,"skip":0}'
+        return
+    fi
+
+    local pass=0 fail=0
+
+    # CRASH-04a: Journal shows unclean shutdown
+    # shellcheck disable=SC2086
+    local journal_out
+    journal_out=$(ssh $SSH_OPTS "$SSH_TARGET" "journalctl -u ga-boot-check -b 0 --no-pager -q 2>/dev/null" 2>/dev/null) || journal_out=""
+    if echo "$journal_out" | grep -q "UNCLEAN SHUTDOWN DETECTED"; then
+        printf "\033[0;32m  PASS\033[0m  CRASH-04a: Kernel panic detected as unclean shutdown\n"
+        pass=$((pass + 1))
+    else
+        printf "\033[0;31m  FAIL\033[0m  CRASH-04a: Kernel panic not detected in boot-check journal\n"
+        fail=$((fail + 1))
+    fi
+
+    # CRASH-04b: crash_history.log has new entry
+    local after_count
+    # shellcheck disable=SC2086
+    after_count=$(ssh $SSH_OPTS "$SSH_TARGET" "wc -l < /mnt/data/crash_history.log 2>/dev/null || echo 0") || after_count=0
+    if [ "$after_count" -gt "$before_count" ]; then
+        printf "\033[0;32m  PASS\033[0m  CRASH-04b: crash_history.log has new entry (%s -> %s lines)\n" "$before_count" "$after_count"
+        pass=$((pass + 1))
+    else
+        printf "\033[0;31m  FAIL\033[0m  CRASH-04b: crash_history.log unchanged after panic (%s lines)\n" "$after_count"
+        fail=$((fail + 1))
+    fi
+
+    # CRASH-04c: Previous boot logs accessible
+    # shellcheck disable=SC2086
+    if ssh $SSH_OPTS "$SSH_TARGET" "journalctl -b -1 2>/dev/null | head -1 | grep -q ." 2>/dev/null; then
+        printf "\033[0;32m  PASS\033[0m  CRASH-04c: Previous boot logs accessible after panic\n"
+        pass=$((pass + 1))
+    else
+        printf "\033[0;31m  FAIL\033[0m  CRASH-04c: Previous boot logs not available after panic\n"
+        fail=$((fail + 1))
+    fi
+
+    # Show crash detection output
+    # shellcheck disable=SC2086
+    local crash_entry
+    crash_entry=$(ssh $SSH_OPTS "$SSH_TARGET" "tail -1 /mnt/data/crash_history.log 2>/dev/null" 2>/dev/null) || crash_entry=""
+    [ -n "$crash_entry" ] && echo "        -> $crash_entry"
+
+    local total=$((pass + fail))
+    echo ""
+    echo "--- Crash Panic: ${pass} passed, ${fail} failed, 0 skipped (${total} total) ---"
+    printf '{"suite":"Crash Panic","pass":%d,"fail":%d,"skip":0}\n' "$pass" "$fail"
 }
 
 # --- Execute via serial ---
