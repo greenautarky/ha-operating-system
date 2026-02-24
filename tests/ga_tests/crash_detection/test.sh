@@ -30,7 +30,7 @@ run_test_show "CRASH-RES" "Boot check result this boot" \
   "journalctl -u ga-boot-check -b 0 --no-pager -q 2>/dev/null | tail -1"
 
 skip_test "CRASH-03" "Clean shutdown removes marker" "requires reboot"
-skip_test "CRASH-04" "Kernel panic detection" "destructive"
+skip_test "CRASH-04" "Kernel panic detection" "host-side: run with crash_panic suite"
 skip_test "CRASH-05" "Power loss detection" "requires physical action"
 
 suite_end
