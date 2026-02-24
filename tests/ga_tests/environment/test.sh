@@ -30,5 +30,6 @@ fi
 
 skip_test "ENV-03" "Dev defaults" "depends on build type"
 skip_test "ENV-04" "Prod defaults" "depends on build type"
+skip_test "ENV-07" "Image filename contains env tag" "build-time property, not verifiable on device"
 
 suite_end

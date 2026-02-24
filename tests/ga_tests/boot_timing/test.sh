@@ -28,8 +28,14 @@ run_test "BOOT-04b" "docker milestone present" \
 run_test "BOOT-04c" "multi_user milestone present" \
   "/usr/libexec/ga-boot-timing 2>/dev/null | grep -q 'multi_user='"
 
+run_test "BOOT-05" "Service times are plausible (0 < t < 600s)" \
+  "OUT=\$(/usr/libexec/ga-boot-timing 2>/dev/null); for f in crash_marker network_online docker multi_user; do V=\$(echo \"\$OUT\" | grep -oE \"\${f}=[0-9.]+\" | cut -d= -f2 | cut -d. -f1); [ -n \"\$V\" ] && [ \"\$V\" -gt 0 ] && [ \"\$V\" -lt 600 ] || return 1; done"
+
 run_test "BOOT-06" "Telegraf exec input configured" \
   "grep -q 'ga-boot-timing' /etc/telegraf/telegraf.conf 2>/dev/null"
+
+run_test "BOOT-07" "Telegraf exec input loaded (collects boot_timing)" \
+  "journalctl -u telegraf -b 0 --no-pager -q 2>/dev/null | grep -q 'Loaded inputs.*exec'"
 
 run_test "BOOT-10" "Script handles errors gracefully (exit 0)" \
   "/usr/libexec/ga-boot-timing >/dev/null 2>&1"
