@@ -10,7 +10,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-ALL_SUITES="crash_detection telemetry environment network ping boot_timing disk_guard watchdog config_verify"
+ALL_SUITES="crash_detection telemetry environment network ping boot_timing disk_guard watchdog config_verify stress"
 SUITES="${*:-$ALL_SUITES}"
 
 TOTAL_PASS=0

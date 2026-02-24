@@ -41,4 +41,6 @@ run_test "TEL-11" "Safe defaults in telegraf unit" \
 run_test_show "TEL-ENV" "Telegraf env file contents" \
   "cat /mnt/data/telegraf/env 2>/dev/null"
 
+skip_test "TEL-12" "ga-env.conf override works" "mutates state (restarts telegraf)"
+
 suite_end

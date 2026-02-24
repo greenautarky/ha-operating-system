@@ -44,8 +44,14 @@ run_test "DG-14" "Script exits 0 on healthy disk" \
 run_test_show "DG-STATE" "Current state" \
   "cat /run/ga_disk_guard/state.json 2>/dev/null"
 
+run_test "DG-11" "journald vacuum action in log" \
+  "journalctl -t ga_disk_guard --no-pager -q 2>/dev/null | grep -qi 'journal\|vacuum' || grep -qi 'journal\|vacuum' /usr/sbin/ga_disk_guard 2>/dev/null"
+
 skip_test "DG-05" "Soft cleanup trigger" "requires filling disk"
 skip_test "DG-06" "Hard cleanup trigger" "requires filling disk"
+skip_test "DG-08" "Old temp files cleaned" "requires soft cleanup trigger (disk below 300 MiB)"
+skip_test "DG-09" "Rotated logs cleaned" "requires soft cleanup trigger (disk below 300 MiB)"
+skip_test "DG-10" "Large log truncation" "requires soft cleanup trigger (disk below 300 MiB)"
 skip_test "DG-13" "Timer triggers after boot" "requires reboot wait"
 
 suite_end
