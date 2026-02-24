@@ -11,15 +11,16 @@ run_test "NET-01" "Static DNS entries for GA services" \
 run_test_show "NET-01b" "DNS entries" \
   "grep greenautarky /etc/hosts 2>/dev/null"
 
-# Check Telegraf journal for successful writes (nc/wget not available on HAOS)
-run_test "NET-02" "InfluxDB endpoint reachable (telegraf writes)" \
-  "journalctl -u telegraf --no-pager -q --since '10 min ago' 2>/dev/null | grep -qi 'wrote batch\\|200 OK\\|output.*influx'"
+# Verify telemetry endpoints work by checking output loaded + no persistent errors
+# (Both services run silently on success — no "wrote batch" messages at info level)
+run_test "NET-02" "Telegraf InfluxDB output loaded and no write errors" \
+  "journalctl -u telegraf -b 0 --no-pager -q 2>/dev/null | grep -q 'Loaded outputs.*influxdb' && ! journalctl -u telegraf --no-pager -q --since '5 min ago' 2>/dev/null | grep -qi 'failed to write\|connection refused\|timeout'"
 
-run_test "NET-03" "Loki endpoint reachable (fluent-bit output)" \
-  "journalctl -u fluent-bit --no-pager -q --since '10 min ago' 2>/dev/null | grep -qi 'loki\\|output.*ok\\|connection.*3100'"
+run_test "NET-03" "Fluent-Bit Loki output configured and delivering" \
+  "journalctl -u fluent-bit -b 0 --no-pager -q 2>/dev/null | grep -q 'loki.greenautarky.com' && ! journalctl -u fluent-bit --no-pager -q --since '5 min ago' 2>/dev/null | grep -qi 'no upstream connections\|connection refused'"
 
-run_test "NET-04" "Telemetry services sending data" \
-  "journalctl -u telegraf --no-pager -q --since '5 min ago' 2>/dev/null | grep -qiE 'wrote batch|output'"
+run_test "NET-04" "Telemetry services active with no recent errors" \
+  "systemctl is-active telegraf >/dev/null 2>&1 && systemctl is-active fluent-bit >/dev/null 2>&1 && ! journalctl -u telegraf -u fluent-bit --no-pager -q --since '5 min ago' 2>/dev/null | grep -qi 'error.*output\|failed to flush\|connection refused'"
 
 run_test "NET-05" "Default gateway detected" \
   "ip route | grep -q '^default'"
