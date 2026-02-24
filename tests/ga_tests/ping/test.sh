@@ -35,4 +35,6 @@ else
   skip_test "PING-05" "8.8.8.8 is pingable" "ping binary broken on this build"
 fi
 
+skip_test "PING-07" "Data reaches InfluxDB" "no InfluxDB CLI on device"
+
 suite_end
