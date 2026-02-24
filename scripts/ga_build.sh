@@ -246,7 +246,7 @@ stamp_os_release() {
     # Remove any previous GA entries to avoid duplicates on rebuilds
     sed -i '/^GA_BUILD_ID=/d; /^GA_BUILD_TIMESTAMP=/d; /^GA_ENV=/d' "$os_release"
     # Append new build info
-    printf 'GA_BUILD_ID="%s"\n' "$ts_human" >> "$os_release"
+    printf 'GA_BUILD_ID="%s (%s)"\n' "$ts_human" "$env_val" >> "$os_release"
     printf 'GA_BUILD_TIMESTAMP="%s"\n' "$GA_BUILD_TIMESTAMP" >> "$os_release"
     printf 'GA_ENV="%s"\n' "$env_val" >> "$os_release"
     echo "Stamped GA build info into: $os_release"
