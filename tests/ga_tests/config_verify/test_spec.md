@@ -89,3 +89,23 @@ package updates, or RAUC OTA issues where new rootfs doesn't contain latest chan
 ### CFG-12: ga-device-label readable or fallback works
 - **Action**: Check if device label file exists; if not, verify env falls back to "unknown"
 - **Expected**: Either label file present with valid content, or env shows `DEVICE_LABEL=unknown`
+
+### CFG-19: parsers.conf exists on rootfs
+- **Command**: `test -f /etc/fluent-bit/parsers.conf`
+- **Expected**: File exists (installed by fluent-bit-config package)
+- **Catches**: Empty or missing parsers.conf from incomplete deploy
+
+### CFG-20: parsers.conf has homeassistant parser
+- **Command**: `grep -q 'Name.*homeassistant' /etc/fluent-bit/parsers.conf`
+- **Expected**: Parser definition for HA/Supervisor log format present
+- **Catches**: Stale parsers.conf without HA log parser
+
+### CFG-21: fluent-bit.conf tail inputs use homeassistant parser
+- **Command**: `grep -A2 'Tag.*ihost.hass' /etc/fluent-bit/fluent-bit.conf | grep -q 'Parser.*homeassistant'`
+- **Expected**: HA log tail input is wired to the homeassistant parser
+- **Catches**: Tail input collecting raw unparsed lines
+
+### CFG-22: fluent-bit.conf storage buffer >= 300M
+- **Command**: `grep 'storage.total_limit_size' /etc/fluent-bit/fluent-bit.conf | grep -v '^#' | grep -qE '[3-9][0-9]{2}M|[0-9]{4,}M'`
+- **Expected**: Active (non-commented) storage buffer is at least 300M
+- **Catches**: Insufficient buffer for Loki outage store-and-forward

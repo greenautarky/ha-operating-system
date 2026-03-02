@@ -12,8 +12,8 @@
 - [ ] Document the dev vs prod matrix for all services
 
 ### Fluent-Bit Configuration
-- [ ] Populate `buildroot-external/package/fluent-bit-config/parsers.conf` (currently empty)
-- [ ] Add fallback output if Loki is unreachable
+- [x] Populate `buildroot-external/package/fluent-bit-config/parsers.conf` (HA log + JSON parsers)
+- [x] Increase store-and-forward buffer to 300M (handles Loki outages via persistent filesystem storage)
 
 ### OTA / RAUC
 - [ ] Test full OTA update flow with signed RAUC bundles
@@ -76,7 +76,7 @@
   - `stress/` (10 tests) - CPU, memory, I/O, thermal, combined, 24h soak (stress-ng)
   - `disk_guard/` (14 tests) - thresholds, allowlist, cleanup rules, journald vacuum, lock, timer
   - `watchdog/` (4 tests) - device presence, timeout, trigger, normal operation
-  - `config_verify/` (18 tests) - rootfs config content assertions, DEVICE_LABEL/UUID, DNS fallback, NetBird service ordering
+  - `config_verify/` (22 tests) - rootfs config content assertions, DEVICE_LABEL/UUID, DNS fallback, NetBird service ordering, parsers, storage buffer
   - `power_cycle/` (10 tests) - HOST-SIDE: N-cycle power-off/on endurance, boot time stats, hang detection, filesystem integrity
 - [ ] Test power-cycle stress test script (`power_cycle/test.sh`):
   - [ ] Validate with `--cycles 2 --off-time 3` in manual mode (basic loop)
