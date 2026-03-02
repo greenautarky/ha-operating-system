@@ -63,6 +63,19 @@ run_test "CFG-17" "influx.greenautarky.com resolves (hosts or DNS)" \
 run_test "CFG-18" "loki.greenautarky.com resolves (hosts or DNS)" \
   "grep -q 'loki.greenautarky.com' /etc/hosts || nslookup loki.greenautarky.com >/dev/null 2>&1"
 
+# --- Fluent-Bit parsers & storage ---
+run_test "CFG-19" "parsers.conf exists on rootfs" \
+  "test -f /etc/fluent-bit/parsers.conf"
+
+run_test "CFG-20" "parsers.conf has homeassistant parser" \
+  "grep -q 'Name.*homeassistant' /etc/fluent-bit/parsers.conf"
+
+run_test "CFG-21" "fluent-bit.conf tail inputs use homeassistant parser" \
+  "grep -A2 'Tag.*ihost.hass' /etc/fluent-bit/fluent-bit.conf | grep -q 'Parser.*homeassistant'"
+
+run_test "CFG-22" "fluent-bit.conf storage buffer >= 300M" \
+  "grep 'storage.total_limit_size' /etc/fluent-bit/fluent-bit.conf | grep -v '^#' | grep -qE '[3-9][0-9]{2}M|[0-9]{4,}M'"
+
 # --- Device label file ---
 if [ -f /mnt/data/ga-device-label ]; then
   run_test_show "CFG-12" "ga-device-label file has valid content" \
