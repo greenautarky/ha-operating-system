@@ -55,6 +55,25 @@
 - [ ] Make DNS entries configurable per environment (dev vs prod endpoints)
 - [ ] Consider adding health-check/retry logic for DNS-dependent services (telegraf, fluent-bit)
 
+### Custom Core Image / Onboarding
+- [ ] Rebuild with `greenautarky/haos-version` URL (PR #1 merged) and verify `version.json` references `ghcr.io/greenautarky/tinker-homeassistant`
+- [ ] Flash and boot on iHost, verify custom onboarding appears:
+  - German-language onboarding flow (Willkommen, Datenschutz, Benutzerkonto)
+  - GDPR consent step
+  - greenautarky telemetry preferences (Fehlerberichte, Metriken)
+  - Custom info/help pages
+- [ ] Write tests to verify custom core image is active on device (check container image, version string)
+- [ ] Update `greenautarky/haos-version` README with stable.json field mapping documentation
+
+### Tailscale Hostname Persistence
+- [ ] Add `hostname` option to `ga_tailscale` addon schema (`config.yaml`) — repo: `greenautarky/ga_tailscale`
+- [ ] Implement hostname persistence in addon startup (read from options or `/mnt/data/ga-device-label`)
+- [ ] Update provisioning (Stage 70) to write hostname into addon `options.json`
+- [ ] Update addon `DOCS.md` with hostname configuration documentation
+- [ ] Deploy updated addon to devices and verify hostname survives container recreate
+- [ ] Fix KIB-SON-07 Tailscale hostname (`kibu-27` → `KIB-SON-00000007`)
+- [ ] Migrate devices from `vibe_addons` image (`ghcr.io/hassio-addons/tailscale`) to `ga_tailscale` image (`ghcr.io/greenautarky/ga_tailscale`)
+
 ### Build Script (`scripts/ga_build.sh`)
 - [ ] Validate genimage.cfg path resolution (multiple fallback searches)
 
@@ -77,6 +96,8 @@
   - `disk_guard/` (14 tests) - thresholds, allowlist, cleanup rules, journald vacuum, lock, timer
   - `watchdog/` (4 tests) - device presence, timeout, trigger, normal operation
   - `config_verify/` (22 tests) - rootfs config content assertions, DEVICE_LABEL/UUID, DNS fallback, NetBird service ordering, parsers, storage buffer
+  - `onboarding/` (7 tests) - custom core image registry, ga-tagged version, version repo URL, non-core upstream
+  - `tailscale/` (5 tests) - addon running, connected, hostname matches device label, IP assigned, image registry
   - `power_cycle/` (10 tests) - HOST-SIDE: N-cycle power-off/on endurance, boot time stats, hang detection, filesystem integrity
 - [ ] Test power-cycle stress test script (`power_cycle/test.sh`):
   - [ ] Validate with `--cycles 2 --off-time 3` in manual mode (basic loop)
