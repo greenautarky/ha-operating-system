@@ -65,6 +65,22 @@
 - [ ] Write tests to verify custom core image is active on device (check container image, version string)
 - [ ] Update `greenautarky/haos-version` README with stable.json field mapping documentation
 
+### Onboarding Reset (`ga-reset-onboarding`)
+- [x] Script at `buildroot-external/rootfs-overlay/usr/sbin/ga-reset-onboarding`
+  - Removes ALL non-system users (including admin) from `.storage/auth`
+  - Clears all entries from `.storage/auth_provider.homeassistant`
+  - Deletes `.storage/onboarding` to re-trigger onboarding wizard
+  - Supports `--dry-run` and `--keep-onboarding` flags
+  - New tenant onboards as owner/admin (stock HA behavior)
+- [x] Fork change: `homeassisant_core/homeassistant/components/onboarding/views.py`
+  - Custom onboarding steps (GDPR, custom pages, analytics)
+  - User creation uses stock `_user_should_be_owner()` — first user becomes owner
+- [ ] Deploy updated core image with fork change to test device
+- [ ] Verify full reset → re-onboarding flow end-to-end
+- [ ] Clean `.storage/person` during reset — stale person entities remain after user removal
+  - `ga-reset-onboarding` removes users from `auth` and `auth_provider.homeassistant` but not from `person` registry
+  - HA auto-creates person entries for new users, so stale entries don't break anything, but they clutter the UI
+
 ### Tailscale Hostname Persistence
 - [ ] Add `hostname` option to `ga_tailscale` addon schema (`config.yaml`) — repo: `greenautarky/ga_tailscale`
 - [ ] Implement hostname persistence in addon startup (read from options or `/mnt/data/ga-device-label`)

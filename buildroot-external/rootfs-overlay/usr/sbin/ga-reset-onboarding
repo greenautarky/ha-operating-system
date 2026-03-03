@@ -1,0 +1,80 @@
+#!/bin/sh
+# ga-reset-onboarding - Reset GA onboarding state
+#
+# Resets the greenautarky_onboarding storage file so the GA onboarding
+# panel appears again. Stock HA onboarding stays done, admin stays intact.
+# The GA panel handles tenant user creation itself.
+#
+# Usage:
+#   ga-reset-onboarding [--dry-run]
+#
+# Options:
+#   --dry-run   Show what would be done without making changes
+
+set -eu
+
+STORAGE_DIR="/mnt/data/supervisor/homeassistant/.storage"
+GA_ONBOARDING_FILE="$STORAGE_DIR/greenautarky_onboarding"
+
+DRY_RUN=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=true ;;
+        -h|--help)
+            echo "Usage: ga-reset-onboarding [--dry-run]"
+            echo ""
+            echo "Resets GA onboarding so the tenant setup wizard appears again."
+            echo "Stock HA onboarding and admin user are not affected."
+            echo ""
+            echo "Options:"
+            echo "  --dry-run   Show what would be done without making changes"
+            exit 0
+            ;;
+        *) echo "Unknown option: $arg"; exit 1 ;;
+    esac
+done
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "ERROR: Must run as root"
+    exit 1
+fi
+
+if [ ! -d "$STORAGE_DIR" ]; then
+    echo "ERROR: Storage directory not found: $STORAGE_DIR"
+    exit 1
+fi
+
+echo "GA Onboarding Reset"
+echo "==================="
+
+if [ -f "$GA_ONBOARDING_FILE" ]; then
+    echo "Current state: $(cat "$GA_ONBOARDING_FILE")"
+else
+    echo "Current state: file does not exist (first run)"
+fi
+
+echo ""
+
+if [ "$DRY_RUN" = true ]; then
+    echo "DRY RUN: Would write $GA_ONBOARDING_FILE with completed=false, tenant_mode=true"
+    exit 0
+fi
+
+cat > "$GA_ONBOARDING_FILE" << 'EOF'
+{
+    "version": 1,
+    "key": "greenautarky_onboarding",
+    "data": {
+        "completed": false,
+        "tenant_mode": true,
+        "gdpr_accepted": false,
+        "steps_done": []
+    }
+}
+EOF
+
+echo "Written: $GA_ONBOARDING_FILE"
+echo "GA onboarding will appear on next page load."
+echo ""
+echo "Done."
