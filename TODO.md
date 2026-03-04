@@ -64,6 +64,11 @@
   - Custom info/help pages
 - [ ] Write tests to verify custom core image is active on device (check container image, version string)
 - [ ] Update `greenautarky/haos-version` README with stable.json field mapping documentation
+- [ ] **Slim down GA Core Docker image** (currently 3.7 GB uncompressed vs ~1.5 GB upstream)
+  - `frontend-build/node_modules/` (1.5 GB) and `frontend-build/.git/` (9 MB) are included via `COPY . homeassistant/`
+  - Fix: add `.dockerignore` in `greenautarky/ha-core` to exclude `frontend-build/node_modules/`, `frontend-build/.git/`, `.claude/`
+  - Or: adjust Dockerfile COPY to only include built artifacts, not the full source tree
+  - Target: image size comparable to upstream (~1.5 GB uncompressed)
 
 ### Onboarding Reset (`ga-reset-onboarding`)
 - [x] Script at `buildroot-external/rootfs-overlay/usr/sbin/ga-reset-onboarding`
