@@ -11,6 +11,18 @@ image_json_name=$4
 dl_dir=$5
 dst_dir=$6
 
+# Map hassio arch names to OCI platform values
+# e.g. "armv7" -> arch "arm", variant "v7"
+case "${arch}" in
+	armv7) oci_arch="arm"; oci_variant="v7" ;;
+	aarch64) oci_arch="arm64"; oci_variant="" ;;
+	*) oci_arch="${arch}"; oci_variant="" ;;
+esac
+skopeo_arch_flags="--override-arch '${oci_arch}'"
+if [ -n "${oci_variant}" ]; then
+	skopeo_arch_flags="${skopeo_arch_flags} --override-variant '${oci_variant}'"
+fi
+
 retry() {
 	local retries="$1"
 	local cmd=$2
@@ -39,7 +51,7 @@ image_tag=$(jq -e -r --arg image_json_name "${image_json_name}" \
 	'.[$image_json_name]' < "${version_json}")
 full_image_name="${image_name}:${image_tag}"
 
-image_digest=$(retry 3 "skopeo inspect 'docker://${full_image_name}' | jq -r '.Digest'")
+image_digest=$(retry 3 "skopeo inspect ${skopeo_arch_flags} 'docker://${full_image_name}' | jq -r '.Digest'")
 
 # Cleanup image name file name use
 image_file_name="${full_image_name//[:\/]/_}@${image_digest//[:\/]/_}"
@@ -52,7 +64,7 @@ dst_image_file_path="${dst_dir}/${image_file_name}.tar"
 	if [ ! -f "${image_file_path}" ]
 	then
 		echo "Fetching image: ${full_image_name} (digest ${image_digest})"
-		retry 3 "skopeo copy 'docker://${image_name}@${image_digest}' 'docker-archive:${image_file_path}:${full_image_name}'"
+		retry 3 "skopeo copy ${skopeo_arch_flags} 'docker://${image_name}@${image_digest}' 'docker-archive:${image_file_path}:${full_image_name}'"
 	else
 		echo "Skipping download of existing image: ${full_image_name} (digest ${image_digest})"
 	fi

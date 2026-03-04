@@ -26,3 +26,6 @@ secrets/
 
 # Container image tarballs
 images/*.tar
+
+# AI tooling
+.claude
