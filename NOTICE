@@ -1,0 +1,16 @@
+GreenAutarky HA Operating System
+Copyright 2023-2026 GreenAutarky
+
+This product is a derivative work based on the following open-source projects:
+
+- Home Assistant Operating System (https://github.com/home-assistant/operating-system)
+  Copyright 2017 Pascal Vizeli, Licensed under Apache-2.0
+
+- HA Operating System for iHost (https://github.com/iHost-Open-Source-Project/ha-operating-system)
+  Licensed under Apache-2.0
+
+- HA Operating System for iHost by Darkxst (https://github.com/Darkxst/ha-operating-system)
+  Licensed under Apache-2.0
+
+For a full list of forked and derived repositories, see the Acknowledgements
+section in README.md.
