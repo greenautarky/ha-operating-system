@@ -217,6 +217,38 @@ The iHost Hardware Control add-on enables control of iHost's buttons and LED ind
 - [OpenThread Border Router](https://github.com/iHost-Open-Source-Project/hassio-ihost-addon/blob/master/hassio-ihost-openthread-border-router/README.md)
 - [Silicon Labs Multiprotocol](https://github.com/iHost-Open-Source-Project/hassio-ihost-addon/blob/master/hassio-ihost-silabs-multiprotocol/README.md)
 
-## Acknowledgement
+## Acknowledgements & Attribution
 
-This project is a derivative development based on Darkxst's [[ha-operating-system\]](https://github.com/Darkxst/ha-operating-system) project from GitHub. We sincerely appreciate the original author for his foundational contributions.
+This project builds on the outstanding work of the open-source community.
+We deeply appreciate and acknowledge the contributions of every upstream project
+that made this possible. GreenAutarky actively contributes back where we can and
+is committed to respecting the licenses and spirit of these projects.
+
+### Forked Repositories
+
+The following GreenAutarky repositories are forks of upstream projects. All
+original license terms apply and are preserved in each repository.
+
+| Repository | Upstream | License | Description |
+|------------|----------|---------|-------------|
+| [ha-operating-system](https://github.com/greenautarky/ha-operating-system) | [iHost-Open-Source-Project/ha-operating-system](https://github.com/iHost-Open-Source-Project/ha-operating-system) → [Darkxst/ha-operating-system](https://github.com/Darkxst/ha-operating-system) → [home-assistant/operating-system](https://github.com/home-assistant/operating-system) | Apache-2.0 | HA OS adapted for SONOFF iHost with GreenAutarky device management |
+| [ha-supervisor](https://github.com/greenautarky/ha-supervisor) | [iHost-Open-Source-Project/ha-supervisor](https://github.com/iHost-Open-Source-Project/ha-supervisor) → [home-assistant/supervisor](https://github.com/home-assistant/supervisor) | Apache-2.0 | Home Assistant Supervisor with GreenAutarky integration |
+| [hassio-ihost-hardware-control](https://github.com/greenautarky/hassio-ihost-hardware-control) | [iHost-Open-Source-Project/hassio-ihost-hardware-control](https://github.com/iHost-Open-Source-Project/hassio-ihost-hardware-control) | MIT | iHost hardware control add-on (buttons, LEDs) |
+
+### Derived Works
+
+These repositories are not GitHub forks but are based on or derived from
+upstream open-source projects. Original license terms are preserved.
+
+| Repository | Based on | License | Description |
+|------------|----------|---------|-------------|
+| [ha-core](https://github.com/greenautarky/ha-core) | [home-assistant/core](https://github.com/home-assistant/core) | Apache-2.0 | Home Assistant Core with GreenAutarky onboarding and tenant management |
+| [frontend](https://github.com/greenautarky/frontend) | [home-assistant/frontend](https://github.com/home-assistant/frontend) | Apache-2.0 | Home Assistant frontend with GreenAutarky customizations |
+| [ga_tailscale](https://github.com/greenautarky/ga_tailscale) | [hassio-addons/addon-tailscale](https://github.com/hassio-addons/addon-tailscale) | MIT | Custom Tailscale add-on with hostname persistence fix |
+
+### Special Thanks
+
+- **[Home Assistant](https://www.home-assistant.io/)** — the foundation this entire ecosystem is built on
+- **[Darkxst](https://github.com/Darkxst)** — for the initial iHost HA OS port that started it all
+- **[iHost Open Source Project](https://github.com/iHost-Open-Source-Project)** — for opening up the SONOFF iHost platform
+- **[Community Add-ons](https://github.com/hassio-addons)** — for the Tailscale add-on and many others
