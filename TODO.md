@@ -99,7 +99,7 @@
 - [ ] Validate genimage.cfg path resolution (multiple fallback searches)
 
 ### Image Size Optimization
-- [ ] Audit HA Core container image for unused components (frontend build artifacts, dev dependencies)
+- [x] ~~Exclude `frontend-build/` from ha-core Docker image (-537MB)~~ — fixed in ha-core `66414a54`
 - [ ] Remove unused integrations/components from custom ha-core build to reduce image size
 - [ ] Review if all bundled container images (audio, multicast, etc.) are needed for iHost
 
