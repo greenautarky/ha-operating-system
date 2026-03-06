@@ -97,6 +97,7 @@
 
 ### Build Script (`scripts/ga_build.sh`)
 - [ ] Validate genimage.cfg path resolution (multiple fallback searches)
+- [x] ~~Remove standalone Go toolchain workaround~~ — done, NetBird now built via Buildroot golang-package
 
 ### Image Size Optimization
 - [x] ~~Exclude `frontend-build/` from ha-core Docker image (-537MB)~~ — fixed in ha-core `66414a54`
@@ -104,7 +105,7 @@
 - [ ] Review if all bundled container images (audio, multicast, etc.) are needed for iHost
 
 ### Package Updates (next major / Buildroot Go bump)
-- [ ] Bump Buildroot Go from 1.23.12 to 1.25+ (unblocks all below)
+- [x] ~~Bump Buildroot Go from 1.23.12 to 1.25+~~ — done via buildroot submodule update (Go 1.25.7)
 - [ ] Telegraf 1.30.0 → latest (needs Go 1.25+, no urgent features)
 - [ ] OS-Agent 1.7.2 → 1.8.x (needs Go 1.25+, Docker storage driver API, minor fixes)
 - [ ] Fluent-Bit 3.2.10 → 4.x (major version, check config compat)
