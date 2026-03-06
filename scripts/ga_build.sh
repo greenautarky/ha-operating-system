@@ -97,7 +97,7 @@ fi
 #   BR2EXT_IHOST     - Path to buildroot-ihost external tree (default: /build/buildroot-ihost)
 #   BR2EXT_NETBIRD   - Path to buildroot-external tree (default: /build/buildroot-external)
 #   OUT              - Output directory (default: /build/ga_output)
-#   NETBIRD_TAG      - NetBird version tag (default: v0.64.4)
+#   NETBIRD_TAG      - NetBird version tag (default: v0.66.2)
 #   GO_VER           - Go version for NetBird build (default: 1.25.6)
 #   GO_SHA256        - Expected SHA256 of Go tarball (for verification)
 #   GA_BUILD_TIMESTAMP - Override build timestamp (default: auto-generated)
@@ -139,7 +139,7 @@ OUT="${OUT:-/build/ga_output}"
 if [[ "$OUT" != /* ]]; then OUT="/build/${OUT}"; fi
 
 # ---- NetBird standalone build settings ----
-NETBIRD_TAG="${NETBIRD_TAG:-v0.64.4}"
+NETBIRD_TAG="${NETBIRD_TAG:-v0.66.2}"
 GO_VER="${GO_VER:-1.25.6}"
 # SHA256 checksum for Go tarball verification (from https://go.dev/dl/)
 # Update this when changing GO_VER - get hash from https://go.dev/dl/
