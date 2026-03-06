@@ -98,8 +98,6 @@ fi
 #   BR2EXT_NETBIRD   - Path to buildroot-external tree (default: /build/buildroot-external)
 #   OUT              - Output directory (default: /build/ga_output)
 #   NETBIRD_TAG      - NetBird version tag (default: v0.66.2)
-#   GO_VER           - Go version for NetBird build (default: 1.25.6)
-#   GO_SHA256        - Expected SHA256 of Go tarball (for verification)
 #   GA_BUILD_TIMESTAMP - Override build timestamp (default: auto-generated)
 #   GA_ENV           - Environment stamp (default: from 2nd argument, or "dev")
 #   GA_PROVISIONING  - Set to "true" to create provisioning image (default: false)
@@ -138,15 +136,8 @@ BR2_EXTERNAL_PATH="${BR2EXT_IHOST}:${BR2EXT_NETBIRD}"
 OUT="${OUT:-/build/ga_output}"
 if [[ "$OUT" != /* ]]; then OUT="/build/${OUT}"; fi
 
-# ---- NetBird standalone build settings ----
+# ---- NetBird version (built via Buildroot golang-package) ----
 NETBIRD_TAG="${NETBIRD_TAG:-v0.66.2}"
-GO_VER="${GO_VER:-1.25.6}"
-# SHA256 checksum for Go tarball verification (from https://go.dev/dl/)
-# Update this when changing GO_VER - get hash from https://go.dev/dl/
-GO_SHA256="${GO_SHA256:-f022b6aad78e362bcba9b0b94d09ad58c5a70c6ba3b7582905fababf5fe0181a}"
-
-# Systemd unit to install (from your external package tree)
-NETBIRD_SERVICE_SRC="${NETBIRD_SERVICE_SRC:-${BR2EXT_NETBIRD}/package/netbird/netbird.service}"
 
 # ---- CA files expected by post-build script ----
 OTA_DIR="${OTA_DIR:-${BR2EXT_NETBIRD}/ota}"
@@ -158,7 +149,6 @@ echo "Using BUILDROOT_DIR=$BUILDROOT_DIR"
 echo "Using BR2EXT_DIR=$BR2EXT_NETBIRD"
 echo "Using BR2_EXTERNAL=$BR2_EXTERNAL_PATH"
 echo "Using NETBIRD_TAG=$NETBIRD_TAG"
-echo "Using GO_VER=$GO_VER"
 echo "Using OTA_DIR=$OTA_DIR"
 echo "Using REL_CA_PEM=$REL_CA_PEM"
 echo "Using DEV_CA_PEM=$DEV_CA_PEM"
@@ -169,10 +159,6 @@ echo "Using DEV_CA_PEM=$DEV_CA_PEM"
 [[ -d "$BR2EXT_NETBIRD" ]] || { echo "ERROR: BR2EXT_NETBIRD not found: $BR2EXT_NETBIRD" >&2; exit 1; }
 [[ -f "$BR2EXT_IHOST/configs/ga_ihost_full_defconfig" ]] || {
   echo "ERROR: Defconfig not found: $BR2EXT_IHOST/configs/ga_ihost_full_defconfig" >&2
-  exit 1
-}
-[[ -f "$NETBIRD_SERVICE_SRC" ]] || {
-  echo "ERROR: netbird.service not found at: $NETBIRD_SERVICE_SRC" >&2
   exit 1
 }
 [[ -f "${BUILDROOT_DIR}/utils/config" ]] || {
@@ -255,130 +241,7 @@ stamp_os_release() {
   fi
 }
 
-disable_buildroot_netbird() {
-  local cfg="${OUT}/.config"
-  if [[ ! -f "$cfg" ]]; then
-    echo "WARN: $cfg not found; skipping netbird disable step."
-    return 0
-  fi
 
-  echo "Disabling Buildroot netbird package (standalone NetBird will be injected later)..."
-
-  "${BUILDROOT_DIR}/utils/config" --file "$cfg" \
-    -d BR2_PACKAGE_NETBIRD \
-    -d BR2_PACKAGE_HOST_NETBIRD || true
-
-  make -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" olddefconfig
-
-  # Clean any prior netbird build attempts
-  make -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" netbird-dirclean || true
-  rm -rf "$OUT/build/netbird-"* "$OUT/build/.netbird-"* 2>/dev/null || true
-
-  # Show final state
-  grep -E '^BR2_PACKAGE_NETBIRD=|^BR2_PACKAGE_HOST_NETBIRD=' "$cfg" || true
-}
-
-install_go_124_toolchain_for_standalone() {
-  local tool_dir="${OUT}/host-tools/go${GO_VER}"
-
-  if [[ -x "${tool_dir}/bin/go" ]]; then
-    echo "Standalone Go already present: $("${tool_dir}/bin/go" version)"
-    return 0
-  fi
-
-  local tgz="/tmp/go${GO_VER}.linux-amd64.tar.gz"
-  local go_url="https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz"
-
-  echo "Downloading standalone Go ${GO_VER}..."
-  wget -O "$tgz" "$go_url"
-
-  # Verify SHA256 checksum for reproducibility and security
-  echo "Verifying Go tarball SHA256 checksum..."
-  local actual_hash
-  actual_hash="$(sha256sum "$tgz" | cut -d' ' -f1)"
-
-  if [[ "$actual_hash" != "$GO_SHA256" ]]; then
-    echo "ERROR: Go tarball SHA256 mismatch!" >&2
-    echo "  Expected: $GO_SHA256" >&2
-    echo "  Actual:   $actual_hash" >&2
-    echo "  File:     $tgz" >&2
-    echo "" >&2
-    echo "This could indicate:" >&2
-    echo "  - Corrupted download" >&2
-    echo "  - Man-in-the-middle attack" >&2
-    echo "  - GO_VER changed without updating GO_SHA256" >&2
-    echo "" >&2
-    echo "Get correct hash from: https://go.dev/dl/" >&2
-    rm -f "$tgz"
-    exit 1
-  fi
-  echo "Go tarball checksum verified: $actual_hash"
-
-  echo "Installing standalone Go ${GO_VER} into ${tool_dir}..."
-  rm -rf /tmp/go
-  tar -C /tmp -xzf "$tgz"
-
-  rm -rf "$tool_dir"
-  mkdir -p "${OUT}/host-tools"
-  mv /tmp/go "$tool_dir"
-
-  # Keep tarball for archive_build_configs to record hash
-  mkdir -p "${OUT}/host-tools"
-  cp "$tgz" "${OUT}/host-tools/go${GO_VER}.linux-amd64.tar.gz"
-
-  echo "Standalone Go installed: $("${tool_dir}/bin/go" version)"
-}
-
-build_and_install_netbird_standalone() {
-  local tool_dir="${OUT}/host-tools/go${GO_VER}"
-  local work="${OUT}/build/netbird-standalone-${NETBIRD_TAG}"
-
-  rm -rf "$work"
-  mkdir -p "$work"
-
-  echo "Cloning NetBird ${NETBIRD_TAG}..."
-  git clone --depth 1 --branch "${NETBIRD_TAG}" https://github.com/netbirdio/netbird.git "$work"
-
-  echo "Building NetBird (ARMv7, CGO=0)..."
-  (
-    cd "$work"
-
-    PATH="${tool_dir}/bin:${PATH}" \
-    GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 \
-    GOPROXY=https://proxy.golang.org,direct \
-    GOTOOLCHAIN=local \
-    go mod vendor
-
-    mkdir -p "${work}/bin"
-
-    # Embed the official release version into the binary (so "netbird version" is not "development").
-    # NetBird expects the semver without the leading "v".
-    NB_VERSION="${NETBIRD_TAG#v}"
-
-    PATH="${tool_dir}/bin:${PATH}" \
-    GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 \
-    GOPROXY=https://proxy.golang.org,direct \
-    GOTOOLCHAIN=local \
-    go build -v -mod=vendor -trimpath -buildvcs=false \
-      -ldflags "-s -w -X github.com/netbirdio/netbird/version.version=${NB_VERSION}" \
-      -o "${work}/bin/netbird" ./client
-  )
-
-  echo "Injecting NetBird into target filesystem..."
-  mkdir -p "${OUT}/target/usr/bin"
-  install -m 0755 "${work}/bin/netbird" "${OUT}/target/usr/bin/netbird"
-
-  # Install + enable systemd unit
-  mkdir -p "${OUT}/target/etc/systemd/system" \
-           "${OUT}/target/etc/systemd/system/multi-user.target.wants"
-  install -m 0644 "${NETBIRD_SERVICE_SRC}" \
-    "${OUT}/target/etc/systemd/system/netbird.service"
-  ln -sf ../netbird.service \
-    "${OUT}/target/etc/systemd/system/multi-user.target.wants/netbird.service"
-
-  echo "NetBird injected:"
-  file "${OUT}/target/usr/bin/netbird" || true
-}
 
 verify_outputs() {
   echo "=== Verify: Build outputs ==="
@@ -785,29 +648,15 @@ PKGEOF
     echo "  ],"
 
     # -------------------------------------------------------------------------
-    # 6) Standalone tool versions
+    # 6) NetBird version (built via Buildroot)
     # -------------------------------------------------------------------------
-    echo "[7/8] Recording standalone tool versions..." >&2
+    echo "[7/8] Recording NetBird version..." >&2
 
     echo '  "standalone_tools": {'
-    echo '    "go": {'
-    echo '      "version": "'${GO_VER}'",'
-    echo '      "download_url": "https://go.dev/dl/go'${GO_VER}'.linux-amd64.tar.gz",'
-
-    # Calculate expected hash if we have the file
-    local go_hash="unknown"
-    local go_tgz="${OUT}/host-tools/go${GO_VER}.tar.gz"
-    [[ -f "$go_tgz" ]] && go_hash="$(sha256sum "$go_tgz" | cut -d' ' -f1)"
-    # Try /tmp as fallback
-    [[ "$go_hash" == "unknown" && -f "/tmp/go${GO_VER}.linux-amd64.tar.gz" ]] && \
-      go_hash="$(sha256sum "/tmp/go${GO_VER}.linux-amd64.tar.gz" | cut -d' ' -f1)"
-
-    echo '      "sha256": "'${go_hash}'"'
-    echo '    },'
     echo '    "netbird": {'
     echo '      "version": "'${NETBIRD_TAG}'",'
     echo '      "source": "https://github.com/netbirdio/netbird",'
-    echo '      "type": "git_tag"'
+    echo '      "build": "buildroot golang-package"'
     echo '    }'
     echo '  },'
 
@@ -1058,7 +907,7 @@ generate_sbom() {
     echo '  "generated": "'$(date '+%Y-%m-%dT%H:%M:%S')'",'
     echo '  "build_id": "'${GA_BUILD_TIMESTAMP}'",'
     echo '  "standalone": {'
-    echo '    "netbird": { "version": "'${NETBIRD_TAG}'", "go": "'${GO_VER}'" }'
+    echo '    "netbird": { "version": "'${NETBIRD_TAG}'" }'
     echo '  },'
     echo '  "containers": ['
 
@@ -1540,7 +1389,6 @@ start_build_log() {
     echo "BR2EXT_NETBIRD=$BR2EXT_NETBIRD"
     echo "OUT=$OUT"
     echo "NETBIRD_TAG=$NETBIRD_TAG"
-    echo "GO_VER=$GO_VER"
     echo ""
     echo "=== System Info ==="
     echo "Kernel: $(uname -a)"
@@ -1650,21 +1498,11 @@ fi
 start_build_log
 log_build_step "Configure ($MODE mode)" "completed"
 
-# 2) Prevent Buildroot from building netbird (Go requirement mismatch)
-log_build_step "Disable Buildroot netbird"
-disable_buildroot_netbird
-
-# 3) Build full system normally
+# 2) Build full system (including NetBird via Buildroot golang-package)
 log_build_step "Buildroot main build"
 make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" -j"$(nproc)" 2>&1 | tee -a "$BUILD_LOG"
 
-# 4) Build + inject NetBird 0.60.x using standalone Go 1.24.10
-log_build_step "Install Go toolchain"
-install_go_124_toolchain_for_standalone
-log_build_step "Build NetBird standalone"
-build_and_install_netbird_standalone
-
-# 5) Inject build ID and regenerate final artifacts
+# 3) Inject build ID and regenerate final artifacts
 log_build_step "Write build ID"
 write_build_id_into_target
 log_build_step "Verify outputs"
@@ -1734,7 +1572,7 @@ echo "  Mode:           ${MODE}"
 echo "  Defconfig:      ${DEFCONFIG}"
 echo "  Buildroot:      ${buildroot_ver}"
 echo "  Kernel:         ${kernel_ver}"
-echo "  NetBird:        ${nb_ver} (Go ${GO_VER})"
+echo "  NetBird:        ${nb_ver}"
 echo ""
 
 echo "  Output images (this build):"
