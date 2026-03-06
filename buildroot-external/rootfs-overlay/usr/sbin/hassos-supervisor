@@ -13,7 +13,7 @@ SUPERVISOR_DATA=/mnt/data/supervisor
 SUPERVISOR_STARTUP_MARKER="/run/supervisor/startup-marker"
 SUPERVISOR_CIDFILE="${SUPERVISOR_DATA}/hassio_supervisor.cid"
 SUPERVISOR_STARTSCRIPT_VERSION="/mnt/data/.hassos-supervisor-version"
-SUPERVISOR_IMAGE="oliverc7/${SUPERVISOR_ARCH}-hassio-supervisor"
+SUPERVISOR_IMAGE="ghcr.io/greenautarky/${SUPERVISOR_ARCH}-hassio-supervisor"
 
 SUPERVISOR_IMAGE_ID=$(docker images --no-trunc --filter "reference=${SUPERVISOR_IMAGE}:latest" --format "{{.ID}}" || echo "")
 SUPERVISOR_CONTAINER_ID=$(docker inspect --format='{{.Image}}' hassio_supervisor || echo "")
@@ -48,7 +48,7 @@ if [ -z "${SUPERVISOR_IMAGE_ID}" ]; then
     # Get version from stable channel in case we have no local version
     # information.
     if [ "${SUPERVISOR_VERSION}" = "stable" ]; then
-        SUPERVISOR_VERSION="$(curl -s --location https://raw.githubusercontent.com/iHost-Open-Source-Project/haos-version/main/stable.json | jq -e -r '.supervisor')"
+        SUPERVISOR_VERSION="$(curl -s --location https://raw.githubusercontent.com/greenautarky/haos-version/main/stable.json | jq -e -r '.supervisor')"
     fi
 
     echo "[WARNING] Supervisor image missing, downloading a fresh one: ${SUPERVISOR_VERSION}"
