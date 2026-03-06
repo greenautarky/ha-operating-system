@@ -98,6 +98,11 @@
 ### Build Script (`scripts/ga_build.sh`)
 - [ ] Validate genimage.cfg path resolution (multiple fallback searches)
 
+### Image Size Optimization
+- [ ] Audit HA Core container image for unused components (frontend build artifacts, dev dependencies)
+- [ ] Remove unused integrations/components from custom ha-core build to reduce image size
+- [ ] Review if all bundled container images (audio, multicast, etc.) are needed for iHost
+
 ### Package Updates (next major / Buildroot Go bump)
 - [ ] Bump Buildroot Go from 1.23.12 to 1.25+ (unblocks all below)
 - [ ] Telegraf 1.30.0 → latest (needs Go 1.25+, no urgent features)
