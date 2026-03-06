@@ -258,7 +258,7 @@ upstream open-source projects. Original license terms are preserved.
 | [telegraf](https://github.com/greenautarky/telegraf) | [sabuto/hassio-telegraf](https://github.com/sabuto/hassio-telegraf) | MIT | Telegraf add-on for metrics collection |
 | [MQTT](https://github.com/greenautarky/MQTT) | [home-assistant/addons](https://github.com/home-assistant/addons) (mosquitto) | Apache-2.0 | Mosquitto MQTT broker add-on |
 | [Zigbee2MQTT](https://github.com/greenautarky/Zigbee2MQTT) | [zigbee2mqtt/hassio-zigbee2mqtt](https://github.com/zigbee2mqtt/hassio-zigbee2mqtt) | Apache-2.0 | Zigbee2MQTT add-on for Zigbee device integration |
-| [vibe_addons](https://github.com/greenautarky/vibe_addons) | Multiple upstream sources (see above) | Various | Legacy add-on collection (bundled from upstream add-ons) |
+| [vibe_addons](https://github.com/greenautarky/vibe_addons) | Multiple upstream sources (see above) | Various | Core add-on collection for GreenAutarky devices |
 
 ### Special Thanks
 
