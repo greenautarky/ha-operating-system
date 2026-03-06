@@ -240,15 +240,31 @@ original license terms apply and are preserved in each repository.
 These repositories are not GitHub forks but are based on or derived from
 upstream open-source projects. Original license terms are preserved.
 
+#### Core Components
+
 | Repository | Based on | License | Description |
 |------------|----------|---------|-------------|
 | [ha-core](https://github.com/greenautarky/ha-core) | [home-assistant/core](https://github.com/home-assistant/core) | Apache-2.0 | Home Assistant Core with GreenAutarky onboarding and tenant management |
 | [frontend](https://github.com/greenautarky/frontend) | [home-assistant/frontend](https://github.com/home-assistant/frontend) | Apache-2.0 | Home Assistant frontend with GreenAutarky customizations |
+
+#### Add-ons
+
+| Repository | Based on | License | Description |
+|------------|----------|---------|-------------|
 | [ga_tailscale](https://github.com/greenautarky/ga_tailscale) | [hassio-addons/addon-tailscale](https://github.com/hassio-addons/addon-tailscale) | MIT | Custom Tailscale add-on with hostname persistence fix |
+| [influxDBv1](https://github.com/greenautarky/influxDBv1) | [hassio-addons/addon-influxdb](https://github.com/hassio-addons/addon-influxdb) | MIT | InfluxDB v1 add-on for time-series data storage |
+| [grafana](https://github.com/greenautarky/grafana) | [hassio-addons/addon-grafana](https://github.com/hassio-addons/addon-grafana) | MIT | Grafana add-on for dashboards and visualization |
+| [glances](https://github.com/greenautarky/glances) | [hassio-addons/addon-glances](https://github.com/hassio-addons/addon-glances) | MIT | Glances add-on for system monitoring |
+| [telegraf](https://github.com/greenautarky/telegraf) | [sabuto/hassio-telegraf](https://github.com/sabuto/hassio-telegraf) | MIT | Telegraf add-on for metrics collection |
+| [MQTT](https://github.com/greenautarky/MQTT) | [home-assistant/addons](https://github.com/home-assistant/addons) (mosquitto) | Apache-2.0 | Mosquitto MQTT broker add-on |
+| [Zigbee2MQTT](https://github.com/greenautarky/Zigbee2MQTT) | [zigbee2mqtt/hassio-zigbee2mqtt](https://github.com/zigbee2mqtt/hassio-zigbee2mqtt) | Apache-2.0 | Zigbee2MQTT add-on for Zigbee device integration |
+| [vibe_addons](https://github.com/greenautarky/vibe_addons) | Multiple upstream sources (see above) | Various | Legacy add-on collection (bundled from upstream add-ons) |
 
 ### Special Thanks
 
 - **[Home Assistant](https://www.home-assistant.io/)** — the foundation this entire ecosystem is built on
 - **[Darkxst](https://github.com/Darkxst)** — for the initial iHost HA OS port that started it all
 - **[iHost Open Source Project](https://github.com/iHost-Open-Source-Project)** — for opening up the SONOFF iHost platform
-- **[Community Add-ons](https://github.com/hassio-addons)** — for the Tailscale add-on and many others
+- **[Community Add-ons (Frenck)](https://github.com/hassio-addons)** — for InfluxDB, Grafana, Glances, Tailscale, and many other add-ons
+- **[Sabuto](https://github.com/sabuto)** — for the Telegraf Hassio add-on
+- **[Zigbee2MQTT](https://github.com/zigbee2mqtt)** — for the Zigbee2MQTT add-on and ecosystem
