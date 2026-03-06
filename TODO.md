@@ -98,6 +98,12 @@
 ### Build Script (`scripts/ga_build.sh`)
 - [ ] Validate genimage.cfg path resolution (multiple fallback searches)
 
+### Package Updates (next major / Buildroot Go bump)
+- [ ] Bump Buildroot Go from 1.23.12 to 1.25+ (unblocks all below)
+- [ ] Telegraf 1.30.0 → latest (needs Go 1.25+, no urgent features)
+- [ ] OS-Agent 1.7.2 → 1.8.x (needs Go 1.25+, Docker storage driver API, minor fixes)
+- [ ] Fluent-Bit 3.2.10 → 4.x (major version, check config compat)
+
 ## Low Priority
 
 ### Fluent-Bit Inputs
