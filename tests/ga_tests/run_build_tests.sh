@@ -29,17 +29,17 @@ echo ""
 echo "--- Config files ---"
 
 # CFG-01: telegraf.conf exists
-[[ -f "${TARGET}/etc/telegraf.conf" ]] \
+[[ -f "${TARGET}/etc/telegraf/telegraf.conf" ]] \
   && _pass "CFG-01: telegraf.conf exists on rootfs" \
   || _fail "CFG-01: telegraf.conf missing"
 
 # CFG-02: telegraf.conf has device_label
-grep -q 'device_label' "${TARGET}/etc/telegraf.conf" 2>/dev/null \
+grep -q 'device_label' "${TARGET}/etc/telegraf/telegraf.conf" 2>/dev/null \
   && _pass "CFG-02: telegraf.conf has device_label tag" \
   || _fail "CFG-02: telegraf.conf missing device_label"
 
 # CFG-03: telegraf.conf has uuid
-grep -q 'uuid' "${TARGET}/etc/telegraf.conf" 2>/dev/null \
+grep -q 'uuid' "${TARGET}/etc/telegraf/telegraf.conf" 2>/dev/null \
   && _pass "CFG-03: telegraf.conf has uuid tag" \
   || _fail "CFG-03: telegraf.conf missing uuid"
 
@@ -59,7 +59,8 @@ grep -q 'device_label' "${TARGET}/etc/fluent-bit/fluent-bit.conf" 2>/dev/null \
   || _fail "CFG-08: fluent-bit.conf missing device_label"
 
 # CFG-11: fluent-bit.service has safe default
-grep -q 'DEVICE_LABEL' "${TARGET}/etc/systemd/system/fluent-bit.service" 2>/dev/null \
+FB_SVC="${TARGET}/usr/lib/systemd/system/fluent-bit.service"
+grep -q 'DEVICE_LABEL' "$FB_SVC" 2>/dev/null \
   && _pass "CFG-11: fluent-bit.service has DEVICE_LABEL" \
   || _fail "CFG-11: fluent-bit.service missing DEVICE_LABEL"
 
@@ -77,7 +78,7 @@ grep -q 'netbird' "${TARGET}/etc/systemd/system/telegraf.service" 2>/dev/null \
   && _pass "CFG-15: telegraf.service ordered after netbird" \
   || _fail "CFG-15: telegraf.service missing netbird ordering"
 
-grep -q 'netbird' "${TARGET}/etc/systemd/system/fluent-bit.service" 2>/dev/null \
+grep -q 'netbird' "$FB_SVC" 2>/dev/null \
   && _pass "CFG-16: fluent-bit.service ordered after netbird" \
   || _fail "CFG-16: fluent-bit.service missing netbird ordering"
 
@@ -110,8 +111,9 @@ case "$GA_ENV_VAL" in
   *) _fail "ENV-02: GA_ENV invalid: '$GA_ENV_VAL'" ;;
 esac
 
-# ENV-08: os-release
-grep -q 'GA_BUILD_ID' "${TARGET}/etc/os-release" 2>/dev/null \
+# ENV-08: os-release (may be at /etc/os-release or /usr/lib/os-release)
+{ grep -q 'GA_BUILD_ID' "${TARGET}/etc/os-release" 2>/dev/null || \
+  grep -q 'GA_BUILD_ID' "${TARGET}/usr/lib/os-release" 2>/dev/null; } \
   && _pass "ENV-08: os-release has GA_BUILD_ID" \
   || _fail "ENV-08: os-release missing GA_BUILD_ID"
 
@@ -121,7 +123,8 @@ echo "--- Services ---"
 # CRASH-01: crash detection services enabled
 SVC_DIR="${TARGET}/etc/systemd/system"
 for svc in ga-crash-marker.service ga-boot-check.service; do
-  if [[ -f "${SVC_DIR}/${svc}" ]] || [[ -L "${SVC_DIR}/${svc}" ]]; then
+  if [[ -f "${TARGET}/usr/lib/systemd/system/${svc}" ]] || \
+     [[ -L "${SVC_DIR}/sysinit.target.wants/${svc}" ]]; then
     _pass "CRASH-01: $svc installed"
   else
     _fail "CRASH-01: $svc missing"
@@ -140,7 +143,7 @@ for svc in netbird.service telegraf.service fluent-bit.service; do
 done
 
 # DG-01: disk guard installed
-[[ -f "${TARGET}/usr/sbin/ga-disk-guard" ]] || [[ -f "${TARGET}/usr/bin/ga-disk-guard" ]] \
+[[ -f "${TARGET}/usr/sbin/ga_disk_guard" ]] || [[ -f "${TARGET}/usr/bin/ga_disk_guard" ]] \
   && _pass "DG-01: disk guard script installed" \
   || _fail "DG-01: disk guard script missing"
 

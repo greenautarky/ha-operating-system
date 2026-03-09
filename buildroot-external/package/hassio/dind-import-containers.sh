@@ -321,8 +321,8 @@ if [ "$arch" = "" ]; then
 fi
 
 # Tag supervisor
-log "Tagging supervisor image $supervisor_id as oliverc7/${arch}-hassio-supervisor:latest"
-docker tag "$supervisor_id" "oliverc7/${arch}-hassio-supervisor:latest"
+log "Tagging supervisor image $supervisor_id as ghcr.io/greenautarky/${arch}-hassio-supervisor:latest"
+docker tag "$supervisor_id" "ghcr.io/greenautarky/${arch}-hassio-supervisor:latest"
 
 # AppArmor + updater metadata
 mkdir -p /data/supervisor/apparmor /data/supervisor

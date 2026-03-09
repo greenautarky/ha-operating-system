@@ -191,6 +191,7 @@ ensure_dev_ca_from_rel_ca() {
 
 # Global build timestamp (compact format for filenames, set once at script start)
 GA_BUILD_TIMESTAMP="${GA_BUILD_TIMESTAMP:-$(date '+%Y%m%d%H%M%S')}"
+export GA_BUILD_TIMESTAMP GA_ENV
 
 write_build_id_into_target() {
   local ts_human
@@ -398,11 +399,9 @@ verify_build_integrity() {
 
 rebuild_artifacts() {
   # Your tree has no 'images' target; use 'all' after target-finalize
+  # Note: post-build.sh (called by target-finalize) writes os-release including
+  # GA_BUILD_ID via GA_BUILD_TIMESTAMP and GA_ENV env vars exported by ga_build.sh
   make -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" target-finalize
-
-  # Re-stamp GA fields into os-release AFTER target-finalize (which regenerates it)
-  stamp_os_release
-
   make -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" -j"$(nproc)" all
 }
 

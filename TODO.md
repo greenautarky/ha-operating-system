@@ -104,6 +104,23 @@
 - [ ] Validate genimage.cfg path resolution (multiple fallback searches)
 - [x] ~~Remove standalone Go toolchain workaround~~ — done, NetBird now built via Buildroot golang-package
 
+### Pre-bake Add-on Container Images (needs discussion)
+- [ ] Pre-pull add-on Docker images into the OS build (same mechanism as core/supervisor)
+  - Candidates: Mosquitto, Zigbee2MQTT, iHost Hardware Control, ga_tailscale
+  - Images are pre-built on GHCR — no compilation needed, just fetch + import
+  - Flasher would "install" addons via HA API instantly (layers already local)
+  - Needs: bump `BR2_PACKAGE_HASSIO_DATA_IMAGE_SIZE` to fit extra images
+  - Needs: add addon entries to `fetch-container-image.sh` / `hassio.mk` or separate fetch step
+  - Consider: pre-writing Supervisor addon config (`/mnt/data/supervisor/addons/`) to skip API step entirely
+
+### Pre-configure GA Add-on Repository (needs discussion)
+- [ ] Pre-write `/mnt/data/supervisor/store.json` with greenautarky addon repo URL
+  - Supervisor auto-merges with built-in defaults (core, community, ESPHome, Music Assistant)
+  - GA addons appear in store from first boot — no manual repo add needed
+  - Format: `{"repositories": ["https://github.com/greenautarky/hassio-addon-repo"]}`
+  - Implementation: add file to data partition during `create-data-partition.sh` or `dind-import-containers.sh`
+  - Add-on store connection stays fully functional (browsing, installing, updating)
+
 ### Image Size Optimization
 - [x] ~~Exclude `frontend-build/` from ha-core Docker image (-537MB)~~ — fixed in ha-core `66414a54`
 - [ ] Remove unused integrations/components from custom ha-core build to reduce image size
