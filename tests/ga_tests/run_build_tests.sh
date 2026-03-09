@@ -181,9 +181,9 @@ if [[ -f "$VER_JSON" ]]; then
     || _fail "BLD: version.json missing greenautarky"
 
   CORE_TAG="$(jq -r '.core // "unknown"' "$VER_JSON" 2>/dev/null)"
-  [[ "$CORE_TAG" == "latest" ]] \
-    && _pass "BLD: Core image tag is 'latest'" \
-    || _fail "BLD: Core tag is '$CORE_TAG' (expected 'latest')"
+  [[ "$CORE_TAG" =~ ^2025\.[0-9]+\.[0-9]+$ ]] \
+    && _pass "BLD: Core image tag is '$CORE_TAG'" \
+    || _fail "BLD: Core tag is '$CORE_TAG' (expected HA version like 2025.11.3)"
 else
   _skip "BLD: version.json" "only present after full build"
 fi
