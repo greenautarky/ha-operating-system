@@ -327,6 +327,6 @@ docker tag "$supervisor_id" "oliverc7/${arch}-hassio-supervisor:latest"
 # AppArmor + updater metadata
 mkdir -p /data/supervisor/apparmor /data/supervisor
 wget -O /data/supervisor/apparmor/hassio-supervisor "$APPARMOR_URL" >/dev/null || true
-printf '{ "channel": "%s" }\n' "$channel" > /data/supervisor/updater.json
+printf '{ "channel": "%s", "homeassistant": "2025.11.3" }\n' "$channel" > /data/supervisor/updater.json
 
 log "Done. channel=$channel"
