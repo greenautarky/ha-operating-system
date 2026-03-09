@@ -37,4 +37,23 @@ run_test "OB-06" "Supervisor is iHost fork" \
 run_test "OB-07" "Non-core components use upstream registries" \
   "for c in hassio_dns hassio_audio hassio_cli hassio_multicast hassio_observer; do IMG=\$(docker inspect \$c --format '{{.Config.Image}}' 2>/dev/null); [ -z \"\$IMG\" ] && continue; echo \"\$IMG\" | grep -qi 'greenautarky' && exit 1; done"
 
+# --- Core image freshness ---
+run_test_show "OB-08" "Core image is latest (not stale)" \
+  "LOCAL_DIGEST=\$(docker inspect homeassistant --format '{{.Image}}' 2>/dev/null | cut -d: -f2 | head -c12) && [ -n \"\$LOCAL_DIGEST\" ] && echo \"local digest: \$LOCAL_DIGEST\""
+
+# --- Custom onboarding content ---
+run_test "OB-09" "Custom onboarding: GDPR step present" \
+  "docker exec homeassistant grep -q 'gdpr' /usr/src/homeassistant/homeassistant/components/onboarding/strings.json 2>/dev/null"
+
+run_test "OB-10" "Custom onboarding: custom_pages step present" \
+  "docker exec homeassistant grep -q 'custom_pages' /usr/src/homeassistant/homeassistant/components/onboarding/strings.json 2>/dev/null"
+
+# --- Frontend ---
+run_test "OB-11" "Frontend wheel installed" \
+  "docker exec homeassistant pip show home-assistant-frontend >/dev/null 2>&1"
+
+# --- Image bloat check ---
+run_test "OB-12" "No frontend-build bloat in core image" \
+  "docker exec homeassistant test ! -d /usr/src/homeassistant/frontend-build"
+
 suite_end

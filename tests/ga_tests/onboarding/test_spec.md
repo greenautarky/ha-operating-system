@@ -43,3 +43,28 @@ telemetry preferences.
 - **Command**: Verify dns, audio, cli, multicast, observer containers use `home-assistant` or `homeassistant` registry
 - **Expected**: Only the core image should be greenautarky; everything else stays upstream
 - **Catches**: Accidental override of non-core components in version repo
+
+### OB-08: Core image is latest (not stale pinned version)
+- **Command**: Compare running image digest with `latest` tag digest on GHCR
+- **Expected**: Digests match — the OS build picked up the most recent core image
+- **Catches**: Stale cached image, version pinning not using `latest`
+
+### OB-09: Custom onboarding strings present (GDPR step)
+- **Command**: `docker exec homeassistant find /usr/src/homeassistant -path '*/onboarding/strings.json' -exec grep -l 'gdpr' {} \;`
+- **Expected**: strings.json contains `gdpr` step definition
+- **Catches**: Upstream core image used instead of custom fork, or custom strings missing
+
+### OB-10: Custom onboarding strings present (custom_pages step)
+- **Command**: `docker exec homeassistant grep -q 'custom_pages' /usr/src/homeassistant/homeassistant/components/onboarding/strings.json`
+- **Expected**: strings.json contains `custom_pages` step definition
+- **Catches**: Custom onboarding content not included in core build
+
+### OB-11: Frontend wheel is custom build (not upstream)
+- **Command**: `docker exec homeassistant pip show home-assistant-frontend 2>/dev/null | grep -i location`
+- **Expected**: Frontend package is installed (built from greenautarky/frontend fork)
+- **Catches**: Frontend wheel missing or not installed
+
+### OB-12: No frontend-build bloat in core image
+- **Command**: `docker exec homeassistant test ! -d /usr/src/homeassistant/frontend-build`
+- **Expected**: `frontend-build/` directory does NOT exist inside the container
+- **Catches**: .dockerignore fix not applied, 537MB bloat still present
