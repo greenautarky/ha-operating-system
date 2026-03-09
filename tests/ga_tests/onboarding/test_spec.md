@@ -18,14 +18,14 @@ telemetry preferences.
 - **Expected**: Container image is `ghcr.io/greenautarky/tinker-homeassistant:*`
 - **Catches**: Build still using upstream `ghcr.io/home-assistant/tinker-homeassistant`
 
-### OB-02: Core image version is ga-tagged
-- **Command**: `docker inspect homeassistant --format '{{.Config.Image}}' | grep -q 'ga\.'`
-- **Expected**: Image tag contains `ga.` suffix (e.g., `2025.11.0-ga.1`)
-- **Catches**: Accidentally pulling upstream version tag
+### OB-02: Core image tag is latest
+- **Command**: `docker inspect homeassistant --format '{{.Config.Image}}' | grep -q ':latest'`
+- **Expected**: Image tag is `latest` (no version pinning)
+- **Catches**: Stale pinned version tag instead of `latest`
 
-### OB-03: HA version matches expected ga build
+### OB-03: HA version is displayed
 - **Command**: `cat /mnt/data/supervisor/homeassistant/.HA_VERSION`
-- **Expected**: Version string contains `-ga.` (e.g., `2025.11.0-ga.1`)
+- **Expected**: Version string is present (informational)
 
 ### OB-04: Supervisor version.json references greenautarky image registry
 - **Command**: Check version.json on data partition for greenautarky core image
@@ -35,9 +35,9 @@ telemetry preferences.
 - **Command**: Verify supervisor fetches from `greenautarky/haos-version`
 - **Expected**: Supervisor logs show fetch from `raw.githubusercontent.com/greenautarky/haos-version`
 
-### OB-06: Supervisor is iHost fork (not upstream HA)
-- **Command**: `docker inspect hassio_supervisor --format '{{.Config.Image}}' | grep -q 'ihost-open-source-project'`
-- **Expected**: Supervisor image is from `ghcr.io/ihost-open-source-project`
+### OB-06: Supervisor is greenautarky fork
+- **Command**: `docker inspect hassio_supervisor --format '{{.Config.Image}}' | grep -q 'greenautarky'`
+- **Expected**: Supervisor image is from `ghcr.io/greenautarky`
 
 ### OB-07: All non-core components use upstream registries
 - **Command**: Verify dns, audio, cli, multicast, observer containers use `home-assistant` or `homeassistant` registry

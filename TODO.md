@@ -16,6 +16,11 @@
 - [x] Increase store-and-forward buffer to 300M (handles Loki outages via persistent filesystem storage)
 
 ### OTA / RAUC
+- [x] Point `stable.json` OTA URL to `greenautarky/ha-operating-system` (was upstream iHost repo)
+- [ ] Publish first RAUC bundle as GitHub Release on `greenautarky/ha-operating-system`
+  - Release tag must match `{version}` in OTA URL pattern
+  - Asset filename: `{os_name}_{board}-{version}.raucb`
+  - Consider CI workflow to auto-publish `.raucb` from `ga_build.sh prod` output
 - [ ] Test full OTA update flow with signed RAUC bundles
 - [ ] Verify CA certificates in `buildroot-external/ota/` are non-expired
 - [ ] Document key rotation procedure
