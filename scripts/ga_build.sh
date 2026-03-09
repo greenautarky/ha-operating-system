@@ -277,6 +277,125 @@ verify_outputs() {
   echo "=== Verify: done ==="
 }
 
+# Post-build integrity checks — runs after successful build, fails the build if critical issues found
+verify_build_integrity() {
+  echo ""
+  echo "=== Post-build integrity checks ==="
+  local pass=0 fail=0 warn=0
+
+  _check_pass() { echo "  PASS  $1"; pass=$((pass+1)); }
+  _check_fail() { echo "  FAIL  $1"; fail=$((fail+1)); }
+  _check_warn() { echo "  WARN  $1"; warn=$((warn+1)); }
+
+  # --- 1) Output images exist ---
+  local img_xz
+  img_xz="$(ls "${OUT}/images/"*".img.xz" 2>/dev/null | head -1)"
+  if [[ -n "$img_xz" ]]; then
+    local sz_mb
+    sz_mb="$(du -m "$img_xz" | cut -f1)"
+    _check_pass "Disk image exists (${sz_mb}MB)"
+    # Sanity: image should be between 200MB and 2GB
+    if (( sz_mb < 200 || sz_mb > 2048 )); then
+      _check_warn "Image size ${sz_mb}MB outside expected range (200-2048MB)"
+    fi
+  else
+    _check_fail "No .img.xz found in ${OUT}/images/"
+  fi
+
+  local raucb
+  raucb="$(ls "${OUT}/images/"*".raucb" 2>/dev/null | head -1)"
+  [[ -n "$raucb" ]] && _check_pass "RAUC bundle exists" || _check_fail "No .raucb found"
+
+  # --- 2) NetBird binary ---
+  local nb="${OUT}/target/usr/bin/netbird"
+  if [[ -x "$nb" ]]; then
+    local nb_ver_out
+    nb_ver_out="$("$nb" version 2>/dev/null || echo "unknown")"
+    if echo "$nb_ver_out" | grep -q "${NETBIRD_TAG#v}"; then
+      _check_pass "NetBird binary version: $nb_ver_out"
+    else
+      _check_warn "NetBird version mismatch: got '$nb_ver_out', expected '${NETBIRD_TAG#v}'"
+    fi
+  else
+    _check_fail "NetBird binary not found at $nb"
+  fi
+
+  # --- 3) Key systemd services enabled ---
+  local svc_dir="${OUT}/target/etc/systemd/system"
+  for svc in netbird.service; do
+    if [[ -L "${svc_dir}/multi-user.target.wants/${svc}" ]] || [[ -f "${svc_dir}/multi-user.target.wants/${svc}" ]]; then
+      _check_pass "Service enabled: $svc"
+    else
+      _check_fail "Service NOT enabled: $svc"
+    fi
+  done
+
+  # --- 4) GA build ID stamped ---
+  if [[ -f "${OUT}/target/etc/ga-build-id" ]]; then
+    _check_pass "Build ID stamped: $(cat "${OUT}/target/etc/ga-build-id")"
+  else
+    _check_fail "ga-build-id not found"
+  fi
+
+  # --- 5) GA env config ---
+  if [[ -f "${OUT}/target/etc/ga-env.conf" ]]; then
+    local env_val
+    env_val="$(grep '^GA_ENV=' "${OUT}/target/etc/ga-env.conf" | cut -d= -f2)"
+    _check_pass "GA_ENV stamped: $env_val"
+  else
+    _check_fail "ga-env.conf not found"
+  fi
+
+  # --- 6) Data partition: check container images were loaded ---
+  local hassio_dir="${OUT}/build/hassio-1.0.0"
+  local version_json="${hassio_dir}/version.json"
+  if [[ -f "$version_json" ]]; then
+    # Check core image references greenautarky
+    if grep -q "greenautarky" "$version_json"; then
+      _check_pass "version.json references greenautarky core image"
+    else
+      _check_fail "version.json does NOT reference greenautarky"
+    fi
+    # Check core version is 'latest'
+    local core_ver
+    core_ver="$(jq -r '.core // "unknown"' "$version_json" 2>/dev/null)"
+    if [[ "$core_ver" == "latest" ]]; then
+      _check_pass "Core image tag: latest"
+    else
+      _check_warn "Core image tag: '$core_ver' (expected 'latest')"
+    fi
+  else
+    _check_warn "version.json not found (normal for non-full builds)"
+  fi
+
+  # --- 7) Data partition size ---
+  local data_img="${OUT}/images/data.ext4"
+  if [[ -f "$data_img" ]]; then
+    local data_sz_mb
+    data_sz_mb="$(du -m "$data_img" | cut -f1)"
+    _check_pass "Data partition: ${data_sz_mb}MB"
+  fi
+
+  # --- 8) os-release has GA fields ---
+  local os_rel="${OUT}/target/etc/os-release"
+  if [[ -f "$os_rel" ]] && grep -q "GA_BUILD_ID" "$os_rel"; then
+    _check_pass "os-release has GA_BUILD_ID"
+  else
+    _check_warn "os-release missing GA_BUILD_ID"
+  fi
+
+  # --- Summary ---
+  echo ""
+  echo "  Results: $pass passed, $fail failed, $warn warnings"
+  echo "=== Post-build integrity checks done ==="
+
+  if (( fail > 0 )); then
+    echo ""
+    echo "ERROR: $fail integrity check(s) FAILED — review above output"
+    return 1
+  fi
+}
+
 rebuild_artifacts() {
   # Your tree has no 'images' target; use 'all' after target-finalize
   make -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" target-finalize
@@ -1547,6 +1666,10 @@ else
   echo "Skipping post-build artifacts for dev build (SBOMs, config archive, provisioning)"
   echo "  Use 'prod' environment for full artifact generation"
 fi
+
+# Post-build integrity checks
+log_build_step "Build integrity checks"
+verify_build_integrity
 
 # Finalize build log
 finalize_build_log 0
