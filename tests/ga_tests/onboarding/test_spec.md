@@ -18,10 +18,10 @@ telemetry preferences.
 - **Expected**: Container image is `ghcr.io/greenautarky/tinker-homeassistant:*`
 - **Catches**: Build still using upstream `ghcr.io/home-assistant/tinker-homeassistant`
 
-### OB-02: Core image tag is latest
-- **Command**: `docker inspect homeassistant --format '{{.Config.Image}}' | grep -q ':latest'`
-- **Expected**: Image tag is `latest` (no version pinning)
-- **Catches**: Stale pinned version tag instead of `latest`
+### OB-02: Core image tag matches HA version
+- **Command**: `docker inspect homeassistant --format '{{.Config.Image}}' | grep -qE ':(2025\.[0-9]+\.[0-9]+|latest)'`
+- **Expected**: Image tag is HA version (e.g., `2025.11.3`) or `latest`
+- **Catches**: Upstream version tag or missing tag
 
 ### OB-03: HA version is displayed
 - **Command**: `cat /mnt/data/supervisor/homeassistant/.HA_VERSION`
