@@ -32,6 +32,12 @@ setup_localtime
     echo "VARIANT_ID=${BOARD_ID}"
     echo "SUPERVISOR_MACHINE=${SUPERVISOR_MACHINE}"
     echo "SUPERVISOR_ARCH=${SUPERVISOR_ARCH}"
+    # GreenAutarky build info (set by ga_build.sh via env vars)
+    if [ -n "${GA_BUILD_TIMESTAMP:-}" ]; then
+        echo "GA_BUILD_ID=\"$(date '+%F %T') (${GA_ENV:-dev})\""
+        echo "GA_BUILD_TIMESTAMP=\"${GA_BUILD_TIMESTAMP}\""
+        echo "GA_ENV=\"${GA_ENV:-dev}\""
+    fi
 ) > "${TARGET_DIR}/usr/lib/os-release"
 
 # Write machine-info
