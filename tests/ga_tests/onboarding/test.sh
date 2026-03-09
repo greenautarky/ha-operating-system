@@ -13,8 +13,8 @@ CORE_IMAGE=$(docker inspect homeassistant --format '{{.Config.Image}}' 2>/dev/nu
 run_test "OB-01" "Core image is greenautarky (not upstream)" \
   "echo '$CORE_IMAGE' | grep -q 'greenautarky'"
 
-run_test "OB-02" "Core image tag is latest" \
-  "echo '$CORE_IMAGE' | grep -q ':latest'"
+run_test "OB-02" "Core image tag is HA version (not upstream)" \
+  "echo '$CORE_IMAGE' | grep -qE ':(2025\.[0-9]+\.[0-9]+|latest)'"
 
 run_test_show "OB-02b" "Core image" \
   "echo '$CORE_IMAGE'"
