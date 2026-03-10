@@ -1,8 +1,8 @@
 ################################################################################
-# Telegraf 1.30.0 - Buildroot (Go) + systemd + writable runtime config
+# Telegraf 1.38.0 - Buildroot (Go) + systemd + writable runtime config
 ################################################################################
 
-TELEGRAF_VERSION = 1.30.0
+TELEGRAF_VERSION = 1.38.0
 TELEGRAF_SITE = https://github.com/influxdata/telegraf/archive/refs/tags
 TELEGRAF_SOURCE = v$(TELEGRAF_VERSION).tar.gz
 
