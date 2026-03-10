@@ -244,6 +244,120 @@ else
 fi
 
 # =========================================================================
+# Source file consistency (checks source tree, not build output)
+# These catch misconfigurations BEFORE a full build completes
+# =========================================================================
+echo ""
+echo "--- Source file consistency ---"
+
+# Determine source root (container: /build, host: parent of output dir)
+if [[ -d "/build/buildroot-external" ]]; then
+  SRC="/build"
+elif [[ -d "${OUT}/../buildroot-external" ]]; then
+  SRC="$(cd "${OUT}/.." && pwd)"
+else
+  SRC=""
+fi
+
+if [[ -n "$SRC" ]]; then
+  # SRC-01: hassio.mk VERSION_URL
+  HASSIO_MK="${SRC}/buildroot-external/package/hassio/hassio.mk"
+  if [[ -f "$HASSIO_MK" ]]; then
+    grep -q 'greenautarky/haos-version' "$HASSIO_MK" \
+      && _pass "SRC-01: hassio.mk VERSION_URL is greenautarky" \
+      || _fail "SRC-01: hassio.mk VERSION_URL is NOT greenautarky"
+
+    # SRC-02: no stale refs in hassio.mk
+    if grep -qE 'oliverc7|iHost-Open-Source' "$HASSIO_MK" 2>/dev/null; then
+      _fail "SRC-02: hassio.mk has stale upstream refs"
+    else
+      _pass "SRC-02: hassio.mk has no stale upstream refs"
+    fi
+  else
+    _skip "SRC-01/02" "hassio.mk not found"
+  fi
+
+  # SRC-03: dind-import-containers.sh tags greenautarky
+  DIND="${SRC}/buildroot-external/package/hassio/dind-import-containers.sh"
+  if [[ -f "$DIND" ]]; then
+    grep -q 'ghcr.io/greenautarky.*hassio-supervisor' "$DIND" \
+      && _pass "SRC-03: dind-import tags supervisor as greenautarky" \
+      || _fail "SRC-03: dind-import does NOT tag supervisor as greenautarky"
+
+    # SRC-04: no stale refs in dind-import
+    if grep -qE 'oliverc7|iHost-Open-Source' "$DIND" 2>/dev/null; then
+      _fail "SRC-04: dind-import has stale upstream refs"
+    else
+      _pass "SRC-04: dind-import has no stale upstream refs"
+    fi
+  else
+    _skip "SRC-03/04" "dind-import-containers.sh not found"
+  fi
+
+  # SRC-05: hassos-supervisor source matches dind-import tag prefix
+  HSUP_SRC="${SRC}/buildroot-external/rootfs-overlay/usr/sbin/hassos-supervisor"
+  if [[ -f "$HSUP_SRC" ]] && [[ -f "$DIND" ]]; then
+    # Extract the image prefix from both files and compare
+    HSUP_PREFIX="$(grep 'SUPERVISOR_IMAGE=' "$HSUP_SRC" | head -1 | sed 's/.*"\(.*\)\/.*/\1/')"
+    DIND_PREFIX="$(grep 'docker tag.*hassio-supervisor' "$DIND" | head -1 | sed 's/.*"\(.*\)\/.*/\1/')"
+    if [[ "$HSUP_PREFIX" == "$DIND_PREFIX" ]] && [[ -n "$HSUP_PREFIX" ]]; then
+      _pass "SRC-05: hassos-supervisor and dind-import use same prefix: $HSUP_PREFIX"
+    else
+      _fail "SRC-05: prefix mismatch: hassos-supervisor='$HSUP_PREFIX' vs dind-import='$DIND_PREFIX'"
+    fi
+  else
+    _skip "SRC-05" "source files not found"
+  fi
+
+  # SRC-06: updater.json has real HA version (not 'latest')
+  if [[ -f "$DIND" ]]; then
+    HA_VER_IN_DIND="$(grep 'homeassistant' "$DIND" | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -1)"
+    if [[ -n "$HA_VER_IN_DIND" ]]; then
+      _pass "SRC-06: updater.json uses real HA version: $HA_VER_IN_DIND"
+    elif grep -q '"latest"' "$DIND" 2>/dev/null; then
+      _fail "SRC-06: updater.json uses 'latest' (HA rejects this)"
+    else
+      _skip "SRC-06" "could not parse HA version from dind-import"
+    fi
+  fi
+
+  # SRC-07: ga_build.sh exports GA_BUILD_TIMESTAMP and GA_ENV
+  GA_BUILD="${SRC}/scripts/ga_build.sh"
+  if [[ -f "$GA_BUILD" ]]; then
+    grep -q 'export GA_BUILD_TIMESTAMP' "$GA_BUILD" \
+      && _pass "SRC-07: ga_build.sh exports GA_BUILD_TIMESTAMP" \
+      || _fail "SRC-07: ga_build.sh does NOT export GA_BUILD_TIMESTAMP"
+  else
+    _skip "SRC-07" "ga_build.sh not found"
+  fi
+
+  # SRC-08: post-build.sh stamps GA_BUILD_ID into os-release
+  POST_BUILD="${SRC}/buildroot-external/scripts/post-build.sh"
+  if [[ -f "$POST_BUILD" ]]; then
+    grep -q 'GA_BUILD_ID' "$POST_BUILD" \
+      && _pass "SRC-08: post-build.sh stamps GA_BUILD_ID" \
+      || _fail "SRC-08: post-build.sh does NOT stamp GA_BUILD_ID"
+  else
+    _skip "SRC-08" "post-build.sh not found"
+  fi
+
+  # SRC-09: Global stale reference scan across all functional source
+  STALE_COUNT=0
+  for dir in "${SRC}/buildroot-external/package" "${SRC}/buildroot-external/rootfs-overlay" "${SRC}/scripts"; do
+    [[ -d "$dir" ]] || continue
+    hits=$(grep -rlE 'oliverc7|iHost-Open-Source-Project' "$dir" 2>/dev/null | wc -l)
+    STALE_COUNT=$((STALE_COUNT + hits))
+  done
+  if [[ "$STALE_COUNT" -eq 0 ]]; then
+    _pass "SRC-09: No stale refs (oliverc7/iHost-Open-Source) in functional source"
+  else
+    _fail "SRC-09: Found $STALE_COUNT file(s) with stale upstream refs in functional source"
+  fi
+else
+  _skip "SRC-01..09" "source tree not found (expected /build or parent of output)"
+fi
+
+# =========================================================================
 # Summary
 # =========================================================================
 echo ""
