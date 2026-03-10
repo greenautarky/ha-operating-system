@@ -73,24 +73,23 @@ fi
 #       - MANIFEST.txt
 #       - LICENSE-SUMMARY.txt
 #
-# Usage:
+# Usage (order-independent):
 #   ./scripts/ga_build.sh [full|partial|kernel|update] [dev|prod]
-#   ./scripts/ga_build.sh dev       # shorthand for "update dev"
-#   ./scripts/ga_build.sh prod      # shorthand for "update prod"
+#   ./scripts/ga_build.sh dev full   # same as "full dev"
+#   ./scripts/ga_build.sh dev        # shorthand for "full dev" (default mode=full)
+#   ./scripts/ga_build.sh prod       # shorthand for "full prod"
 #
-# Modes:
+# Modes (default: full):
 #   full    - Clean build from scratch (rm -rf $OUT)
 #   partial - Rebuild with linux-dirclean and hassio-dirclean
 #   kernel  - Rebuild with linux-dirclean only
 #   update  - Incremental build (reconfigure only)
-#   dev     - Shorthand for "update dev"
-#   prod    - Shorthand for "update prod"
 #
-# Environment:
-#   dev  (default) - Development build: fast, skips post-build artifacts
-#                    (no SBOMs, no config archive, no provisioning image)
-#   prod           - Production build: full artifacts for release
-#                    (SBOMs, config archive, provisioning if enabled)
+# Environment (default: dev):
+#   dev  - Development build: fast, skips post-build artifacts
+#          (no SBOMs, no config archive, no provisioning image)
+#   prod - Production build: full artifacts for release
+#          (SBOMs, config archive, provisioning if enabled)
 #
 # Environment Variables (override defaults):
 #   BUILDROOT_DIR    - Path to Buildroot source (default: /build/buildroot)
@@ -107,24 +106,33 @@ fi
 
 unset BR2_EXTERNAL
 
-MODE="${1:-full}"   # full | partial | kernel | update | dev | prod
-
-# Shorthand: "dev" or "prod" as first arg => "update dev" or "update prod"
-if [[ "$MODE" == "dev" || "$MODE" == "prod" ]]; then
-  GA_ENV="$MODE"
-  MODE="update"
-else
-  # Environment: 2nd argument overrides GA_ENV env var; default is "dev"
-  if [[ -n "${2:-}" ]]; then
-    GA_ENV="$2"
-  fi
-fi
+# Parse arguments: order-independent, e.g. "full dev" and "dev full" are equivalent.
+#   Mode args:  full | partial | kernel | update  (default: full)
+#   Env args:   dev | prod                        (default: dev)
+#   Shorthands: "dev" alone => "update dev", "prod" alone => "update prod"
+MODE=""
+_CLI_ENV=""
+for arg in "${@}"; do
+  case "$arg" in
+    full|partial|kernel|update)
+      [[ -z "$MODE" ]] || { echo "ERROR: Duplicate mode argument: '$arg' (already have '$MODE')." >&2; exit 1; }
+      MODE="$arg"
+      ;;
+    dev|prod)
+      [[ -z "$_CLI_ENV" ]] || { echo "ERROR: Duplicate environment argument: '$arg' (already have '$_CLI_ENV')." >&2; exit 1; }
+      _CLI_ENV="$arg"
+      ;;
+    *)
+      echo "ERROR: Unknown argument '$arg'. Usage: $0 [full|partial|kernel|update] [dev|prod]" >&2
+      exit 1
+      ;;
+  esac
+done
+# CLI arg overrides GA_ENV env var
+[[ -n "$_CLI_ENV" ]] && GA_ENV="$_CLI_ENV"
+MODE="${MODE:-full}"
 GA_ENV="${GA_ENV:-dev}"
-if [[ "$GA_ENV" != "dev" && "$GA_ENV" != "prod" ]]; then
-  echo "ERROR: Invalid environment '$GA_ENV'. Must be 'dev' or 'prod'." >&2
-  exit 1
-fi
-echo "Building with GA_ENV=$GA_ENV"
+echo "Building with MODE=$MODE GA_ENV=$GA_ENV"
 
 # ---- Paths inside container ----
 BUILDROOT_DIR="${BUILDROOT_DIR:-/build/buildroot}"

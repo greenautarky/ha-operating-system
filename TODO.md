@@ -31,6 +31,46 @@
 
 ## Medium Priority
 
+### GA Device Management Addon (`ga-device-manager`) (needs discussion)
+A new HA addon for remote fleet management, accessible over NetBird.
+Runs as a container with Supervisor API access (`hassio` role).
+
+**Core features:**
+- [ ] Remote OS/addon/core updates via Supervisor API
+  - `POST /api/os/update`, `/api/addons/{slug}/update`
+  - Staged rollout support (update one device, verify, then fleet-wide)
+- [ ] Backup management
+  - Trigger full/partial backups: `POST /api/backups/new/full`
+  - Upload backups to remote storage (S3/NFS/NetBird peer)
+  - Schedule automated backups via cron
+- [ ] Addon lifecycle control
+  - Start/stop/restart addons: `POST /api/addons/{slug}/start|stop|restart`
+  - Install/uninstall addons remotely
+  - Push addon config changes: `POST /api/addons/{slug}/options`
+- [ ] Config management
+  - Push GA environment changes (`ga-env.conf`)
+  - Update device label, network config
+  - Read/write files on `/mnt/data/` via mapped volume
+- [ ] Health & fallback
+  - Periodic health checks (supervisor, core, addons, disk, network)
+  - Auto-restart failed services
+  - Rollback to previous backup on repeated boot failures
+  - Watchdog integration (reboot if management agent loses contact)
+- [ ] External API
+  - REST API on a NetBird-accessible port (e.g., 9100)
+  - Auth: API key or mTLS over NetBird
+  - Endpoints: `/status`, `/update`, `/backup`, `/addons`, `/config`, `/reboot`
+  - Webhook support for fleet orchestration tools
+
+**Architecture:**
+- Language: Python (reuse HA patterns) or Go (small binary, low memory)
+- Repo: `greenautarky/ga-device-manager`
+- Image: `ghcr.io/greenautarky/ga-device-manager`
+- Pre-baked into OS image (see "Pre-bake Add-on Container Images")
+- Supervisor access: `hassio_role: manager` in addon config
+- Network: host network or dedicated port mapping
+- Replaces: ad-hoc SSH scripts, manual flasher interventions
+
 ### Crash & Diagnostics
 - [ ] Test crash detection on device:
   - **Test 1 - Kernel panic:** `echo c > /proc/sysrq-trigger`, reboot, verify:
@@ -61,7 +101,11 @@
 - [ ] Consider adding health-check/retry logic for DNS-dependent services (telegraf, fluent-bit)
 
 ### Custom Core Image / Onboarding
-- [ ] Rebuild with `greenautarky/haos-version` URL (PR #1 merged) and verify `version.json` references `ghcr.io/greenautarky/tinker-homeassistant`
+- [x] Rebuild with `greenautarky/haos-version` URL (PR #1 merged) and verify `version.json` references `ghcr.io/greenautarky/tinker-homeassistant`
+- [x] GA calver versioning scheme: use `.N` suffix (e.g. `2025.11.3.1`) — stays CALVER for AwesomeVersion
+  - Do NOT use `-ga.N` (triggers SEMVER strategy, breaks comparisons)
+  - Version bump checklist: ha-core workflow, haos-version/stable.json, dind-import-containers.sh
+  - See `memory/registry-chain.md` for full details
 - [ ] Flash and boot on iHost, verify custom onboarding appears:
   - German-language onboarding flow (Willkommen, Datenschutz, Benutzerkonto)
   - GDPR consent step
@@ -69,11 +113,7 @@
   - Custom info/help pages
 - [ ] Write tests to verify custom core image is active on device (check container image, version string)
 - [ ] Update `greenautarky/haos-version` README with stable.json field mapping documentation
-- [ ] **Slim down GA Core Docker image** (currently 3.7 GB uncompressed vs ~1.5 GB upstream)
-  - `frontend-build/node_modules/` (1.5 GB) and `frontend-build/.git/` (9 MB) are included via `COPY . homeassistant/`
-  - Fix: add `.dockerignore` in `greenautarky/ha-core` to exclude `frontend-build/node_modules/`, `frontend-build/.git/`, `.claude/`
-  - Or: adjust Dockerfile COPY to only include built artifacts, not the full source tree
-  - Target: image size comparable to upstream (~1.5 GB uncompressed)
+- [x] **Slim down GA Core Docker image** — fixed in ha-core `66414a54` (.dockerignore for frontend-build)
 
 ### Onboarding Reset (`ga-reset-onboarding`)
 - [x] Script at `buildroot-external/rootfs-overlay/usr/sbin/ga-reset-onboarding`
@@ -92,12 +132,10 @@
   - HA auto-creates person entries for new users, so stale entries don't break anything, but they clutter the UI
 
 ### Tailscale Hostname Persistence
-- [ ] Add `hostname` option to `ga_tailscale` addon schema (`config.yaml`) — repo: `greenautarky/ga_tailscale`
 - [ ] Implement hostname persistence in addon startup (read from options or `/mnt/data/ga-device-label`)
 - [ ] Update provisioning (Stage 70) to write hostname into addon `options.json`
 - [ ] Update addon `DOCS.md` with hostname configuration documentation
 - [ ] Deploy updated addon to devices and verify hostname survives container recreate
-- [ ] Fix KIB-SON-07 Tailscale hostname (`kibu-27` → `KIB-SON-00000007`)
 - [ ] Migrate devices from `vibe_addons` image (`ghcr.io/hassio-addons/tailscale`) to `ga_tailscale` image (`ghcr.io/greenautarky/ga_tailscale`)
 
 ### Build Script (`scripts/ga_build.sh`)
@@ -128,7 +166,7 @@
 
 ### Package Updates (next major / Buildroot Go bump)
 - [x] ~~Bump Buildroot Go from 1.23.12 to 1.25+~~ — done via buildroot submodule update (Go 1.25.7)
-- [ ] Telegraf 1.30.0 → latest (needs Go 1.25+, no urgent features)
+- [x] ~~Telegraf 1.30.0 → 1.38.0~~ — bumped in telegraf.mk (strict env var handling is safe, all GA env vars are strings)
 - [ ] OS-Agent 1.7.2 → 1.8.x (needs Go 1.25+, Docker storage driver API, minor fixes)
 - [ ] Fluent-Bit 3.2.10 → 4.x (major version, check config compat)
 

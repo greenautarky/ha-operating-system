@@ -184,9 +184,9 @@ if [[ -f "$VER_JSON" ]]; then
     || _fail "BLD: version.json missing greenautarky"
 
   CORE_TAG="$(jq -r '.core // "unknown"' "$VER_JSON" 2>/dev/null)"
-  [[ "$CORE_TAG" =~ ^2025\.[0-9]+\.[0-9]+$ ]] \
+  [[ "$CORE_TAG" =~ ^2025\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] \
     && _pass "BLD: Core image tag is '$CORE_TAG'" \
-    || _fail "BLD: Core tag is '$CORE_TAG' (expected HA version like 2025.11.3)"
+    || _fail "BLD: Core tag is '$CORE_TAG' (expected HA calver like 2025.11.3 or 2025.11.3.1)"
 
   # REG: Verify all image refs use greenautarky (not upstream home-assistant or oliverc7)
   SUP_IMG="$(jq -r '.images.supervisor // "unknown"' "$VER_JSON" 2>/dev/null)"
@@ -353,8 +353,87 @@ if [[ -n "$SRC" ]]; then
   else
     _fail "SRC-09: Found $STALE_COUNT file(s) with stale upstream refs in functional source"
   fi
+  # =========================================================================
+  # Cross-repo version alignment (fetches stable.json, compares with local)
+  # =========================================================================
+  echo ""
+  echo "--- Cross-repo version alignment ---"
+
+  STABLE_JSON="$(curl -sf 'https://raw.githubusercontent.com/greenautarky/haos-version/main/stable.json' 2>/dev/null || true)"
+
+  if [[ -n "$STABLE_JSON" ]]; then
+    STABLE_CORE="$(echo "$STABLE_JSON" | jq -r '.core // "unknown"')"
+    STABLE_SUP="$(echo "$STABLE_JSON" | jq -r '.supervisor // "unknown"')"
+    STABLE_CORE_IMG="$(echo "$STABLE_JSON" | jq -r '.images.core // "unknown"')"
+    STABLE_SUP_IMG="$(echo "$STABLE_JSON" | jq -r '.images.supervisor // "unknown"')"
+    STABLE_CORE_TINKER="$(echo "$STABLE_JSON" | jq -r '.homeassistant.tinker // "unknown"')"
+
+    # XVER-01: stable.json core version uses calver (not -ga.N)
+    if [[ "$STABLE_CORE" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+      _pass "XVER-01: stable.json core is calver: $STABLE_CORE"
+    else
+      _fail "XVER-01: stable.json core is NOT calver: $STABLE_CORE"
+    fi
+
+    # XVER-02: stable.json supervisor version uses calver (not -ga.N)
+    if [[ "$STABLE_SUP" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+      _pass "XVER-02: stable.json supervisor is calver: $STABLE_SUP"
+    else
+      _fail "XVER-02: stable.json supervisor is NOT calver: $STABLE_SUP"
+    fi
+
+    # XVER-03: stable.json core image is greenautarky
+    [[ "$STABLE_CORE_IMG" == *greenautarky* ]] \
+      && _pass "XVER-03: stable.json core image is greenautarky" \
+      || _fail "XVER-03: stable.json core image is NOT greenautarky: $STABLE_CORE_IMG"
+
+    # XVER-04: stable.json supervisor image is greenautarky
+    [[ "$STABLE_SUP_IMG" == *greenautarky* ]] \
+      && _pass "XVER-04: stable.json supervisor image is greenautarky" \
+      || _fail "XVER-04: stable.json supervisor image is NOT greenautarky: $STABLE_SUP_IMG"
+
+    # XVER-05: stable.json core == tinker-specific core (no machine mismatch)
+    [[ "$STABLE_CORE" == "$STABLE_CORE_TINKER" ]] \
+      && _pass "XVER-05: stable.json core matches tinker: $STABLE_CORE" \
+      || _fail "XVER-05: stable.json core ($STABLE_CORE) != tinker ($STABLE_CORE_TINKER)"
+
+    # XVER-06: updater.json (in dind-import) matches stable.json core version
+    if [[ -f "$DIND" ]]; then
+      UPDATER_VER="$(grep 'homeassistant' "$DIND" | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)"
+      if [[ "$UPDATER_VER" == "$STABLE_CORE" ]]; then
+        _pass "XVER-06: updater.json ($UPDATER_VER) matches stable.json core ($STABLE_CORE)"
+      else
+        _fail "XVER-06: updater.json ($UPDATER_VER) != stable.json core ($STABLE_CORE)"
+      fi
+    else
+      _skip "XVER-06" "dind-import-containers.sh not found"
+    fi
+
+    # XVER-07: build version.json core matches stable.json core
+    if [[ -f "$VER_JSON" ]]; then
+      BUILD_CORE="$(jq -r '.core // "unknown"' "$VER_JSON" 2>/dev/null)"
+      if [[ "$BUILD_CORE" == "$STABLE_CORE" ]]; then
+        _pass "XVER-07: build version.json core ($BUILD_CORE) matches stable.json ($STABLE_CORE)"
+      else
+        _fail "XVER-07: build version.json core ($BUILD_CORE) != stable.json ($STABLE_CORE)"
+      fi
+    else
+      _skip "XVER-07" "build version.json not present (full build needed)"
+    fi
+
+    # XVER-08: No -ga.N pattern anywhere in stable.json (enforce calver)
+    if echo "$STABLE_JSON" | grep -qE '"[0-9]{4}\.[0-9]+\.[0-9]+-ga\.[0-9]+"'; then
+      _fail "XVER-08: stable.json still contains -ga.N version (must use .N calver)"
+    else
+      _pass "XVER-08: stable.json has no -ga.N versions (clean calver)"
+    fi
+  else
+    _skip "XVER-01..08" "could not fetch stable.json (offline or network error)"
+  fi
+
 else
   _skip "SRC-01..09" "source tree not found (expected /build or parent of output)"
+  _skip "XVER-01..08" "source tree not found"
 fi
 
 # =========================================================================

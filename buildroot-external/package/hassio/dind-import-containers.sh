@@ -327,6 +327,6 @@ docker tag "$supervisor_id" "ghcr.io/greenautarky/${arch}-hassio-supervisor:late
 # AppArmor + updater metadata
 mkdir -p /data/supervisor/apparmor /data/supervisor
 wget -O /data/supervisor/apparmor/hassio-supervisor "$APPARMOR_URL" >/dev/null || true
-printf '{ "channel": "%s", "homeassistant": "2025.11.3" }\n' "$channel" > /data/supervisor/updater.json
+printf '{ "channel": "%s", "homeassistant": "2025.11.3.1" }\n' "$channel" > /data/supervisor/updater.json
 
 log "Done. channel=$channel"
