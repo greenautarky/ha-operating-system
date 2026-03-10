@@ -187,8 +187,60 @@ if [[ -f "$VER_JSON" ]]; then
   [[ "$CORE_TAG" =~ ^2025\.[0-9]+\.[0-9]+$ ]] \
     && _pass "BLD: Core image tag is '$CORE_TAG'" \
     || _fail "BLD: Core tag is '$CORE_TAG' (expected HA version like 2025.11.3)"
+
+  # REG: Verify all image refs use greenautarky (not upstream home-assistant or oliverc7)
+  SUP_IMG="$(jq -r '.images.supervisor // "unknown"' "$VER_JSON" 2>/dev/null)"
+  CORE_IMG="$(jq -r '.images.core // "unknown"' "$VER_JSON" 2>/dev/null)"
+  [[ "$SUP_IMG" == *greenautarky* ]] \
+    && _pass "REG-01: Supervisor image is greenautarky: $SUP_IMG" \
+    || _fail "REG-01: Supervisor image is NOT greenautarky: $SUP_IMG"
+  [[ "$CORE_IMG" == *greenautarky* ]] \
+    && _pass "REG-02: Core image is greenautarky: $CORE_IMG" \
+    || _fail "REG-02: Core image is NOT greenautarky: $CORE_IMG"
+
+  # REG: No upstream or oliverc7 refs in version.json
+  if grep -qE 'oliverc7|iHost-Open-Source' "$VER_JSON" 2>/dev/null; then
+    _fail "REG-03: version.json has stale upstream refs (oliverc7 or iHost-Open-Source)"
+  else
+    _pass "REG-03: version.json has no stale upstream refs"
+  fi
 else
   _skip "BLD: version.json" "only present after full build"
+fi
+
+echo ""
+echo "--- Registry consistency ---"
+
+# REG-04: hassos-supervisor uses greenautarky image
+HSUP="${TARGET}/usr/sbin/hassos-supervisor"
+if [[ -f "$HSUP" ]]; then
+  grep -q 'SUPERVISOR_IMAGE="ghcr.io/greenautarky/' "$HSUP" \
+    && _pass "REG-04: hassos-supervisor SUPERVISOR_IMAGE is greenautarky" \
+    || _fail "REG-04: hassos-supervisor SUPERVISOR_IMAGE is NOT greenautarky"
+
+  # REG-05: fallback URL uses greenautarky
+  grep -q 'greenautarky/haos-version' "$HSUP" \
+    && _pass "REG-05: hassos-supervisor fallback URL is greenautarky" \
+    || _fail "REG-05: hassos-supervisor fallback URL is NOT greenautarky"
+
+  # REG-06: no oliverc7 or iHost-Open-Source references
+  if grep -qE 'oliverc7|iHost-Open-Source' "$HSUP" 2>/dev/null; then
+    _fail "REG-06: hassos-supervisor has stale upstream refs"
+  else
+    _pass "REG-06: hassos-supervisor has no stale upstream refs"
+  fi
+else
+  _skip "REG-04/05/06: hassos-supervisor" "not found in target"
+fi
+
+# REG-07: Supervisor image tar uses greenautarky (only after full build)
+SUP_TAR="$(ls "${OUT}/build/hassio-1.0.0/images/"*hassio-supervisor* 2>/dev/null | head -1)"
+if [[ -n "$SUP_TAR" ]]; then
+  [[ "$SUP_TAR" == *greenautarky* ]] \
+    && _pass "REG-07: Supervisor tar is greenautarky: $(basename "$SUP_TAR")" \
+    || _fail "REG-07: Supervisor tar is NOT greenautarky: $(basename "$SUP_TAR")"
+else
+  _skip "REG-07: Supervisor tar" "only present after full build"
 fi
 
 # =========================================================================
