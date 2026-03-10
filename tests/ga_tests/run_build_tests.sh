@@ -311,7 +311,7 @@ if [[ -n "$SRC" ]]; then
 
   # SRC-06: updater.json has real HA version (not 'latest')
   if [[ -f "$DIND" ]]; then
-    HA_VER_IN_DIND="$(grep 'homeassistant' "$DIND" | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -1)"
+    HA_VER_IN_DIND="$(grep 'updater.json' "$DIND" | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+[.0-9]*' | head -1)"
     if [[ -n "$HA_VER_IN_DIND" ]]; then
       _pass "SRC-06: updater.json uses real HA version: $HA_VER_IN_DIND"
     elif grep -q '"latest"' "$DIND" 2>/dev/null; then
@@ -399,7 +399,7 @@ if [[ -n "$SRC" ]]; then
 
     # XVER-06: updater.json (in dind-import) matches stable.json core version
     if [[ -f "$DIND" ]]; then
-      UPDATER_VER="$(grep 'homeassistant' "$DIND" | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)"
+      UPDATER_VER="$(grep 'updater.json' "$DIND" | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+[.0-9]*' | head -1)"
       if [[ "$UPDATER_VER" == "$STABLE_CORE" ]]; then
         _pass "XVER-06: updater.json ($UPDATER_VER) matches stable.json core ($STABLE_CORE)"
       else
