@@ -43,12 +43,19 @@ retry() {
 	fi
 }
 
-image_name=$(jq -e -r --arg image_json_name "${image_json_name}" \
-	--arg arch "${arch}" --arg machine "${machine}" \
-	'.images[$image_json_name] | sub("{arch}"; $arch) | sub("{machine}"; $machine)' \
-	< "${version_json}")
-image_tag=$(jq -e -r --arg image_json_name "${image_json_name}" \
-	'.[$image_json_name]' < "${version_json}")
+# Direct mode: arg4="direct:<tag>", arg3=full image name (already resolved)
+# Standard mode: arg3=version.json path, arg4=image key in version.json
+if [ "${image_json_name#direct:}" != "${image_json_name}" ]; then
+	image_name="${version_json}"
+	image_tag="${image_json_name#direct:}"
+else
+	image_name=$(jq -e -r --arg image_json_name "${image_json_name}" \
+		--arg arch "${arch}" --arg machine "${machine}" \
+		'.images[$image_json_name] | sub("{arch}"; $arch) | sub("{machine}"; $machine)' \
+		< "${version_json}")
+	image_tag=$(jq -e -r --arg image_json_name "${image_json_name}" \
+		'.[$image_json_name]' < "${version_json}")
+fi
 full_image_name="${image_name}:${image_tag}"
 
 image_digest=$(retry 3 "skopeo inspect ${skopeo_arch_flags} 'docker://${full_image_name}' | jq -r '.Digest'")

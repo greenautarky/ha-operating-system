@@ -1,0 +1,28 @@
+{
+  "addons": {
+    "mosquitto": {
+      "image": "homeassistant/{arch}-addon-mosquitto",
+      "version": "6.5.2"
+    },
+    "ga_tailscale": {
+      "image": "ghcr.io/greenautarky/ga_tailscale-{arch}",
+      "version": "0.26.2"
+    },
+    "ga_ihosthardwarecontrol": {
+      "image": "ghcr.io/greenautarky/ga_ihosthardwarecontrol-{arch}",
+      "version": "1.1.3"
+    },
+    "ga_influxdbv1": {
+      "image": "ghcr.io/greenautarky/ga_influxdbv1-{arch}",
+      "version": "0.0.3"
+    },
+    "ga_zigbee2mqtt": {
+      "image": "ghcr.io/zigbee2mqtt/zigbee2mqtt-{arch}",
+      "version": "2.6.3-1"
+    },
+    "sonoff_dongle_flasher": {
+      "image": "ghcr.io/ihost-open-source-project/hassio-ihost-sonoff-dongle-flasher-{arch}",
+      "version": "1.2.3"
+    }
+  }
+}
