@@ -147,13 +147,13 @@ index 9a87dc0d5f66..e1077309bd2a 100644
 -	vccio7-supply = <&vcc_dovdd>;
 +	vccio3-supply = <&vcc_3v3>;
 +	vccio4-supply = <&vcc_3v3>;
-+	vccio5-supply = <&vcc_3v3>;
++	vccio5-supply = <&vcc_1v8>;
 +	vccio6-supply = <&vcc_3v3>;
 +	vccio7-supply = <&vcc_1v8>;
  	status = "okay";
  };
  
-@@ -342,18 +360,15 @@ &saradc {
+@@ -342,18 +360,17 @@ &saradc {
  
  &sdio {
  	bus-width = <4>;
@@ -169,8 +169,8 @@ index 9a87dc0d5f66..e1077309bd2a 100644
  	pinctrl-0 = <&sdmmc1_clk &sdmmc1_cmd &sdmmc1_bus4>;
  	rockchip,default-sample-phase = <90>;
 -	sd-uhs-sdr50;
--	vmmc-supply = <&vcc3v3_sd>;
--	vqmmc-supply = <&vcc_1v8>;
+ 	vmmc-supply = <&vcc3v3_sd>;
+ 	vqmmc-supply = <&vcc_1v8>;
  	status = "okay";
  };
  
