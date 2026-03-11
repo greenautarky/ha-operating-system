@@ -1,13 +1,6 @@
-From: GreenAutarky <info@greenautarky.com>
-Subject: [PATCH] arm: dts: rv1126: disable USB host port on iHost
-
-Disable the external USB-A host port to prevent end-user access.
-The USB gadget (peripheral) port used for serial console remains enabled.
-
-Signed-off-by: GreenAutarky <info@greenautarky.com>
----
---- a/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi	2026-03-11 14:05:59.922095698 +0100
-+++ b/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi	2026-03-11 14:05:59.942095861 +0100
+diff --git a/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi b/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi
+--- a/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi
++++ b/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi
 @@ -23,8 +23,6 @@
  		pinctrl-names = "default";
  		pinctrl-0 = <&host_vbus_drv>;
@@ -17,7 +10,7 @@ Signed-off-by: GreenAutarky <info@greenautarky.com>
  		vin-supply = <&vcc5v0_sys>;
  	};
  
-@@ -439,12 +437,11 @@
+@@ -399,12 +397,11 @@
  };
  
  &u2phy1 {
@@ -32,7 +25,7 @@ Signed-off-by: GreenAutarky <info@greenautarky.com>
  };
  
  &uart0 {
-@@ -475,11 +472,11 @@
+@@ -435,11 +432,11 @@
  };
  
  &usb_host0_ehci {

@@ -204,6 +204,70 @@ if [[ -f "$VER_JSON" ]]; then
   else
     _pass "REG-03: version.json has no stale upstream refs"
   fi
+
+  # -----------------------------------------------------------------------
+  # Version chain verification — catch "latest" or wrong-registry values
+  # that break provisioning
+  # -----------------------------------------------------------------------
+  echo ""
+  echo "--- Version chain verification ---"
+
+  # VER-01: supervisor version is not "latest"
+  VER_SUP="$(jq -r '.supervisor // "unknown"' "$VER_JSON" 2>/dev/null)"
+  if [[ "$VER_SUP" == "latest" ]]; then
+    _fail "VER-01: version.json supervisor is 'latest' (must be a real version)"
+  elif [[ "$VER_SUP" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+    _pass "VER-01: version.json supervisor is a real version: $VER_SUP"
+  else
+    _fail "VER-01: version.json supervisor is unexpected value: '$VER_SUP'"
+  fi
+
+  # VER-02: core version is not "latest"
+  VER_CORE="$(jq -r '.core // "unknown"' "$VER_JSON" 2>/dev/null)"
+  if [[ "$VER_CORE" == "latest" ]]; then
+    _fail "VER-02: version.json core is 'latest' (must be a real version)"
+  elif [[ "$VER_CORE" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+ ]]; then
+    _pass "VER-02: version.json core is a real version: $VER_CORE"
+  else
+    _fail "VER-02: version.json core is unexpected value: '$VER_CORE'"
+  fi
+
+  # VER-03: homeassistant.tinker is not "latest"
+  VER_TINKER="$(jq -r '.homeassistant.tinker // "unknown"' "$VER_JSON" 2>/dev/null)"
+  if [[ "$VER_TINKER" == "latest" ]]; then
+    _fail "VER-03: version.json tinker HA is 'latest' (must be a real version)"
+  elif [[ "$VER_TINKER" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+ ]]; then
+    _pass "VER-03: version.json tinker HA is a real version: $VER_TINKER"
+  else
+    _fail "VER-03: version.json tinker HA is unexpected value: '$VER_TINKER'"
+  fi
+
+  # VER-04: supervisor image uses greenautarky registry (both image and images)
+  VER_IMG_SUP="$(jq -r '.image.supervisor // "unknown"' "$VER_JSON" 2>/dev/null)"
+  VER_IMGS_SUP="$(jq -r '.images.supervisor // "unknown"' "$VER_JSON" 2>/dev/null)"
+  if [[ "$VER_IMG_SUP" == *greenautarky* ]] && [[ "$VER_IMGS_SUP" == *greenautarky* ]]; then
+    _pass "VER-04: supervisor image refs both use greenautarky"
+  else
+    [[ "$VER_IMG_SUP" != *greenautarky* ]] && _fail "VER-04: image.supervisor is NOT greenautarky: $VER_IMG_SUP"
+    [[ "$VER_IMGS_SUP" != *greenautarky* ]] && _fail "VER-04: images.supervisor is NOT greenautarky: $VER_IMGS_SUP"
+  fi
+
+  # VER-05: core image uses greenautarky registry (both image and images)
+  VER_IMG_CORE="$(jq -r '.image.core // "unknown"' "$VER_JSON" 2>/dev/null)"
+  VER_IMGS_CORE="$(jq -r '.images.core // "unknown"' "$VER_JSON" 2>/dev/null)"
+  if [[ "$VER_IMG_CORE" == *greenautarky* ]] && [[ "$VER_IMGS_CORE" == *greenautarky* ]]; then
+    _pass "VER-05: core image refs both use greenautarky"
+  else
+    [[ "$VER_IMG_CORE" != *greenautarky* ]] && _fail "VER-05: image.core is NOT greenautarky: $VER_IMG_CORE"
+    [[ "$VER_IMGS_CORE" != *greenautarky* ]] && _fail "VER-05: images.core is NOT greenautarky: $VER_IMGS_CORE"
+  fi
+
+  # VER-06: OTA URL points to greenautarky
+  VER_OTA="$(jq -r '.ota // "unknown"' "$VER_JSON" 2>/dev/null)"
+  [[ "$VER_OTA" == *greenautarky* ]] \
+    && _pass "VER-06: OTA URL points to greenautarky" \
+    || _fail "VER-06: OTA URL does NOT point to greenautarky: $VER_OTA"
+
 else
   _skip "BLD: version.json" "only present after full build"
 fi
@@ -241,6 +305,66 @@ if [[ -n "$SUP_TAR" ]]; then
     || _fail "REG-07: Supervisor tar is NOT greenautarky: $(basename "$SUP_TAR")"
 else
   _skip "REG-07: Supervisor tar" "only present after full build"
+fi
+
+# =========================================================================
+# Device tree verification
+# Compares the patched device tree against a known-good reference to catch
+# silent patch failures (fuzz, offset, dropped hunks)
+# =========================================================================
+echo ""
+echo "--- Device tree verification ---"
+
+DTSI_EXPECTED=""
+DTSI_ACTUAL=""
+
+# Find the reference file
+for ref_dir in "${SRC:-}/tests/ga_tests/build/reference" "$(dirname "$0")/build/reference"; do
+  if [[ -f "${ref_dir}/rv1126-sonoff-ihost.dtsi.expected" ]]; then
+    DTSI_EXPECTED="${ref_dir}/rv1126-sonoff-ihost.dtsi.expected"
+    break
+  fi
+done
+
+# Find the patched dtsi in the build output
+DTSI_ACTUAL="${OUT}/build/linux-6.12.51/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi"
+# Fall back to other kernel versions
+if [[ ! -f "$DTSI_ACTUAL" ]]; then
+  DTSI_ACTUAL="$(ls "${OUT}"/build/linux-*/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi 2>/dev/null | head -1)"
+fi
+
+if [[ -z "$DTSI_EXPECTED" ]]; then
+  _skip "DT-01: Device tree reference comparison" "reference file not found"
+elif [[ -z "$DTSI_ACTUAL" ]] || [[ ! -f "$DTSI_ACTUAL" ]]; then
+  _skip "DT-01: Device tree reference comparison" "patched dtsi not found (linux not built yet)"
+else
+  DT_DIFF="$(diff -u "$DTSI_EXPECTED" "$DTSI_ACTUAL" 2>/dev/null)"
+  if [[ -z "$DT_DIFF" ]]; then
+    _pass "DT-01: Patched device tree matches known-good reference"
+  else
+    _fail "DT-01: Patched device tree DIFFERS from reference"
+    echo "         Diff (first 20 lines):"
+    echo "$DT_DIFF" | head -20 | sed 's/^/         /'
+    echo "         Reference: $DTSI_EXPECTED"
+    echo "         Actual:    $DTSI_ACTUAL"
+    echo "         If intentional, update reference: cp \"\$ACTUAL\" \"\$EXPECTED\""
+  fi
+
+  # DT-02: Verify critical properties exist in patched dtsi
+  for prop in "vmmc-supply" "vqmmc-supply" "supports-sdio" "dr_mode.*peripheral"; do
+    grep -q "$prop" "$DTSI_ACTUAL" 2>/dev/null \
+      && _pass "DT-02: dtsi has '$prop'" \
+      || _fail "DT-02: dtsi MISSING '$prop' (patch may have been silently dropped)"
+  done
+
+  # DT-03: USB host should be disabled (0002 patch)
+  for node in "u2phy1" "u2phy_host" "usb_host0_ehci" "usb_host0_ohci"; do
+    if grep -A1 "^&${node}" "$DTSI_ACTUAL" 2>/dev/null | grep -q 'disabled'; then
+      _pass "DT-03: &${node} is disabled"
+    else
+      _fail "DT-03: &${node} is NOT disabled (USB host disable patch may have failed)"
+    fi
+  done
 fi
 
 # =========================================================================
