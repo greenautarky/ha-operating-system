@@ -1,0 +1,60 @@
+From: GreenAutarky <info@greenautarky.com>
+Subject: [PATCH] arm: dts: rv1126: disable USB host port on iHost
+
+Disable the external USB-A host port to prevent end-user access.
+The USB gadget (peripheral) port used for serial console remains enabled.
+
+Changes:
+- Remove regulator-always-on/regulator-boot-on from vcc5v0_host (no VBUS power)
+- Disable u2phy1 and u2phy_host (host PHY off)
+- Disable usb_host0_ehci and usb_host0_ohci (host controller off)
+
+Signed-off-by: GreenAutarky <info@greenautarky.com>
+---
+ arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi | 16 ++++++----------
+ 1 file changed, 6 insertions(+), 10 deletions(-)
+
+diff --git a/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi b/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi
+index e1077309bd2a..ga0001 100644
+--- a/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi
++++ b/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi
+@@ -19,12 +19,10 @@
+ 	vcc5v0_host: vcc5v0-host-regulator {
+ 		compatible = "regulator-fixed";
+ 		enable-active-high;
+ 		gpio = <&gpio0 RK_PB6 GPIO_ACTIVE_HIGH>;
+ 		pinctrl-names = "default";
+ 		pinctrl-0 = <&host_vbus_drv>;
+ 		regulator-name = "vcc5v0_host";
+-		regulator-always-on;
+-		regulator-boot-on;
+ 		vin-supply = <&vcc5v0_sys>;
+ 	};
+
+@@ -443,15 +441,13 @@
+ };
+
+ &u2phy1 {
+-	status = "okay";
++	status = "disabled";
+ };
+
+ &u2phy_host {
+-	status = "okay";
+-	phy-supply = <&vcc5v0_host>;
++	status = "disabled";
+ };
+
+ &uart0 {
+@@ -479,11 +475,11 @@
+ };
+
+ &usb_host0_ehci {
+-	status = "okay";
++	status = "disabled";
+ };
+
+ &usb_host0_ohci {
+-	status = "okay";
++	status = "disabled";
+ };

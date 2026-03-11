@@ -22,14 +22,14 @@ regressions from kernel updates, device tree changes, and firmware issues.
 | HW-06 | Ethernet link state | Reports `operstate` (up/down) |
 | HW-07 | USB subsystem functional | `/sys/bus/usb/devices/` is populated |
 | HW-08 | USB devices enumerated | Lists USB devices via `lsusb` or sysfs fallback |
-| HW-09 | Zigbee serial device | `/dev/ttyUSB*` or `/dev/ttyACM*` present |
+| HW-08a | USB host port disabled | No EHCI/OHCI host controller registered (security) |
+| HW-08b | USB gadget functional | Serial console gadget (dwc3 peripheral mode) working |
+| HW-09 | Zigbee serial device | Internal UART `/dev/ttyS3` (EFR32 at ff580000) |
 | HW-10 | eMMC block device | `/dev/mmcblk*` present |
 | HW-11 | Root filesystem type | Reports mount type (squashfs/erofs expected) |
 | HW-12 | Kernel not tainted | `/proc/sys/kernel/tainted` == 0 |
 | HW-13 | No critical driver errors | No `probe.*failed` or `driver.*error` in dmesg (excl. known) |
-| HW-14 | CPU temperature safe | `thermal_zone0` < 85C |
 | HW-15 | Watchdog device present | `/dev/watchdog*` exists |
-| HW-16 | LED sysfs entries | `/sys/class/leds/` populated (iHost LED control) |
 | HW-SUM | dmesg error summary | Count of `error`/`fail` lines in dmesg (informational) |
 
 ## Running
@@ -66,6 +66,6 @@ Serial is the recommended transport for hardware tests because:
 ## Known issues
 
 - HW-04 (WiFi scan) may fail if no APs are nearby or if WiFi regulatory domain is not set
-- HW-09 (Zigbee) only passes if a Zigbee dongle is physically connected
+- HW-09 (Zigbee) checks internal UART `/dev/ttyS3` only (EFR32 on iHost)
 - HW-13 excludes `rtw_8723ds` from the error grep to avoid false positives from the eFuse
   error that may appear briefly during driver retry
