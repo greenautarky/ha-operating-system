@@ -327,6 +327,17 @@ docker tag "$supervisor_id" "ghcr.io/greenautarky/${arch}-hassio-supervisor:late
 # AppArmor + updater metadata
 mkdir -p /data/supervisor/apparmor /data/supervisor
 wget -O /data/supervisor/apparmor/hassio-supervisor "$APPARMOR_URL" >/dev/null || true
-printf '{ "channel": "%s", "homeassistant": "2025.11.3.1" }\n' "$channel" > /data/supervisor/updater.json
+
+# Read core version from version.json (mounted at /build/ from hassio package dir)
+core_version=""
+if [ -f /build/version.json ]; then
+  ensure_pkg jq
+  core_version="$(jq -r '.core // empty' /build/version.json 2>/dev/null || true)"
+fi
+if [ -z "$core_version" ]; then
+  die "Cannot determine core version: /build/version.json missing or has no .core field"
+fi
+log "Writing updater.json: channel=$channel core=$core_version"
+printf '{ "channel": "%s", "homeassistant": "%s" }\n' "$channel" "$core_version" > /data/supervisor/updater.json
 
 log "Done. channel=$channel"
