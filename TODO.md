@@ -202,6 +202,19 @@ Runs as a container with Supervisor API access (`hassio` role).
   - [ ] Test `--power-cmd-off/on` with Tasmota or smart plug
   - [ ] Run full 100-cycle endurance test and review results
 - [ ] Run `config_verify` suite on device after next RAUC OTA update to confirm deployment
+- [ ] Implement `hardware/` device test suite — integration tests for hardware drivers:
+  - WiFi: `wlan0` interface present, `rtw88_8723ds` probe clean (no eFuse errors in dmesg)
+  - WiFi scan: `nmcli dev wifi list` returns results
+  - Ethernet: `eth0` present and link up
+  - USB: `lsusb` lists expected devices (Zigbee dongle, etc.)
+  - eMMC: `/dev/mmcblk*` present, SMART/health check
+  - Zigbee dongle: `/dev/ttyUSB0` or `/dev/ttyACM0` present
+  - Kernel taint: `/proc/sys/kernel/tainted` == 0 (no tainted modules)
+  - dmesg errors: no `failed`, `error`, `timeout` from critical drivers
+  - Thermal: `/sys/class/thermal/thermal_zone0/temp` readable and in range
+  - Watchdog: `/dev/watchdog` device present
+  - SDIO: no mmc errors in dmesg (voltage sequencing OK)
+  - LED control: `/sys/class/leds/` entries present (iHost-specific)
 - [ ] Build-time config manifest: generate `/etc/ga-config-manifest.json` with sha256 checksums
   of critical config files (telegraf.conf, fluent-bit.conf, service files) during post-build
 - [ ] Runtime manifest verification test (CFG-13+): compare deployed file hashes against manifest

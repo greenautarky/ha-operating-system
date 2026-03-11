@@ -127,3 +127,22 @@ Must run on real iHost hardware. Needs network, Docker, HA running.
 
 ### From watchdog (needs real hardware)
 - WDT-01 through WDT-04
+
+### From hardware (needs real iHost hardware)
+- HW-01: WiFi interface wlan0 present
+- HW-02: rtw88_8723ds driver loaded without eFuse errors
+- HW-03: No SDIO/MMC errors in dmesg
+- HW-04: WiFi can scan networks
+- HW-05: Ethernet interface eth0 present
+- HW-06: Ethernet link state
+- HW-07: USB subsystem functional
+- HW-08: USB devices enumerated
+- HW-09: Zigbee serial device present
+- HW-10: eMMC block device present
+- HW-11: Root filesystem type
+- HW-12: Kernel not tainted
+- HW-13: No critical driver probe failures
+- HW-14: CPU temperature in safe range
+- HW-15: Watchdog device present
+- HW-16: LED sysfs entries
+- HW-SUM: dmesg error/fail summary
