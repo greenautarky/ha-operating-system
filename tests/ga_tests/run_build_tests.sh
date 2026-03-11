@@ -433,15 +433,14 @@ if [[ -n "$SRC" ]]; then
     _skip "SRC-05" "source files not found"
   fi
 
-  # SRC-06: updater.json has real HA version (not 'latest')
+  # SRC-06: updater.json core version is read dynamically from version.json (not hardcoded)
   if [[ -f "$DIND" ]]; then
-    HA_VER_IN_DIND="$(grep 'updater.json' "$DIND" | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+[.0-9]*' | head -1)"
-    if [[ -n "$HA_VER_IN_DIND" ]]; then
-      _pass "SRC-06: updater.json uses real HA version: $HA_VER_IN_DIND"
-    elif grep -q '"latest"' "$DIND" 2>/dev/null; then
+    if grep -q 'version\.json' "$DIND" && grep -q '\.core' "$DIND"; then
+      _pass "SRC-06: updater.json core version is read dynamically from version.json"
+    elif grep 'updater.json' "$DIND" | grep -q '"latest"'; then
       _fail "SRC-06: updater.json uses 'latest' (HA rejects this)"
     else
-      _skip "SRC-06" "could not parse HA version from dind-import"
+      _fail "SRC-06: updater.json core version is not read from version.json (may be hardcoded)"
     fi
   fi
 
@@ -521,16 +520,16 @@ if [[ -n "$SRC" ]]; then
       && _pass "XVER-05: stable.json core matches tinker: $STABLE_CORE" \
       || _fail "XVER-05: stable.json core ($STABLE_CORE) != tinker ($STABLE_CORE_TINKER)"
 
-    # XVER-06: updater.json (in dind-import) matches stable.json core version
-    if [[ -f "$DIND" ]]; then
-      UPDATER_VER="$(grep 'updater.json' "$DIND" | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+[.0-9]*' | head -1)"
-      if [[ "$UPDATER_VER" == "$STABLE_CORE" ]]; then
-        _pass "XVER-06: updater.json ($UPDATER_VER) matches stable.json core ($STABLE_CORE)"
+    # XVER-06: updater.json will use version.json core at build time; verify version.json core matches stable.json
+    if [[ -f "$VER_JSON" ]]; then
+      VJ_CORE="$(jq -r '.core // "unknown"' "$VER_JSON" 2>/dev/null)"
+      if [[ "$VJ_CORE" == "$STABLE_CORE" ]]; then
+        _pass "XVER-06: version.json core ($VJ_CORE) matches stable.json ($STABLE_CORE) — updater.json will be correct"
       else
-        _fail "XVER-06: updater.json ($UPDATER_VER) != stable.json core ($STABLE_CORE)"
+        _fail "XVER-06: version.json core ($VJ_CORE) != stable.json core ($STABLE_CORE)"
       fi
     else
-      _skip "XVER-06" "dind-import-containers.sh not found"
+      _skip "XVER-06" "version.json not found"
     fi
 
     # XVER-07: build version.json core matches stable.json core
