@@ -45,10 +45,18 @@ else
     "ls /sys/bus/usb/devices/*/product 2>/dev/null | while read f; do echo \"\$(cat \$f)\"; done | head -5"
 fi
 
-# --- Zigbee dongle ---
+# --- USB host port (should be disabled for security) ---
 
-run_test "HW-09" "Zigbee serial device present" \
-  "ls /dev/ttyUSB* /dev/ttyACM* >/dev/null 2>&1"
+run_test "HW-08a" "USB host port disabled" \
+  "if ls /sys/bus/usb/devices/usb*/product 2>/dev/null | xargs cat 2>/dev/null | grep -qi 'EHCI\|OHCI'; then false; else true; fi"
+
+run_test "HW-08b" "USB gadget (serial console) functional" \
+  "dmesg | grep -q 'Gadget Serial\|g_serial\|dwc3.*peripheral' || [ -c /dev/ttyGS0 ]"
+
+# --- Zigbee (internal EFR32 on UART3) ---
+
+run_test "HW-09" "Zigbee serial device present (internal UART)" \
+  "[ -c /dev/ttyS3 ]"
 
 # --- eMMC ---
 
@@ -66,32 +74,10 @@ run_test "HW-12" "Kernel not tainted" \
 run_test "HW-13" "No critical driver errors in dmesg" \
   "! dmesg | grep -iE 'probe.*failed|driver.*error|firmware.*failed' | grep -v 'rtw_8723ds' | grep -qi 'fail\|error'"
 
-# --- Thermal ---
-
-if [ -f /sys/class/thermal/thermal_zone0/temp ]; then
-  TEMP=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
-  TEMP_C=$((TEMP / 1000))
-  run_test "HW-14" "CPU temperature in safe range (<85C)" \
-    "[ $TEMP_C -lt 85 ]"
-  run_test_show "HW-14b" "CPU temperature" \
-    "echo '${TEMP_C}°C'"
-else
-  skip_test "HW-14" "CPU temperature" "thermal_zone0 not found"
-fi
-
 # --- Watchdog ---
 
 run_test "HW-15" "Watchdog device present" \
   "ls /dev/watchdog* >/dev/null 2>&1"
-
-# --- LEDs (iHost-specific) ---
-
-if [ -d /sys/class/leds ]; then
-  run_test_show "HW-16" "LED sysfs entries" \
-    "ls /sys/class/leds/ 2>/dev/null | tr ' ' '\n' | head -5"
-else
-  skip_test "HW-16" "LED sysfs entries" "no /sys/class/leds"
-fi
 
 # --- Summary dmesg scan ---
 

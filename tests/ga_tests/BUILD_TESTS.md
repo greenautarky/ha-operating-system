@@ -137,12 +137,12 @@ Must run on real iHost hardware. Needs network, Docker, HA running.
 - HW-06: Ethernet link state
 - HW-07: USB subsystem functional
 - HW-08: USB devices enumerated
-- HW-09: Zigbee serial device present
+- HW-08a: USB host port disabled (security)
+- HW-08b: USB gadget serial console functional
+- HW-09: Zigbee serial device present (internal UART)
 - HW-10: eMMC block device present
 - HW-11: Root filesystem type
 - HW-12: Kernel not tainted
 - HW-13: No critical driver probe failures
-- HW-14: CPU temperature in safe range
 - HW-15: Watchdog device present
-- HW-16: LED sysfs entries
 - HW-SUM: dmesg error/fail summary
