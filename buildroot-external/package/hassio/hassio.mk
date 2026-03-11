@@ -38,6 +38,10 @@ define HASSIO_BUILD_CMDS
 		$(BR2_EXTERNAL_HASSOS_PATH)/package/hassio/fetch-container-image.sh \
 			$(BR2_PACKAGE_HASSIO_ARCH) $(BR2_PACKAGE_HASSIO_MACHINE) $(@D)/version.json $(image) "$(HASSIO_DL_DIR)" "$(@D)/images"
 	)
+	$(BR2_EXTERNAL_HASSOS_PATH)/package/hassio/fetch-addon-images.sh \
+		$(BR2_PACKAGE_HASSIO_ARCH) $(BR2_PACKAGE_HASSIO_MACHINE) \
+		$(BR2_EXTERNAL_HASSOS_PATH)/package/hassio/addon-images.json \
+		"$(HASSIO_DL_DIR)" "$(@D)/images"
 endef
 
 HASSIO_INSTALL_IMAGES = YES
