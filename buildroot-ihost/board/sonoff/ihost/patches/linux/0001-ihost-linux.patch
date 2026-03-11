@@ -99,7 +99,7 @@ diff --git a/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi b/arch/arm/boot
 index 9a87dc0d5f66..e1077309bd2a 100644
 --- a/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi
 +++ b/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi
-@@ -16,6 +16,18 @@ chosen {
+@@ -16,6 +16,18 @@
  		stdout-path = "serial2:1500000n8";
  	};
  
@@ -118,20 +118,16 @@ index 9a87dc0d5f66..e1077309bd2a 100644
  	vcc5v0_sys: regulator-vcc5v0-sys {
  		compatible = "regulator-fixed";
  		regulator-name = "vcc5v0_sys";
-@@ -315,6 +327,12 @@ pmic_int_l: pmic-int-l {
+@@ -320,18 +332,24 @@
+ 			rockchip,pins = <1 RK_PD0 RK_FUNC_GPIO &pcfg_pull_none>;
  		};
  	};
- 
++
 +	usb {
 +		host_vbus_drv: host-vbus-drv {
 +			rockchip,pins = <0 RK_PB6 RK_FUNC_GPIO &pcfg_pull_none>;
 +		};
 +	};
-+
- 	wifi {
- 		wifi_enable_h: wifi-enable-h {
- 			rockchip,pins = <1 RK_PD0 RK_FUNC_GPIO &pcfg_pull_none>;
-@@ -323,15 +341,15 @@ wifi_enable_h: wifi-enable-h {
  };
  
  &pmu_io_domains {
@@ -142,18 +138,17 @@ index 9a87dc0d5f66..e1077309bd2a 100644
  	vccio2-supply = <&vccio_sd>;
 -	vccio3-supply = <&vcc3v3_sd>;
 -	vccio4-supply = <&vcc_dovdd>;
--	vccio5-supply = <&vcc_1v8>;
--	vccio6-supply = <&vcc_1v8>;
--	vccio7-supply = <&vcc_dovdd>;
 +	vccio3-supply = <&vcc_3v3>;
 +	vccio4-supply = <&vcc_3v3>;
-+	vccio5-supply = <&vcc_1v8>;
+ 	vccio5-supply = <&vcc_1v8>;
+-	vccio6-supply = <&vcc_1v8>;
+-	vccio7-supply = <&vcc_dovdd>;
 +	vccio6-supply = <&vcc_3v3>;
 +	vccio7-supply = <&vcc_1v8>;
  	status = "okay";
  };
  
-@@ -342,18 +360,17 @@ &saradc {
+@@ -342,16 +360,15 @@
  
  &sdio {
  	bus-width = <4>;
@@ -172,9 +167,7 @@ index 9a87dc0d5f66..e1077309bd2a 100644
  	vmmc-supply = <&vcc3v3_sd>;
  	vqmmc-supply = <&vcc_1v8>;
  	status = "okay";
- };
- 
-@@ -372,6 +387,24 @@ &sdmmc {
+@@ -372,6 +389,24 @@
  	status = "okay";
  };
  
@@ -199,7 +192,7 @@ index 9a87dc0d5f66..e1077309bd2a 100644
  &uart0 {
  	pinctrl-names = "default";
  	pinctrl-0 = <&uart0_xfer &uart0_ctsn &uart0_rtsn>;
-@@ -389,6 +422,24 @@ bluetooth {
+@@ -389,6 +424,24 @@
  	};
  };
  
@@ -224,7 +217,7 @@ index 9a87dc0d5f66..e1077309bd2a 100644
  &uart2 {
  	status = "okay";
  };
-@@ -404,3 +455,7 @@ &uart4 {
+@@ -404,3 +457,7 @@
  	pinctrl-0 = <&uart4m2_xfer>;
  	status = "okay";
  };
@@ -232,7 +225,6 @@ index 9a87dc0d5f66..e1077309bd2a 100644
 +&optee {
 +	status = "okay";
 +};
-\ No newline at end of file
 diff --git a/arch/arm/boot/dts/rockchip/rv1126.dtsi b/arch/arm/boot/dts/rockchip/rv1126.dtsi
 index 434846b85c95..b750780ed82e 100644
 --- a/arch/arm/boot/dts/rockchip/rv1126.dtsi

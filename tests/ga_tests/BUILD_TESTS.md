@@ -41,6 +41,19 @@ No device or emulator needed — checks the build output tree directly.
 ### From disk_guard
 - DG-01: Script and service installed
 
+### Device tree verification
+- DT-01: Patched device tree matches known-good reference (catches silent patch failures)
+- DT-02: Critical SDIO properties present (vmmc-supply, vqmmc-supply, supports-sdio, dr_mode=peripheral)
+- DT-03: USB host nodes disabled (u2phy1, u2phy_host, usb_host0_ehci, usb_host0_ohci)
+
+### Version chain
+- VER-01: version.json supervisor version is not "latest"
+- VER-02: version.json core version is not "latest"
+- VER-03: version.json tinker HA version is not "latest"
+- VER-04: version.json supervisor image uses greenautarky registry (both image and images)
+- VER-05: version.json core image uses greenautarky registry (both image and images)
+- VER-06: version.json OTA URL points to greenautarky
+
 ### Build-specific (in ga_build.sh verify_build_integrity)
 - BLD-01: Disk image exists and size sane (200-2048MB)
 - BLD-02: RAUC bundle generated
