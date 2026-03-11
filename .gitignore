@@ -17,6 +17,7 @@ buildroot-ihost/rootfs-overlay/etc/shadow
 scripts/local.env
 secrets/
 *.env.local
+serial-password.txt
 
 # vscode generated files
 .vscode*
