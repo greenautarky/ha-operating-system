@@ -1,0 +1,37 @@
+name: Version Chain Check
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'buildroot-external/package/hassio/**'
+      - 'scripts/check-images.sh'
+  workflow_dispatch:
+
+jobs:
+  check-versions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq skopeo
+
+      - name: Run image availability check
+        run: ./scripts/check-images.sh
+
+      - name: Run source-level build tests
+        run: |
+          # Run the subset of tests that don't need build output
+          # (SRC-* and VER-* tests only)
+          export REPO_ROOT="${GITHUB_WORKSPACE}"
+          export FRONTEND_ROOT=""  # skip frontend source checks in CI
+          bash tests/ga_tests/run_build_tests.sh 2>&1 | tee test-output.txt || true
+          # Check for FAIL lines (excluding expected skips for build-only tests)
+          if grep -E '^\s*FAIL' test-output.txt | grep -v 'BLD-\|REG-\|DT-'; then
+            echo "::error::Source-level tests failed"
+            exit 1
+          fi
+          echo "Source-level tests passed (build-only tests skipped as expected)"
