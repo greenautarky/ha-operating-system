@@ -307,6 +307,50 @@ else
   _skip "REG-07: Supervisor tar" "only present after full build"
 fi
 
+# BLD-FE: Verify HA Core container image contains greenautarky onboarding frontend
+echo ""
+echo "--- Frontend in Core image ---"
+
+CORE_TAR="$(ls "${OUT}/build/hassio-1.0.0/images/"*homeassistant* 2>/dev/null | head -1)"
+if [[ -n "$CORE_TAR" ]]; then
+  # Docker archive tars contain layer tars; list recursively to find frontend files
+  # The greenautarky-setup.html is installed via the wheel into the HA Core image
+  CORE_FE_FOUND=false
+  # List the outer tar contents; layer tars are named <hash>/layer.tar or <hash>.tar
+  LAYER_LIST="$(tar -tf "$CORE_TAR" 2>/dev/null | grep 'layer\.tar$' || true)"
+  if [[ -z "$LAYER_LIST" ]]; then
+    # Some formats use blobs/sha256/<hash> instead of <hash>/layer.tar
+    LAYER_LIST="$(tar -tf "$CORE_TAR" 2>/dev/null | grep -E '^blobs/' || true)"
+  fi
+  for layer in $LAYER_LIST; do
+    if tar -xf "$CORE_TAR" --to-stdout "$layer" 2>/dev/null | tar -tf - 2>/dev/null | grep -q 'greenautarky-setup\.html'; then
+      CORE_FE_FOUND=true
+      break
+    fi
+  done
+  if $CORE_FE_FOUND; then
+    _pass "BLD-FE-01: Core image contains greenautarky-setup.html"
+  else
+    _fail "BLD-FE-01: Core image does NOT contain greenautarky-setup.html"
+  fi
+
+  # BLD-FE-02: Verify the greenautarky-setup JS entrypoint bundle exists (separate from .html)
+  CORE_JS_FOUND=false
+  for layer in $LAYER_LIST; do
+    if tar -xf "$CORE_TAR" --to-stdout "$layer" 2>/dev/null | tar -tf - 2>/dev/null | grep -qE 'greenautarky-setup.*\.js'; then
+      CORE_JS_FOUND=true
+      break
+    fi
+  done
+  if $CORE_JS_FOUND; then
+    _pass "BLD-FE-02: Core image contains greenautarky-setup JS bundle"
+  else
+    _fail "BLD-FE-02: Core image does NOT contain greenautarky-setup JS bundle"
+  fi
+else
+  _skip "BLD-FE-01/02: Core image frontend check" "only present after full build"
+fi
+
 # =========================================================================
 # Device tree verification
 # Compares the patched device tree against a known-good reference to catch
@@ -462,6 +506,63 @@ if [[ -n "$SRC" ]]; then
       || _fail "SRC-08: post-build.sh does NOT stamp GA_BUILD_ID"
   else
     _skip "SRC-08" "post-build.sh not found"
+  fi
+
+  # SRC-10: Frontend build pipeline has greenautarky-setup entrypoint
+  FE_ROOT=""
+  for fe_dir in "${SRC}/../homeassistant_frontend" "/home/user/git/homeassistant_frontend"; do
+    [[ -d "$fe_dir/src" ]] && FE_ROOT="$fe_dir" && break
+  done
+  if [[ -n "$FE_ROOT" ]]; then
+    # SRC-10a: HTML template exists
+    [[ -f "${FE_ROOT}/src/html/greenautarky-setup.html.template" ]] \
+      && _pass "SRC-10a: greenautarky-setup.html.template exists" \
+      || _fail "SRC-10a: greenautarky-setup.html.template MISSING — frontend build will not produce GA setup page"
+
+    # SRC-10b: Entrypoint TS exists
+    [[ -f "${FE_ROOT}/src/entrypoints/greenautarky-setup.ts" ]] \
+      && _pass "SRC-10b: greenautarky-setup.ts entrypoint exists" \
+      || _fail "SRC-10b: greenautarky-setup.ts entrypoint MISSING"
+
+    # SRC-10c: bundle.cjs references the entrypoint
+    grep -q '"greenautarky-setup"' "${FE_ROOT}/build-scripts/bundle.cjs" 2>/dev/null \
+      && _pass "SRC-10c: bundle.cjs has greenautarky-setup entry" \
+      || _fail "SRC-10c: bundle.cjs MISSING greenautarky-setup entry — JS won't be compiled"
+
+    # SRC-10d: entry-html.js has the page in APP_PAGE_ENTRIES
+    grep -q '"greenautarky-setup.html"' "${FE_ROOT}/build-scripts/gulp/entry-html.js" 2>/dev/null \
+      && _pass "SRC-10d: entry-html.js has greenautarky-setup.html page" \
+      || _fail "SRC-10d: entry-html.js MISSING greenautarky-setup.html — HTML page won't be generated"
+
+    # SRC-10e: Panel Lit component with user creation step
+    grep -q 'ga-setup-create-user' "${FE_ROOT}/src/panels/greenautarky-setup/ha-panel-greenautarky-setup.ts" 2>/dev/null \
+      && _pass "SRC-10e: Lit panel includes user creation step" \
+      || _fail "SRC-10e: Lit panel MISSING user creation step"
+
+    # SRC-10f: build_frontend script has post-build verification
+    grep -q 'greenautarky-setup.html' "${FE_ROOT}/script/build_frontend" 2>/dev/null \
+      && _pass "SRC-10f: build_frontend verifies greenautarky-setup.html" \
+      || _fail "SRC-10f: build_frontend has NO verification for greenautarky-setup.html"
+  else
+    _skip "SRC-10a..f" "frontend repo not found"
+  fi
+
+  # SRC-11: Core CI workflow verifies wheel contents
+  CORE_ROOT=""
+  for core_dir in "${SRC}/../homeassisant_core" "/home/user/git/homeassisant_core"; do
+    [[ -d "$core_dir/.github" ]] && CORE_ROOT="$core_dir" && break
+  done
+  if [[ -n "$CORE_ROOT" ]]; then
+    CORE_WF="${CORE_ROOT}/.github/workflows/build-ga-core.yml"
+    if [[ -f "$CORE_WF" ]]; then
+      grep -q 'greenautarky-setup.html' "$CORE_WF" 2>/dev/null \
+        && _pass "SRC-11: Core CI workflow verifies greenautarky-setup.html in wheel" \
+        || _fail "SRC-11: Core CI workflow does NOT verify greenautarky-setup.html in wheel"
+    else
+      _skip "SRC-11" "build-ga-core.yml not found"
+    fi
+  else
+    _skip "SRC-11" "ha-core repo not found"
   fi
 
   # SRC-09: Global stale reference scan across all functional source
