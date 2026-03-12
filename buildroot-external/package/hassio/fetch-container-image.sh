@@ -65,6 +65,11 @@ image_file_name="${full_image_name//[:\/]/_}@${image_digest//[:\/]/_}"
 image_file_path="${dl_dir}/${image_file_name}.tar"
 dst_image_file_path="${dst_dir}/${image_file_name}.tar"
 
+# Remove stale lock if not writable (e.g., left by a container running as different user)
+if [ -f "${image_file_path}.lock" ] && ! [ -w "${image_file_path}.lock" ]; then
+	rm -f "${image_file_path}.lock"
+fi
+
 (
 	# Use file locking to avoid race condition
 	flock --verbose 3

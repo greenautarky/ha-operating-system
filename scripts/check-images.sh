@@ -84,6 +84,16 @@ check_image() {
     return 1
 }
 
+# --- Check cache directory permissions ---
+CACHE_DIR="${CACHE_DIR:-/cache/dl/hassio}"
+if [ -d "$CACHE_DIR" ]; then
+    stale_locks=$(find "$CACHE_DIR" -name '*.lock' ! -writable 2>/dev/null | wc -l)
+    if [ "$stale_locks" -gt 0 ]; then
+        printf "${YELLOW}WARN${NC}  Found %d stale lock file(s) in %s (wrong owner) — removing\n" "$stale_locks" "$CACHE_DIR"
+        find "$CACHE_DIR" -name '*.lock' ! -writable -delete 2>/dev/null || true
+    fi
+fi
+
 # --- Fetch stable.json ---
 echo "=== Pre-build Image Availability Check ==="
 echo ""
