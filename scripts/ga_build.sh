@@ -1593,6 +1593,25 @@ DEFCONFIG="ga_ihost_full_defconfig"
 # Ensure dev-ca.pem exists for post-build script (link/copy from rel-ca.pem)
 ensure_dev_ca_from_rel_ca
 
+# Pre-flight: verify all container images exist in registries before building
+# (skip in update mode since the images haven't changed and network may be slow)
+if [[ "$MODE" == "full" || "$MODE" == "partial" ]]; then
+  echo ""
+  echo "=== Pre-flight: checking container image availability ==="
+  if [[ -f "${SCRIPT_DIR}/check-images.sh" ]]; then
+    if "${SCRIPT_DIR}/check-images.sh"; then
+      echo "Pre-flight passed."
+    else
+      echo "ERROR: Pre-flight image check failed. Fix missing images before building." >&2
+      echo "  Run: ./scripts/check-images.sh   (for details)" >&2
+      exit 1
+    fi
+  else
+    echo "WARNING: check-images.sh not found, skipping pre-flight image check."
+  fi
+  echo ""
+fi
+
 # 1) Configure
 if [[ "$MODE" == "full" ]]; then
   rm -rf "$OUT"
