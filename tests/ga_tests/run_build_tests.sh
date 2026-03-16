@@ -316,11 +316,17 @@ if [[ -n "$CORE_TAR" ]]; then
   # Docker archive tars contain layer tars; list recursively to find frontend files
   # The greenautarky-setup.html is installed via the wheel into the HA Core image
   CORE_FE_FOUND=false
-  # List the outer tar contents; layer tars are named <hash>/layer.tar or <hash>.tar
+  # List the outer tar contents; handle three Docker archive formats:
+  #   1. <hash>/layer.tar  (OCI legacy)
+  #   2. blobs/sha256/<hash>  (OCI)
+  #   3. <hash>.tar  (Docker save flat format — most common with docker save)
   LAYER_LIST="$(tar -tf "$CORE_TAR" 2>/dev/null | grep 'layer\.tar$' || true)"
   if [[ -z "$LAYER_LIST" ]]; then
-    # Some formats use blobs/sha256/<hash> instead of <hash>/layer.tar
     LAYER_LIST="$(tar -tf "$CORE_TAR" 2>/dev/null | grep -E '^blobs/' || true)"
+  fi
+  if [[ -z "$LAYER_LIST" ]]; then
+    # Flat format: files named <64-char-sha>.tar at root level
+    LAYER_LIST="$(tar -tf "$CORE_TAR" 2>/dev/null | grep -E '^[a-f0-9]{64}\.tar$' || true)"
   fi
   for layer in $LAYER_LIST; do
     if tar -xf "$CORE_TAR" --to-stdout "$layer" 2>/dev/null | tar -tf - 2>/dev/null | grep -q 'greenautarky-setup\.html'; then
