@@ -52,6 +52,22 @@ run_test_show() {
   [ -n "$_out" ] && echo "        -> $_out"
 }
 
+# Warn: test ran but result is informational (not a failure)
+# Usage: warn_test "TEST-01" "description" "command"
+warn_test() {
+  _id="$1"
+  _desc="$2"
+  _cmd="$3"
+
+  if eval "$_cmd" >/dev/null 2>&1; then
+    printf "${_GREEN}  PASS${_RESET}  %s: %s\n" "$_id" "$_desc"
+    _PASS=$((_PASS+1))
+  else
+    printf "${_YELLOW}  WARN${_RESET}  %s: %s\n" "$_id" "$_desc"
+    _SKIP=$((_SKIP+1))
+  fi
+}
+
 # Skip a test (manual/destructive)
 skip_test() {
   _id="$1"

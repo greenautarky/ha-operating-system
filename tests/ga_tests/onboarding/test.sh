@@ -24,7 +24,8 @@ run_test_show "OB-03" "HA version" \
   "cat /mnt/data/supervisor/homeassistant/.HA_VERSION 2>/dev/null"
 
 # --- Version repo / supervisor ---
-run_test "OB-05" "Supervisor fetches from greenautarky version repo" \
+# Supervisor only logs this after an update check — may not appear on fresh boot
+warn_test "OB-05" "Supervisor fetches from greenautarky version repo" \
   "journalctl -u hassio-supervisor -b 0 --no-pager -q 2>/dev/null | grep -q 'greenautarky/haos-version'"
 
 run_test "OB-06" "Supervisor is greenautarky fork" \
@@ -32,7 +33,7 @@ run_test "OB-06" "Supervisor is greenautarky fork" \
 
 # --- Non-core components should stay upstream ---
 run_test "OB-07" "Non-core components use upstream registries" \
-  "for c in hassio_dns hassio_audio hassio_cli hassio_multicast hassio_observer; do IMG=\$(docker inspect \$c --format '{{.Config.Image}}' 2>/dev/null); [ -z \"\$IMG\" ] && continue; echo \"\$IMG\" | grep -qi 'greenautarky' && exit 1; done"
+  "for c in hassio_dns hassio_audio hassio_cli hassio_multicast hassio_observer; do IMG=\$(docker inspect \$c --format '{{.Config.Image}}' 2>/dev/null); [ -z \"\$IMG\" ] && continue; echo \"\$IMG\" | grep -qi 'greenautarky' && exit 1; done; exit 0"
 
 # --- Core image freshness ---
 run_test_show "OB-08" "Core image is latest (not stale)" \
