@@ -48,6 +48,16 @@ grep -q 'DEVICE_LABEL' "${TARGET}/etc/systemd/system/telegraf.service" 2>/dev/nu
   && _pass "CFG-06: telegraf.service has DEVICE_LABEL" \
   || _fail "CFG-06: telegraf.service missing DEVICE_LABEL"
 
+# CFG-04: telegraf.conf has wireless input
+grep -q '\[\[inputs.wireless\]\]' "${TARGET}/etc/telegraf/telegraf.conf" 2>/dev/null \
+  && _pass "CFG-04: telegraf.conf has WiFi signal input (inputs.wireless)" \
+  || _fail "CFG-04: telegraf.conf missing inputs.wireless"
+
+# CFG-05: telegraf.conf monitors wlan0
+grep -q 'wlan0' "${TARGET}/etc/telegraf/telegraf.conf" 2>/dev/null \
+  && _pass "CFG-05: telegraf.conf monitors wlan0 interface" \
+  || _fail "CFG-05: telegraf.conf missing wlan0 in net interfaces"
+
 # CFG-07: fluent-bit.conf exists
 [[ -f "${TARGET}/etc/fluent-bit/fluent-bit.conf" ]] \
   && _pass "CFG-07: fluent-bit.conf exists on rootfs" \
@@ -95,6 +105,49 @@ grep -q 'homeassistant' "${TARGET}/etc/fluent-bit/parsers.conf" 2>/dev/null \
 grep -qE 'storage\.total_limit_size\s+300M' "${TARGET}/etc/fluent-bit/fluent-bit.conf" 2>/dev/null \
   && _pass "CFG-22: fluent-bit storage buffer >= 300M" \
   || _fail "CFG-22: fluent-bit storage buffer not 300M"
+
+echo ""
+echo "--- NetworkManager WiFi defaults ---"
+
+NM_CONF="${TARGET}/etc/NetworkManager/NetworkManager.conf"
+if [[ -f "$NM_CONF" ]]; then
+  # WIFI-01: MAC randomization disabled for scanning
+  grep -q 'wifi.scan-rand-mac-address=no' "$NM_CONF" 2>/dev/null \
+    && _pass "WIFI-01: scan MAC randomization disabled" \
+    || _fail "WIFI-01: scan MAC randomization NOT disabled"
+
+  # WIFI-02: Power save disabled
+  grep -q 'wifi.powersave=2' "$NM_CONF" 2>/dev/null \
+    && _pass "WIFI-02: WiFi power save disabled" \
+    || _fail "WIFI-02: WiFi power save NOT disabled"
+
+  # WIFI-03: Permanent MAC address
+  grep -q 'wifi.cloned-mac-address=permanent' "$NM_CONF" 2>/dev/null \
+    && _pass "WIFI-03: cloned-mac-address set to permanent" \
+    || _fail "WIFI-03: cloned-mac-address NOT set to permanent"
+
+  # WIFI-04: Infinite autoconnect retries
+  grep -q 'connection.autoconnect-retries=0' "$NM_CONF" 2>/dev/null \
+    && _pass "WIFI-04: infinite autoconnect retries (0)" \
+    || _fail "WIFI-04: autoconnect-retries NOT set to 0"
+
+  # WIFI-05: Hidden SSID scanning enabled
+  grep -q 'wifi.hidden=true' "$NM_CONF" 2>/dev/null \
+    && _pass "WIFI-05: hidden SSID scanning enabled" \
+    || _fail "WIFI-05: hidden SSID scanning NOT enabled"
+
+  # WIFI-06: High autoconnect priority
+  grep -q 'connection.autoconnect-priority=100' "$NM_CONF" 2>/dev/null \
+    && _pass "WIFI-06: WiFi autoconnect priority=100" \
+    || _fail "WIFI-06: WiFi autoconnect priority NOT set to 100"
+
+  # WIFI-07: match-device targets wifi type
+  grep -q 'match-device=type:wifi' "$NM_CONF" 2>/dev/null \
+    && _pass "WIFI-07: WiFi defaults scoped to type:wifi" \
+    || _fail "WIFI-07: WiFi defaults NOT scoped to type:wifi"
+else
+  _skip "WIFI-01..07" "NetworkManager.conf not found"
+fi
 
 echo ""
 echo "--- Environment ---"
