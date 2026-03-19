@@ -1,0 +1,16 @@
+{
+  "name": "ga-e2e-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "End-to-end Playwright tests for GA OS — emulated mobile + desktop",
+  "scripts": {
+    "test": "playwright test",
+    "test:mobile": "playwright test --project=mobile-ios --project=mobile-android",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "typescript": "^5.7.0"
+  }
+}
