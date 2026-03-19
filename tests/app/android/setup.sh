@@ -138,15 +138,16 @@ ok "Licenses accepted"
 step "SDK packages (platform-tools, emulator, system-image)"
 
 PKGS_NEEDED=()
-[[ ! -f "$ANDROID_HOME/platform-tools/adb"     ]] && PKGS_NEEDED+=("platform-tools")
-[[ ! -f "$ANDROID_HOME/emulator/emulator"       ]] && PKGS_NEEDED+=("emulator")
+[[ ! -f "$ANDROID_HOME/platform-tools/adb"      ]] && PKGS_NEEDED+=("platform-tools")
+[[ ! -f "$ANDROID_HOME/emulator/emulator"        ]] && PKGS_NEEDED+=("emulator")
 [[ ! -d "$ANDROID_HOME/system-images/android-34" ]] && PKGS_NEEDED+=("$SYSTEM_IMAGE")
+[[ ! -f "$ANDROID_HOME/build-tools/35.0.0/aapt2" ]] && PKGS_NEEDED+=("build-tools;35.0.0")
 
 if [[ ${#PKGS_NEEDED[@]} -eq 0 ]]; then
   ok "All packages already installed"
 else
   echo "  Installing: ${PKGS_NEEDED[*]}"
-  echo "  (platform-tools + emulator: ~200 MB, system-image: ~1.5 GB)"
+  echo "  (platform-tools + emulator: ~200 MB, system-image: ~1.5 GB, build-tools: ~200 MB)"
   "$SDKMANAGER" "${PKGS_NEEDED[@]}" 2>&1 | grep -E 'Downloading|Unzipping|Done' | grep -v '^\[' || true
   ok "SDK packages installed"
 fi

@@ -19,8 +19,7 @@ import { execSync } from 'child_process';
  *     Onboarding reset: SSH to root@<DEVICE_IP>
  */
 
-const DEFAULT_SSH_KEY =
-  '~/.ssh/ha-ihost.pem';
+const DEFAULT_SSH_KEY = process.env.HOME + '/.ssh/ha-ihost.pem';
 
 /** True when testing against local Docker HA Core (no physical iHost needed). */
 export const LOCAL_MODE = process.env.LOCAL_MODE === '1';

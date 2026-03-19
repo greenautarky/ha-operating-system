@@ -32,10 +32,10 @@
 #
 # Examples:
 #   # Real iHost — first-time setup + run:
-#   RUN_APP_TESTS=1 tests/run_app_tests.sh --ssh root@<ip> --admin-pass changeme --setup
+#   RUN_APP_TESTS=1 tests/run_app_tests.sh --ssh root@&lt;ip&gt; --admin-pass changeme --setup
 #
 #   # Real iHost — emulator already running:
-#   RUN_APP_TESTS=1 tests/run_app_tests.sh --ssh root@<ip> --admin-pass changeme --no-avd
+#   RUN_APP_TESTS=1 tests/run_app_tests.sh --ssh root@&lt;ip&gt; --admin-pass changeme --no-avd
 #
 #   # Local Docker HA Core (no physical device needed):
 #   tests/app/android/start-ha-local.sh          # start HA in Docker first
@@ -153,6 +153,9 @@ if [[ ! -d "$APP_DIR/node_modules" ]]; then
 fi
 
 # ── Export env vars ───────────────────────────────────────────────────────────
+
+export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
+export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 
 export RUN_APP_TESTS=1
 export SSH_PORT="$SSH_PORT"
