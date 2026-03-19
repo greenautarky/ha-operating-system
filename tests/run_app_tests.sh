@@ -2,13 +2,17 @@
 # run_app_tests.sh — Optional Android app tests for GA OS (EXPERIMENTAL)
 #
 # Tests the HA Companion app onboarding and login flows via Appium + WebDriverIO.
-# Requires Android SDK, an AVD emulator, and a debug HA Companion APK.
+# Supports two targets: a real iHost device, or local HA Core in Docker.
 #
 # Usage:
-#   RUN_APP_TESTS=1 tests/run_app_tests.sh --ssh root@<ip>
-#   RUN_APP_TESTS=1 tests/run_app_tests.sh --runner <N>
+#   RUN_APP_TESTS=1 tests/run_app_tests.sh --ssh root@<ip>     # real iHost
+#   RUN_APP_TESTS=1 tests/run_app_tests.sh --runner <N>        # VLAN runner
+#   RUN_APP_TESTS=1 tests/run_app_tests.sh --local             # local Docker HA
 #
 # Options:
+#   --local              Use local HA Core in Docker (http://10.0.2.2:8123)
+#                        No SSH needed — resets via docker exec on host.
+#                        Start HA first: tests/app/android/start-ha-local.sh
 #   --port PORT          SSH port for device access (default: 22222)
 #   --admin-user USER    HA admin username (default: admin)
 #   --admin-pass PASS    HA admin password (required for login tests)
@@ -27,14 +31,15 @@
 #   doesn't block the main test pipeline when called unconditionally.
 #
 # Examples:
-#   # First-time setup + run:
+#   # Real iHost — first-time setup + run:
 #   RUN_APP_TESTS=1 tests/run_app_tests.sh --ssh root@<ip> --admin-pass changeme --setup
 #
-#   # Normal run (emulator already started):
+#   # Real iHost — emulator already running:
 #   RUN_APP_TESTS=1 tests/run_app_tests.sh --ssh root@<ip> --admin-pass changeme --no-avd
 #
-#   # Onboarding suite only:
-#   RUN_APP_TESTS=1 tests/run_app_tests.sh --ssh root@<ip> --suite onboarding
+#   # Local Docker HA Core (no physical device needed):
+#   tests/app/android/start-ha-local.sh          # start HA in Docker first
+#   RUN_APP_TESTS=1 tests/run_app_tests.sh --local --admin-pass changeme --no-avd
 #
 #   # Via runner infrastructure (VLAN, runner 3 = 192.168.103.100):
 #   RUN_APP_TESTS=1 tests/run_app_tests.sh --runner 3 --admin-pass changeme
@@ -54,7 +59,7 @@ fi
 # ── Usage ─────────────────────────────────────────────────────────────────────
 
 usage() {
-  sed -n '3,42p' "$0" | sed 's/^# //' | sed 's/^#//'
+  sed -n '3,47p' "$0" | sed 's/^# //' | sed 's/^#//'
   exit 1
 }
 
@@ -62,6 +67,7 @@ usage() {
 
 MODE=""
 DEVICE_IP=""
+LOCAL_MODE=false
 SSH_PORT="22222"
 HA_ADMIN_USER="admin"
 HA_ADMIN_PASS=""
@@ -73,6 +79,7 @@ RUN_SETUP=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --local)       MODE="local"; LOCAL_MODE=true; shift ;;
     --ssh)         MODE="ssh";    DEVICE_IP="${2##*@}";                    shift 2 ;;
     --runner)      MODE="runner"; DEVICE_IP="192.168.$((100 + $2)).100";   shift 2 ;;
     --port)        SSH_PORT="$2";       shift 2 ;;
@@ -88,7 +95,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -z "$MODE" ]] && { echo "ERROR: Specify --ssh root@<ip> or --runner N"; echo ""; usage; }
+[[ -z "$MODE" ]] && { echo "ERROR: Specify --local, --ssh root@<ip>, or --runner N"; echo ""; usage; }
 
 # ── Optional one-time setup ───────────────────────────────────────────────────
 
@@ -100,14 +107,34 @@ fi
 
 # ── Verify APK ────────────────────────────────────────────────────────────────
 
+# Fall back to release APK if debug isn't available yet (native UI tests still run)
 if [[ ! -f "$APK_PATH" ]]; then
-  echo "ERROR: APK not found at $APK_PATH"
-  echo ""
-  echo "Run setup:  tests/app/android/setup.sh"
-  echo "Or set:     --apk /path/to/ha-companion-debug.apk"
-  echo ""
-  echo "NOTE: A debug APK is required — release builds do not expose WebView for automation."
-  exit 1
+  RELEASE_APK="$APP_DIR/android/ha-companion-release.apk"
+  if [[ -f "$RELEASE_APK" ]]; then
+    echo "NOTE: Debug APK not found — falling back to release APK (WebView tests will fail)"
+    echo "      Save debug build as: $APK_PATH"
+    APK_PATH="$RELEASE_APK"
+  else
+    echo "ERROR: APK not found at $APK_PATH"
+    echo ""
+    echo "Run setup:  tests/app/android/setup.sh"
+    echo "Or set:     --apk /path/to/ha-companion-debug.apk"
+    exit 1
+  fi
+fi
+
+# ── Local mode: verify Docker HA is running ───────────────────────────────────
+
+if $LOCAL_MODE; then
+  HA_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 \
+    "http://localhost:${HA_PORT:-8123}/api/" 2>/dev/null || echo "000")
+  if [[ "$HA_STATUS" != "200" && "$HA_STATUS" != "401" ]]; then
+    echo "ERROR: HA Core not responding at http://localhost:${HA_PORT:-8123} (HTTP $HA_STATUS)"
+    echo ""
+    echo "Start it first:"
+    echo "  tests/app/android/start-ha-local.sh"
+    exit 1
+  fi
 fi
 
 # ── Start emulator ────────────────────────────────────────────────────────────
@@ -128,22 +155,35 @@ fi
 # ── Export env vars ───────────────────────────────────────────────────────────
 
 export RUN_APP_TESTS=1
-export DEVICE_IP="$DEVICE_IP"
 export SSH_PORT="$SSH_PORT"
 export HA_ADMIN_USER="$HA_ADMIN_USER"
 export AVD_NAME="$AVD_NAME"
 export APK_PATH="$APK_PATH"
 
+if $LOCAL_MODE; then
+  export LOCAL_MODE=1
+  export DEVICE_URL="http://10.0.2.2:${HA_PORT:-8123}"
+  # HOST_URL is derived from LOCAL_MODE in fixtures/device.ts
+else
+  export DEVICE_IP="$DEVICE_IP"
+fi
+
 [[ -n "$HA_ADMIN_PASS" ]] && export HA_ADMIN_PASS
 
 # ── Print header ──────────────────────────────────────────────────────────────
+
+if $LOCAL_MODE; then
+  TARGET_DESC="local Docker HA (http://10.0.2.2:${HA_PORT:-8123})"
+else
+  TARGET_DESC="iHost device  http://${DEVICE_IP}:8123"
+fi
 
 AUTH_DESC="none (login tests will skip)"
 [[ -n "$HA_ADMIN_PASS" ]] && AUTH_DESC="password (${HA_ADMIN_USER})"
 
 echo "=============================================="
 echo "  GA App Tests (EXPERIMENTAL)"
-echo "  Device:  http://${DEVICE_IP}:8123"
+echo "  Target:  ${TARGET_DESC}"
 echo "  Auth:    ${AUTH_DESC}"
 echo "  AVD:     ${AVD_NAME}"
 echo "  APK:     $(basename "$APK_PATH")"
@@ -158,8 +198,7 @@ case "$SUITE" in
   login)      SPEC_ARG="--spec tests/login.spec.ts" ;;
   all)        SPEC_ARG="" ;;
   *)
-    echo "Unknown suite: $SUITE"
-    echo "Valid values: onboarding, login, all"
+    echo "Unknown suite: $SUITE (use: onboarding, login, all)"
     exit 1
     ;;
 esac
@@ -182,11 +221,15 @@ if [[ $EXIT_CODE -eq 0 ]]; then
 else
   echo "  App Tests: FAILURES DETECTED (exit $EXIT_CODE)"
   echo ""
-  echo "  Troubleshooting tips:"
-  echo "    - Check appium.log in tests/app/ for Appium errors"
-  echo "    - Verify the APK is a debug build (WebView automation requires debug)"
-  echo "    - Run emulator manually: tests/app/android/start-emulator.sh"
-  echo "    - Check device connectivity: curl http://${DEVICE_IP}:8123/api/"
+  echo "  Troubleshooting:"
+  echo "    - Check appium.log in tests/app/"
+  echo "    - WebView tests require a debug APK (release APK won't work)"
+  if $LOCAL_MODE; then
+    echo "    - Check local HA: docker logs ha-local"
+    echo "    - Verify reachable: curl http://localhost:${HA_PORT:-8123}/api/"
+  else
+    echo "    - Check device: curl http://${DEVICE_IP}:8123/api/"
+  fi
 fi
 echo "=============================================="
 
