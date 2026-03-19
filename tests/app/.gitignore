@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+appium.log
+appium-*.log
+test-results/
+.env
+
+# APKs are large binaries — download via android/setup.sh
+android/*.apk

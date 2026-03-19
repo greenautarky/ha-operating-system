@@ -1,0 +1,23 @@
+{
+  "name": "ga-app-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Optional Android app tests for GA OS — HA Companion onboarding and login flows via Appium",
+  "scripts": {
+    "test": "wdio run wdio.android.conf.ts",
+    "test:onboarding": "wdio run wdio.android.conf.ts --spec tests/onboarding.spec.ts",
+    "test:login": "wdio run wdio.android.conf.ts --spec tests/login.spec.ts"
+  },
+  "devDependencies": {
+    "@wdio/appium-service": "^9.0.0",
+    "@wdio/cli": "^9.0.0",
+    "@wdio/local-runner": "^9.0.0",
+    "@wdio/mocha-framework": "^9.0.0",
+    "@wdio/spec-reporter": "^9.0.0",
+    "@types/node": "^20.0.0",
+    "appium": "^2.11.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.7.0",
+    "webdriverio": "^9.0.0"
+  }
+}
