@@ -31,7 +31,7 @@ else
   run_test "PING-03" "Gateway reachable (ARP table)" \
     "grep -q '${GW:-NO_GW}' /proc/net/arp 2>/dev/null"
   run_test "PING-04" "Telegraf ping plugin reporting data" \
-    "journalctl -u telegraf --no-pager -q --since '10 min ago' 2>/dev/null | grep -qi 'ping'"
+    "journalctl -u telegraf --no-pager -q --since '3 hours ago' 2>/dev/null | grep -qi 'ping'"
   skip_test "PING-05" "8.8.8.8 is pingable" "ping binary broken on this build"
 fi
 

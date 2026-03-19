@@ -24,7 +24,8 @@ else
     "docker exec $TS_CONTAINER /opt/tailscale status 2>/dev/null | head -1 | grep -qv 'stopped\|not running'"
 
   # --- Hostname matches device label ---
-  TS_HOSTNAME=$(docker exec "$TS_CONTAINER" /opt/tailscale status --json 2>/dev/null | grep -o '"Self":{[^}]*}' | grep -o '"HostName":"[^"]*"' | cut -d'"' -f4)
+  # Use first "HostName" entry in JSON — that is always Self (multi-line JSON, regex on Self block doesn't work)
+  TS_HOSTNAME=$(docker exec "$TS_CONTAINER" /opt/tailscale status --json 2>/dev/null | grep '"HostName"' | head -1 | cut -d'"' -f4)
   DEVICE_LABEL=$(cat /mnt/data/ga-device-label 2>/dev/null)
 
   if [ -n "$DEVICE_LABEL" ] && [ -n "$TS_HOSTNAME" ]; then
