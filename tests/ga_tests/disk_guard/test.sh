@@ -133,8 +133,8 @@ if [ "${FILL_DISK:-0}" = "1" ]; then
     rm -f /mnt/data/.ga_test_fill 2>/dev/null
 
     # DG-06: State file shows soft phase
-    DG_PHASE=$(grep -o '"phase":"[^"]*"' /run/ga_disk_guard/state.json 2>/dev/null | cut -d'"' -f4 || echo "unknown")
-    DG_FREED=$(grep -o '"worst_freed_mib":[0-9]*' /run/ga_disk_guard/state.json 2>/dev/null | cut -d: -f2 || echo "0")
+    DG_PHASE=$(sed -n 's/.*"phase"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /run/ga_disk_guard/state.json 2>/dev/null || echo "unknown")
+    DG_FREED=$(sed -n 's/.*"worst_freed_mib"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' /run/ga_disk_guard/state.json 2>/dev/null || echo "0")
     run_test_show "DG-06" "State: phase=${DG_PHASE}, freed=${DG_FREED} MiB" \
       "[ \"$DG_PHASE\" = 'soft' ] || [ \"$DG_PHASE\" = 'hard' ]"
 
@@ -152,9 +152,13 @@ if [ "${FILL_DISK:-0}" = "1" ]; then
     # DG-15: Journal vacuum — journal should be smaller after soft cleanup
     JOURNAL_AFTER=$(journal_mib)
     echo "        -> Journal size after: ${JOURNAL_AFTER:-?} MiB (before: ${JOURNAL_BEFORE:-?}, soft vacuum: 200M)"
-    # On a fresh device journal may already be small — just verify guard attempted vacuum
-    run_test_show "DG-15" "Journal vacuum attempted (guard log mentions journal)" \
-      "echo \"$DG_OUTPUT\" | grep -qi 'journal\|vacuum'"
+    # Check guard log OR journal for vacuum evidence
+    run_test_show "DG-15" "Journal vacuum attempted" \
+      "echo \"$DG_OUTPUT\" | grep -qi 'journal\|vacuum' || journalctl -t ga_disk_guard --no-pager -n 20 2>/dev/null | grep -qi 'journal\|vacuum'"
+
+    # DG-19: Verify soft cleanup event logged to journal
+    run_test_show "DG-19" "Soft cleanup logged to journal" \
+      "journalctl -t ga_disk_guard --no-pager -n 10 2>/dev/null | grep -q 'SOFT cleanup'"
 
     # Cleanup between scenarios
     cleanup_fill
@@ -188,9 +192,13 @@ if [ "${FILL_DISK:-0}" = "1" ]; then
     rm -f /mnt/data/.ga_test_fill 2>/dev/null
 
     # DG-17: Verify hard phase in state
-    DG_HARD_PHASE=$(grep -o '"phase":"[^"]*"' /run/ga_disk_guard/state.json 2>/dev/null | cut -d'"' -f4 || echo "unknown")
+    DG_HARD_PHASE=$(sed -n 's/.*"phase"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /run/ga_disk_guard/state.json 2>/dev/null || echo "unknown")
     run_test_show "DG-17" "Hard cleanup phase recorded (phase=${DG_HARD_PHASE})" \
       "[ \"$DG_HARD_PHASE\" = 'hard' ]"
+
+    # DG-20: Verify hard cleanup event logged to journal
+    run_test_show "DG-20" "Hard cleanup logged to journal" \
+      "journalctl -t ga_disk_guard --no-pager -n 10 2>/dev/null | grep -q 'HARD cleanup'"
 
     cleanup_fill
 
@@ -201,26 +209,31 @@ if [ "${FILL_DISK:-0}" = "1" ]; then
     echo "        ── Scenario 3: Large log truncation ──"
 
     # Create a 25 MiB log file (guard truncates active logs > 20 MiB)
-    BIGLOG="/var/log/.ga_test_biglog.log"
+    # Place it in /mnt/data/logs (persistent, writable, inside ALLOWLIST /mnt/data/)
+    BIGLOG="/mnt/data/logs/.ga_test_biglog.log"
     if dd if=/dev/urandom of="$BIGLOG" bs=1M count=25 2>/dev/null; then
       BIGLOG_BEFORE=$(du -m "$BIGLOG" 2>/dev/null | awk '{print $1}')
-      echo "        -> Created ${BIGLOG_BEFORE} MiB log file"
+      echo "        -> Created ${BIGLOG_BEFORE} MiB log file at $BIGLOG"
 
-      # Need disk to be low for guard to trigger
+      # Fill disk so guard triggers cleanup — keep fill file present during guard run
+      # so disk stays below threshold and truncation rule fires
       fill_to 250
-      GA_DG_VERBOSE=0 /usr/sbin/ga_disk_guard >/dev/null 2>&1 || true
+      echo "        -> Running guard with disk low + large log..."
+      GA_DG_VERBOSE=1 /usr/sbin/ga_disk_guard >/dev/null 2>&1 || true
+
+      # NOW remove fill file
       rm -f /mnt/data/.ga_test_fill 2>/dev/null
 
       if [ -f "$BIGLOG" ]; then
         BIGLOG_AFTER=$(du -m "$BIGLOG" 2>/dev/null | awk '{print $1}')
-        run_test_show "DG-10" "Large log truncated (${BIGLOG_BEFORE} MiB -> ${BIGLOG_AFTER} MiB, threshold: 20 MiB)" \
+        run_test_show "DG-10" "Large log truncated (${BIGLOG_BEFORE} MiB -> ${BIGLOG_AFTER:-?} MiB, threshold: 20 MiB)" \
           "[ \"${BIGLOG_AFTER:-25}\" -lt \"$BIGLOG_BEFORE\" ]"
       else
         run_test_show "DG-10" "Large log file deleted by guard" "true"
       fi
       rm -f "$BIGLOG" 2>/dev/null
     else
-      skip_test "DG-10" "Large log truncation" "/var/log not writable"
+      skip_test "DG-10" "Large log truncation" "/mnt/data/logs not writable"
     fi
 
     cleanup_fill
@@ -234,7 +247,7 @@ if [ "${FILL_DISK:-0}" = "1" ]; then
     HEALTHY_FREE_BEFORE=$(free_mib)
     GA_DG_VERBOSE=0 /usr/sbin/ga_disk_guard >/dev/null 2>&1 || true
     HEALTHY_FREE_AFTER=$(free_mib)
-    DG_IDLE_PHASE=$(grep -o '"phase":"[^"]*"' /run/ga_disk_guard/state.json 2>/dev/null | cut -d'"' -f4 || echo "unknown")
+    DG_IDLE_PHASE=$(sed -n 's/.*"phase"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /run/ga_disk_guard/state.json 2>/dev/null || echo "unknown")
     run_test_show "DG-18" "Guard is idle on healthy disk (phase=${DG_IDLE_PHASE}, free: ${HEALTHY_FREE_BEFORE} -> ${HEALTHY_FREE_AFTER} MiB)" \
       "[ \"$DG_IDLE_PHASE\" = 'idle' ]"
 
@@ -251,7 +264,13 @@ else
   skip_test "DG-16" "Hard cleanup trigger" "set FILL_DISK=1 to enable"
   skip_test "DG-17" "Hard cleanup state" "set FILL_DISK=1 to enable"
   skip_test "DG-18" "Guard idle on healthy disk" "set FILL_DISK=1 to enable"
+  skip_test "DG-19" "Soft cleanup logged to journal" "set FILL_DISK=1 to enable"
+  skip_test "DG-20" "Hard cleanup logged to journal" "set FILL_DISK=1 to enable"
   skip_test "DG-13" "Timer triggers after boot" "requires reboot wait"
 fi
+
+# DG-21: Verify Fluent-Bit is configured to forward disk guard events to Loki (always runs)
+run_test "DG-21" "Fluent-Bit config includes ga-disk-guard.service" \
+  "grep -q 'ga-disk-guard.service' /etc/fluent-bit/fluent-bit.conf 2>/dev/null"
 
 suite_end
