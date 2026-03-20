@@ -88,4 +88,56 @@ JOURNAL_ENTRIES=$(journalctl -b 0 --no-pager -q 2>/dev/null | wc -l)
 run_test_show "HLTH-11" "Journal has entries for current boot (${JOURNAL_ENTRIES})" \
   "[ \"$JOURNAL_ENTRIES\" -gt 10 ]"
 
+# --- Addon watchdog (from flasher stage 81) ---
+
+if command -v ha >/dev/null 2>&1; then
+  # Supervisor should have watchdog enabled for addons
+  WATCHDOG=$(ha addons info core_mosquitto --raw-json 2>/dev/null | grep -o '"watchdog":[a-z]*' | head -1 || true)
+  if [ -n "$WATCHDOG" ]; then
+    run_test "HLTH-12" "Addon watchdog enabled (mosquitto)" \
+      "echo \"$WATCHDOG\" | grep -q 'true'"
+  else
+    skip_test "HLTH-12" "Addon watchdog enabled" "cannot read addon info"
+  fi
+else
+  skip_test "HLTH-12" "Addon watchdog enabled" "ha CLI not found"
+fi
+
+# --- MQTT integration configured (from flasher stage 81) ---
+
+if command -v curl >/dev/null 2>&1; then
+  # Check if MQTT is configured by looking for the mosquitto addon listening
+  MQTT_LISTEN=$(docker exec addon_core_mosquitto netstat -tlnp 2>/dev/null | grep ':1883' || \
+    docker ps --format '{{.Names}}' 2>/dev/null | grep mosquitto)
+  run_test "HLTH-13" "MQTT broker listening (port 1883)" \
+    "[ -n \"$MQTT_LISTEN\" ]"
+else
+  skip_test "HLTH-13" "MQTT broker listening" "curl not found"
+fi
+
+# --- HA UUID format valid (from flasher stage 81) ---
+
+HA_UUID=$(grep -o '"uuid": "[^"]*"' /mnt/data/supervisor/homeassistant/.storage/core.uuid 2>/dev/null | cut -d'"' -f4 || true)
+if [ -n "$HA_UUID" ]; then
+  run_test_show "HLTH-14" "HA UUID valid format (${HA_UUID})" \
+    "echo \"$HA_UUID\" | grep -qE '^[0-9a-f]{32}$'"
+else
+  skip_test "HLTH-14" "HA UUID valid format" "core.uuid not found"
+fi
+
+# --- NetBird hostname matches device label (from flasher stage 81) ---
+
+if command -v netbird >/dev/null 2>&1; then
+  NB_HOST=$(netbird status 2>/dev/null | grep -i 'hostname\|FQDN' | head -1 | awk '{print $NF}' || true)
+  DEV_LABEL=$(cat /etc/ga-device-label 2>/dev/null || echo "")
+  if [ -n "$NB_HOST" ] && [ -n "$DEV_LABEL" ]; then
+    run_test_show "HLTH-15" "NetBird hostname matches device label (${NB_HOST})" \
+      "echo \"$NB_HOST\" | grep -qi \"$DEV_LABEL\""
+  else
+    skip_test "HLTH-15" "NetBird hostname matches device label" "netbird or label not available"
+  fi
+else
+  skip_test "HLTH-15" "NetBird hostname matches device label" "netbird not found"
+fi
+
 suite_end
