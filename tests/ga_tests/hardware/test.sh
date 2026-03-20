@@ -63,11 +63,12 @@ run_test "HW-09" "Zigbee serial device present (internal UART)" \
 if command -v docker >/dev/null 2>&1; then
   Z2M_CONTAINER=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "ga_zigbee2mqtt" | head -1)
   if [ -n "$Z2M_CONTAINER" ]; then
-    Z2M_FW=$(docker exec "$Z2M_CONTAINER" cat /app/data/coordinator_backup.json 2>/dev/null | grep -o '"ezsp":[^}]*' | head -1 || true)
+    # Z2M config is at /config/zigbee2mqtt/configuration.yaml inside the container
+    Z2M_CFG="/config/zigbee2mqtt/configuration.yaml"
     run_test_show "HW-09b" "Z2M coordinator detected" \
-      "docker exec $Z2M_CONTAINER cat /app/data/configuration.yaml 2>/dev/null | grep -q 'serial'"
+      "docker exec $Z2M_CONTAINER cat $Z2M_CFG 2>/dev/null | grep -q 'serial'"
 
-    Z2M_PORT=$(docker exec "$Z2M_CONTAINER" cat /app/data/configuration.yaml 2>/dev/null | grep 'port:' | head -1 | awk '{print $2}' || true)
+    Z2M_PORT=$(docker exec "$Z2M_CONTAINER" cat $Z2M_CFG 2>/dev/null | grep 'port:' | head -1 | awk '{print $2}' || true)
     run_test_show "HW-09c" "Z2M serial port configured (${Z2M_PORT:-?})" \
       "[ -n \"$Z2M_PORT\" ]"
   else
@@ -91,10 +92,10 @@ run_test_show "HW-10b" "Root filesystem on SD card (not eMMC)" \
 
 # Check eMMC first sector is zeroed (erased during provisioning)
 if [ -b /dev/mmcblk0 ]; then
-  EMMC_ZEROS=$(dd if=/dev/mmcblk0 bs=512 count=1 2>/dev/null | od -A n -t x1 | tr -d ' \n')
-  EXPECTED=$(printf '0' | head -c ${#EMMC_ZEROS} | tr '0' '0')
-  run_test "HW-10c" "eMMC first sector is zeroed (erased)" \
-    "[ \"$EMMC_ZEROS\" = \"$(printf '%0*d' ${#EMMC_ZEROS} 0)\" ]"
+  # Count non-zero bytes in first 512 bytes
+  NONZERO=$(dd if=/dev/mmcblk0 bs=512 count=1 2>/dev/null | od -A n -t x1 | tr -d ' \n' | sed 's/00//g' | wc -c)
+  run_test_show "HW-10c" "eMMC first sector is zeroed (erased)" \
+    "[ \"$NONZERO\" -eq 0 ]"
 else
   skip_test "HW-10c" "eMMC first sector is zeroed" "mmcblk0 not found"
 fi
