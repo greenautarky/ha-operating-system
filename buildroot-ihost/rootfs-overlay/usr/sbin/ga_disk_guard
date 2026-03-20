@@ -60,9 +60,7 @@ LOCKDIR="/run/ga_disk_guard.lock"
 # INTERNALS
 ###############################################################################
 log() {
-  if [ -t 1 ] || [ "${GA_DG_VERBOSE:-0}" = "1" ]; then
-    echo "ga_disk_guard: $*"
-  fi
+  echo "ga_disk_guard: $*"
 }
 
 now_iso() {
@@ -228,16 +226,17 @@ main() {
   after="$1"
   mnt2="$2"
   write_state "soft" "$before" "$after" "$mnt2" "$actions"
+  log "SOFT cleanup: ${mnt2} ${before}->${after} MiB free [${actions}]"
 
   # Done if we recovered sufficiently
   if [ "$after" -ge "$TARGET_FREE_MIB" ]; then
-    log "Recovered: worst=${after}MiB on ${mnt2}"
+    log "Recovered after soft: ${mnt2} ${after} MiB free"
     exit 0
   fi
 
   # Hard cleanup if critically low
   if [ "$after" -lt "$HARD_FREE_MIB" ]; then
-    log "Critical space: worst=${after}MiB on ${mnt2} -> hard cleanup"
+    log "HARD cleanup starting: worst=${after}MiB on ${mnt2}"
     before2="$after"
     actions2="$(run_rules hard)"
 
@@ -245,11 +244,12 @@ main() {
     after2="$1"
     mnt3="$2"
     write_state "hard" "$before2" "$after2" "$mnt3" "$actions2"
+    log "HARD cleanup: ${mnt3} ${before2}->${after2} MiB free [${actions2}]"
 
     if [ "$after2" -lt "$HARD_FREE_MIB" ]; then
-      log "WARNING: still critically low: worst=${after2}MiB on ${mnt3}"
+      log "STILL CRITICAL: ${mnt3} ${after2} MiB free after hard cleanup"
     else
-      log "Recovered after hard cleanup: worst=${after2}MiB on ${mnt3}"
+      log "Recovered after hard: ${mnt3} ${after2} MiB free"
     fi
   fi
 }
