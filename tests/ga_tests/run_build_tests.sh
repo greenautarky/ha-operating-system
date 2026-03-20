@@ -654,6 +654,41 @@ if [[ -n "$SRC" ]]; then
     _skip "SRC-12a..e" "frontend repo not found"
   fi
 
+  # SRC-13: Frontend version is CI-managed (pyproject.toml must use 0.0.0.dev0 placeholder)
+  if [[ -n "$FE_ROOT" ]]; then
+    # SRC-13a: pyproject.toml must NOT contain a hardcoded YYYYMMDD version
+    if grep -qE '^version\s*=\s*"202[0-9]{5}\.' "${FE_ROOT}/pyproject.toml" 2>/dev/null; then
+      _fail "SRC-13a: pyproject.toml has a hardcoded date version — must be 0.0.0.dev0 (CI injects the real version)"
+    else
+      _pass "SRC-13a: pyproject.toml uses placeholder version (CI-managed)"
+    fi
+
+    # SRC-13b: Core CI workflow has the version injection step
+    CORE_ROOT=""
+    for core_dir in "${SRC}/../homeassisant_core" "/home/user/git/homeassisant_core"; do
+      [[ -d "$core_dir/.github" ]] && CORE_ROOT="$core_dir" && break
+    done
+    if [[ -n "$CORE_ROOT" ]]; then
+      CORE_WF="${CORE_ROOT}/.github/workflows/build-ga-core.yml"
+      grep -q 'Compute and inject frontend version' "$CORE_WF" 2>/dev/null \
+        && _pass "SRC-13b: Core CI has version injection step" \
+        || _fail "SRC-13b: Core CI is MISSING version injection step — builds will use placeholder version"
+
+      # SRC-13c: Core pin files use placeholder (not a stale hardcoded version)
+      if grep -qE 'home-assistant-frontend==202[0-9]{5}\.' \
+        "${CORE_ROOT}/homeassistant/components/frontend/manifest.json" \
+        "${CORE_ROOT}/requirements_all.txt" 2>/dev/null; then
+        _fail "SRC-13c: Core repo has hardcoded frontend version — must be 0.0.0.dev0 (CI injects the real version)"
+      else
+        _pass "SRC-13c: Core pin files use placeholder version (CI-managed)"
+      fi
+    else
+      _skip "SRC-13b..c" "ha-core repo not found"
+    fi
+  else
+    _skip "SRC-13a..c" "frontend repo not found"
+  fi
+
   # SRC-09: Global stale reference scan across all functional source
   STALE_COUNT=0
   for dir in "${SRC}/buildroot-external/package" "${SRC}/buildroot-external/rootfs-overlay" "${SRC}/scripts"; do
