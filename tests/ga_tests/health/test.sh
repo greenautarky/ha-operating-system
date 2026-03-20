@@ -31,8 +31,11 @@ fi
 
 # --- HA Core API ---
 
-run_test "HLTH-05" "HA Core API responds (GET /api/)" \
-  "wget -q -O /dev/null --timeout=10 http://127.0.0.1:8123/api/ 2>/dev/null || curl -sf --connect-timeout 10 http://127.0.0.1:8123/api/ >/dev/null 2>&1"
+# HA returns 401 (Unauthorized) for /api/ without a token — that still means it's responding.
+# Accept any HTTP response (non-000) as success.
+HA_HTTP=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 10 http://127.0.0.1:8123/api/ 2>/dev/null || echo "000")
+run_test_show "HLTH-05" "HA Core API responds (HTTP ${HA_HTTP})" \
+  "[ \"$HA_HTTP\" != \"000\" ]"
 
 run_test "HLTH-06" "Supervisor API responds" \
   "docker exec hassio_supervisor curl -sf --connect-timeout 5 http://127.0.0.1/supervisor/info >/dev/null 2>&1 || ha supervisor info >/dev/null 2>&1"
@@ -40,13 +43,14 @@ run_test "HLTH-06" "Supervisor API responds" \
 # --- Addon health ---
 
 # Check pre-baked addons are running (if installed)
-for addon in addon_core_mosquitto addon_a0d7b954_ga_tailscale; do
-  name=$(echo "$addon" | sed 's/addon_core_//;s/addon_[a-f0-9]*_//')
-  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "$addon"; then
-    run_test "HLTH-07-${name}" "Addon ${name} running" \
-      "docker inspect -f '{{.State.Status}}' $addon 2>/dev/null | grep -q running"
+# Container names use a hash prefix: addon_<hash>_ga_mosquitto, addon_<hash>_ga_tailscale, etc.
+for addon_pattern in ga_mosquitto ga_tailscale ga_influxdbv1 ga_zigbee2mqtt; do
+  match=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep "$addon_pattern" | head -1)
+  if [ -n "$match" ]; then
+    run_test "HLTH-07-${addon_pattern}" "Addon ${addon_pattern} running" \
+      "docker inspect -f '{{.State.Status}}' $match 2>/dev/null | grep -q running"
   else
-    skip_test "HLTH-07-${name}" "Addon ${name} running" "not installed"
+    skip_test "HLTH-07-${addon_pattern}" "Addon ${addon_pattern} running" "not installed"
   fi
 done
 
