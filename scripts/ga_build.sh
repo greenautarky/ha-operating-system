@@ -1866,3 +1866,11 @@ else
 fi
 echo ""
 echo "  Build log: ${BUILD_LOG}"
+echo ""
+
+# Flash hint — show the command to flash the image to an SD card
+img_xz="$(ls "${OUT}/images/"*"${GA_BUILD_TIMESTAMP}"*.img.xz 2>/dev/null | head -n 1 || true)"
+if [[ -n "$img_xz" ]]; then
+  echo "  To flash this image:"
+  echo "    ./scripts/verify-sd.sh --all $(basename "$img_xz")"
+fi

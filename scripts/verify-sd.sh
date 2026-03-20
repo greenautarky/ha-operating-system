@@ -80,9 +80,17 @@ trap cleanup EXIT
 decompress_image() {
   if [[ -n "$TMPDIR_WORK" ]]; then return; fi  # already done
   if $DRY_RUN; then IMG_RAW="$IMAGE"; return; fi
-  # Decompress to /tmp (needs ~6GB free)
-  TMPDIR_WORK="$(mktemp -d /tmp/verify-sd.XXXXXX)"
-  _info "Decompressing image (needs ~6GB, writing to /tmp)…"
+  # Decompress to same directory as the image (avoids /tmp space issues).
+  # Falls back to /tmp if the image directory is not writable.
+  local img_dir
+  img_dir="$(dirname "$IMAGE")"
+  if [[ -w "$img_dir" ]]; then
+    TMPDIR_WORK="$(mktemp -d "${img_dir}/verify-sd.XXXXXX")"
+    _info "Decompressing image (needs ~6GB, writing to ${img_dir})…"
+  else
+    TMPDIR_WORK="$(mktemp -d /tmp/verify-sd.XXXXXX)"
+    _info "Decompressing image (needs ~6GB, writing to /tmp)…"
+  fi
   if [[ "$IMAGE" == *.xz ]]; then
     xzcat "$IMAGE" > "$TMPDIR_WORK/image.img"
   else
