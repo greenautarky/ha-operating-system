@@ -48,7 +48,7 @@ while [[ $# -gt 0 ]]; do
     --sha)     DO_SHA=true ;;
     --diff)    DO_DIFF=true ;;
     --flash)   DO_FLASH=true ;;
-    --all)     DO_SHA=true; DO_DIFF=true ;;
+    --all)     DO_SHA=true; DO_DIFF=true; DO_FLASH=true ;;
     --device)  DEVICE="$2"; shift ;;
     --dry-run) DRY_RUN=true ;;
     --help|-h) usage ;;
@@ -171,9 +171,8 @@ if $DO_DIFF; then
     if [[ -z "$DIFF_OUT" ]]; then
       _pass "Boot partition contents identical"
     else
-      _warn "Boot partition differs:"
+      _warn "Boot partition differs (expected for new builds):"
       echo "$DIFF_OUT" | sed 's/^/    /'
-      FAILURES=$((FAILURES+1))
     fi
 
     sudo umount "$MOUNT_IMG" "$MOUNT_SD" 2>/dev/null || true
@@ -190,14 +189,18 @@ if $DO_FLASH; then
   [[ ! -b "$DEVICE" ]] && { _fail "Device not found: $DEVICE"; exit 1; }
 
   DEVICE_SIZE="$(lsblk -bno SIZE "$DEVICE" | head -1)"
-  _warn "THIS WILL ERASE ALL DATA ON $DEVICE ($((DEVICE_SIZE / 1024 / 1024 / 1024)) GB)"
-  _info "Image: $IMAGE"
+  DEVICE_GB=$((DEVICE_SIZE / 1024 / 1024 / 1024))
+  DEVICE_MODEL="$(lsblk -dno MODEL "$DEVICE" 2>/dev/null | xargs || echo "unknown")"
+  echo ""
+  echo -e "  ${RED}${BOLD}WARNING: This will ERASE ALL DATA on:${NC}"
+  echo -e "    Device:  ${BOLD}$DEVICE${NC}  (${DEVICE_GB} GB, ${DEVICE_MODEL})"
+  echo -e "    Image:   $(basename "$IMAGE")"
+  echo ""
 
   if $DRY_RUN; then
     _info "[dry-run] Would run: xzcat '$IMAGE' | dd of='$DEVICE' bs=4M status=progress conv=fsync"
   else
-    echo ""
-    read -r -p "  Type YES to confirm flash to $DEVICE: " CONFIRM
+    read -r -p "  Type YES to confirm flash: " CONFIRM
     if [[ "$CONFIRM" != "YES" ]]; then
       _warn "Flash cancelled"
     else
