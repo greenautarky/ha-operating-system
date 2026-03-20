@@ -81,13 +81,17 @@ else
 fi
 
 # --- IDLE-07: No OOM kills since boot ---
-OOM_COUNT=$(dmesg 2>/dev/null | grep -c "Out of memory" || echo 0)
+OOM_COUNT=$(dmesg 2>/dev/null | grep -c "Out of memory" || true)
+OOM_COUNT=${OOM_COUNT:-0}
 run_test_show "IDLE-07" "No OOM kills since boot (got ${OOM_COUNT})" \
   "[ \"$OOM_COUNT\" -eq 0 ]"
 
 # --- IDLE-08: No systemd failed units ---
-FAILED=$(systemctl --failed --no-legend --no-pager 2>/dev/null | wc -l)
-run_test_show "IDLE-08" "No systemd failed units (got ${FAILED})" \
+FAILED=$(systemctl --failed --no-legend --no-pager 2>/dev/null | grep -c '.' || true)
+FAILED=${FAILED:-0}
+# Show which units failed for diagnostics
+FAILED_LIST=$(systemctl --failed --no-legend --no-pager 2>/dev/null | awk '{print $2}' | tr '\n' ' ')
+run_test_show "IDLE-08" "No systemd failed units (got ${FAILED}: ${FAILED_LIST:-none})" \
   "[ \"$FAILED\" -eq 0 ]"
 
 # --- IDLE-09: Top CPU consumer < 10% ---
