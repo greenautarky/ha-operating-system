@@ -7,7 +7,7 @@
  * REQUIRES:
  *   RUN_APP_TESTS=1   — opt-in guard
  *   DEVICE_IP         — iHost device IP
- *   HA_ADMIN_PASS     — admin password (used to log in before checking onboarding)
+ *   HA_ADMIN_PASS     — admin password (fallback for Admin-Login bypass test)
  *   AVD_NAME          — Android emulator AVD name (default: ga-test)
  *   APK_PATH          — path to a DEBUG HA Companion APK (WebView access required)
  *
@@ -18,12 +18,13 @@
  *     - Or build locally: ./gradlew assembleFullDebug
  *   See tests/app/android/setup.sh for setup instructions.
  *
- * OPEN QUESTION (verify on first run):
- *   After stock HA onboarding (Phase 1, done by flasher) but before GA onboarding
- *   (Phase 2), the app may either:
- *     a) Show the HA login screen → user logs in → app redirects to /greenautarky-setup
- *     b) Redirect directly to /greenautarky-setup before login
- *   This suite handles case (a): login first, then verify the onboarding panel.
+ * FLOW (confirmed behaviour):
+ *   The HA Companion app navigates to /auth/authorize after connecting to the device.
+ *   authorize.ts contains a GA pre-check: if GA onboarding is not yet complete,
+ *   it stores the auth URL in sessionStorage and redirects to /greenautarky-setup.html.
+ *   After the user completes onboarding, the panel redirects back to the stored auth URL
+ *   so the app can finish its OAuth handshake.
+ *   An "Admin-Login" link in the bottom-right corner bypasses the wizard (?ga_bypass=1).
  */
 
 import { DEVICE_URL, DEVICE_IP } from '../fixtures/device';
@@ -66,7 +67,7 @@ describe('GA Onboarding — HA Companion App', function () {
 
     // After fresh install, the welcome / add-server screen should appear
     const addBtn = await driver.$(
-      'android=new UiSelector().textMatches("(?i)add.server|get.started")',
+      'android=new UiSelector().textMatches("(?i).*(add.server|get.started|connect.to.my).*")',
     );
     await addBtn.waitForDisplayed({ timeout: 15_000 });
     expect(await addBtn.getText()).toBeTruthy();
@@ -77,31 +78,33 @@ describe('GA Onboarding — HA Companion App', function () {
 
     await addServer(driver, DEVICE_URL);
 
-    // After connecting, app opens a WebView with the HA auth / onboarding page
+    // The app opens a WebView and navigates to /auth/authorize.
+    // authorize.ts fires a GA pre-check: if onboarding is not complete it redirects
+    // to /greenautarky-setup.html.  Wait up to 20 s for the WebView to appear.
     await switchToWebView(driver);
     const url = await getWebViewUrl(driver);
     console.log(`[onboarding] WebView URL after connect: ${url}`);
 
-    // URL must be on the iHost — either auth page or HA frontend
+    // URL must be on the iHost device
     expect(url).toContain(DEVICE_IP);
   });
 
-  it('GA onboarding panel is accessible in the WebView', async function () {
+  it('/auth/authorize auto-redirects to GA onboarding (app-flow redirect)', async function () {
     requiresAppTests.call(this);
 
-    const url = await getWebViewUrl(driver);
-
-    // If the app landed on the HA login screen, log in first
-    if (url.includes('/auth/') || url.includes('authorize')) {
-      console.log('[onboarding] login page detected — authenticating before checking onboarding');
-      await loginInWebView(driver);
-    }
-
-    // Navigate to the GA onboarding panel
-    await driver.url(`${DEVICE_URL}/greenautarky-setup`);
+    // Poll the current WebView URL — the authorize.ts pre-check runs asynchronously
+    // after the JS module loads, so the redirect may take a moment.
     await driver.waitUntil(
-      async () => (await getWebViewUrl(driver)).includes('greenautarky-setup'),
-      { timeout: 15_000, timeoutMsg: '/greenautarky-setup did not load' },
+      async () => {
+        const url = await getWebViewUrl(driver);
+        return url.includes('greenautarky-setup');
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg:
+          'Expected /auth/authorize to redirect to /greenautarky-setup.html — ' +
+          'check that authorize.ts contains the GA pre-check and GA onboarding is not yet complete',
+      },
     );
 
     const finalUrl = await getWebViewUrl(driver);
@@ -115,6 +118,33 @@ describe('GA Onboarding — HA Companion App', function () {
       () => !!document.querySelector('ha-panel-greenautarky-setup'),
     );
     expect(attached).toBe(true);
+  });
+
+  it('Admin-Login link is visible in the bottom-right corner', async function () {
+    requiresAppTests.call(this);
+
+    // The Admin-Login link is rendered by the panel when ga_auth_redirect is in
+    // sessionStorage (which authorize.ts sets before the redirect).
+    const hasLink = await driver.execute(
+      () =>
+        !!document
+          .querySelector('ha-panel-greenautarky-setup')
+          ?.shadowRoot?.querySelector('.admin-login'),
+    );
+    expect(hasLink).toBe(true);
+  });
+
+  it('Admin-Login link href contains ga_bypass=1', async function () {
+    requiresAppTests.call(this);
+
+    const href = await driver.execute(
+      () =>
+        document
+          .querySelector('ha-panel-greenautarky-setup')
+          ?.shadowRoot?.querySelector('.admin-login')
+          ?.getAttribute('href') ?? '',
+    );
+    expect(href).toContain('ga_bypass=1');
   });
 
   it('GDPR step renders with an unchecked consent checkbox', async function () {
@@ -158,5 +188,50 @@ describe('GA Onboarding — HA Companion App', function () {
         timeoutMsg: 'Continue button did not become enabled after GDPR consent',
       },
     );
+  });
+
+  it('Admin-Login bypass: ?ga_bypass=1 shows the normal HA login form', async function () {
+    requiresAppTests.call(this);
+
+    if (!process.env.HA_ADMIN_PASS) {
+      this.skip();
+      return;
+    }
+
+    // Construct the bypass URL — same as what the Admin-Login link points to
+    const adminLoginHref: string = await driver.execute(
+      () =>
+        (
+          document
+            .querySelector('ha-panel-greenautarky-setup')
+            ?.shadowRoot?.querySelector('.admin-login') as HTMLAnchorElement | null
+        )?.href ?? '',
+    );
+
+    if (!adminLoginHref) {
+      this.skip();
+      return;
+    }
+
+    // Navigate to the bypass URL in the WebView
+    await driver.url(adminLoginHref);
+
+    // ha-authorize must render — we must NOT be redirected back to setup
+    await driver.waitUntil(
+      async () => {
+        const url = await getWebViewUrl(driver);
+        return url.includes('authorize') && !url.includes('greenautarky-setup');
+      },
+      {
+        timeout: 10_000,
+        timeoutMsg: 'ga_bypass=1 did not prevent the GA onboarding redirect',
+      },
+    );
+
+    // Log in with admin credentials to confirm the auth form is functional
+    await loginInWebView(driver);
+
+    const dashUrl = await getWebViewUrl(driver);
+    expect(dashUrl).not.toContain('/auth/');
   });
 });

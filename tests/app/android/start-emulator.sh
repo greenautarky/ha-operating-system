@@ -56,6 +56,12 @@ while [[ $ELAPSED -lt $TIMEOUT ]]; do
     # Unlock the screen (simulates a swipe-up)
     "$ADB" -e shell input keyevent 82 2>/dev/null || true
     sleep 3  # Extra settling time for system services
+
+    # Suppress Chrome first-run dialog (HA Companion uses Chrome Custom Tabs)
+    "$ADB" -e shell 'echo "chrome --disable-fre --no-default-browser-check --no-first-run" \
+      > /data/local/tmp/chrome-command-line && chmod 777 /data/local/tmp/chrome-command-line' \
+      2>/dev/null || true
+
     echo "[emulator] ready"
     exit 0
   fi

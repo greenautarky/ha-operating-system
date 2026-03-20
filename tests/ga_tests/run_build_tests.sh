@@ -618,6 +618,42 @@ if [[ -n "$SRC" ]]; then
     _skip "SRC-11" "ha-core repo not found"
   fi
 
+  # SRC-12: authorize.ts app-flow redirect (GA onboarding intercept)
+  # Verifies that authorize.ts contains the GA pre-check that redirects the HA
+  # Companion app to the GA setup wizard before auth, and that the panel
+  # handles the return redirect and Admin-Login escape hatch.
+  if [[ -n "$FE_ROOT" ]]; then
+    AUTH_TS="${FE_ROOT}/src/entrypoints/authorize.ts"
+    PANEL_TS="${FE_ROOT}/src/panels/greenautarky-setup/ha-panel-greenautarky-setup.ts"
+
+    # SRC-12a: authorize.ts fetches the GA onboarding status endpoint
+    grep -q 'greenautarky_onboarding/status' "$AUTH_TS" 2>/dev/null \
+      && _pass "SRC-12a: authorize.ts fetches GA onboarding status" \
+      || _fail "SRC-12a: authorize.ts does NOT fetch GA onboarding status — app-flow redirect will not fire"
+
+    # SRC-12b: authorize.ts has the ga_bypass admin escape hatch
+    grep -q 'ga_bypass' "$AUTH_TS" 2>/dev/null \
+      && _pass "SRC-12b: authorize.ts has ga_bypass admin bypass" \
+      || _fail "SRC-12b: authorize.ts missing ga_bypass — admin cannot skip GA redirect"
+
+    # SRC-12c: authorize.ts stores the auth URL for return-redirect after setup
+    grep -q 'ga_auth_redirect' "$AUTH_TS" 2>/dev/null \
+      && _pass "SRC-12c: authorize.ts stores ga_auth_redirect in sessionStorage" \
+      || _fail "SRC-12c: authorize.ts does NOT store ga_auth_redirect — return redirect after onboarding will fail"
+
+    # SRC-12d: Panel reads ga_auth_redirect on completion (return to auth URL)
+    grep -q 'ga_auth_redirect' "$PANEL_TS" 2>/dev/null \
+      && _pass "SRC-12d: panel reads ga_auth_redirect for post-completion redirect" \
+      || _fail "SRC-12d: panel does NOT read ga_auth_redirect — app will not return to auth after onboarding"
+
+    # SRC-12e: Panel renders Admin-Login link (escape hatch for admins)
+    grep -q 'admin-login' "$PANEL_TS" 2>/dev/null \
+      && _pass "SRC-12e: panel renders admin-login link" \
+      || _fail "SRC-12e: panel missing admin-login link — admins cannot bypass GA setup"
+  else
+    _skip "SRC-12a..e" "frontend repo not found"
+  fi
+
   # SRC-09: Global stale reference scan across all functional source
   STALE_COUNT=0
   for dir in "${SRC}/buildroot-external/package" "${SRC}/buildroot-external/rootfs-overlay" "${SRC}/scripts"; do
