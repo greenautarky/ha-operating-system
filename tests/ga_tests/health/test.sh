@@ -128,13 +128,17 @@ fi
 # --- NetBird hostname matches device label (from flasher stage 81) ---
 
 if command -v netbird >/dev/null 2>&1; then
-  NB_HOST=$(netbird status 2>/dev/null | grep -i 'hostname\|FQDN' | head -1 | awk '{print $NF}' || true)
-  DEV_LABEL=$(cat /etc/ga-device-label 2>/dev/null || echo "")
+  NB_FQDN=$(netbird status 2>/dev/null | grep -i 'FQDN' | awk '{print $NF}' || true)
+  # Extract hostname part from FQDN (e.g. kib-son-00000000.netbird.cloud → kib-son-00000000)
+  NB_HOST=$(echo "$NB_FQDN" | cut -d. -f1)
+  # Device label from ga-device-label file or telegraf env
+  DEV_LABEL=$(cat /etc/ga-device-label 2>/dev/null || true)
+  [ -z "$DEV_LABEL" ] && DEV_LABEL=$(grep 'DEVICE_LABEL=' /etc/default/telegraf 2>/dev/null | cut -d= -f2 || true)
   if [ -n "$NB_HOST" ] && [ -n "$DEV_LABEL" ]; then
-    run_test_show "HLTH-15" "NetBird hostname matches device label (${NB_HOST})" \
+    run_test_show "HLTH-15" "NetBird hostname matches device label (nb=${NB_HOST} label=${DEV_LABEL})" \
       "echo \"$NB_HOST\" | grep -qi \"$DEV_LABEL\""
   else
-    skip_test "HLTH-15" "NetBird hostname matches device label" "netbird or label not available"
+    skip_test "HLTH-15" "NetBird hostname matches device label" "netbird FQDN='${NB_FQDN:-empty}' label='${DEV_LABEL:-empty}'"
   fi
 else
   skip_test "HLTH-15" "NetBird hostname matches device label" "netbird not found"
