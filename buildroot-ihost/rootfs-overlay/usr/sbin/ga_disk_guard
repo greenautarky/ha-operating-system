@@ -175,7 +175,8 @@ run_rules() {
         actions="${actions}${action}:${path}/${param};"
         ;;
       trunc_size_mib)
-        find "$path" -xdev -type f -size +"${param}"M -print -exec sh -c ': > "$1"' _ {} \; 2>/dev/null || true
+        size_bytes=$((param * 1048576))
+        find "$path" -xdev -type f -size +"${size_bytes}"c -print -exec sh -c ': > "$1"' _ {} \; 2>/dev/null || true
         actions="${actions}${action}:${path}(>${param}MiB);"
         ;;
       *)
