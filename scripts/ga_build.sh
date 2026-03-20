@@ -252,6 +252,86 @@ stamp_os_release() {
 
 
 
+# -----------------------------------------------------------------------------
+# Frontend version resolution — reads Docker image labels from the core tar
+# -----------------------------------------------------------------------------
+
+# Reads org.greenautarky.frontend-* labels from the HA Core image tarball that
+# the hassio Buildroot package downloads.  Call this after the main build.
+# Sets (and exports) GA_FRONTEND_PYVERSION, GA_FRONTEND_SHA, GA_FRONTEND_VERSION.
+resolve_frontend_version() {
+  GA_FRONTEND_PYVERSION="unknown"
+  GA_FRONTEND_SHA="unknown"
+  GA_FRONTEND_VERSION="unknown"
+
+  local images_dir
+  images_dir="$(ls -d "${OUT}/build/hassio-"*/images 2>/dev/null | head -n 1 || true)"
+  if [[ -z "$images_dir" ]]; then
+    echo "  [fe-version] hassio images dir not found — skipping"
+    return
+  fi
+
+  # Core image tar contains "homeassistant" and ends in .tar
+  local core_tar
+  core_tar="$(find "$images_dir" -maxdepth 1 -name "*homeassistant*.tar" 2>/dev/null | head -n 1 || true)"
+  if [[ -z "$core_tar" ]]; then
+    echo "  [fe-version] core image tar not found in $images_dir — skipping"
+    return
+  fi
+
+  echo "  [fe-version] reading labels from: $(basename "$core_tar")"
+
+  if ! command -v jq &>/dev/null; then
+    echo "  [fe-version] jq not available — skipping"
+    return
+  fi
+
+  # OCI image layout: manifest.json → config blob path → config.Labels
+  local config_path
+  config_path=$(tar -xOf "$core_tar" manifest.json 2>/dev/null \
+    | jq -r '.[0].Config // empty' || true)
+  if [[ -z "$config_path" ]]; then
+    echo "  [fe-version] could not parse manifest.json from image tar — skipping"
+    return
+  fi
+
+  local labels
+  labels=$(tar -xOf "$core_tar" "$config_path" 2>/dev/null \
+    | jq '.config.Labels // {}' || true)
+  if [[ -z "$labels" || "$labels" == "null" ]]; then
+    echo "  [fe-version] no labels in image config — skipping"
+    return
+  fi
+
+  GA_FRONTEND_PYVERSION=$(echo "$labels" | jq -r '."org.greenautarky.frontend-pyversion" // "unknown"')
+  GA_FRONTEND_SHA=$(echo "$labels"       | jq -r '."org.greenautarky.frontend-sha"       // "unknown"')
+  GA_FRONTEND_VERSION=$(echo "$labels"   | jq -r '."org.greenautarky.frontend-version"   // "unknown"')
+
+  echo "  [fe-version] pyversion: ${GA_FRONTEND_PYVERSION}"
+  echo "  [fe-version] version:   ${GA_FRONTEND_VERSION}"
+  echo "  [fe-version] sha:       ${GA_FRONTEND_SHA}"
+
+  export GA_FRONTEND_PYVERSION GA_FRONTEND_SHA GA_FRONTEND_VERSION
+}
+
+# Write /etc/ga-frontend-version into the target rootfs.
+# Readable at runtime via: cat /etc/ga-frontend-version
+stamp_frontend_version_into_target() {
+  if [[ "${GA_FRONTEND_PYVERSION:-unknown}" == "unknown" ]]; then
+    echo "WARN: frontend version unknown — /etc/ga-frontend-version not written"
+    return
+  fi
+  mkdir -p "${OUT}/target/etc"
+  cat > "${OUT}/target/etc/ga-frontend-version" <<FEVEOF
+# HA Core frontend version — written at OS build time
+# Source: org.greenautarky.* labels in the core Docker image
+GA_FRONTEND_PYVERSION=${GA_FRONTEND_PYVERSION}
+GA_FRONTEND_VERSION=${GA_FRONTEND_VERSION}
+GA_FRONTEND_SHA=${GA_FRONTEND_SHA}
+FEVEOF
+  echo "Stamped frontend version: ${GA_FRONTEND_PYVERSION} -> ${OUT}/target/etc/ga-frontend-version"
+}
+
 verify_outputs() {
   echo "=== Verify: Build outputs ==="
 
@@ -391,6 +471,13 @@ verify_build_integrity() {
     _check_pass "os-release has GA_BUILD_ID"
   else
     _check_warn "os-release missing GA_BUILD_ID"
+  fi
+
+  # --- 9) Frontend version resolved from core image labels ---
+  if [[ "${GA_FRONTEND_PYVERSION:-unknown}" != "unknown" ]]; then
+    _check_pass "Frontend version resolved: ${GA_FRONTEND_PYVERSION} (${GA_FRONTEND_VERSION})"
+  else
+    _check_warn "Frontend version not resolved (core image labels unavailable)"
   fi
 
   # --- Summary ---
@@ -784,6 +871,13 @@ PKGEOF
     echo '      "source": "https://github.com/netbirdio/netbird",'
     echo '      "build": "buildroot golang-package"'
     echo '    }'
+    echo '  },'
+
+    # HA Core frontend version (resolved from core Docker image labels after build)
+    echo '  "ha_core_frontend": {'
+    echo '    "pyversion": "'${GA_FRONTEND_PYVERSION:-unknown}'",'
+    echo '    "sha": "'${GA_FRONTEND_SHA:-unknown}'",'
+    echo '    "branch_at_sha": "'${GA_FRONTEND_VERSION:-unknown}'"'
     echo '  },'
 
     # -------------------------------------------------------------------------
@@ -1650,6 +1744,12 @@ make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" -j"$(nproc)" 2>&1 | tee -a "$BUI
 # 3) Inject build ID and regenerate final artifacts
 log_build_step "Write build ID"
 write_build_id_into_target
+
+# 3a) Resolve frontend version from core image labels and stamp into rootfs
+log_build_step "Resolve frontend version"
+resolve_frontend_version
+stamp_frontend_version_into_target
+
 log_build_step "Verify outputs"
 verify_outputs
 log_build_step "Rebuild artifacts"
@@ -1731,6 +1831,7 @@ echo "  Defconfig:      ${DEFCONFIG}"
 echo "  Buildroot:      ${buildroot_ver}"
 echo "  Kernel:         ${kernel_ver}"
 echo "  NetBird:        ${nb_ver}"
+echo "  HA Core FE:     ${GA_FRONTEND_PYVERSION:-unknown} (${GA_FRONTEND_VERSION:-unknown})"
 echo ""
 
 echo "  Output images (this build):"
