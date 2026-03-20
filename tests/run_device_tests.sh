@@ -117,6 +117,26 @@ setup_serial() {
 
 run_ssh() {
     echo ""
+    echo "Verifying target is a GA OS iHost device..."
+    # shellcheck disable=SC2086
+    local device_check
+    device_check=$(ssh $SSH_OPTS "$SSH_TARGET" "cat /etc/os-release 2>/dev/null" 2>/dev/null) || {
+        echo "ERROR: Cannot connect to $SSH_TARGET — is the device up?"
+        exit 1
+    }
+    if ! echo "$device_check" | grep -qi "greenautarky\|gaos\|hassos"; then
+        echo "ERROR: Target $SSH_TARGET does not look like a GA OS device."
+        echo "       /etc/os-release does not contain 'greenautarky', 'gaos', or 'hassos'."
+        echo "       Aborting to prevent running tests on the wrong machine."
+        echo ""
+        echo "       Got:"
+        echo "$device_check" | head -5 | sed 's/^/         /'
+        exit 1
+    fi
+    local machine
+    machine=$(echo "$device_check" | grep -i "^VARIANT\|^GA_MACHINE\|^MACHINE" | head -1 || true)
+    echo "  OK — ${machine:-GA OS detected}"
+    echo ""
     echo "Copying test scripts to device..."
     # shellcheck disable=SC2086
     ssh $SSH_OPTS "$SSH_TARGET" "rm -rf $REMOTE_DIR" 2>/dev/null || true
