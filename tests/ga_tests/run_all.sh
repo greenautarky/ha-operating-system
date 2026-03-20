@@ -20,8 +20,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Test suites by category
 SUITES_EMU="environment crash_detection boot_timing disk_guard"
-SUITES_DEVICE="telemetry network ping config_verify onboarding tailscale watchdog stress idle_perf hardware"
-SUITES_ALL="crash_detection telemetry environment network ping boot_timing disk_guard watchdog config_verify stress idle_perf onboarding tailscale hardware"
+SUITES_DEVICE="health telemetry network ping config_verify onboarding tailscale watchdog stress idle_perf hardware"
+SUITES_ALL="crash_detection health telemetry environment network ping boot_timing disk_guard watchdog config_verify stress idle_perf onboarding tailscale hardware"
 
 # Parse arguments
 CATEGORY=""
