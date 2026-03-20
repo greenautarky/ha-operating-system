@@ -59,10 +59,45 @@ run_test "HW-08b" "USB gadget (serial console) functional" \
 run_test "HW-09" "Zigbee serial device present (internal UART)" \
   "[ -c /dev/ttyS3 ]"
 
+# Zigbee dongle firmware version (from Z2M coordinator info)
+if command -v docker >/dev/null 2>&1; then
+  Z2M_CONTAINER=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "ga_zigbee2mqtt" | head -1)
+  if [ -n "$Z2M_CONTAINER" ]; then
+    Z2M_FW=$(docker exec "$Z2M_CONTAINER" cat /app/data/coordinator_backup.json 2>/dev/null | grep -o '"ezsp":[^}]*' | head -1 || true)
+    run_test_show "HW-09b" "Z2M coordinator detected" \
+      "docker exec $Z2M_CONTAINER cat /app/data/configuration.yaml 2>/dev/null | grep -q 'serial'"
+
+    Z2M_PORT=$(docker exec "$Z2M_CONTAINER" cat /app/data/configuration.yaml 2>/dev/null | grep 'port:' | head -1 | awk '{print $2}' || true)
+    run_test_show "HW-09c" "Z2M serial port configured (${Z2M_PORT:-?})" \
+      "[ -n \"$Z2M_PORT\" ]"
+  else
+    skip_test "HW-09b" "Z2M coordinator detected" "zigbee2mqtt not running"
+    skip_test "HW-09c" "Z2M serial port configured" "zigbee2mqtt not running"
+  fi
+else
+  skip_test "HW-09b" "Z2M coordinator detected" "docker not found"
+  skip_test "HW-09c" "Z2M serial port configured" "docker not found"
+fi
+
 # --- eMMC ---
 
 run_test "HW-10" "eMMC block device present" \
   "ls /dev/mmcblk* >/dev/null 2>&1"
+
+# Verify root filesystem is on SD card, not eMMC (eMMC should be erased)
+ROOT_DEV=$(mount | grep 'on / ' | awk '{print $1}')
+run_test_show "HW-10b" "Root filesystem on SD card (not eMMC)" \
+  "echo \"$ROOT_DEV\" | grep -qv 'mmcblk0' || mount | grep 'on / ' | grep -q '/dev/sd\|/dev/vd\|loop'"
+
+# Check eMMC first sector is zeroed (erased during provisioning)
+if [ -b /dev/mmcblk0 ]; then
+  EMMC_ZEROS=$(dd if=/dev/mmcblk0 bs=512 count=1 2>/dev/null | od -A n -t x1 | tr -d ' \n')
+  EXPECTED=$(printf '0' | head -c ${#EMMC_ZEROS} | tr '0' '0')
+  run_test "HW-10c" "eMMC first sector is zeroed (erased)" \
+    "[ \"$EMMC_ZEROS\" = \"$(printf '%0*d' ${#EMMC_ZEROS} 0)\" ]"
+else
+  skip_test "HW-10c" "eMMC first sector is zeroed" "mmcblk0 not found"
+fi
 
 run_test_show "HW-11" "Root filesystem type" \
   "mount | grep 'on / ' | awk '{print \$5}'"
