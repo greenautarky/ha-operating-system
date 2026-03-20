@@ -50,12 +50,29 @@ TOTAL_PASS=0
 TOTAL_FAIL=0
 TOTAL_SKIP=0
 EXIT=0
+SUITE_RESULTS=""
+
+# Gather device info for report header
+_hostname=$(hostname 2>/dev/null || echo "unknown")
+_date=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date 2>/dev/null)
+_build_id=$(cat /etc/ga-build-id 2>/dev/null || echo "unknown")
+_ga_env=$(. /etc/ga-env.conf 2>/dev/null && echo "$GA_ENV" || echo "unknown")
+_kernel=$(uname -r 2>/dev/null || echo "unknown")
+_uptime=$(uptime 2>/dev/null | sed 's/.*up /up /' | sed 's/,.*load/ load/' || echo "unknown")
+_mem_total=$(awk '/^MemTotal:/ {printf "%d MB", $2/1024}' /proc/meminfo 2>/dev/null || echo "unknown")
+_ha_ver=$(docker inspect homeassistant 2>/dev/null | grep -o '"io.hass.version":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "unknown")
 
 echo "=============================================="
 echo "  GA OS Test Runner"
-echo "  Device: $(hostname 2>/dev/null || echo unknown)"
-echo "  Date:   $(date 2>/dev/null)"
-echo "  Suites: $SUITES"
+echo "  Host:     $_hostname"
+echo "  Date:     $_date"
+echo "  Build:    $_build_id"
+echo "  Env:      $_ga_env"
+echo "  Kernel:   $_kernel"
+echo "  RAM:      $_mem_total"
+echo "  HA Core:  $_ha_ver"
+echo "  Uptime:   $_uptime"
+echo "  Suites:   $SUITES"
 echo "=============================================="
 
 for suite in $SUITES; do
@@ -64,6 +81,7 @@ for suite in $SUITES; do
     echo ""
     echo "=== $suite ==="
     echo "  SKIP  (no test.sh found)"
+    SUITE_RESULTS="${SUITE_RESULTS}${suite}|0|0|1|SKIP\n"
     continue
   fi
 
@@ -81,6 +99,12 @@ for suite in $SUITES; do
     TOTAL_PASS=$((TOTAL_PASS + p))
     TOTAL_FAIL=$((TOTAL_FAIL + f))
     TOTAL_SKIP=$((TOTAL_SKIP + s))
+    if [ "$f" -gt 0 ]; then
+      status="FAIL"
+    else
+      status="PASS"
+    fi
+    SUITE_RESULTS="${SUITE_RESULTS}${suite}|${p}|${f}|${s}|${status}\n"
   fi
 
   [ "$rc" -ne 0 ] && EXIT=$((EXIT + rc))
@@ -88,12 +112,29 @@ done
 
 TOTAL=$((TOTAL_PASS + TOTAL_FAIL + TOTAL_SKIP))
 
+echo ""
 echo "=============================================="
-echo "  TOTAL: ${TOTAL_PASS} passed, ${TOTAL_FAIL} failed, ${TOTAL_SKIP} skipped (${TOTAL} tests)"
+echo "  TEST REPORT"
+echo "=============================================="
+echo ""
+echo "  Device:   $_hostname ($_ga_env)"
+echo "  Build:    $_build_id"
+echo "  HA Core:  $_ha_ver"
+echo "  Date:     $_date"
+echo ""
+echo "  Suite               Pass  Fail  Skip  Status"
+echo "  ────────────────────────────────────────────"
+printf "$SUITE_RESULTS" | while IFS='|' read -r name p f s st; do
+  [ -z "$name" ] && continue
+  printf "  %-20s %4s  %4s  %4s  %s\n" "$name" "$p" "$f" "$s" "$st"
+done
+echo "  ────────────────────────────────────────────"
+printf "  %-20s %4s  %4s  %4s\n" "TOTAL" "$TOTAL_PASS" "$TOTAL_FAIL" "$TOTAL_SKIP"
+echo ""
 if [ "$TOTAL_FAIL" -eq 0 ]; then
-  echo "  Result: ALL PASS"
+  echo "  Result: ALL PASS ($TOTAL tests)"
 else
-  echo "  Result: ${TOTAL_FAIL} FAILURES"
+  echo "  Result: ${TOTAL_FAIL} FAILURES ($TOTAL tests)"
 fi
 echo "=============================================="
 
