@@ -92,10 +92,10 @@ run_test_show "HW-10b" "Root filesystem on SD card (not eMMC)" \
 
 # Check eMMC first sector is zeroed (erased during provisioning)
 if [ -b /dev/mmcblk0 ]; then
-  # Count non-zero bytes in first 512 bytes
+  # Count non-zero bytes in first 512 bytes (wc -c includes trailing newline, so ≤1 = all zeros)
   NONZERO=$(dd if=/dev/mmcblk0 bs=512 count=1 2>/dev/null | od -A n -t x1 | tr -d ' \n' | sed 's/00//g' | wc -c)
-  run_test_show "HW-10c" "eMMC first sector is zeroed (erased)" \
-    "[ \"$NONZERO\" -eq 0 ]"
+  run_test_show "HW-10c" "eMMC first sector is zeroed (non-zero bytes: ${NONZERO})" \
+    "[ \"$NONZERO\" -le 1 ]"
 else
   skip_test "HW-10c" "eMMC first sector is zeroed" "mmcblk0 not found"
 fi
