@@ -80,16 +80,30 @@ export async function addServer(driver: Browser, serverUrl: string): Promise<voi
     // No prompt present
   }
 
-  // Click "Add Server" / "Get Started" on welcome screen
+  // Click "Add Server" / "Get Started" / "Connect to my HA server" on welcome screen
   const addBtn = await driver.$(
-    'android=new UiSelector().textMatches("(?i)add.server|get.started")',
+    'android=new UiSelector().textMatches("(?i).*(add.server|get.started|connect.to.my).*")',
   );
   await addBtn.waitForDisplayed({ timeout: 15_000 });
   await addBtn.click();
 
+  // Dismiss Chrome first-run "Welcome to Chrome" dialog if it appears
+  // (happens when HA Companion uses Chrome Custom Tabs on a fresh emulator)
+  try {
+    const noAccount = await driver.$(
+      'android=new UiSelector().textMatches("(?i).*(without.an.account|no thanks|skip).*")',
+    );
+    if (await noAccount.isDisplayed()) {
+      await noAccount.click();
+      await driver.pause(2_000);
+    }
+  } catch {
+    // Chrome already set up — no dialog
+  }
+
   // Enter the server URL
   const urlInput = await driver.$('android=new UiSelector().className("android.widget.EditText")');
-  await urlInput.waitForDisplayed({ timeout: 10_000 });
+  await urlInput.waitForDisplayed({ timeout: 15_000 });
   await urlInput.clearValue();
   await urlInput.setValue(serverUrl);
 
