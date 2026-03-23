@@ -55,18 +55,23 @@ SUITE_RESULTS=""
 # Gather device info for report header
 _hostname=$(hostname 2>/dev/null || echo "unknown")
 _date=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date 2>/dev/null)
+_date_file=$(date '+%Y%m%d-%H%M%S' 2>/dev/null || echo "unknown")
 _build_id=$(cat /etc/ga-build-id 2>/dev/null || echo "unknown")
 _ga_env=$(. /etc/ga-env.conf 2>/dev/null && echo "$GA_ENV" || echo "unknown")
 _kernel=$(uname -r 2>/dev/null || echo "unknown")
 _uptime=$(uptime 2>/dev/null | sed 's/.*up /up /' | sed 's/,.*load/ load/' || echo "unknown")
 _mem_total=$(awk '/^MemTotal:/ {printf "%d MB", $2/1024}' /proc/meminfo 2>/dev/null || echo "unknown")
 _ha_ver=$(docker inspect homeassistant 2>/dev/null | grep -o '"io.hass.version":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "unknown")
+_device_label=$(cat /etc/ga-device-label 2>/dev/null || echo "unknown")
+_os_version=$(. /etc/os-release 2>/dev/null && echo "${GA_BUILD_TIMESTAMP:-unknown}" || echo "unknown")
 
 echo "=============================================="
 echo "  GA OS Test Runner"
+echo "  Device:   $_device_label"
 echo "  Host:     $_hostname"
 echo "  Date:     $_date"
 echo "  Build:    $_build_id"
+echo "  OS Ver:   $_os_version"
 echo "  Env:      $_ga_env"
 echo "  Kernel:   $_kernel"
 echo "  RAM:      $_mem_total"
@@ -117,8 +122,10 @@ echo "=============================================="
 echo "  TEST REPORT"
 echo "=============================================="
 echo ""
-echo "  Device:   $_hostname ($_ga_env)"
+echo "  Device:   $_device_label ($_ga_env)"
+echo "  Host:     $_hostname"
 echo "  Build:    $_build_id"
+echo "  OS Ver:   $_os_version"
 echo "  HA Core:  $_ha_ver"
 echo "  Date:     $_date"
 echo ""
@@ -132,10 +139,45 @@ echo "  ────────────────────────
 printf "  %-20s %4s  %4s  %4s\n" "TOTAL" "$TOTAL_PASS" "$TOTAL_FAIL" "$TOTAL_SKIP"
 echo ""
 if [ "$TOTAL_FAIL" -eq 0 ]; then
+  _result="PASS"
   echo "  Result: ALL PASS ($TOTAL tests)"
 else
+  _result="FAIL"
   echo "  Result: ${TOTAL_FAIL} FAILURES ($TOTAL tests)"
 fi
 echo "=============================================="
+
+# Write JSON test report to /mnt/data (persistent) if writable
+REPORT_DIR="/mnt/data/test-reports"
+if [ -d "/mnt/data" ] && mkdir -p "$REPORT_DIR" 2>/dev/null; then
+  REPORT_FILE="${REPORT_DIR}/test-report-${_device_label}-${_date_file}.json"
+  _suites_json=""
+  printf "$SUITE_RESULTS" | while IFS='|' read -r name p f s st; do
+    [ -z "$name" ] && continue
+    echo "{\"suite\":\"$name\",\"pass\":$p,\"fail\":$f,\"skip\":$s,\"status\":\"$st\"}"
+  done > "${REPORT_DIR}/.suites_tmp" 2>/dev/null
+  # Build JSON array from temp file
+  _suites_arr="[$(sed ':a;N;$!ba;s/\n/,/g' "${REPORT_DIR}/.suites_tmp" 2>/dev/null)]"
+  rm -f "${REPORT_DIR}/.suites_tmp" 2>/dev/null
+  cat > "$REPORT_FILE" <<JSONEOF
+{
+  "device_label": "$_device_label",
+  "hostname": "$_hostname",
+  "date": "$_date",
+  "build_id": "$_build_id",
+  "os_version": "$_os_version",
+  "ga_env": "$_ga_env",
+  "kernel": "$_kernel",
+  "ha_core": "$_ha_ver",
+  "ram": "$_mem_total",
+  "result": "$_result",
+  "total_pass": $TOTAL_PASS,
+  "total_fail": $TOTAL_FAIL,
+  "total_skip": $TOTAL_SKIP,
+  "suites": $_suites_arr
+}
+JSONEOF
+  echo "  Report: $REPORT_FILE"
+fi
 
 exit $EXIT
