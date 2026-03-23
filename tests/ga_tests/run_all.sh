@@ -55,7 +55,6 @@ SUITE_RESULTS=""
 # Gather device info for report header
 _hostname=$(hostname 2>/dev/null || echo "unknown")
 _date=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date 2>/dev/null)
-_date_file=$(date '+%Y%m%d-%H%M%S' 2>/dev/null || echo "unknown")
 _build_id=$(cat /etc/ga-build-id 2>/dev/null || echo "unknown")
 _ga_env=$(. /etc/ga-env.conf 2>/dev/null && echo "$GA_ENV" || echo "unknown")
 _kernel=$(uname -r 2>/dev/null || echo "unknown")
@@ -146,38 +145,5 @@ else
   echo "  Result: ${TOTAL_FAIL} FAILURES ($TOTAL tests)"
 fi
 echo "=============================================="
-
-# Write JSON test report to /mnt/data (persistent) if writable
-REPORT_DIR="/mnt/data/test-reports"
-if [ -d "/mnt/data" ] && mkdir -p "$REPORT_DIR" 2>/dev/null; then
-  REPORT_FILE="${REPORT_DIR}/test-report-${_device_label}-${_date_file}.json"
-  _suites_json=""
-  printf "$SUITE_RESULTS" | while IFS='|' read -r name p f s st; do
-    [ -z "$name" ] && continue
-    echo "{\"suite\":\"$name\",\"pass\":$p,\"fail\":$f,\"skip\":$s,\"status\":\"$st\"}"
-  done > "${REPORT_DIR}/.suites_tmp" 2>/dev/null
-  # Build JSON array from temp file
-  _suites_arr="[$(sed ':a;N;$!ba;s/\n/,/g' "${REPORT_DIR}/.suites_tmp" 2>/dev/null)]"
-  rm -f "${REPORT_DIR}/.suites_tmp" 2>/dev/null
-  cat > "$REPORT_FILE" <<JSONEOF
-{
-  "device_label": "$_device_label",
-  "hostname": "$_hostname",
-  "date": "$_date",
-  "build_id": "$_build_id",
-  "os_version": "$_os_version",
-  "ga_env": "$_ga_env",
-  "kernel": "$_kernel",
-  "ha_core": "$_ha_ver",
-  "ram": "$_mem_total",
-  "result": "$_result",
-  "total_pass": $TOTAL_PASS,
-  "total_fail": $TOTAL_FAIL,
-  "total_skip": $TOTAL_SKIP,
-  "suites": $_suites_arr
-}
-JSONEOF
-  echo "  Report: $REPORT_FILE"
-fi
 
 exit $EXIT
