@@ -212,6 +212,17 @@ if $DO_FLASH; then
       fi
       sudo sync
       _pass "Flash complete — safe to remove SD card"
+
+      # Append to flash log for QMH traceability (Phase 3)
+      FLASH_LOG="$(dirname "$IMAGE")/flash-log.csv"
+      if [[ ! -f "$FLASH_LOG" ]]; then
+        echo "date,image,sha256,device,device_model,device_size_gb,operator" > "$FLASH_LOG"
+      fi
+      _flash_sha="$(sha256sum "$IMAGE" | awk '{print $1}')"
+      _flash_date="$(date -Iseconds)"
+      _flash_operator="$(whoami)@$(hostname)"
+      echo "${_flash_date},$(basename "$IMAGE"),${_flash_sha},${DEVICE},${DEVICE_MODEL},${DEVICE_GB},${_flash_operator}" >> "$FLASH_LOG"
+      _info "Flash recorded in $FLASH_LOG"
     fi
   fi
 fi
