@@ -38,4 +38,19 @@ fi
 run_test_show "NET-GW" "Default gateway" \
   "ip route | grep '^default' | head -1 | awk '{print \$3}'"
 
+# --- NM connectivity check ---
+
+# NET-07: NM connectivity check configured
+run_test "NET-07" "NM connectivity check configured" \
+  "grep -q 'checkonline.greenautarky.com' /etc/NetworkManager/NetworkManager.conf 2>/dev/null"
+
+# NET-08: NM reports online
+NM_STATE=$(nmcli -t -f CONNECTIVITY general 2>/dev/null || echo "unknown")
+run_test_show "NET-08" "NM connectivity state is 'full' (got: $NM_STATE)" \
+  "[ '$NM_STATE' = 'full' ]"
+
+# NET-09: GA connectivity endpoint reachable
+run_test "NET-09" "checkonline.greenautarky.com reachable" \
+  "curl -sf --connect-timeout 5 https://checkonline.greenautarky.com/online.txt 2>/dev/null | grep -q 'NetworkManager is online'"
+
 suite_end
