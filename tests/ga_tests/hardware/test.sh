@@ -116,6 +116,11 @@ run_test "HW-13" "No critical driver errors in dmesg" \
 run_test "HW-15" "Watchdog device present" \
   "ls /dev/watchdog* >/dev/null 2>&1"
 
+# --- Install WiFi fallback ---
+
+run_test "HW-16" "GreenAutarky-Install WiFi connection configured" \
+  "nmcli -t -f NAME connection show 2>/dev/null | grep -q 'GreenAutarky-Install'"
+
 # --- Summary dmesg scan ---
 
 DMESG_ERRS=$(dmesg | grep -ciE 'error|fail' 2>/dev/null || echo 0)

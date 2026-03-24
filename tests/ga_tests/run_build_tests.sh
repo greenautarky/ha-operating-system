@@ -149,6 +149,32 @@ else
   _skip "WIFI-01..07" "NetworkManager.conf not found"
 fi
 
+# WIFI-08: GreenAutarky-Install fallback WiFi connection
+INSTALL_WIFI="${TARGET}/etc/NetworkManager/system-connections/GreenAutarky-Install.nmconnection"
+if [[ -f "$INSTALL_WIFI" ]]; then
+  grep -q 'ssid=GreenAutarky-Install' "$INSTALL_WIFI" 2>/dev/null \
+    && _pass "WIFI-08a: Install WiFi SSID configured" \
+    || _fail "WIFI-08a: Install WiFi SSID missing"
+  grep -q 'autoconnect-priority=-10' "$INSTALL_WIFI" 2>/dev/null \
+    && _pass "WIFI-08b: Install WiFi low priority (Ethernet wins)" \
+    || _fail "WIFI-08b: Install WiFi priority not set to -10"
+  # Verify PSK was injected (not placeholder)
+  if grep -q '__WIFI_INSTALL_PSK__' "$INSTALL_WIFI" 2>/dev/null; then
+    _fail "WIFI-08c: Install WiFi PSK is still placeholder (secrets/wifi-install.psk missing?)"
+  else
+    grep -q 'psk=' "$INSTALL_WIFI" 2>/dev/null \
+      && _pass "WIFI-08c: Install WiFi PSK injected" \
+      || _fail "WIFI-08c: Install WiFi PSK field missing"
+  fi
+  # Verify permissions (NM requires 0600)
+  PERMS=$(stat -c '%a' "$INSTALL_WIFI" 2>/dev/null)
+  [[ "$PERMS" == "600" ]] \
+    && _pass "WIFI-08d: Install WiFi file permissions 0600" \
+    || _fail "WIFI-08d: Install WiFi permissions $PERMS (need 0600)"
+else
+  _fail "WIFI-08: GreenAutarky-Install.nmconnection not found"
+fi
+
 echo ""
 echo "--- Environment ---"
 
