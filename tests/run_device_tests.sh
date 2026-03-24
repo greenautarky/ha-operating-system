@@ -124,9 +124,9 @@ run_ssh() {
         echo "ERROR: Cannot connect to $SSH_TARGET — is the device up?"
         exit 1
     }
-    if ! echo "$device_check" | grep -qi "greenautarky\|gaos\|hassos"; then
+    if ! echo "$device_check" | grep -qi "GA_BUILD\|GA_ENV\|haos\|hassos"; then
         echo "ERROR: Target $SSH_TARGET does not look like a GA OS device."
-        echo "       /etc/os-release does not contain 'greenautarky', 'gaos', or 'hassos'."
+        echo "       /etc/os-release does not contain GA_BUILD*, GA_ENV, or haos."
         echo "       Aborting to prevent running tests on the wrong machine."
         echo ""
         echo "       Got:"
