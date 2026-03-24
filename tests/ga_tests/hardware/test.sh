@@ -121,6 +121,12 @@ run_test "HW-15" "Watchdog device present" \
 run_test "HW-16" "GreenAutarky-Install WiFi connection configured" \
   "nmcli -t -f NAME connection show 2>/dev/null | grep -q 'GreenAutarky-Install'"
 
+run_test "HW-16b" "Install WiFi has low priority (Ethernet wins)" \
+  "nmcli -t -f connection.autoconnect-priority connection show GreenAutarky-Install 2>/dev/null | grep -q '\-10'"
+
+run_test "HW-16c" "Install WiFi autoconnect enabled" \
+  "nmcli -t -f connection.autoconnect connection show GreenAutarky-Install 2>/dev/null | grep -qi 'yes'"
+
 # --- Summary dmesg scan ---
 
 DMESG_ERRS=$(dmesg | grep -ciE 'error|fail' 2>/dev/null || echo 0)
