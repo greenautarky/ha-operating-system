@@ -53,6 +53,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         zip \
     && rm -rf /var/lib/apt/lists/*
 
+# Trivy (CVE scanner for SBOMs and container images)
+RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
 # Init entry
 COPY scripts/entry.sh /usr/sbin/
 ENTRYPOINT ["/usr/sbin/entry.sh"]
