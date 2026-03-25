@@ -53,28 +53,48 @@ echo ""
 if [[ "$SCAN_IMAGES" == "true" ]]; then
   echo "=== Scanning Container Images ==="
 
-  # Read images from version.json and addon-images.json
-  VERSION_JSON="${REPO_ROOT}/buildroot-external/package/hassio/version.json"
+  # Fetch stable.json from haos-version repo and read addon-images.json
+  STABLE_URL="https://raw.githubusercontent.com/greenautarky/haos-version/main/stable.json"
   ADDON_JSON="${REPO_ROOT}/buildroot-external/package/hassio/addon-images.json"
+  ARCH="armv7"
+  MACHINE="tinker"
+
+  echo "  Fetching stable.json..."
+  STABLE=$(curl -sf "$STABLE_URL" 2>/dev/null || true)
 
   IMAGES=()
 
-  if [[ -f "$VERSION_JSON" ]]; then
-    # Core image
-    CORE_IMG=$(jq -r '.images.core // empty' "$VERSION_JSON" 2>/dev/null || true)
-    CORE_VER=$(jq -r '.versions.core // empty' "$VERSION_JSON" 2>/dev/null || true)
+  if [[ -n "$STABLE" ]]; then
+    # Core image: replace {machine} placeholder
+    CORE_TMPL=$(echo "$STABLE" | jq -r '.images.core // empty')
+    CORE_VER=$(echo "$STABLE" | jq -r ".homeassistant.${MACHINE} // .homeassistant.default // empty")
+    CORE_IMG="${CORE_TMPL//\{machine\}/$MACHINE}"
     [[ -n "$CORE_IMG" && -n "$CORE_VER" ]] && IMAGES+=("${CORE_IMG}:${CORE_VER}")
 
-    # Supervisor
-    SUP_IMG=$(jq -r '.images.supervisor // empty' "$VERSION_JSON" 2>/dev/null || true)
-    SUP_VER=$(jq -r '.versions.supervisor // empty' "$VERSION_JSON" 2>/dev/null || true)
+    # Supervisor: replace {arch} placeholder
+    SUP_TMPL=$(echo "$STABLE" | jq -r '.images.supervisor // empty')
+    SUP_VER=$(echo "$STABLE" | jq -r '.supervisor // empty')
+    SUP_IMG="${SUP_TMPL//\{arch\}/$ARCH}"
     [[ -n "$SUP_IMG" && -n "$SUP_VER" ]] && IMAGES+=("${SUP_IMG}:${SUP_VER}")
+
+    # System images (cli, dns, audio, observer, multicast)
+    for comp in cli dns audio observer multicast; do
+      IMG_TMPL=$(echo "$STABLE" | jq -r ".images.${comp} // empty")
+      COMP_VER=$(echo "$STABLE" | jq -r ".${comp} // empty")
+      IMG="${IMG_TMPL//\{arch\}/$ARCH}"
+      [[ -n "$IMG" && -n "$COMP_VER" ]] && IMAGES+=("${IMG}:${COMP_VER}")
+    done
+  else
+    echo "  WARN: Could not fetch stable.json — skipping system images"
   fi
 
+  # Addon images
   if [[ -f "$ADDON_JSON" ]]; then
     while IFS= read -r img; do
+      # Replace {arch} placeholder
+      img="${img//\{arch\}/$ARCH}"
       IMAGES+=("$img")
-    done < <(jq -r '.[] | "\(.image):\(.version)"' "$ADDON_JSON" 2>/dev/null || true)
+    done < <(jq -r '.addons | to_entries[] | "\(.value.image):\(.value.version)"' "$ADDON_JSON" 2>/dev/null || true)
   fi
 
   TOTAL=${#IMAGES[@]}
