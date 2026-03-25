@@ -1796,7 +1796,38 @@ if [[ "$GA_ENV" == "prod" ]]; then
     if trivy sbom --severity CRITICAL,HIGH --format table "${OUT}/images/sbom-cyclonedx.json" 2>&1 | tee "${OUT}/images/cve-scan-sbom.txt"; then
       echo "CVE scan complete — results in ${OUT}/images/cve-scan-sbom.txt"
     else
-      echo "WARN: CVE scan failed (non-blocking)"
+      echo "WARN: SBOM CVE scan failed (non-blocking)"
+    fi
+
+    # 11b) Scan downloaded container image tars (covers private GHCR images)
+    local images_dir
+    images_dir="$(ls -d "${OUT}/build/hassio-"*/images 2>/dev/null | head -n 1 || true)"
+    if [[ -d "$images_dir" ]]; then
+      echo ""
+      echo "Scanning container image tars for CRITICAL/HIGH vulnerabilities..."
+      local img_scan_file="${OUT}/images/cve-scan-containers.txt"
+      : > "$img_scan_file"
+      local img_total=0 img_clean=0 img_findings=0
+      for tarball in "$images_dir"/*.tar; do
+        [[ -f "$tarball" ]] || continue
+        local img_name
+        img_name="$(basename "$tarball" .tar)"
+        img_total=$((img_total + 1))
+        echo "  Scanning: ${img_name}..." | tee -a "$img_scan_file"
+        if trivy image --severity CRITICAL,HIGH --format table --input "$tarball" 2>&1 | tee -a "$img_scan_file"; then
+          local count
+          count=$(grep -cE "CRITICAL|HIGH" "$img_scan_file" 2>/dev/null || echo 0)
+          if [[ "$count" -gt 0 ]]; then
+            img_findings=$((img_findings + 1))
+          else
+            img_clean=$((img_clean + 1))
+          fi
+        else
+          echo "    WARN: could not scan ${img_name}" | tee -a "$img_scan_file"
+        fi
+      done
+      echo "" | tee -a "$img_scan_file"
+      echo "Container image scan: ${img_clean} clean, ${img_findings} with findings (${img_total} total)" | tee -a "$img_scan_file"
     fi
   else
     echo "Skipping CVE scan (trivy not installed or no SBOM)"
@@ -1867,6 +1898,10 @@ echo "  SBOMs:"
 if [[ -f "${OUT}/images/cve-scan-sbom.txt" ]]; then
   cve_count=$(grep -c "CRITICAL\|HIGH" "${OUT}/images/cve-scan-sbom.txt" 2>/dev/null || echo "0")
   echo "    cve-scan-sbom.txt     (${cve_count} CRITICAL/HIGH findings)"
+fi
+if [[ -f "${OUT}/images/cve-scan-containers.txt" ]]; then
+  cve_img_summary=$(tail -1 "${OUT}/images/cve-scan-containers.txt" 2>/dev/null || echo "")
+  echo "    cve-scan-containers.txt  (${cve_img_summary})"
 fi
 echo ""
 
