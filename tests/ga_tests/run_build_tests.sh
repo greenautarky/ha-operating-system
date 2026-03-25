@@ -480,12 +480,12 @@ else
       || _fail "DT-02: dtsi MISSING '$prop' (patch may have been silently dropped)"
   done
 
-  # DT-03: USB host should be disabled (0002 patch)
+  # DT-03: USB host should be enabled (for RNDIS router stick support)
   for node in "u2phy1" "u2phy_host" "usb_host0_ehci" "usb_host0_ohci"; do
-    if grep -A1 "^&${node}" "$DTSI_ACTUAL" 2>/dev/null | grep -q 'disabled'; then
-      _pass "DT-03: &${node} is disabled"
+    if grep -A1 "^&${node}" "$DTSI_ACTUAL" 2>/dev/null | grep -q 'okay'; then
+      _pass "DT-03: &${node} is enabled"
     else
-      _fail "DT-03: &${node} is NOT disabled (USB host disable patch may have failed)"
+      _fail "DT-03: &${node} is NOT enabled (USB host should be active for RNDIS support)"
     fi
   done
 fi

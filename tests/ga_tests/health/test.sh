@@ -91,13 +91,27 @@ run_test_show "HLTH-11" "Journal has entries for current boot (${JOURNAL_ENTRIES
 # --- Addon watchdog (from flasher stage 81) ---
 
 if command -v ha >/dev/null 2>&1; then
-  # Supervisor should have watchdog enabled for addons
-  WATCHDOG=$(ha addons info core_mosquitto --raw-json 2>/dev/null | grep -o '"watchdog":[a-z]*' | head -1 || true)
+  # Try Supervisor REST API first (ha CLI --raw-json is unreliable)
+  WATCHDOG=""
+  # Try via Supervisor API on the container
+  SUP_JSON=$(docker exec hassio_supervisor curl -sf http://127.0.0.1/addons/core_mosquitto/info 2>/dev/null || true)
+  if [ -n "$SUP_JSON" ]; then
+    WATCHDOG=$(echo "$SUP_JSON" | grep -o '"watchdog":[a-z]*' | head -1 || true)
+  fi
+  # Fallback: try ha CLI (may return table format instead of JSON)
+  if [ -z "$WATCHDOG" ]; then
+    HA_OUT=$(ha addons info core_mosquitto 2>/dev/null || true)
+    if echo "$HA_OUT" | grep -qi 'watchdog.*true'; then
+      WATCHDOG='"watchdog":true'
+    elif echo "$HA_OUT" | grep -qi 'watchdog.*false'; then
+      WATCHDOG='"watchdog":false'
+    fi
+  fi
   if [ -n "$WATCHDOG" ]; then
     run_test "HLTH-12" "Addon watchdog enabled (mosquitto)" \
       "echo \"$WATCHDOG\" | grep -q 'true'"
   else
-    skip_test "HLTH-12" "Addon watchdog enabled" "cannot read addon info"
+    skip_test "HLTH-12" "Addon watchdog enabled" "cannot parse addon info from Supervisor API or ha CLI"
   fi
 else
   skip_test "HLTH-12" "Addon watchdog enabled" "ha CLI not found"
@@ -135,8 +149,11 @@ if command -v netbird >/dev/null 2>&1; then
   DEV_LABEL=$(cat /etc/ga-device-label 2>/dev/null || true)
   [ -z "$DEV_LABEL" ] && DEV_LABEL=$(grep 'DEVICE_LABEL=' /etc/default/telegraf 2>/dev/null | cut -d= -f2 || true)
   if [ -n "$NB_HOST" ] && [ -n "$DEV_LABEL" ]; then
+    # Case-insensitive comparison: lowercase both sides (BusyBox tr compatible)
+    NB_HOST_LC=$(echo "$NB_HOST" | tr 'A-Z' 'a-z')
+    DEV_LABEL_LC=$(echo "$DEV_LABEL" | tr 'A-Z' 'a-z')
     run_test_show "HLTH-15" "NetBird hostname matches device label (nb=${NB_HOST} label=${DEV_LABEL})" \
-      "echo \"$NB_HOST\" | grep -qi \"$DEV_LABEL\""
+      "[ \"$NB_HOST_LC\" = \"$DEV_LABEL_LC\" ]"
   else
     skip_test "HLTH-15" "NetBird hostname matches device label" "netbird FQDN='${NB_FQDN:-empty}' label='${DEV_LABEL:-empty}'"
   fi
