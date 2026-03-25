@@ -46,13 +46,20 @@ else
     "ls /sys/bus/usb/devices/*/product 2>/dev/null | while read f; do echo \"\$(cat \$f)\"; done | head -5"
 fi
 
-# --- USB host port (should be disabled for security) ---
+# --- USB host port (enabled for RNDIS router stick support) ---
 
-run_test "HW-08a" "USB host port disabled" \
-  "if ls /sys/bus/usb/devices/usb*/product 2>/dev/null | xargs cat 2>/dev/null | grep -qi 'EHCI\|OHCI'; then false; else true; fi"
+run_test "HW-08a" "USB host port enabled" \
+  "ls /sys/bus/usb/devices/usb*/product 2>/dev/null | xargs cat 2>/dev/null | grep -qi 'EHCI\|OHCI'"
 
 run_test "HW-08b" "USB gadget (serial console) functional" \
   "dmesg | grep -q 'Gadget Serial\|g_serial\|dwc3.*peripheral' || [ -c /dev/ttyGS0 ]"
+
+# HW-08d: USB RNDIS device detected (if plugged in)
+if lsusb 2>/dev/null | grep -qi 'RNDIS\|CDC.*Ethernet\|modem\|4G\|LTE'; then
+  run_test "HW-08d" "USB RNDIS/modem device detected" "true"
+else
+  skip_test "HW-08d" "USB RNDIS device detected (no USB modem plugged in)"
+fi
 
 # --- Zigbee (internal EFR32 on UART3) ---
 

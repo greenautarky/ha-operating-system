@@ -23,6 +23,8 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&host_vbus_drv>;
 		regulator-name = "vcc5v0_host";
+		regulator-always-on;
+		regulator-boot-on;
 		vin-supply = <&vcc5v0_sys>;
 	};
 
@@ -439,11 +441,12 @@
 };
 
 &u2phy1 {
-	status = "disabled";
+	status = "okay";
 };
 
 &u2phy_host {
-	status = "disabled";
+	status = "okay";
+	phy-supply = <&vcc5v0_host>;
 };
 
 &uart0 {
@@ -474,11 +477,11 @@
 };
 
 &usb_host0_ehci {
-	status = "disabled";
+	status = "okay";
 };
 
 &usb_host0_ohci {
-	status = "disabled";
+	status = "okay";
 };
 
 &uart2 {
