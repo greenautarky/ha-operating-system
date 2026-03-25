@@ -1788,6 +1788,19 @@ if [[ "$GA_ENV" == "prod" ]]; then
   # 10) Generate Software Bill of Materials (SBOM)
   log_build_step "Generate SBOM"
   generate_sbom 2>&1 | tee -a "$BUILD_LOG"
+
+  # 11) CVE scan of SBOM (informational, non-blocking)
+  if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]]; then
+    log_build_step "CVE scan (SBOM)"
+    echo "Scanning SBOM for CRITICAL/HIGH vulnerabilities..."
+    if trivy sbom --severity CRITICAL,HIGH --format table "${OUT}/images/sbom-cyclonedx.json" 2>&1 | tee "${OUT}/images/cve-scan-sbom.txt"; then
+      echo "CVE scan complete — results in ${OUT}/images/cve-scan-sbom.txt"
+    else
+      echo "WARN: CVE scan failed (non-blocking)"
+    fi
+  else
+    echo "Skipping CVE scan (trivy not installed or no SBOM)"
+  fi
 else
   echo "Skipping post-build artifacts for dev build (SBOMs, config archive, provisioning)"
   echo "  Use 'prod' environment for full artifact generation"
@@ -1851,6 +1864,10 @@ echo ""
 echo "  SBOMs:"
 [[ -f "${OUT}/images/sbom-cyclonedx.json" ]] && echo "    sbom-cyclonedx.json   (Buildroot packages, CycloneDX 1.6)"
 [[ -f "${OUT}/images/sbom-containers.json" ]] && echo "    sbom-containers.json  (Container images + standalone tools)"
+if [[ -f "${OUT}/images/cve-scan-sbom.txt" ]]; then
+  cve_count=$(grep -c "CRITICAL\|HIGH" "${OUT}/images/cve-scan-sbom.txt" 2>/dev/null || echo "0")
+  echo "    cve-scan-sbom.txt     (${cve_count} CRITICAL/HIGH findings)"
+fi
 echo ""
 
 echo "  Configs:  ${OUT}/images/configs/"
