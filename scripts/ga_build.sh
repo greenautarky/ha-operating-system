@@ -1790,6 +1790,7 @@ if [[ "$GA_ENV" == "prod" ]]; then
   generate_sbom 2>&1 | tee -a "$BUILD_LOG"
 
   # 11) CVE scan of SBOM (informational, non-blocking)
+  mkdir -p "${OUT}/images/reports"
   if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]]; then
     log_build_step "CVE scan (SBOM)"
     # Trivy doesn't support CycloneDX component type "firmware" — patch to "operating-system"
@@ -1801,8 +1802,8 @@ if [[ "$GA_ENV" == "prod" ]]; then
       sed -i 's/"type": "firmware"/"type": "operating-system"/' "${OUT}/images/sbom-cyclonedx.json"
     fi
     echo "Scanning SBOM for CRITICAL/HIGH vulnerabilities..."
-    if trivy sbom --severity CRITICAL,HIGH --format table "${OUT}/images/sbom-cyclonedx.json" 2>&1 | tee "${OUT}/images/cve-scan-sbom.txt"; then
-      echo "CVE scan complete — results in ${OUT}/images/cve-scan-sbom.txt"
+    if trivy sbom --severity CRITICAL,HIGH --format table "${OUT}/images/sbom-cyclonedx.json" 2>&1 | tee "${OUT}/images/reports/cve-scan-sbom.txt"; then
+      echo "CVE scan complete — results in ${OUT}/images/reports/cve-scan-sbom.txt"
     else
       echo "WARN: SBOM CVE scan failed (non-blocking)"
     fi
@@ -1812,7 +1813,7 @@ if [[ "$GA_ENV" == "prod" ]]; then
     if [[ -d "$_cve_images_dir" ]]; then
       echo ""
       echo "Scanning container image tars for CRITICAL/HIGH vulnerabilities..."
-      _cve_scan_file="${OUT}/images/cve-scan-containers.txt"
+      _cve_scan_file="${OUT}/images/reports/cve-scan-containers.txt"
       : > "$_cve_scan_file"
       _cve_img_total=0 _cve_img_clean=0 _cve_img_findings=0
       for tarball in "$_cve_images_dir"/*.tar; do
@@ -1900,14 +1901,17 @@ echo ""
 echo "  SBOMs:"
 [[ -f "${OUT}/images/sbom-cyclonedx.json" ]] && echo "    sbom-cyclonedx.json   (Buildroot packages, CycloneDX 1.6)"
 [[ -f "${OUT}/images/sbom-containers.json" ]] && echo "    sbom-containers.json  (Container images + standalone tools)"
-if [[ -f "${OUT}/images/cve-scan-sbom.txt" ]]; then
-  cve_count=$(grep -c "CRITICAL\|HIGH" "${OUT}/images/cve-scan-sbom.txt" 2>/dev/null || echo "0")
-  echo "    cve-scan-sbom.txt     (${cve_count} CRITICAL/HIGH findings)"
+echo ""
+echo "  Reports:  ${OUT}/images/reports/"
+if [[ -f "${OUT}/images/reports/cve-scan-sbom.txt" ]]; then
+  cve_count=$(grep -c "CRITICAL\|HIGH" "${OUT}/images/reports/cve-scan-sbom.txt" 2>/dev/null || echo "0")
+  echo "    cve-scan-sbom.txt         (${cve_count} CRITICAL/HIGH findings)"
 fi
-if [[ -f "${OUT}/images/cve-scan-containers.txt" ]]; then
-  cve_img_summary=$(tail -1 "${OUT}/images/cve-scan-containers.txt" 2>/dev/null || echo "")
-  echo "    cve-scan-containers.txt  (${cve_img_summary})"
+if [[ -f "${OUT}/images/reports/cve-scan-containers.txt" ]]; then
+  cve_img_summary=$(tail -1 "${OUT}/images/reports/cve-scan-containers.txt" 2>/dev/null || echo "")
+  echo "    cve-scan-containers.txt   (${cve_img_summary})"
 fi
+[[ -f "${OUT}/images/reports/build-report.html" ]] && echo "    build-report.html         (open in browser)"
 echo ""
 
 echo "  Configs:  ${OUT}/images/configs/"
@@ -1933,15 +1937,15 @@ if [[ -n "$img_xz" ]]; then
 fi
 
 # Generate HTML build report
-_report="${OUT}/images/build-report.html"
+_report="${OUT}/images/reports/build-report.html"
 _img_name="$(basename "$img_xz" 2>/dev/null || echo "none")"
 _img_size="$(du -h "$img_xz" 2>/dev/null | cut -f1 || echo "N/A")"
 _img_sha="$(cut -d' ' -f1 "${img_xz}.sha256" 2>/dev/null || echo "N/A")"
 _raucb="$(ls "${OUT}/images/"*"${GA_BUILD_TIMESTAMP}"*.raucb 2>/dev/null | head -n 1 || true)"
 _raucb_name="$(basename "$_raucb" 2>/dev/null || echo "none")"
 _raucb_size="$(du -h "$_raucb" 2>/dev/null | cut -f1 || echo "N/A")"
-_cve_sbom_count=$(grep -c "CRITICAL\|HIGH" "${OUT}/images/cve-scan-sbom.txt" 2>/dev/null || echo "N/A")
-_cve_container_summary=$(tail -1 "${OUT}/images/cve-scan-containers.txt" 2>/dev/null || echo "N/A")
+_cve_sbom_count=$(grep -c "CRITICAL\|HIGH" "${OUT}/images/reports/cve-scan-sbom.txt" 2>/dev/null || echo "N/A")
+_cve_container_summary=$(tail -1 "${OUT}/images/reports/cve-scan-containers.txt" 2>/dev/null || echo "N/A")
 _build_tests_pass=$(grep -cE '^\s*PASS' "$BUILD_LOG" 2>/dev/null || echo "0")
 _build_tests_fail=$(grep -cE '^\s*FAIL' "$BUILD_LOG" 2>/dev/null || echo "0")
 _build_tests_skip=$(grep -cE '^\s*SKIP' "$BUILD_LOG" 2>/dev/null || echo "0")
@@ -2047,8 +2051,8 @@ fi)
 <tr><td class="mono">configs/container-images.lock.json</td><td>Container image digests</td></tr>
 $(if [[ -f "${OUT}/images/sbom-cyclonedx.json" ]]; then echo '<tr><td class="mono">sbom-cyclonedx.json</td><td>CycloneDX 1.6 SBOM (OS packages)</td></tr>'; fi)
 $(if [[ -f "${OUT}/images/sbom-containers.json" ]]; then echo '<tr><td class="mono">sbom-containers.json</td><td>Container image inventory</td></tr>'; fi)
-$(if [[ -f "${OUT}/images/cve-scan-sbom.txt" ]]; then echo '<tr><td class="mono">cve-scan-sbom.txt</td><td>Trivy SBOM scan results</td></tr>'; fi)
-$(if [[ -f "${OUT}/images/cve-scan-containers.txt" ]]; then echo '<tr><td class="mono">cve-scan-containers.txt</td><td>Trivy container scan results</td></tr>'; fi)
+$(if [[ -f "${OUT}/images/reports/cve-scan-sbom.txt" ]]; then echo '<tr><td class="mono">cve-scan-sbom.txt</td><td>Trivy SBOM scan results</td></tr>'; fi)
+$(if [[ -f "${OUT}/images/reports/cve-scan-containers.txt" ]]; then echo '<tr><td class="mono">cve-scan-containers.txt</td><td>Trivy container scan results</td></tr>'; fi)
 $(if [[ -d "${OUT}/images/legal-info" ]]; then echo '<tr><td class="mono">legal-info/</td><td>License manifests + source archive</td></tr>'; fi)
 </table>
 
