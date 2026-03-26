@@ -1,0 +1,12 @@
+[Unit]
+Description=Apply Ethernet disable state from ga-env.conf
+After=NetworkManager.service hassos-config.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-manage-ethernet apply
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

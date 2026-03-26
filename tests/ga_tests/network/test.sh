@@ -53,4 +53,25 @@ run_test_show "NET-08" "NM connectivity state is 'full' (got: $NM_STATE)" \
 run_test "NET-09" "checkonline.greenautarky.com reachable" \
   "curl -sf --connect-timeout 5 https://checkonline.greenautarky.com/online.txt 2>/dev/null | grep -q 'NetworkManager is online'"
 
+# --- Ethernet disable state tests ---
+
+# NET-13: Management script always available
+run_test "NET-13" "ga-manage-ethernet script available" \
+  "test -x /usr/sbin/ga-manage-ethernet"
+
+if [ -f /mnt/data/ga-env.conf ] && grep -q '^GA_ETHERNET_DISABLED=true' /mnt/data/ga-env.conf 2>/dev/null; then
+  # Ethernet is disabled — verify the state is correct
+  run_test "NET-10" "Ethernet disabled flag set" "true"
+
+  run_test "NET-11" "eth0 is down when disabled" \
+    "! nmcli -t -f DEVICE,STATE device status 2>/dev/null | grep -q '^eth0:connected'"
+
+  run_test "NET-12" "WiFi active when Ethernet disabled" \
+    "nmcli -t -f DEVICE,STATE device status 2>/dev/null | grep -q '^wlan0:connected'"
+else
+  skip_test "NET-10" "Ethernet disabled flag set (not disabled)"
+  skip_test "NET-11" "eth0 down when disabled (not disabled)"
+  skip_test "NET-12" "WiFi active when disabled (not disabled)"
+fi
+
 suite_end
