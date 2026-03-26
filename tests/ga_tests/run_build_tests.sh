@@ -106,6 +106,19 @@ grep -qE 'storage\.total_limit_size\s+300M' "${TARGET}/etc/fluent-bit/fluent-bit
   && _pass "CFG-22: fluent-bit storage buffer >= 300M" \
   || _fail "CFG-22: fluent-bit storage buffer not 300M"
 
+# CFG-23: ga-manage-ethernet script on rootfs
+[[ -x "${TARGET}/usr/sbin/ga-manage-ethernet" ]] \
+  && _pass "CFG-23: ga-manage-ethernet script exists and executable" \
+  || _fail "CFG-23: ga-manage-ethernet NOT found on rootfs"
+
+# CFG-24: ga-ethernet-guard.service exists and enabled
+[[ -f "${TARGET}/etc/systemd/system/ga-ethernet-guard.service" ]] \
+  && _pass "CFG-24a: ga-ethernet-guard.service unit exists" \
+  || _fail "CFG-24a: ga-ethernet-guard.service NOT found"
+[[ -L "${TARGET}/etc/systemd/system/multi-user.target.wants/ga-ethernet-guard.service" ]] \
+  && _pass "CFG-24b: ga-ethernet-guard.service enabled at boot" \
+  || _fail "CFG-24b: ga-ethernet-guard.service NOT enabled"
+
 echo ""
 echo "--- NetworkManager WiFi defaults ---"
 
@@ -174,6 +187,31 @@ if [[ -f "$INSTALL_WIFI" ]]; then
 else
   _fail "WIFI-08: GreenAutarky-Install.nmconnection not found"
 fi
+
+# --- Additional rootfs checks ---
+
+# CFG-25: audio-setup.service masked (iHost has no audio hardware)
+if [[ -L "${TARGET}/etc/systemd/system/audio-setup.service" ]]; then
+  LINK_TARGET=$(readlink "${TARGET}/etc/systemd/system/audio-setup.service" 2>/dev/null)
+  [[ "$LINK_TARGET" == "/dev/null" ]] \
+    && _pass "CFG-25: audio-setup.service masked" \
+    || _fail "CFG-25: audio-setup.service symlink points to '$LINK_TARGET' (expected /dev/null)"
+else
+  _fail "CFG-25: audio-setup.service not masked (no symlink)"
+fi
+
+# CFG-26: NM connectivity check configured
+grep -q 'checkonline.greenautarky.com' "${TARGET}/etc/NetworkManager/NetworkManager.conf" 2>/dev/null \
+  && _pass "CFG-26a: NM connectivity check URI configured" \
+  || _fail "CFG-26a: NM connectivity check URI missing"
+grep -q 'response=NetworkManager is online' "${TARGET}/etc/NetworkManager/NetworkManager.conf" 2>/dev/null \
+  && _pass "CFG-26b: NM connectivity check response string set" \
+  || _fail "CFG-26b: NM connectivity check response string missing"
+
+# CFG-27: Fluent-Bit systemd filter includes ga-disk-guard.service
+grep -q 'ga-disk-guard.service' "${TARGET}/etc/fluent-bit/fluent-bit.conf" 2>/dev/null \
+  && _pass "CFG-27: Fluent-Bit captures ga-disk-guard logs" \
+  || _fail "CFG-27: Fluent-Bit missing ga-disk-guard.service in systemd filter"
 
 echo ""
 echo "--- Environment ---"
