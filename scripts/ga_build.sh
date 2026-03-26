@@ -1800,34 +1800,31 @@ if [[ "$GA_ENV" == "prod" ]]; then
     fi
 
     # 11b) Scan downloaded container image tars (covers private GHCR images)
-    local images_dir
-    images_dir="$(ls -d "${OUT}/build/hassio-"*/images 2>/dev/null | head -n 1 || true)"
-    if [[ -d "$images_dir" ]]; then
+    _cve_images_dir="$(ls -d "${OUT}/build/hassio-"*/images 2>/dev/null | head -n 1 || true)"
+    if [[ -d "$_cve_images_dir" ]]; then
       echo ""
       echo "Scanning container image tars for CRITICAL/HIGH vulnerabilities..."
-      local img_scan_file="${OUT}/images/cve-scan-containers.txt"
-      : > "$img_scan_file"
-      local img_total=0 img_clean=0 img_findings=0
-      for tarball in "$images_dir"/*.tar; do
+      _cve_scan_file="${OUT}/images/cve-scan-containers.txt"
+      : > "$_cve_scan_file"
+      _cve_img_total=0 _cve_img_clean=0 _cve_img_findings=0
+      for tarball in "$_cve_images_dir"/*.tar; do
         [[ -f "$tarball" ]] || continue
-        local img_name
-        img_name="$(basename "$tarball" .tar)"
-        img_total=$((img_total + 1))
-        echo "  Scanning: ${img_name}..." | tee -a "$img_scan_file"
-        if trivy image --severity CRITICAL,HIGH --format table --input "$tarball" 2>&1 | tee -a "$img_scan_file"; then
-          local count
-          count=$(grep -cE "CRITICAL|HIGH" "$img_scan_file" 2>/dev/null || echo 0)
-          if [[ "$count" -gt 0 ]]; then
-            img_findings=$((img_findings + 1))
+        _cve_img_name="$(basename "$tarball" .tar)"
+        _cve_img_total=$((_cve_img_total + 1))
+        echo "  Scanning: ${_cve_img_name}..." | tee -a "$_cve_scan_file"
+        if trivy image --severity CRITICAL,HIGH --format table --input "$tarball" 2>&1 | tee -a "$_cve_scan_file"; then
+          _cve_count=$(grep -cE "CRITICAL|HIGH" "$_cve_scan_file" 2>/dev/null || echo 0)
+          if [[ "$_cve_count" -gt 0 ]]; then
+            _cve_img_findings=$((_cve_img_findings + 1))
           else
-            img_clean=$((img_clean + 1))
+            _cve_img_clean=$((_cve_img_clean + 1))
           fi
         else
-          echo "    WARN: could not scan ${img_name}" | tee -a "$img_scan_file"
+          echo "    WARN: could not scan ${_cve_img_name}" | tee -a "$_cve_scan_file"
         fi
       done
-      echo "" | tee -a "$img_scan_file"
-      echo "Container image scan: ${img_clean} clean, ${img_findings} with findings (${img_total} total)" | tee -a "$img_scan_file"
+      echo "" | tee -a "$_cve_scan_file"
+      echo "Container image scan: ${_cve_img_clean} clean, ${_cve_img_findings} with findings (${_cve_img_total} total)" | tee -a "$_cve_scan_file"
     fi
   else
     echo "Skipping CVE scan (trivy not installed or no SBOM)"
