@@ -1,0 +1,126 @@
+#!/bin/sh
+# ga-manage-ethernet — Enable/disable Ethernet interface via NetworkManager
+#
+# Usage:
+#   ga-manage-ethernet disable   # Set flag + disable eth0 now
+#   ga-manage-ethernet enable    # Clear flag + enable eth0 now
+#   ga-manage-ethernet status    # Print current state
+#   ga-manage-ethernet apply     # Read flag from ga-env.conf, apply (used by systemd)
+#
+# The disable state persists across reboots via GA_ETHERNET_DISABLED=true
+# in /mnt/data/ga-env.conf. The ga-ethernet-guard.service calls "apply" at boot.
+#
+# Re-enable remotely: ssh -p 22222 root@<vpn-ip> 'ga-manage-ethernet enable'
+#
+set -e
+
+GA_ENV_FILE="/mnt/data/ga-env.conf"
+ETH_IFACE="eth0"
+
+# Find the NM connection name bound to eth0
+find_eth_connection() {
+  nmcli -t -f NAME,DEVICE connection show 2>/dev/null | grep ":${ETH_IFACE}$" | head -1 | cut -d: -f1
+}
+
+# Check if eth0 is currently connected
+is_eth_connected() {
+  nmcli -t -f DEVICE,STATE device status 2>/dev/null | grep -q "^${ETH_IFACE}:connected"
+}
+
+# Read the flag from ga-env.conf
+is_flag_set() {
+  [ -f "$GA_ENV_FILE" ] && grep -q "^GA_ETHERNET_DISABLED=true" "$GA_ENV_FILE" 2>/dev/null
+}
+
+# Set GA_ETHERNET_DISABLED=true in ga-env.conf
+set_flag() {
+  if [ ! -f "$GA_ENV_FILE" ]; then
+    echo "GA_ETHERNET_DISABLED=true" > "$GA_ENV_FILE"
+    return
+  fi
+  if grep -q "^GA_ETHERNET_DISABLED=" "$GA_ENV_FILE" 2>/dev/null; then
+    sed -i 's/^GA_ETHERNET_DISABLED=.*/GA_ETHERNET_DISABLED=true/' "$GA_ENV_FILE"
+  else
+    echo "GA_ETHERNET_DISABLED=true" >> "$GA_ENV_FILE"
+  fi
+}
+
+# Remove GA_ETHERNET_DISABLED from ga-env.conf
+clear_flag() {
+  [ -f "$GA_ENV_FILE" ] && sed -i '/^GA_ETHERNET_DISABLED=/d' "$GA_ENV_FILE"
+}
+
+do_disable() {
+  CONN=$(find_eth_connection)
+  if [ -n "$CONN" ]; then
+    echo "Disabling Ethernet: connection='$CONN' interface='$ETH_IFACE'"
+    nmcli connection modify "$CONN" connection.autoconnect no 2>/dev/null || true
+    nmcli connection down "$CONN" 2>/dev/null || true
+  else
+    echo "No NM connection found for $ETH_IFACE — bringing interface down directly"
+    ip link set "$ETH_IFACE" down 2>/dev/null || true
+  fi
+  set_flag
+  echo "Ethernet disabled. Flag set in $GA_ENV_FILE"
+}
+
+do_enable() {
+  CONN=$(find_eth_connection)
+  if [ -n "$CONN" ]; then
+    echo "Enabling Ethernet: connection='$CONN' interface='$ETH_IFACE'"
+    nmcli connection modify "$CONN" connection.autoconnect yes 2>/dev/null || true
+    nmcli connection up "$CONN" 2>/dev/null || true
+  else
+    echo "No NM connection found for $ETH_IFACE — bringing interface up directly"
+    ip link set "$ETH_IFACE" up 2>/dev/null || true
+  fi
+  clear_flag
+  echo "Ethernet enabled. Flag cleared from $GA_ENV_FILE"
+}
+
+do_status() {
+  if is_flag_set; then
+    FLAG="true"
+  else
+    FLAG="false"
+  fi
+
+  if is_eth_connected; then
+    STATE="connected"
+  else
+    STATE="disconnected"
+  fi
+
+  CONN=$(find_eth_connection)
+  echo "ethernet_disabled=${FLAG}"
+  echo "ethernet_state=${STATE}"
+  echo "ethernet_connection=${CONN:-none}"
+  echo "ethernet_operstate=$(cat /sys/class/net/${ETH_IFACE}/operstate 2>/dev/null || echo 'unknown')"
+}
+
+do_apply() {
+  if is_flag_set; then
+    echo "GA_ETHERNET_DISABLED=true found — disabling Ethernet"
+    CONN=$(find_eth_connection)
+    if [ -n "$CONN" ]; then
+      nmcli connection modify "$CONN" connection.autoconnect no 2>/dev/null || true
+      nmcli connection down "$CONN" 2>/dev/null || true
+      echo "Ethernet disabled on boot"
+    else
+      ip link set "$ETH_IFACE" down 2>/dev/null || true
+      echo "Ethernet interface brought down (no NM connection found)"
+    fi
+  fi
+  # If flag is not set, do nothing — default is Ethernet enabled
+}
+
+case "${1:-}" in
+  disable) do_disable ;;
+  enable)  do_enable ;;
+  status)  do_status ;;
+  apply)   do_apply ;;
+  *)
+    echo "Usage: ga-manage-ethernet {disable|enable|status|apply}"
+    exit 1
+    ;;
+esac
