@@ -1792,6 +1792,14 @@ if [[ "$GA_ENV" == "prod" ]]; then
   # 11) CVE scan of SBOM (informational, non-blocking)
   if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]]; then
     log_build_step "CVE scan (SBOM)"
+    # Trivy doesn't support CycloneDX component type "firmware" — patch to "operating-system"
+    if command -v jq &>/dev/null; then
+      jq '(.metadata.component.type) = "operating-system"' "${OUT}/images/sbom-cyclonedx.json" \
+        > "${OUT}/images/sbom-cyclonedx.json.tmp" 2>/dev/null \
+        && mv "${OUT}/images/sbom-cyclonedx.json.tmp" "${OUT}/images/sbom-cyclonedx.json"
+    else
+      sed -i 's/"type": "firmware"/"type": "operating-system"/' "${OUT}/images/sbom-cyclonedx.json"
+    fi
     echo "Scanning SBOM for CRITICAL/HIGH vulnerabilities..."
     if trivy sbom --severity CRITICAL,HIGH --format table "${OUT}/images/sbom-cyclonedx.json" 2>&1 | tee "${OUT}/images/cve-scan-sbom.txt"; then
       echo "CVE scan complete — results in ${OUT}/images/cve-scan-sbom.txt"
