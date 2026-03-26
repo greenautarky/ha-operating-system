@@ -1931,3 +1931,133 @@ if [[ -n "$img_xz" ]]; then
   echo "  To flash this image:"
   echo "    ./scripts/verify-sd.sh --all $(basename "$img_xz")"
 fi
+
+# Generate HTML build report
+_report="${OUT}/images/build-report.html"
+_img_name="$(basename "$img_xz" 2>/dev/null || echo "none")"
+_img_size="$(du -h "$img_xz" 2>/dev/null | cut -f1 || echo "N/A")"
+_img_sha="$(cut -d' ' -f1 "${img_xz}.sha256" 2>/dev/null || echo "N/A")"
+_raucb="$(ls "${OUT}/images/"*"${GA_BUILD_TIMESTAMP}"*.raucb 2>/dev/null | head -n 1 || true)"
+_raucb_name="$(basename "$_raucb" 2>/dev/null || echo "none")"
+_raucb_size="$(du -h "$_raucb" 2>/dev/null | cut -f1 || echo "N/A")"
+_cve_sbom_count=$(grep -c "CRITICAL\|HIGH" "${OUT}/images/cve-scan-sbom.txt" 2>/dev/null || echo "N/A")
+_cve_container_summary=$(tail -1 "${OUT}/images/cve-scan-containers.txt" 2>/dev/null || echo "N/A")
+_build_tests_pass=$(grep -cE '^\s*PASS' "$BUILD_LOG" 2>/dev/null || echo "0")
+_build_tests_fail=$(grep -cE '^\s*FAIL' "$BUILD_LOG" 2>/dev/null || echo "0")
+_build_tests_skip=$(grep -cE '^\s*SKIP' "$BUILD_LOG" 2>/dev/null || echo "0")
+_source_pins="$(cat "${OUT}/images/configs/source-pins.json" 2>/dev/null || echo "{}")"
+_build_duration="$(grep 'Total build time' "$BUILD_LOG" 2>/dev/null | tail -1 || echo "unknown")"
+
+cat > "$_report" <<HTMLEOF
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GA OS Build Report — ${GA_BUILD_TIMESTAMP}</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; color: #333; background: #fafafa; }
+  h1 { color: #2e7d32; border-bottom: 3px solid #2e7d32; padding-bottom: 10px; }
+  h2 { color: #1b5e20; margin-top: 30px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+  th, td { padding: 8px 12px; text-align: left; border: 1px solid #ddd; }
+  th { background: #e8f5e9; }
+  .pass { color: #2e7d32; font-weight: bold; }
+  .fail { color: #c62828; font-weight: bold; }
+  .skip { color: #f57f17; }
+  .warn { color: #e65100; }
+  .mono { font-family: 'Fira Code', 'Consolas', monospace; font-size: 0.9em; }
+  .badge { display: inline-block; padding: 4px 12px; border-radius: 4px; color: white; font-weight: bold; font-size: 0.85em; }
+  .badge-pass { background: #2e7d32; }
+  .badge-fail { background: #c62828; }
+  .badge-warn { background: #e65100; }
+  .sha { font-size: 0.75em; color: #666; word-break: break-all; }
+  pre { background: #f5f5f5; padding: 12px; border-radius: 4px; overflow-x: auto; font-size: 0.85em; }
+  .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+  .summary-card { background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px; }
+  .footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #ddd; color: #999; font-size: 0.85em; }
+</style>
+</head>
+<body>
+<h1>GA OS Build Report</h1>
+
+<div class="summary-grid">
+<div class="summary-card">
+  <h3>Build Info</h3>
+  <table>
+  <tr><td>Build ID</td><td class="mono">${GA_BUILD_TIMESTAMP}</td></tr>
+  <tr><td>Date</td><td>${GA_BUILD_DATE:-$(date '+%Y-%m-%d %H:%M:%S')}</td></tr>
+  <tr><td>Environment</td><td><span class="badge badge-${GA_ENV}">${GA_ENV}</span></td></tr>
+  <tr><td>Mode</td><td>${MODE}</td></tr>
+  <tr><td>Duration</td><td>${_build_duration}</td></tr>
+  </table>
+</div>
+<div class="summary-card">
+  <h3>Versions</h3>
+  <table>
+  <tr><td>Kernel</td><td class="mono">${kernel_ver}</td></tr>
+  <tr><td>Buildroot</td><td class="mono">${buildroot_ver}</td></tr>
+  <tr><td>NetBird</td><td class="mono">${nb_ver}</td></tr>
+  <tr><td>HA Core FE</td><td class="mono">${GA_FRONTEND_PYVERSION:-unknown}</td></tr>
+  <tr><td>Defconfig</td><td class="mono">${DEFCONFIG}</td></tr>
+  </table>
+</div>
+</div>
+
+<h2>Output Images</h2>
+<table>
+<tr><th>File</th><th>Size</th><th>SHA256</th></tr>
+<tr><td class="mono">${_img_name}</td><td>${_img_size}</td><td class="sha">${_img_sha}</td></tr>
+<tr><td class="mono">${_raucb_name}</td><td>${_raucb_size}</td><td class="sha">$(cut -d' ' -f1 "${_raucb}.sha256" 2>/dev/null || echo "N/A")</td></tr>
+</table>
+
+<h2>Build Tests</h2>
+<p>
+  <span class="badge badge-pass">${_build_tests_pass} PASS</span>
+  <span class="badge badge-fail">${_build_tests_fail} FAIL</span>
+  <span class="badge badge-warn">${_build_tests_skip} SKIP</span>
+</p>
+$(if [[ "$_build_tests_fail" -gt 0 ]]; then
+  echo "<h3 class='fail'>Failed Tests</h3><pre>"
+  grep -E '^\s*FAIL' "$BUILD_LOG" 2>/dev/null
+  echo "</pre>"
+fi)
+
+<h2>CVE Scan</h2>
+<table>
+<tr><th>Target</th><th>Findings (CRITICAL/HIGH)</th><th>Status</th></tr>
+<tr>
+  <td>OS Packages (SBOM)</td>
+  <td>${_cve_sbom_count}</td>
+  <td>$(if [[ "$_cve_sbom_count" == "0" ]]; then echo '<span class="pass">CLEAN</span>'; elif [[ "$_cve_sbom_count" == "N/A" ]]; then echo '<span class="skip">SKIPPED</span>'; else echo '<span class="fail">FINDINGS</span>'; fi)</td>
+</tr>
+<tr>
+  <td>Container Images (13)</td>
+  <td colspan="2">${_cve_container_summary}</td>
+</tr>
+</table>
+
+<h2>Source Pins</h2>
+<pre>$(echo "$_source_pins" | python3 -m json.tool 2>/dev/null || echo "$_source_pins")</pre>
+
+<h2>Artifacts</h2>
+<table>
+<tr><th>File</th><th>Description</th></tr>
+<tr><td class="mono">build.log.xz</td><td>Complete build log (compressed)</td></tr>
+<tr><td class="mono">configs/source-pins.json</td><td>Git SHAs of all source repositories</td></tr>
+<tr><td class="mono">configs/container-images.lock.json</td><td>Container image digests</td></tr>
+$(if [[ -f "${OUT}/images/sbom-cyclonedx.json" ]]; then echo '<tr><td class="mono">sbom-cyclonedx.json</td><td>CycloneDX 1.6 SBOM (OS packages)</td></tr>'; fi)
+$(if [[ -f "${OUT}/images/sbom-containers.json" ]]; then echo '<tr><td class="mono">sbom-containers.json</td><td>Container image inventory</td></tr>'; fi)
+$(if [[ -f "${OUT}/images/cve-scan-sbom.txt" ]]; then echo '<tr><td class="mono">cve-scan-sbom.txt</td><td>Trivy SBOM scan results</td></tr>'; fi)
+$(if [[ -f "${OUT}/images/cve-scan-containers.txt" ]]; then echo '<tr><td class="mono">cve-scan-containers.txt</td><td>Trivy container scan results</td></tr>'; fi)
+$(if [[ -d "${OUT}/images/legal-info" ]]; then echo '<tr><td class="mono">legal-info/</td><td>License manifests + source archive</td></tr>'; fi)
+</table>
+
+<div class="footer">
+  Generated by ga_build.sh | GreenAutarky GmbH | $(date -Iseconds)
+</div>
+</body>
+</html>
+HTMLEOF
+
+echo ""
+echo "  Build report: ${_report}"
