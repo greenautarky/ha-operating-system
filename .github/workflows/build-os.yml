@@ -1,0 +1,88 @@
+name: Build GA OS Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Build mode (update or full)'
+        default: 'update'
+        type: choice
+        options:
+          - update
+          - full
+      env:
+        description: 'Build environment (dev or prod)'
+        default: 'prod'
+        type: choice
+        options:
+          - dev
+          - prod
+
+jobs:
+  build:
+    runs-on: self-hosted
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Prepare secrets
+        run: |
+          mkdir -p secrets
+          echo "${{ secrets.WIFI_INSTALL_PSK }}" > secrets/wifi-install.psk
+          echo "${{ secrets.ROOT_PW_HASH_LINE }}" > scripts/local.env
+          echo "${{ secrets.REL_CA_PEM }}" > buildroot-external/ota/rel-ca.pem
+          # dev-ca.pem is a symlink to rel-ca.pem
+          ln -sf rel-ca.pem buildroot-external/ota/dev-ca.pem
+
+      - name: Build Docker image
+        run: docker build -t hassos:local .
+
+      - name: Build OS image
+        run: |
+          mkdir -p $HOME/hassos-cache
+          docker run --rm --privileged \
+            -v "$(pwd):/build" \
+            -v "$HOME/hassos-cache:/cache" \
+            -e FORCE_UNSAFE_CONFIGURE=1 \
+            hassos:local \
+            bash -c "cd /build && ./scripts/ga_build.sh ${{ inputs.mode }} ${{ inputs.env }}"
+
+      - name: Upload image artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gaos-image-${{ github.run_number }}
+          path: |
+            ga_output/images/*.img.xz
+            ga_output/images/*.img.xz.sha256
+            ga_output/images/*.raucb
+            ga_output/images/*.raucb.sha256
+          retention-days: 30
+
+      - name: Upload reports
+        if: inputs.env == 'prod'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gaos-reports-${{ github.run_number }}
+          path: |
+            ga_output/images/reports/
+            ga_output/images/configs/
+            ga_output/images/sbom-*.json
+          retention-days: 90
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Build Result" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Mode: ${{ inputs.mode }} ${{ inputs.env }}" >> $GITHUB_STEP_SUMMARY
+          for f in ga_output/images/*.img.xz; do
+            [ -f "$f" ] || continue
+            SIZE=$(du -h "$f" | cut -f1)
+            echo "- Image: \`$(basename "$f")\` ($SIZE)" >> $GITHUB_STEP_SUMMARY
+          done
+          if [ -f ga_output/images/reports/build-report.html ]; then
+            echo "- Build report: uploaded as artifact" >> $GITHUB_STEP_SUMMARY
+          fi
