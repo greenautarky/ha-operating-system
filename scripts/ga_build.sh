@@ -1904,7 +1904,8 @@ echo "  SBOMs:"
 echo ""
 echo "  Reports:  ${OUT}/images/reports/"
 if [[ -f "${OUT}/images/reports/cve-scan-sbom.txt" ]]; then
-  cve_count=$(grep -c "CRITICAL\|HIGH" "${OUT}/images/reports/cve-scan-sbom.txt" 2>/dev/null || echo "0")
+  cve_count=$(grep -c "CRITICAL\|HIGH" "${OUT}/images/reports/cve-scan-sbom.txt" 2>/dev/null | head -1 | tr -cd '0-9' || echo "0")
+  cve_count="${cve_count:-0}"
   echo "    cve-scan-sbom.txt         (${cve_count} CRITICAL/HIGH findings)"
 fi
 if [[ -f "${OUT}/images/reports/cve-scan-containers.txt" ]]; then
@@ -1944,11 +1945,15 @@ _img_sha="$(cut -d' ' -f1 "${img_xz}.sha256" 2>/dev/null || echo "N/A")"
 _raucb="$(ls "${OUT}/images/"*"${GA_BUILD_TIMESTAMP}"*.raucb 2>/dev/null | head -n 1 || true)"
 _raucb_name="$(basename "$_raucb" 2>/dev/null || echo "none")"
 _raucb_size="$(du -h "$_raucb" 2>/dev/null | cut -f1 || echo "N/A")"
-_cve_sbom_count=$(grep -c "CRITICAL\|HIGH" "${OUT}/images/reports/cve-scan-sbom.txt" 2>/dev/null || echo "N/A")
+_cve_sbom_count=$(grep -c "CRITICAL\|HIGH" "${OUT}/images/reports/cve-scan-sbom.txt" 2>/dev/null | head -1 | tr -cd '0-9' || echo "0")
+_cve_sbom_count="${_cve_sbom_count:-0}"
 _cve_container_summary=$(tail -1 "${OUT}/images/reports/cve-scan-containers.txt" 2>/dev/null || echo "N/A")
-_build_tests_pass=$(grep -cE '^\s*PASS' "$BUILD_LOG" 2>/dev/null || echo "0")
-_build_tests_fail=$(grep -cE '^\s*FAIL' "$BUILD_LOG" 2>/dev/null || echo "0")
-_build_tests_skip=$(grep -cE '^\s*SKIP' "$BUILD_LOG" 2>/dev/null || echo "0")
+_build_tests_pass=$(grep -cE '^\s*PASS' "$BUILD_LOG" 2>/dev/null | head -1 | tr -cd '0-9' || echo "0")
+_build_tests_pass="${_build_tests_pass:-0}"
+_build_tests_fail=$(grep -cE '^\s*FAIL' "$BUILD_LOG" 2>/dev/null | head -1 | tr -cd '0-9' || echo "0")
+_build_tests_fail="${_build_tests_fail:-0}"
+_build_tests_skip=$(grep -cE '^\s*SKIP' "$BUILD_LOG" 2>/dev/null | head -1 | tr -cd '0-9' || echo "0")
+_build_tests_skip="${_build_tests_skip:-0}"
 _source_pins="$(cat "${OUT}/images/configs/source-pins.json" 2>/dev/null || echo "{}")"
 _build_duration="$(grep 'Total build time' "$BUILD_LOG" 2>/dev/null | tail -1 || echo "unknown")"
 
