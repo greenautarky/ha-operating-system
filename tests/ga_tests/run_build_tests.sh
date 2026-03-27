@@ -753,6 +753,40 @@ if [[ -n "$SRC" ]]; then
     _skip "SRC-13a..c" "frontend repo not found"
   fi
 
+  # SRC-14: PIN verification integration (frontend + core)
+  if [[ -n "$FE_ROOT" ]]; then
+    # SRC-14a: Frontend has PIN step component
+    [[ -f "${FE_ROOT}/src/panels/greenautarky-setup/ga-setup-pin.ts" ]] \
+      && _pass "SRC-14a: ga-setup-pin.ts component exists" \
+      || _fail "SRC-14a: ga-setup-pin.ts missing — PIN step not in frontend"
+
+    # SRC-14b: Wizard includes PIN step
+    grep -q '"pin"' "${FE_ROOT}/src/panels/greenautarky-setup/ha-panel-greenautarky-setup.ts" 2>/dev/null \
+      && _pass "SRC-14b: wizard STEPS includes pin" \
+      || _fail "SRC-14b: wizard STEPS missing pin step"
+
+    # SRC-14c: API client has verifyGASetupPin
+    grep -q 'verifyGASetupPin' "${FE_ROOT}/src/data/greenautarky_setup.ts" 2>/dev/null \
+      && _pass "SRC-14c: verifyGASetupPin API function exists" \
+      || _fail "SRC-14c: verifyGASetupPin missing from API client"
+  else
+    _skip "SRC-14a..c" "frontend repo not found"
+  fi
+
+  if [[ -n "$CORE_ROOT" ]]; then
+    # SRC-14d: Core has verify_pin endpoint
+    grep -q 'verify_pin' "${CORE_ROOT}/homeassistant/components/greenautarky_onboarding/http.py" 2>/dev/null \
+      && _pass "SRC-14d: Core has verify_pin endpoint" \
+      || _fail "SRC-14d: Core missing verify_pin endpoint"
+
+    # SRC-14e: Core has PIN rate limiting (exponential backoff)
+    grep -q 'pin_locked_until' "${CORE_ROOT}/homeassistant/components/greenautarky_onboarding/http.py" 2>/dev/null \
+      && _pass "SRC-14e: Core has PIN rate limiting" \
+      || _fail "SRC-14e: Core missing PIN rate limiting"
+  else
+    _skip "SRC-14d..e" "ha-core repo not found"
+  fi
+
   # SRC-09: Global stale reference scan across all functional source
   STALE_COUNT=0
   for dir in "${SRC}/buildroot-external/package" "${SRC}/buildroot-external/rootfs-overlay" "${SRC}/scripts"; do
