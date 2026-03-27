@@ -163,7 +163,10 @@ else
 fi
 
 # WIFI-08: GreenAutarky-Install fallback WiFi connection
-INSTALL_WIFI="${TARGET}/etc/NetworkManager/system-connections/GreenAutarky-Install.nmconnection"
+# NOTE: WiFi config lives in /usr/share/ga-wifi/ (not /etc/NetworkManager/system-connections/)
+# because HAOS bind-mounts an overlay partition over /etc/NM/system-connections/.
+# A first-boot service (ga-wifi-install.service) copies it to the overlay.
+INSTALL_WIFI="${TARGET}/usr/share/ga-wifi/GreenAutarky-Install.nmconnection"
 if [[ -f "$INSTALL_WIFI" ]]; then
   grep -q 'ssid=GreenAutarky-Install' "$INSTALL_WIFI" 2>/dev/null \
     && _pass "WIFI-08a: Install WiFi SSID configured" \
@@ -185,7 +188,22 @@ if [[ -f "$INSTALL_WIFI" ]]; then
     && _pass "WIFI-08d: Install WiFi file permissions 0600" \
     || _fail "WIFI-08d: Install WiFi permissions $PERMS (need 0600)"
 else
-  _fail "WIFI-08: GreenAutarky-Install.nmconnection not found"
+  _fail "WIFI-08: GreenAutarky-Install.nmconnection not found in /usr/share/ga-wifi/"
+fi
+
+# WIFI-09: First-boot WiFi copy service exists and enabled
+[[ -f "${TARGET}/etc/systemd/system/ga-wifi-install.service" ]] \
+  && _pass "WIFI-09a: ga-wifi-install.service exists" \
+  || _fail "WIFI-09a: ga-wifi-install.service NOT found (WiFi won't be copied to overlay)"
+[[ -L "${TARGET}/etc/systemd/system/multi-user.target.wants/ga-wifi-install.service" ]] \
+  && _pass "WIFI-09b: ga-wifi-install.service enabled at boot" \
+  || _fail "WIFI-09b: ga-wifi-install.service NOT enabled"
+
+# WIFI-10: WiFi config must NOT be in /etc/NM/system-connections (overlay hides it!)
+if [[ -f "${TARGET}/etc/NetworkManager/system-connections/GreenAutarky-Install.nmconnection" ]]; then
+  _fail "WIFI-10: WiFi config in /etc/NM/system-connections/ — will be hidden by HAOS overlay mount! Move to /usr/share/ga-wifi/"
+else
+  _pass "WIFI-10: WiFi config correctly NOT in overlaid /etc/NM/system-connections/"
 fi
 
 # --- Additional rootfs checks ---
