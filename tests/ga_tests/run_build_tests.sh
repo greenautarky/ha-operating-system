@@ -191,13 +191,10 @@ else
   _fail "WIFI-08: GreenAutarky-Install.nmconnection not found in /usr/share/ga-wifi/"
 fi
 
-# WIFI-09: First-boot WiFi copy service exists and enabled
-[[ -f "${TARGET}/etc/systemd/system/ga-wifi-install.service" ]] \
-  && _pass "WIFI-09a: ga-wifi-install.service exists" \
-  || _fail "WIFI-09a: ga-wifi-install.service NOT found (WiFi won't be copied to overlay)"
-[[ -L "${TARGET}/etc/systemd/system/multi-user.target.wants/ga-wifi-install.service" ]] \
-  && _pass "WIFI-09b: ga-wifi-install.service enabled at boot" \
-  || _fail "WIFI-09b: ga-wifi-install.service NOT enabled"
+# WIFI-09: ga-overlay-init handles WiFi copy (consolidated service)
+grep -q 'ga-wifi' "${TARGET}/usr/sbin/ga-overlay-init" 2>/dev/null \
+  && _pass "WIFI-09: ga-overlay-init copies WiFi config to overlay" \
+  || _fail "WIFI-09: ga-overlay-init missing WiFi copy logic"
 
 # WIFI-10: WiFi config must NOT be in /etc/NM/system-connections (overlay hides it!)
 if [[ -f "${TARGET}/etc/NetworkManager/system-connections/GreenAutarky-Install.nmconnection" ]]; then
@@ -205,6 +202,44 @@ if [[ -f "${TARGET}/etc/NetworkManager/system-connections/GreenAutarky-Install.n
 else
   _pass "WIFI-10: WiFi config correctly NOT in overlaid /etc/NM/system-connections/"
 fi
+
+# --- HAOS Overlay Safety Checks ---
+# HAOS bind-mounts /mnt/overlay/etc/{hosts,hostname,systemd/timesyncd.conf,...}
+# over the rootfs. Any file placed in these paths at build time will be INVISIBLE
+# at runtime. GA defaults must live in /usr/share/ga-defaults/ and be copied to
+# the overlay by ga-overlay-init.service on first boot.
+
+# OVL-01: No GA content in overlaid /etc/hosts
+if [[ -f "${TARGET}/etc/hosts" ]] && grep -q 'greenautarky' "${TARGET}/etc/hosts" 2>/dev/null; then
+  _fail "OVL-01: /etc/hosts has GA entries — will be hidden by HAOS overlay! Use /usr/share/ga-defaults/hosts"
+else
+  _pass "OVL-01: /etc/hosts does not have GA entries (safe)"
+fi
+
+# OVL-02: GA hosts defaults in safe location
+[[ -f "${TARGET}/usr/share/ga-defaults/hosts" ]] && grep -q 'greenautarky' "${TARGET}/usr/share/ga-defaults/hosts" 2>/dev/null \
+  && _pass "OVL-02: GA DNS entries in /usr/share/ga-defaults/hosts" \
+  || _fail "OVL-02: GA DNS entries missing from /usr/share/ga-defaults/hosts"
+
+# OVL-03: timesyncd.conf not in overlaid path
+if [[ -f "${TARGET}/etc/systemd/timesyncd.conf" ]]; then
+  _fail "OVL-03: timesyncd.conf in /etc/systemd/ — will be hidden by HAOS overlay! Use /usr/share/ga-defaults/"
+else
+  _pass "OVL-03: timesyncd.conf not in overlaid path (safe)"
+fi
+
+# OVL-04: timesyncd defaults in safe location
+[[ -f "${TARGET}/usr/share/ga-defaults/timesyncd.conf" ]] \
+  && _pass "OVL-04: timesyncd.conf in /usr/share/ga-defaults/" \
+  || _fail "OVL-04: timesyncd.conf missing from /usr/share/ga-defaults/"
+
+# OVL-05: ga-overlay-init service exists and enabled
+[[ -f "${TARGET}/etc/systemd/system/ga-overlay-init.service" ]] \
+  && _pass "OVL-05a: ga-overlay-init.service exists" \
+  || _fail "OVL-05a: ga-overlay-init.service NOT found"
+[[ -L "${TARGET}/etc/systemd/system/multi-user.target.wants/ga-overlay-init.service" ]] \
+  && _pass "OVL-05b: ga-overlay-init.service enabled at boot" \
+  || _fail "OVL-05b: ga-overlay-init.service NOT enabled"
 
 # --- Additional rootfs checks ---
 
