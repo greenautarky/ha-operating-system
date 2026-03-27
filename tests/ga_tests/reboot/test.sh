@@ -220,12 +220,14 @@ run_reboot_test() {
         ssh_cmd "reboot" &>/dev/null || true
     elif [[ -c "${SERIAL_DEV:-/dev/ttyACM0}" ]]; then
         _info "  Using serial to trigger reboot..."
-        python3 -c "
-import serial, time
-s = serial.Serial('${SERIAL_DEV:-/dev/ttyACM0}', 115200, timeout=2)
+        SERIAL_DEV="${SERIAL_DEV:-/dev/ttyACM0}" SERIAL_PASS="${SERIAL_PASS:-}" python3 -c "
+import serial, time, os
+dev = os.environ.get('SERIAL_DEV', '/dev/ttyACM0')
+pw = os.environ.get('SERIAL_PASS', '')
+s = serial.Serial(dev, 115200, timeout=2)
 s.write(b'\r\n'); time.sleep(0.5); s.read(s.in_waiting)
 s.write(b'root\r\n'); time.sleep(1); s.read(s.in_waiting)
-s.write(b'${SERIAL_PASS:-}\r\n'); time.sleep(2); s.read(s.in_waiting)
+s.write(pw.encode() + b'\r\n'); time.sleep(2); s.read(s.in_waiting)
 s.write(b'reboot\r\n'); time.sleep(1)
 s.close()
 " 2>/dev/null || { _f "${prefix}-REBOOT: Could not trigger reboot via serial"; return 1; }
