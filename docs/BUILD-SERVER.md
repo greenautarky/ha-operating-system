@@ -37,7 +37,28 @@ pct create 107 local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst \
   --start 1 \
   --onboot 1
 
-# 3. Install build dependencies
+# 3. Configure Docker-in-Docker (CRITICAL for GA OS build)
+# The build uses Docker-in-Docker (DinD) for data partition creation.
+# These LXC settings are REQUIRED:
+pct stop 107
+cat >> /etc/pve/lxc/107.conf << 'EOF'
+lxc.apparmor.profile: unconfined
+lxc.cgroup2.devices.allow: a
+lxc.mount.auto: proc:rw sys:rw cgroup:rw:force
+lxc.cap.drop:
+lxc.mount.entry: /dev/loop-control dev/loop-control none bind,create=file 0 0
+lxc.mount.entry: /dev/loop0 dev/loop0 none bind,create=file 0 0
+lxc.mount.entry: /dev/loop1 dev/loop1 none bind,create=file 0 0
+lxc.mount.entry: /dev/loop2 dev/loop2 none bind,create=file 0 0
+lxc.mount.entry: /dev/loop3 dev/loop3 none bind,create=file 0 0
+lxc.mount.entry: /dev/loop4 dev/loop4 none bind,create=file 0 0
+lxc.mount.entry: /dev/loop5 dev/loop5 none bind,create=file 0 0
+lxc.mount.entry: /dev/loop6 dev/loop6 none bind,create=file 0 0
+lxc.mount.entry: /dev/loop7 dev/loop7 none bind,create=file 0 0
+EOF
+pct start 107
+
+# 4. Install build dependencies
 pct exec 107 -- bash -c 'apt-get update && apt-get install -y \
   git docker.io curl jq skopeo xz-utils \
   automake bash bc binutils build-essential bzip2 cpio file \
