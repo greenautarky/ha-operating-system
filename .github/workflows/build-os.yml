@@ -1,6 +1,14 @@
 name: Build GA OS Image
 
 on:
+  push:
+    branches: [master]
+    paths:
+      - 'buildroot-external/**'
+      - 'buildroot-ihost/**'
+      - 'scripts/ga_build.sh'
+      - 'scripts/check-images.sh'
+      - 'Dockerfile'
   workflow_dispatch:
     inputs:
       mode:
