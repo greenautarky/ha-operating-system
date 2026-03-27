@@ -13,6 +13,7 @@
 #   USB_POWER_CMD    — Command to power cycle USB (for power loss test)
 #   REBOOT_TIMEOUT   — Max seconds to wait for device (default: 180)
 #   HA_API_TIMEOUT   — Max seconds to wait for HA API (default: 300)
+#   CSV_FILE         — Path to CSV output file (default: reboot-results.csv in reports/)
 #
 set -euo pipefail
 
@@ -23,6 +24,20 @@ SSH_PORT="${SSH_PORT:-22222}"
 REBOOT_TIMEOUT="${REBOOT_TIMEOUT:-180}"
 HA_API_TIMEOUT="${HA_API_TIMEOUT:-300}"
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5"
+
+# CSV output
+CSV_FILE="${CSV_FILE:-${SCRIPT_DIR}/../../../ga_output/images/reports/reboot-results.csv}"
+mkdir -p "$(dirname "$CSV_FILE")" 2>/dev/null || true
+
+csv_init() {
+    if [[ ! -f "$CSV_FILE" ]]; then
+        echo "iteration,type,timestamp,shutdown_s,ping_return_s,ssh_ready_s,api_ready_s,total_s,result" > "$CSV_FILE"
+    fi
+}
+
+csv_row() {
+    echo "$1,$2,$(date -Iseconds),$3,$4,$5,$6,$7,$8" >> "$CSV_FILE"
+}
 
 # Counters
 _pass=0 _fail=0 _skip=0
@@ -272,11 +287,16 @@ s.close()
     verify_recovery "$prefix" "no"
 
     # Threshold check
+    local result="PASS"
     if [[ "${total_time}" -lt 180 ]]; then
         _p "${prefix}-TIME: Total reboot time ${total_time}s (< 180s threshold)"
     else
         _f "${prefix}-TIME: Total reboot time ${total_time}s (>= 180s threshold)"
+        result="FAIL"
     fi
+
+    # CSV
+    csv_row "$iteration" "reboot" "$down_wait" "${ping_time:-0}" "${ssh_time:-0}" "${api_time:-0}" "$total_time" "$result"
 }
 
 # === Power Loss Test ===
@@ -342,11 +362,16 @@ run_power_loss_test() {
     verify_recovery "$prefix" "yes"
 
     # Threshold check
+    local result="PASS"
     if [[ "${total_time}" -lt 240 ]]; then
         _p "${prefix}-TIME: Total power cycle time ${total_time}s (< 240s threshold)"
     else
         _f "${prefix}-TIME: Total power cycle time ${total_time}s (>= 240s threshold)"
+        result="FAIL"
     fi
+
+    # CSV
+    csv_row "1" "power_loss" "0" "${ping_time:-0}" "${ssh_time:-0}" "${api_time:-0}" "$total_time" "$result"
 }
 
 # === Main ===
@@ -373,6 +398,8 @@ else
     echo "ERROR: Device not reachable at ${DEVICE_IP}"
     exit 1
 fi
+echo "  CSV output: ${CSV_FILE}"
+csv_init
 echo "  Starting tests..."
 
 # Clean reboot test
