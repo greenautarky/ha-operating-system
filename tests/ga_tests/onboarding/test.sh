@@ -54,4 +54,15 @@ run_test "OB-11" "Frontend wheel installed" \
 run_test "OB-12" "No frontend-build bloat in core image" \
   "docker exec homeassistant test ! -d /usr/src/homeassistant/frontend-build"
 
+# --- Onboarding PIN ---
+if [ -f /mnt/data/ga-onboarding-pin ]; then
+  run_test "OB-10a" "PIN file exists" "true"
+  PERMS=$(stat -c '%a' /mnt/data/ga-onboarding-pin 2>/dev/null || echo "?")
+  run_test "OB-10b" "PIN file permissions 600" "[ '$PERMS' = '600' ]"
+  run_test "OB-10c" "PIN is 6 digits" \
+    "grep -qE '^[0-9]{6}$' /mnt/data/ga-onboarding-pin"
+else
+  skip_test "OB-10" "PIN file (not provisioned via ga-flasher)"
+fi
+
 suite_end
