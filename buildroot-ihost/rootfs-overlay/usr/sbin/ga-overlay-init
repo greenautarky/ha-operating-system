@@ -1,0 +1,64 @@
+#!/bin/sh
+# ga-overlay-init — Copy GA config files from rootfs to overlay partition.
+#
+# HAOS bind-mounts /mnt/overlay/etc/{hosts,systemd/timesyncd.conf,...} over
+# the rootfs, hiding any files placed there at build time. This script runs
+# once at first boot to seed the overlay with our defaults.
+#
+# Files are only copied if they don't already exist in the overlay (preserves
+# user/supervisor changes). Idempotent — safe to re-run.
+#
+set -e
+
+OVERLAY="/mnt/overlay"
+DEFAULTS="/usr/share/ga-defaults"
+
+log() { echo "ga-overlay-init: $1"; }
+
+# --- /etc/hosts: GA DNS fallback entries ---
+HOSTS_OVERLAY="${OVERLAY}/etc/hosts"
+HOSTS_DEFAULT="${DEFAULTS}/hosts"
+if [ -f "$HOSTS_DEFAULT" ]; then
+    if [ ! -f "$HOSTS_OVERLAY" ] || ! grep -q 'greenautarky' "$HOSTS_OVERLAY" 2>/dev/null; then
+        # Append GA entries (don't overwrite — supervisor may have added entries)
+        if [ -f "$HOSTS_OVERLAY" ]; then
+            # Append only the GA lines
+            grep 'greenautarky' "$HOSTS_DEFAULT" >> "$HOSTS_OVERLAY" 2>/dev/null || true
+            log "appended GA DNS entries to existing overlay hosts"
+        else
+            cp "$HOSTS_DEFAULT" "$HOSTS_OVERLAY"
+            log "copied hosts to overlay"
+        fi
+    else
+        log "hosts already has GA entries — skipping"
+    fi
+fi
+
+# --- /etc/systemd/timesyncd.conf: NTP fallback ---
+TIMESYNC_OVERLAY="${OVERLAY}/etc/systemd/timesyncd.conf"
+TIMESYNC_DEFAULT="${DEFAULTS}/timesyncd.conf"
+if [ -f "$TIMESYNC_DEFAULT" ]; then
+    if [ ! -f "$TIMESYNC_OVERLAY" ]; then
+        mkdir -p "$(dirname "$TIMESYNC_OVERLAY")"
+        cp "$TIMESYNC_DEFAULT" "$TIMESYNC_OVERLAY"
+        log "copied timesyncd.conf to overlay"
+    else
+        log "timesyncd.conf already in overlay — skipping"
+    fi
+fi
+
+# --- WiFi: GreenAutarky-Install connection ---
+WIFI_OVERLAY="${OVERLAY}/etc/NetworkManager/system-connections/GreenAutarky-Install.nmconnection"
+WIFI_DEFAULT="/usr/share/ga-wifi/GreenAutarky-Install.nmconnection"
+if [ -f "$WIFI_DEFAULT" ]; then
+    if [ ! -f "$WIFI_OVERLAY" ]; then
+        mkdir -p "$(dirname "$WIFI_OVERLAY")"
+        cp "$WIFI_DEFAULT" "$WIFI_OVERLAY"
+        chmod 600 "$WIFI_OVERLAY"
+        log "copied WiFi config to overlay"
+    else
+        log "WiFi config already in overlay — skipping"
+    fi
+fi
+
+log "done"

@@ -1,0 +1,12 @@
+[Unit]
+Description=Copy GA config files to overlay partition (first boot)
+After=etc-hosts.mount etc-systemd-timesyncd.conf.mount etc-NetworkManager-system\x2dconnections.mount
+Before=NetworkManager.service systemd-timesyncd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-overlay-init
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
