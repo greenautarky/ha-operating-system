@@ -1,0 +1,13 @@
+[Unit]
+Description=Copy GreenAutarky-Install WiFi to overlay (first boot)
+After=etc-NetworkManager-system\x2dconnections.mount
+Before=NetworkManager.service
+ConditionPathExists=!/mnt/overlay/etc/NetworkManager/system-connections/GreenAutarky-Install.nmconnection
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'cp /usr/share/ga-wifi/GreenAutarky-Install.nmconnection /mnt/overlay/etc/NetworkManager/system-connections/ && chmod 600 /mnt/overlay/etc/NetworkManager/system-connections/GreenAutarky-Install.nmconnection'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
