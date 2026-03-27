@@ -389,16 +389,26 @@ echo "  Device:  ${DEVICE_IP}:${SSH_PORT}"
 echo "  Timeouts: ping/ssh=${REBOOT_TIMEOUT}s api=${HA_API_TIMEOUT}s"
 echo ""
 
+# Wait for device to be reachable (handles case where device is still booting)
+echo "  Waiting for device to come online..."
+_online_wait=0
+while ! ping -c 1 -W 1 "$DEVICE_IP" &>/dev/null && (( _online_wait < 120 )); do
+    sleep 2
+    _online_wait=$((_online_wait + 2))
+done
+if ! ping -c 1 -W 2 "$DEVICE_IP" &>/dev/null; then
+    echo "ERROR: Device not reachable at ${DEVICE_IP} after 120s"
+    exit 1
+fi
+[[ "$_online_wait" -gt 0 ]] && echo "  Device came online after ${_online_wait}s"
+
 # Check connectivity — SSH preferred, ping-only fallback
 SSH_AVAILABLE=false
 if ssh_cmd "echo ok" &>/dev/null; then
     SSH_AVAILABLE=true
     echo "  Device reachable via SSH. Full verification enabled."
-elif ping -c 1 -W 2 "$DEVICE_IP" &>/dev/null; then
-    echo "  Device reachable via ping only (SSH unavailable). Ping-only mode."
 else
-    echo "ERROR: Device not reachable at ${DEVICE_IP}"
-    exit 1
+    echo "  Device reachable via ping only (SSH unavailable). Ping-only mode."
 fi
 echo "  CSV output: ${CSV_FILE}"
 csv_init
