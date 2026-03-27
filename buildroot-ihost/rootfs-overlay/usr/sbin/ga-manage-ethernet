@@ -17,9 +17,17 @@ set -e
 GA_ENV_FILE="/mnt/data/ga-env.conf"
 ETH_IFACE="eth0"
 
-# Find the NM connection name bound to eth0
+# Find the NM connection name for eth0 (active or inactive)
 find_eth_connection() {
-  nmcli -t -f NAME,DEVICE connection show 2>/dev/null | grep ":${ETH_IFACE}$" | head -1 | cut -d: -f1
+  # First try active connections
+  local conn
+  conn=$(nmcli -t -f NAME,DEVICE connection show 2>/dev/null | grep ":${ETH_IFACE}$" | head -1 | cut -d: -f1)
+  if [ -n "$conn" ]; then
+    echo "$conn"
+    return
+  fi
+  # Fallback: search all connections by type (ethernet) — picks up inactive ones
+  nmcli -t -f NAME,TYPE connection show 2>/dev/null | grep ':802-3-ethernet$' | head -1 | cut -d: -f1
 }
 
 # Check if eth0 is currently connected
