@@ -16,8 +16,8 @@ No device or emulator needed — checks the build output tree directly.
 - CFG-08: fluent-bit.conf has device_label in record_modifier filter
 - CFG-09: fluent-bit.conf has device_label in Loki output labels
 - CFG-11: fluent-bit.service has DEVICE_LABEL safe default
-- CFG-13: /etc/hosts has influx fallback entry
-- CFG-14: /etc/hosts has loki fallback entry
+- CFG-13: ga-defaults/hosts has influx fallback entry
+- CFG-14: ga-defaults/hosts has loki fallback entry
 - CFG-15: telegraf.service ordered after netbird
 - CFG-16: fluent-bit.service ordered after netbird
 - CFG-19: parsers.conf exists on rootfs
@@ -45,6 +45,25 @@ No device or emulator needed — checks the build output tree directly.
 - DT-01: Patched device tree matches known-good reference (catches silent patch failures)
 - DT-02: Critical SDIO properties present (vmmc-supply, vqmmc-supply, supports-sdio, dr_mode=peripheral)
 - DT-03: USB host nodes disabled (u2phy1, u2phy_host, usb_host0_ehci, usb_host0_ohci)
+
+### WiFi configuration
+- WIFI-08a: GreenAutarky-Install WiFi SSID configured
+- WIFI-08b: Install WiFi low priority (autoconnect-priority=-10)
+- WIFI-08c: Install WiFi PSK injected (not placeholder)
+- WIFI-08d: Install WiFi file permissions 0600
+- WIFI-09: ga-overlay-init copies WiFi config to overlay
+- WIFI-10: WiFi config NOT in overlaid /etc/NM/system-connections/
+- WIFI-11a: OpenStick WiFi key permissions 0600
+- WIFI-11b: OpenStick WiFi key is 64 hex chars (256-bit)
+- WIFI-11c: OpenStick WiFi key is valid hex
+
+### HAOS overlay safety
+- OVL-01: No GA content in overlaid /etc/hosts
+- OVL-02: GA DNS entries in /usr/share/ga-defaults/hosts
+- OVL-03: GA timesyncd.conf not in overlaid /etc/systemd/
+- OVL-04: timesyncd.conf in /usr/share/ga-defaults/
+- OVL-05a: ga-overlay-init.service exists
+- OVL-05b: ga-overlay-init.service enabled at boot
 
 ### Version chain
 - VER-01: version.json supervisor version is not "latest"
@@ -159,3 +178,16 @@ Must run on real iHost hardware. Needs network, Docker, HA running.
 - HW-13: No critical driver probe failures
 - HW-15: Watchdog device present
 - HW-SUM: dmesg error/fail summary
+
+### From openstick (needs OpenStick dongle powered + in range)
+- OS-01: Shared secret file exists (`/usr/share/ga-wifi/openstick-wifi.key`)
+- OS-02a: Shared secret permissions 600
+- OS-02b: Shared secret is 64 hex chars (256-bit)
+- OS-03: HMAC-SHA256 derivation produces 16-char PSK
+- OS-04a: WiFi interface wlan0 present
+- OS-04: WiFi scan completed
+- OS-05: OpenStick GA-* SSID detected in range
+- OS-06: SSID format valid (GA-XXXX = 4 digits)
+- OS-07: PSK derived for detected SSID
+- OS-08: WiFi connection with derived PSK
+- OS-09: Internet reachable via OpenStick (connectivity check)
