@@ -87,6 +87,19 @@ Runs as a container with Supervisor API access (`hassio` role).
 ### Disk Guard
 - [ ] Tune disk guard thresholds for production (currently: 300 MiB soft, 120 MiB hard)
 
+### OpenStick WiFi Fallback (needs discussion)
+- [ ] Implement auto-connect to OpenStick LTE dongle WiFi as last-resort fallback
+  - SSID: `GA-XXXX` (last 4 digits of OpenStick IMEI, prefix TBD)
+  - PSK derived from SSID: `HMAC-SHA256(SHARED_SECRET, SSID)[:16]`
+  - Same shared secret baked into KiBu OS + OpenStick firmware
+  - Trigger: only when NM connectivity check fails on LAN, RNDIS, and GreenAutarky-Install WiFi
+  - Any GA-* stick in range is acceptable (no pairing needed)
+  - See: `ga-ihost-docs/NETWORKING.md` → "OpenStick WiFi" section
+- [ ] Define SSID prefix format
+- [ ] Choose shared secret and storage location
+- [ ] Implement OpenStick hostapd config (separate repo)
+- [ ] Implement KiBu WiFi scan + auto-derive service
+
 ### Image Flasher
 - [ ] Add error recovery / rollback logic to `ga_flasher` for failed flashes
 
