@@ -61,4 +61,13 @@ if [ -f "$WIFI_DEFAULT" ]; then
     fi
 fi
 
+# --- Mask audio-setup.service (iHost has no audio hardware) ---
+AUDIO_MASK="/etc/systemd/system/audio-setup.service"
+if [ ! -L "$AUDIO_MASK" ] || [ "$(readlink "$AUDIO_MASK" 2>/dev/null)" != "/dev/null" ]; then
+    ln -sf /dev/null "$AUDIO_MASK"
+    log "masked audio-setup.service (no audio on iHost)"
+else
+    log "audio-setup.service already masked — skipping"
+fi
+
 log "done"

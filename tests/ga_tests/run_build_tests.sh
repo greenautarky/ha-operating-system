@@ -243,15 +243,11 @@ fi
 
 # --- Additional rootfs checks ---
 
-# CFG-25: audio-setup.service masked (iHost has no audio hardware)
-if [[ -L "${TARGET}/etc/systemd/system/audio-setup.service" ]]; then
-  LINK_TARGET=$(readlink "${TARGET}/etc/systemd/system/audio-setup.service" 2>/dev/null)
-  [[ "$LINK_TARGET" == "/dev/null" ]] \
-    && _pass "CFG-25: audio-setup.service masked" \
-    || _fail "CFG-25: audio-setup.service symlink points to '$LINK_TARGET' (expected /dev/null)"
-else
-  _fail "CFG-25: audio-setup.service not masked (no symlink)"
-fi
+# CFG-25: audio-setup masking handled by ga-overlay-init at runtime
+# Cannot mask at build time — Buildroot's preset phase fails on masked units.
+grep -q 'audio-setup' "${TARGET}/usr/sbin/ga-overlay-init" 2>/dev/null \
+  && _pass "CFG-25: ga-overlay-init masks audio-setup.service at runtime" \
+  || _fail "CFG-25: ga-overlay-init missing audio-setup masking"
 
 # CFG-26: NM connectivity check configured
 grep -q 'checkonline.greenautarky.com' "${TARGET}/etc/NetworkManager/NetworkManager.conf" 2>/dev/null \
