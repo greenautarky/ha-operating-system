@@ -452,6 +452,37 @@ if [[ -f "$VER_JSON" ]]; then
     && _pass "VER-06: OTA URL points to greenautarky" \
     || _fail "VER-06: OTA URL does NOT point to greenautarky: $VER_OTA"
 
+  # VER-07: Core image digest matches GHCR (not stale cache)
+  IMAGES_DIR="$(ls -d ${OUT}/build/hassio-*/images 2>/dev/null | head -n 1 || true)"
+  if [[ -d "$IMAGES_DIR" ]] && command -v skopeo >/dev/null 2>&1; then
+    CORE_TAR="$(ls "$IMAGES_DIR"/*homeassistant*.tar 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$CORE_TAR" ]]; then
+      # Extract digest from tar filename (format: ...@sha256_XXXX.tar)
+      BUILD_DIGEST="$(basename "$CORE_TAR" .tar | grep -oP 'sha256_\K[a-f0-9]+' || true)"
+      # Query current digest from GHCR
+      CORE_REF="$(jq -r '.images.core // .image.core' "$VER_JSON" 2>/dev/null | sed "s/{machine}/${MACHINE:-tinker}/;s/{arch}/${ARCH:-armv7}/")"
+      CORE_TAG="$(jq -r '.homeassistant."'${MACHINE:-tinker}'" // .core' "$VER_JSON" 2>/dev/null)"
+      if [[ -n "$CORE_REF" ]] && [[ -n "$CORE_TAG" ]] && [[ "$CORE_TAG" != "null" ]]; then
+        GHCR_DIGEST="$(skopeo inspect --override-arch arm --override-variant v7 "docker://${CORE_REF}:${CORE_TAG}" 2>/dev/null | jq -r '.Digest' | sed 's/sha256://' || true)"
+        if [[ -n "$BUILD_DIGEST" ]] && [[ -n "$GHCR_DIGEST" ]]; then
+          if [[ "$BUILD_DIGEST" == "$GHCR_DIGEST" ]]; then
+            _pass "VER-07: Core image digest matches GHCR (fresh)"
+          else
+            _fail "VER-07: Core image STALE — build digest ${BUILD_DIGEST:0:12} != GHCR ${GHCR_DIGEST:0:12} (cached tar not refreshed)"
+          fi
+        else
+          _skip "VER-07" "could not extract digests (build=$BUILD_DIGEST ghcr=$GHCR_DIGEST)"
+        fi
+      else
+        _skip "VER-07" "could not resolve core image ref from version.json"
+      fi
+    else
+      _skip "VER-07" "no core tar found in $IMAGES_DIR"
+    fi
+  else
+    _skip "VER-07" "skopeo not available or no images dir"
+  fi
+
 else
   _skip "BLD: version.json" "only present after full build"
 fi

@@ -1725,6 +1725,14 @@ elif [[ "$MODE" == "update" ]]; then
   # (Buildroot doesn't track overlay/config file changes as package dependencies)
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" \
     telegraf-dirclean fluent-bit-config-dirclean 2>/dev/null || true
+  # Force hassio to re-check container image digests from registry
+  # Without this, Buildroot skips the fetch step and uses stale cached tars
+  # (same Docker tag can have new content after a Core/Frontend rebuild)
+  rm -f "${OUT}/build/hassio-1.0.0/.stamp_built" \
+        "${OUT}/build/hassio-1.0.0/.stamp_images_installed" \
+        "${OUT}/build/hassio-1.0.0/.stamp_installed" \
+        "${OUT}/build/hassio-1.0.0/.stamp_target_installed" 2>/dev/null || true
+  echo "Cleared hassio stamps — container images will be re-checked"
 
 else
   echo "Usage: $0 [full|partial|kernel|update|dev|prod] [dev|prod]"
