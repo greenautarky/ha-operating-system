@@ -1,7 +1,7 @@
 #!/bin/bash
 # Inject OpenStick WiFi shared secret into the OS image.
 # The secret is used at runtime to derive WiFi passwords from OpenStick SSIDs:
-#   PSK = SHA256(SSID + SECRET)[:16]
+#   PSK = HMAC-SHA256(SECRET, SSID)[:16]
 # Secret is stored in secrets/openstick-wifi.key (gitignored).
 set -e
 

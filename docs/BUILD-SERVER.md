@@ -124,6 +124,20 @@ git submodule update --init
 ./scripts/ga_build.sh prod   # prod build (~90 min)
 ```
 
+## Secrets
+
+These files must exist on the builder (gitignored, manually copied):
+
+| File | Purpose |
+|------|---------|
+| `secrets/wifi-install.psk` | GreenAutarky-Install WiFi PSK |
+| `secrets/openstick-wifi.key` | HMAC shared secret for OpenStick WiFi PSK derivation |
+| `scripts/local.env` | Root password hash for device provisioning |
+| `buildroot-external/ota/rel-ca.pem` | RAUC OTA signing CA certificate |
+| `buildroot-external/ota/dev-ca.pem` | Symlink → `rel-ca.pem` |
+
+In CI, these are injected from GitHub Secrets (see `.github/workflows/build-os.yml`).
+
 ## Build Cache
 
 The container preserves build output between runs — incremental builds

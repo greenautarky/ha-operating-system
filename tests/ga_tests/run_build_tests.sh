@@ -196,6 +196,24 @@ grep -q 'ga-wifi' "${TARGET}/usr/sbin/ga-overlay-init" 2>/dev/null \
   && _pass "WIFI-09: ga-overlay-init copies WiFi config to overlay" \
   || _fail "WIFI-09: ga-overlay-init missing WiFi copy logic"
 
+# WIFI-11: OpenStick WiFi shared secret injected
+OSTICK_KEY="${TARGET}/usr/share/ga-wifi/openstick-wifi.key"
+if [[ -f "$OSTICK_KEY" ]]; then
+  OSTICK_PERMS=$(stat -c '%a' "$OSTICK_KEY" 2>/dev/null)
+  [[ "$OSTICK_PERMS" == "600" ]] \
+    && _pass "WIFI-11a: openstick-wifi.key permissions 0600" \
+    || _fail "WIFI-11a: openstick-wifi.key permissions $OSTICK_PERMS (need 0600)"
+  OSTICK_LEN=$(tr -d '\n' < "$OSTICK_KEY" | wc -c)
+  [[ "$OSTICK_LEN" == "64" ]] \
+    && _pass "WIFI-11b: openstick-wifi.key is 64 hex chars (256-bit)" \
+    || _fail "WIFI-11b: openstick-wifi.key length $OSTICK_LEN (expected 64)"
+  grep -qE '^[0-9a-f]{64}$' "$OSTICK_KEY" 2>/dev/null \
+    && _pass "WIFI-11c: openstick-wifi.key is valid hex" \
+    || _fail "WIFI-11c: openstick-wifi.key is not valid hex"
+else
+  _skip "WIFI-11a..c" "openstick-wifi.key not found (secrets/openstick-wifi.key missing?)"
+fi
+
 # WIFI-10: WiFi config must NOT be in /etc/NM/system-connections (overlay hides it!)
 if [[ -f "${TARGET}/etc/NetworkManager/system-connections/GreenAutarky-Install.nmconnection" ]]; then
   _fail "WIFI-10: WiFi config in /etc/NM/system-connections/ — will be hidden by HAOS overlay mount! Move to /usr/share/ga-wifi/"
