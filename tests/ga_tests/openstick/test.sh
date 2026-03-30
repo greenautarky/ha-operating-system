@@ -21,20 +21,6 @@ SSID_PREFIX="GA-"
 
 # --- OS-01..03: Key file and HMAC derivation ---
 
-if [ ! -f "$KEY_FILE" ]; then
-  skip_test "OS-01" "Shared secret file exists (not provisioned)"
-  skip_test "OS-02" "Shared secret format valid"
-  skip_test "OS-03" "HMAC-SHA256 derivation works"
-  skip_test "OS-04" "WiFi scan for GA-* SSIDs"
-  skip_test "OS-05" "OpenStick SSID detected"
-  skip_test "OS-06" "SSID format valid (GA-XXXX)"
-  skip_test "OS-07" "PSK derivation matches"
-  skip_test "OS-08" "WiFi connection to OpenStick"
-  skip_test "OS-09" "Internet via OpenStick"
-  suite_end
-  exit $?
-fi
-
 run_test "OS-01" "Shared secret file exists" \
   "test -f $KEY_FILE"
 
@@ -50,8 +36,8 @@ run_test "OS-03" "HMAC-SHA256 derivation produces 16-char PSK" \
   "PSK=\$(echo -n 'GA-0000' | openssl dgst -sha256 -hmac \"\$(cat $KEY_FILE)\" 2>/dev/null | cut -d' ' -f2 | cut -c1-16) && [ \${#PSK} -eq 16 ]"
 
 # --- OS-04..06: WiFi scanning and OpenStick detection ---
+# These tests skip if no WiFi hardware or no OpenStick in range
 
-# Check if wlan0 exists
 if ! ip link show wlan0 >/dev/null 2>&1; then
   skip_test "OS-04" "WiFi interface present (wlan0 missing)"
   skip_test "OS-05" "OpenStick SSID detected"
