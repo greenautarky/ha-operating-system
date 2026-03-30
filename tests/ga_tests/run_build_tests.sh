@@ -854,6 +854,31 @@ if [[ -n "$SRC" ]]; then
     _skip "SRC-14d..e" "ha-core repo not found"
   fi
 
+  # SRC-15: QR code PIN auto-injection (frontend)
+  if [[ -n "$FE_ROOT" ]]; then
+    # SRC-15a: PIN component accepts autoPin property
+    grep -q 'autoPin' "${FE_ROOT}/src/panels/greenautarky-setup/ga-setup-pin.ts" 2>/dev/null \
+      && _pass "SRC-15a: ga-setup-pin has autoPin property (QR support)" \
+      || _fail "SRC-15a: ga-setup-pin missing autoPin — QR auto-inject won't work"
+
+    # SRC-15b: Wizard parses ?pin= URL parameter
+    grep -q "getParam.*pin\|URLSearchParams.*pin\|\.get.*pin" "${FE_ROOT}/src/panels/greenautarky-setup/ha-panel-greenautarky-setup.ts" 2>/dev/null \
+      && _pass "SRC-15b: wizard parses ?pin= from URL" \
+      || _fail "SRC-15b: wizard not parsing ?pin= URL parameter"
+
+    # SRC-15c: Wizard cleans URL after parsing (removes pin from address bar)
+    grep -q 'replaceState' "${FE_ROOT}/src/panels/greenautarky-setup/ha-panel-greenautarky-setup.ts" 2>/dev/null \
+      && _pass "SRC-15c: wizard cleans PIN from URL (history.replaceState)" \
+      || _fail "SRC-15c: wizard not cleaning PIN from URL — security risk"
+
+    # SRC-15d: E2E tests for QR auto-inject exist
+    grep -q 'QR auto-inject' "${SCRIPT_DIR}/../../e2e/tests/pin-verification.spec.ts" 2>/dev/null \
+      && _pass "SRC-15d: QR auto-inject E2E tests exist" \
+      || _fail "SRC-15d: QR auto-inject E2E tests missing"
+  else
+    _skip "SRC-15a..d" "frontend repo not found"
+  fi
+
   # SRC-09: Global stale reference scan across all functional source
   STALE_COUNT=0
   for dir in "${SRC}/buildroot-external/package" "${SRC}/buildroot-external/rootfs-overlay" "${SRC}/scripts"; do
