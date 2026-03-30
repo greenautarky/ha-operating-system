@@ -1957,6 +1957,30 @@ _build_tests_skip="${_build_tests_skip:-0}"
 _source_pins="$(cat "${OUT}/images/configs/source-pins.json" 2>/dev/null || echo "{}")"
 _build_duration="$(grep 'Total build time' "$BUILD_LOG" 2>/dev/null | tail -1 || echo "unknown")"
 
+# Disk image sizes (uncompressed)
+_data_ext4_size="$(du -h "${OUT}/images/data.ext4" 2>/dev/null | cut -f1 || echo "N/A")"
+_rootfs_size="$(du -h "${OUT}/images/rootfs.erofs" 2>/dev/null | cut -f1 || echo "N/A")"
+_boot_size="$(du -h "${OUT}/images/boot.vfat" 2>/dev/null | cut -f1 || echo "N/A")"
+_disk_img="$(ls "${OUT}/images/haos_"*.img 2>/dev/null | head -n 1 || true)"
+_disk_img_size="$(du -h "$_disk_img" 2>/dev/null | cut -f1 || echo "N/A")"
+
+# Container image sizes (tars in hassio build dir)
+_container_rows=""
+_container_total=0
+_images_dir="${OUT}/build/hassio-1.0.0/images"
+if [[ -d "$_images_dir" ]]; then
+  while IFS= read -r tarfile; do
+    _tar_name="$(basename "$tarfile" .tar)"
+    # Clean up name: replace _ with / for readability, trim sha256 digest
+    _tar_display="$(echo "$_tar_name" | sed 's/@sha256_.*//' | sed 's|_|/|')"
+    _tar_bytes="$(stat -c%s "$tarfile" 2>/dev/null || echo 0)"
+    _tar_human="$(du -h "$tarfile" 2>/dev/null | cut -f1 || echo "?")"
+    _container_total=$(( _container_total + _tar_bytes ))
+    _container_rows="${_container_rows}<tr><td class=\"mono\">${_tar_display}</td><td>${_tar_human}</td></tr>"
+  done < <(ls -S "$_images_dir"/*.tar 2>/dev/null)
+fi
+_container_total_human="$(echo "$_container_total" | awk '{printf "%.1f GB", $1/1024/1024/1024}')"
+
 cat > "$_report" <<HTMLEOF
 <!DOCTYPE html>
 <html lang="en">
@@ -2017,6 +2041,22 @@ cat > "$_report" <<HTMLEOF
 <tr><th>File</th><th>Size</th><th>SHA256</th></tr>
 <tr><td class="mono">${_img_name}</td><td>${_img_size}</td><td class="sha">${_img_sha}</td></tr>
 <tr><td class="mono">${_raucb_name}</td><td>${_raucb_size}</td><td class="sha">$(cut -d' ' -f1 "${_raucb}.sha256" 2>/dev/null || echo "N/A")</td></tr>
+</table>
+
+<h2>Disk Layout</h2>
+<table>
+<tr><th>Partition / Image</th><th>Size</th></tr>
+<tr><td>Total disk image (uncompressed)</td><td><strong>${_disk_img_size}</strong></td></tr>
+<tr><td>rootfs.erofs</td><td>${_rootfs_size}</td></tr>
+<tr><td>boot.vfat</td><td>${_boot_size}</td></tr>
+<tr><td>data.ext4</td><td>${_data_ext4_size}</td></tr>
+</table>
+
+<h2>Pre-baked Container Images</h2>
+<table>
+<tr><th>Image</th><th>Size (tar)</th></tr>
+${_container_rows}
+<tr><td><strong>Total</strong></td><td><strong>${_container_total_human}</strong></td></tr>
 </table>
 
 <h2>Build Tests</h2>

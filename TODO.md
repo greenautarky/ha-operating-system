@@ -150,6 +150,12 @@ Runs as a container with Supervisor API access (`hassio` role).
   - Needs: bump `BR2_PACKAGE_HASSIO_DATA_IMAGE_SIZE` to fit extra images
   - Needs: add addon entries to `fetch-container-image.sh` / `hassio.mk` or separate fetch step
   - Consider: pre-writing Supervisor addon config (`/mnt/data/supervisor/addons/`) to skip API step entirely
+- [ ] **ga_hmvapp_addon + ga_default_addon**: Set up CI to build & push Docker images to GHCR
+  - Both repos (`greenautarky/ga_hmvapp_addon`, `greenautarky/ga_default_addon`) are private, no CI yet
+  - Need: Dockerfile + GitHub Actions workflow → push to `ghcr.io/greenautarky/ga_hmvapp_addon-{arch}`
+  - Then add to `addon-images.json` with pinned version
+  - Note: ga_default_addon had crash-loop issue (InfluxDB "gd_data" DB missing) — fix first (see #4)
+  - Will increase data partition size further — check FULL_DISK_SIZE accordingly
 
 ### Pre-configure GA Add-on Repository (needs discussion)
 - [ ] Pre-write `/mnt/data/supervisor/store.json` with greenautarky addon repo URL
@@ -162,6 +168,8 @@ Runs as a container with Supervisor API access (`hassio` role).
 ### Image Size Optimization
 - [x] ~~Exclude `frontend-build/` from ha-core Docker image (-537MB)~~ — fixed in ha-core `66414a54`
 - [ ] Remove unused integrations/components from custom ha-core build to reduce image size
+- [ ] **Slim down ga_influxdbv1 container** (496 MB — second largest after Core)
+  - Discuss: smaller base image, multi-stage build, strip debug symbols, remove unused plugins
 - [ ] Review if all bundled container images (audio, multicast, etc.) are needed for iHost
 
 ### Package Updates (next major / Buildroot Go bump)
