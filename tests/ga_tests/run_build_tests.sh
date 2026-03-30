@@ -74,14 +74,14 @@ grep -q 'DEVICE_LABEL' "$FB_SVC" 2>/dev/null \
   && _pass "CFG-11: fluent-bit.service has DEVICE_LABEL" \
   || _fail "CFG-11: fluent-bit.service missing DEVICE_LABEL"
 
-# CFG-13/14: /etc/hosts has fallback entries
-grep -q 'influx.greenautarky.com' "${TARGET}/etc/hosts" 2>/dev/null \
-  && _pass "CFG-13: /etc/hosts has influx fallback" \
-  || _fail "CFG-13: /etc/hosts missing influx fallback"
+# CFG-13/14: GA DNS fallback entries in ga-defaults (applied at runtime by ga-overlay-init)
+grep -q 'influx.greenautarky.com' "${TARGET}/usr/share/ga-defaults/hosts" 2>/dev/null \
+  && _pass "CFG-13: ga-defaults/hosts has influx fallback" \
+  || _fail "CFG-13: ga-defaults/hosts missing influx fallback"
 
-grep -q 'loki.greenautarky.com' "${TARGET}/etc/hosts" 2>/dev/null \
-  && _pass "CFG-14: /etc/hosts has loki fallback" \
-  || _fail "CFG-14: /etc/hosts missing loki fallback"
+grep -q 'loki.greenautarky.com' "${TARGET}/usr/share/ga-defaults/hosts" 2>/dev/null \
+  && _pass "CFG-14: ga-defaults/hosts has loki fallback" \
+  || _fail "CFG-14: ga-defaults/hosts missing loki fallback"
 
 # CFG-15/16: Service ordering
 grep -q 'netbird' "${TARGET}/etc/systemd/system/telegraf.service" 2>/dev/null \
@@ -221,11 +221,11 @@ fi
   && _pass "OVL-02: GA DNS entries in /usr/share/ga-defaults/hosts" \
   || _fail "OVL-02: GA DNS entries missing from /usr/share/ga-defaults/hosts"
 
-# OVL-03: timesyncd.conf not in overlaid path
-if [[ -f "${TARGET}/etc/systemd/timesyncd.conf" ]]; then
-  _fail "OVL-03: timesyncd.conf in /etc/systemd/ — will be hidden by HAOS overlay! Use /usr/share/ga-defaults/"
+# OVL-03: GA timesyncd.conf not in overlaid path (upstream Buildroot default is OK)
+if grep -q 'greenautarky\|time.cloudflare.com' "${TARGET}/etc/systemd/timesyncd.conf" 2>/dev/null; then
+  _fail "OVL-03: GA timesyncd.conf in /etc/systemd/ — will be hidden by HAOS overlay! Use /usr/share/ga-defaults/"
 else
-  _pass "OVL-03: timesyncd.conf not in overlaid path (safe)"
+  _pass "OVL-03: GA timesyncd.conf not in overlaid path (safe)"
 fi
 
 # OVL-04: timesyncd defaults in safe location
