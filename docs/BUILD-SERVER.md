@@ -55,8 +55,16 @@ lxc.mount.entry: /dev/loop4 dev/loop4 none bind,create=file 0 0
 lxc.mount.entry: /dev/loop5 dev/loop5 none bind,create=file 0 0
 lxc.mount.entry: /dev/loop6 dev/loop6 none bind,create=file 0 0
 lxc.mount.entry: /dev/loop7 dev/loop7 none bind,create=file 0 0
+lxc.mount.entry: /dev/mapper dev/mapper none bind,create=dir 0 0
 EOF
 pct start 107
+
+# 3b. Load dm-verity on host (needed for RAUC bundle signing)
+modprobe dm_mod
+modprobe dm-verity 2>/dev/null || modprobe dm_verity
+# Make persistent:
+echo dm_mod >> /etc/modules-load.d/ga-builder.conf
+echo dm-verity >> /etc/modules-load.d/ga-builder.conf
 
 # 4. Install build dependencies
 pct exec 107 -- bash -c 'apt-get update && apt-get install -y \

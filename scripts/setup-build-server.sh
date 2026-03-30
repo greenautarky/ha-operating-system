@@ -83,11 +83,12 @@ sleep 2
 # - mount.auto cgroup:rw:force: Docker-in-Docker needs writable cgroups
 # - cap.drop empty: Docker --privileged needs ALL capabilities
 # - loop devices: Buildroot creates data.ext4 via losetup+mount
+# - /dev/mapper: RAUC verity bundles need device-mapper (dm-verity)
 pve "
 cat >> /etc/pve/lxc/${CTID}.conf << 'LXCEOF'
 lxc.apparmor.profile: unconfined
 lxc.cgroup2.devices.allow: a
-lxc.mount.auto: proc:rw sys:rw cgroup:rw:force
+lxc.mount.auto: proc:rw sys:rw
 lxc.cap.drop:
 lxc.mount.entry: /dev/loop-control dev/loop-control none bind,create=file 0 0
 lxc.mount.entry: /dev/loop0 dev/loop0 none bind,create=file 0 0
@@ -98,8 +99,12 @@ lxc.mount.entry: /dev/loop4 dev/loop4 none bind,create=file 0 0
 lxc.mount.entry: /dev/loop5 dev/loop5 none bind,create=file 0 0
 lxc.mount.entry: /dev/loop6 dev/loop6 none bind,create=file 0 0
 lxc.mount.entry: /dev/loop7 dev/loop7 none bind,create=file 0 0
+lxc.mount.entry: /dev/mapper dev/mapper none bind,create=dir 0 0
 LXCEOF
 "
+
+# Load dm-verity kernel module on host (needed for RAUC bundle signing)
+pve "modprobe dm_mod && modprobe dm-verity 2>/dev/null || modprobe dm_verity 2>/dev/null && echo 'dm-verity loaded' || echo 'WARN: dm-verity not available'"
 pve "pct start ${CTID}"
 sleep 10
 echo "  Docker-in-Docker configured"
