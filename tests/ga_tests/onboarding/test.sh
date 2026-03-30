@@ -55,12 +55,14 @@ run_test "OB-12" "No frontend-build bloat in core image" \
   "docker exec homeassistant test ! -d /usr/src/homeassistant/frontend-build"
 
 # --- Onboarding PIN ---
-if [ -f /mnt/data/ga-onboarding-pin ]; then
+# PIN lives in /mnt/data/supervisor/homeassistant/ (HA Core sees it as /config/)
+PIN_FILE="/mnt/data/supervisor/homeassistant/ga-onboarding-pin"
+if [ -f "$PIN_FILE" ]; then
   run_test "OB-10a" "PIN file exists" "true"
-  PERMS=$(stat -c '%a' /mnt/data/ga-onboarding-pin 2>/dev/null || echo "?")
+  PERMS=$(stat -c '%a' "$PIN_FILE" 2>/dev/null || echo "?")
   run_test "OB-10b" "PIN file permissions 600" "[ '$PERMS' = '600' ]"
   run_test "OB-10c" "PIN is 6 digits" \
-    "grep -qE '^[0-9]{6}$' /mnt/data/ga-onboarding-pin"
+    "grep -qE '^[0-9]{6}$' $PIN_FILE"
 else
   skip_test "OB-10" "PIN file (not provisioned via ga-flasher)"
 fi

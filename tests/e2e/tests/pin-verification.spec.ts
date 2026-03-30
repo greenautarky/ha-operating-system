@@ -9,7 +9,7 @@ import { test, expect } from "../fixtures/device";
  *
  * Requires:
  *   - Device with GA onboarding not completed
- *   - PIN file on device (/mnt/data/ga-onboarding-pin)
+ *   - PIN file on device (/mnt/data/supervisor/homeassistant/ga-onboarding-pin)
  *   - DEVICE_PIN env var with the correct PIN (for positive tests)
  *
  * If no PIN file exists on the device, tests are skipped (backward compat).
