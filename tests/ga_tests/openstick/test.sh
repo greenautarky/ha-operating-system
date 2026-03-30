@@ -6,9 +6,12 @@
 #   OS-04..06: WiFi scanning and OpenStick detection
 #   OS-07..09: Connection and internet via OpenStick
 #
+# All tests FAIL (not skip) if requirements are not met.
+# An OpenStick must be powered and broadcasting a GA-XXXX SSID.
+#
 # Prerequisites:
+#   - Shared secret in /usr/share/ga-wifi/openstick-wifi.key (build artifact)
 #   - OpenStick dongle powered and broadcasting GA-XXXX SSID
-#   - Shared secret in /usr/share/ga-wifi/openstick-wifi.key
 #   - openssl available (for HMAC-SHA256)
 #
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -36,18 +39,9 @@ run_test "OS-03" "HMAC-SHA256 derivation produces 16-char PSK" \
   "PSK=\$(echo -n 'GA-0000' | openssl dgst -sha256 -hmac \"\$(cat $KEY_FILE)\" 2>/dev/null | cut -d' ' -f2 | cut -c1-16) && [ \${#PSK} -eq 16 ]"
 
 # --- OS-04..06: WiFi scanning and OpenStick detection ---
-# These tests skip if no WiFi hardware or no OpenStick in range
 
-if ! ip link show wlan0 >/dev/null 2>&1; then
-  skip_test "OS-04" "WiFi interface present (wlan0 missing)"
-  skip_test "OS-05" "OpenStick SSID detected"
-  skip_test "OS-06" "SSID format valid"
-  skip_test "OS-07" "PSK derivation for detected SSID"
-  skip_test "OS-08" "WiFi connection to OpenStick"
-  skip_test "OS-09" "Internet via OpenStick"
-  suite_end
-  exit $?
-fi
+run_test "OS-04a" "WiFi interface wlan0 present" \
+  "ip link show wlan0 >/dev/null 2>&1"
 
 # Scan for GA-* SSIDs (rescan first)
 nmcli dev wifi rescan 2>/dev/null
@@ -58,12 +52,15 @@ GA_SSIDS=$(nmcli -t -f SSID dev wifi list 2>/dev/null | grep "^${SSID_PREFIX}" |
 run_test "OS-04" "WiFi scan completed" \
   "nmcli -t -f SSID dev wifi list 2>/dev/null | head -1 | grep -q '.' "
 
+run_test "OS-05" "OpenStick GA-* SSID detected in range" \
+  "[ -n '$GA_SSIDS' ]"
+
 if [ -z "$GA_SSIDS" ]; then
-  skip_test "OS-05" "OpenStick SSID detected (no GA-* SSIDs in range)"
-  skip_test "OS-06" "SSID format valid"
-  skip_test "OS-07" "PSK derivation for detected SSID"
-  skip_test "OS-08" "WiFi connection to OpenStick"
-  skip_test "OS-09" "Internet via OpenStick"
+  # Still run remaining tests as FAIL (not skip)
+  run_test "OS-06" "SSID format valid (GA-XXXX)" "false"
+  run_test "OS-07" "PSK derivation for detected SSID" "false"
+  run_test "OS-08" "WiFi connection to OpenStick" "false"
+  run_test "OS-09" "Internet via OpenStick" "false"
   suite_end
   exit $?
 fi
@@ -71,7 +68,7 @@ fi
 # Pick first GA-* SSID
 TARGET_SSID=$(echo "$GA_SSIDS" | head -1)
 
-run_test "OS-05" "OpenStick SSID detected: $TARGET_SSID" "true"
+# OS-05 already passed above
 
 # Validate SSID format: GA- followed by exactly 4 digits
 run_test "OS-06" "SSID format valid (GA-XXXX)" \
@@ -107,7 +104,7 @@ if $CONNECT_OK; then
   run_test "OS-09" "Internet reachable via OpenStick" \
     "curl -sf --connect-timeout 10 http://checkonline.greenautarky.com/online.txt 2>/dev/null | grep -q 'NetworkManager is online'"
 else
-  skip_test "OS-09" "Internet via OpenStick (connection failed)"
+  run_test "OS-09" "Internet via OpenStick" "false"
 fi
 
 # Cleanup: remove test connection, let NM fall back to previous
