@@ -104,6 +104,12 @@ if [[ -n "$DEVICE_OUTPUT" ]] || [[ -n "$E2E_RESULTS" ]]; then
   "${SCRIPT_DIR}/../tests/generate-report.sh" "${REPORT_ARGS[@]}" || echo "  WARN: test report generation failed"
 fi
 
+# Generate changelog
+echo "  Generating changelog..."
+"${SCRIPT_DIR}/generate-changelog.sh" \
+  --build-dir "$BUILD_DIR" \
+  --output "$STAGE_DIR/CHANGELOG.md" 2>/dev/null || echo "  WARN: changelog generation failed"
+
 # Copy Playwright HTML report if available
 PW_REPORT="$(dirname "$SCRIPT_DIR")/tests/e2e/playwright-report"
 if [[ -d "$PW_REPORT" ]]; then
