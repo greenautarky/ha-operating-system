@@ -224,6 +224,88 @@ Runs as a container with Supervisor API access (`hassio` role).
 - [ ] OS-Agent 1.7.2 → 1.8.x (needs Go 1.25+, Docker storage driver API, minor fixes)
 - [ ] Fluent-Bit 3.2.10 → 4.x (major version, check config compat)
 
+### End-to-End CI Pipeline (Prio 1)
+- [ ] **Automated build-test-release chain** — currently manually chained
+  - Core CI → OS Build → Flash → Device Tests → E2E → Release Archive
+  - Option A: Single GitHub Actions workflow that orchestrates all steps
+  - Option B: Separate workflows with `workflow_dispatch` triggers between stages
+  - ga-builder (self-hosted runner) handles build + flash + device tests
+  - Laptop/cloud runner handles E2E (Playwright needs browser)
+  - Final step: `create-release.sh` → upload to storage
+- [ ] **Build trigger on dependency changes** — auto-trigger OS build when:
+  - Core CI completes (new Docker image on GHCR)
+  - Addon image updated
+  - stable.json changed in haos-version repo
+
+### OTA & Rollback Testing (Prio 1)
+- [ ] **Test RAUC OTA update on real device**
+  - Flash old image → apply .raucb → verify new rootfs boots
+  - Verify A/B slot switching works correctly
+  - Test interrupted update (power loss during apply)
+- [ ] **Test A/B rollback**
+  - Deploy intentionally broken image → verify automatic fallback to slot B
+  - Measure rollback time
+  - Verify data partition survives rollback
+- [ ] **OTA delivery infrastructure**
+  - Publish .raucb as GitHub Release asset
+  - Test Supervisor auto-update detection via stable.json OTA URL
+
+### Release Sign-off (Prio 1)
+- [ ] **Define formal approval workflow**
+  - Thomas: OS/kernel/build review
+  - Ahmad: addon/integration review
+  - Ramin: final release approval
+  - Minimum criteria: 0 FAIL build tests, 0 FAIL E2E, device failures triaged
+- [ ] **Changelog auto-generation** from git log between release tags
+  - Include: changes, test results summary, CVE scan summary, known issues
+  - Template in `scripts/generate-changelog.sh`
+
+### Branch Strategy & Code Review (Prio 2)
+- [ ] **Define Git branching model**
+  - `master` = production-ready? Or `release/vX.Y` branches?
+  - Feature branches with PR required before merge?
+  - Hotfix branch workflow for urgent patches
+- [ ] **Enable branch protection on critical repos**
+  - Require PR review (4-Augen-Prinzip) before merge to master
+  - Require status checks to pass (build tests, CI)
+  - Repos: ha-operating-system, ha-core, frontend, ha-supervisor
+
+### Performance & Monitoring (Prio 2)
+- [ ] **Performance trending between releases**
+  - idle_perf tests already collect CPU/RAM/IO baselines
+  - Store results per build ID in a time-series DB or CSV
+  - Detect regressions: alert if CPU/RAM increased >10% vs previous release
+- [ ] **Fleet health monitoring dashboard**
+  - Central Grafana dashboard for all devices in the field
+  - Metrics: uptime, CPU, RAM, disk, connectivity, crash count
+  - Data source: Telegraf → InfluxDB (already sending), Fluent-Bit → Loki (already sending)
+  - Alert rules: device offline >1h, disk >90%, crash loop detected
+
+### Incident & Security (Prio 2)
+- [ ] **Incident runbook** — documented emergency procedures
+  - Device unreachable: NetBird VPN check → serial console → reflash
+  - Crash loop: check crash_history.log → boot into rescue → rollback
+  - Security incident: CVE triage → hotfix → emergency OTA
+- [ ] **Backup/restore test**
+  - Create HA backup via Supervisor API
+  - Reset device, restore backup
+  - Verify: user accounts, automations, integrations, addon configs survive
+- [ ] **Security hardening audit**
+  - Document: SSH root access (needed for management), no firewall rules (NM handles)
+  - Review: open ports, exposed services, API authentication
+  - Consider: fail2ban for SSH, rate-limit NetBird API access
+
+### Nice-to-have (Prio 3)
+- [ ] **Nightly builds** — automated daily build on ga-builder, catch regressions early
+- [ ] **Test result trending** — historical comparison between releases (build + device + E2E)
+- [ ] **Auto-rollback on boot loop** — Supervisor/RAUC detects N failed boots → rolls back
+  - Partially exists via ga-crash-marker.service, extend with RAUC integration
+- [ ] **Canary releases** — update 1 device first, verify for 24h, then roll out to fleet
+  - Needs: device grouping in fleet management, staged OTA delivery
+- [ ] **DSGVO audit trail** — consent versions + timestamps persistent and exportable
+  - greenautarky_onboarding already tracks consents with versions
+  - Need: export API endpoint, retention policy, deletion on request
+
 ## Low Priority
 
 ### Fluent-Bit Inputs
