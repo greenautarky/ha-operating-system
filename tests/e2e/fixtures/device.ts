@@ -10,10 +10,19 @@ export interface DeviceFixtures {
    *
    * DESTRUCTIVE — deletes /config/.storage/greenautarky_onboarding and restarts core.
    * Requires DEVICE_IP and SSH access. Only use on dedicated test devices.
-   *
-   * Guarded by RESET_ONBOARDING=1 env var — tests skip if not set.
    */
   resetOnboarding: () => void;
+}
+
+function sshCmd(cmd: string): string {
+  const ip = process.env.DEVICE_IP;
+  if (!ip) throw new Error('DEVICE_IP not set');
+  const key =
+    process.env.SSH_KEY ||
+    process.env.HOME + '/Nextcloud2/GreenAutarky/security_store/HomeassistantGreen0.pem';
+  const port = process.env.SSH_PORT || '22222';
+  const sshPrefix = `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${key} -p ${port} root@${ip}`;
+  return execSync(`${sshPrefix} '${cmd}'`, { timeout: 60_000 }).toString().trim();
 }
 
 export const test = base.extend<DeviceFixtures>({
@@ -25,30 +34,27 @@ export const test = base.extend<DeviceFixtures>({
     await use(url);
   },
 
-  resetOnboarding: async ({}, use) => {
-    const ip = process.env.DEVICE_IP;
-    const key =
-      process.env.SSH_KEY ||
-      '~/.ssh/ha-ihost.pem';
-    const port = process.env.SSH_PORT || '22222';
-
+  resetOnboarding: async ({ deviceUrl }, use) => {
     await use(() => {
-      if (!ip) throw new Error('DEVICE_IP not set — required for SSH-based onboarding reset');
+      // Delete state file and restart HA Core
+      sshCmd('rm -f /mnt/data/supervisor/homeassistant/.storage/greenautarky_onboarding && docker restart homeassistant');
 
-      const sshPrefix = [
-        'ssh',
-        '-o StrictHostKeyChecking=no',
-        '-o UserKnownHostsFile=/dev/null',
-        `-i ${key}`,
-        `-p ${port}`,
-        `root@${ip}`,
-      ].join(' ');
-
-      // Delete GA onboarding state and restart HA Core
-      execSync(
-        `${sshPrefix} "docker exec homeassistant rm -f /config/.storage/greenautarky_onboarding; ha core restart"`,
-        { timeout: 30_000 },
-      );
+      // Wait for HA to come back up (poll status endpoint)
+      const maxWait = 60_000;
+      const start = Date.now();
+      while (Date.now() - start < maxWait) {
+        try {
+          const res = execSync(
+            `curl -sf --connect-timeout 5 ${deviceUrl}/api/greenautarky_onboarding/status`,
+            { timeout: 10_000 },
+          ).toString();
+          if (res.includes('"pin_required"')) return; // HA is back
+        } catch {
+          // not ready yet
+        }
+        execSync('sleep 3');
+      }
+      throw new Error('HA Core did not come back after onboarding reset');
     });
   },
 });
