@@ -151,15 +151,20 @@ test.describe("PIN verification (onboarding)", () => {
     await expect(pinInput).toBeVisible({ timeout: 10000 });
   });
 
-  test("QR auto-inject: PIN from URL parameter auto-submitted", async ({ page, deviceUrl }) => {
+  // --- QR auto-inject tests ---
+  // Each test needs fresh onboarding state (PIN not yet verified).
+  // resetOnboarding() deletes the state file and restarts HA Core.
+
+  test("QR auto-inject: PIN from URL parameter auto-submitted", async ({ page, deviceUrl, resetOnboarding }) => {
     test.skip(!pinRequired, "No PIN required on this device");
     test.skip(!DEVICE_PIN, "DEVICE_PIN env var not set");
+    test.setTimeout(90_000);
 
-    // Simulate QR code scan: open setup page with ?pin= parameter
+    resetOnboarding();
+
     await page.goto(`${deviceUrl}/greenautarky-setup.html?pin=${DEVICE_PIN}&device=KIB-SON-TEST`);
     await page.waitForLoadState("networkidle");
 
-    // Click through welcome step
     const startButton = page.locator("ha-button.start, mwc-button");
     if (await startButton.isVisible({ timeout: 5000 })) {
       await startButton.click();
@@ -173,14 +178,15 @@ test.describe("PIN verification (onboarding)", () => {
     expect(page.url()).not.toContain("pin=");
   });
 
-  test("QR auto-inject: wrong PIN from URL falls back to manual entry", async ({ page, deviceUrl }) => {
+  test("QR auto-inject: wrong PIN from URL falls back to manual entry", async ({ page, deviceUrl, resetOnboarding }) => {
     test.skip(!pinRequired, "No PIN required on this device");
+    test.setTimeout(90_000);
 
-    // Simulate QR code with wrong PIN
+    resetOnboarding();
+
     await page.goto(`${deviceUrl}/greenautarky-setup.html?pin=000000`);
     await page.waitForLoadState("networkidle");
 
-    // Click through welcome step
     const startButton = page.locator("ha-button.start, mwc-button");
     if (await startButton.isVisible({ timeout: 5000 })) {
       await startButton.click();
@@ -190,47 +196,45 @@ test.describe("PIN verification (onboarding)", () => {
     const pinComponent = page.locator("ga-setup-pin");
     await expect(pinComponent).toBeVisible({ timeout: 10000 });
 
-    // Error message should be visible
     const error = page.locator("ga-setup-pin .error");
     await expect(error).toBeVisible({ timeout: 5000 });
   });
 
-  test("QR auto-inject: no PIN in URL shows manual entry", async ({ page, deviceUrl }) => {
+  test("QR auto-inject: no PIN in URL shows manual entry", async ({ page, deviceUrl, resetOnboarding }) => {
     test.skip(!pinRequired, "No PIN required on this device");
+    test.setTimeout(90_000);
 
-    // Open setup page without ?pin= parameter
+    resetOnboarding();
+
     await page.goto(`${deviceUrl}/greenautarky-setup.html`);
     await page.waitForLoadState("networkidle");
 
-    // Click through welcome step
     const startButton = page.locator("ha-button.start, mwc-button");
     if (await startButton.isVisible({ timeout: 5000 })) {
       await startButton.click();
     }
 
-    // PIN step should show manual input (no auto-submit)
     const pinComponent = page.locator("ga-setup-pin");
     await expect(pinComponent).toBeVisible({ timeout: 10000 });
 
-    // Input field should be visible for manual entry
     const pinInput = page.locator("ga-setup-pin ha-textfield");
     await expect(pinInput).toBeVisible();
   });
 
-  test("QR auto-inject: invalid PIN format in URL ignored", async ({ page, deviceUrl }) => {
+  test("QR auto-inject: invalid PIN format in URL ignored", async ({ page, deviceUrl, resetOnboarding }) => {
     test.skip(!pinRequired, "No PIN required on this device");
+    test.setTimeout(90_000);
 
-    // Open with invalid PIN (not 6 digits)
+    resetOnboarding();
+
     await page.goto(`${deviceUrl}/greenautarky-setup.html?pin=abc`);
     await page.waitForLoadState("networkidle");
 
-    // Click through welcome step
     const startButton = page.locator("ha-button.start, mwc-button");
     if (await startButton.isVisible({ timeout: 5000 })) {
       await startButton.click();
     }
 
-    // Should fall through to manual PIN entry (invalid format ignored)
     const pinComponent = page.locator("ga-setup-pin");
     await expect(pinComponent).toBeVisible({ timeout: 10000 });
 
