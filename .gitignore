@@ -31,3 +31,4 @@ images/*.tar
 # AI tooling
 .claude
 scan-results/
+releases/
