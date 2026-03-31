@@ -1732,7 +1732,9 @@ elif [[ "$MODE" == "update" ]]; then
         "${OUT}/build/hassio-1.0.0/.stamp_images_installed" \
         "${OUT}/build/hassio-1.0.0/.stamp_installed" \
         "${OUT}/build/hassio-1.0.0/.stamp_target_installed" 2>/dev/null || true
-  echo "Cleared hassio stamps — container images will be re-checked"
+  # Clean old container tars to avoid disk bloat (stale digests accumulate)
+  rm -rf "${OUT}/build/hassio-1.0.0/images" 2>/dev/null || true
+  echo "Cleared hassio stamps + old container tars — fresh pull from registry"
 
 else
   echo "Usage: $0 [full|partial|kernel|update|dev|prod] [dev|prod]"
