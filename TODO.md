@@ -29,6 +29,39 @@
 - [ ] Document how to reproduce a build from archived configs
 - [ ] Add pre-build validation for required files (CA certs, defconfig, etc.)
 
+### Release Process (needs discussion)
+- [ ] **Release archive storage** — where to keep `*_release.tar.gz` (~3 GB)?
+  - Option A: GitHub Releases — max 2GB per asset, image too large
+  - Option B: Split into `*_release-lite.tar.gz` (~20 MB, reports/SBOMs/configs for GitHub)
+    + `*_release-full.tar.gz` (~3 GB, image + legal-info for NAS/S3)
+  - Option C: Nextcloud / NAS (existing infra)
+  - Option D: S3 / Cloudflare R2 (scalable, CDN)
+  - Decision needed: retention policy (how many releases to keep?)
+- [ ] **Automated release pipeline** — trigger after successful test suite
+  - Build → Flash → Device Tests → E2E → create-release.sh → upload
+  - CI integration: GitHub Actions job after build-os.yml succeeds?
+  - Or manual trigger after human review of test-report.html?
+- [ ] **Release naming convention** — define tag format
+  - Options: `v16.3`, `v16.3-20260331`, semantic versioning?
+  - Must align with RAUC OTA URL pattern
+- [ ] **Release sign-off** — who approves a release?
+  - Test report reviewed by: Thomas (OS), Ahmad (addons), Ramin (approval)
+  - Minimum criteria: 0 FAIL in build tests, 0 FAIL in E2E, device test failures triaged
+- [ ] **Release notes generation** — auto-generate from git log?
+  - Between previous release tag and current
+  - Include: changes, test results, CVE scan summary, known issues
+- [ ] **Legal-info archive** — GPL compliance for distribution
+  - `legal-info-full.tar.xz` must be kept for every shipped release
+  - Retention: indefinite (as long as devices are in the field)
+  - Consider: separate legal archive repo or dedicated storage
+- [ ] **SBOM delivery** — customer-facing or internal only?
+  - CycloneDX 1.6 format ready (`sbom-cyclonedx.json`)
+  - Some customers (enterprise/government) require SBOM with delivery
+- [ ] **Rollback procedure** — document how to roll back a bad release
+  - OTA: RAUC A/B slot fallback (automatic on boot failure)
+  - Manual: re-flash previous SD image
+  - Data partition: survives both OTA and re-flash
+
 ## Medium Priority
 
 ### GA Device Management Addon (`ga-device-manager`) (needs discussion)
