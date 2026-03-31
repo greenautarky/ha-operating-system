@@ -508,6 +508,121 @@ if [[ -f "$VER_JSON" ]]; then
     _skip "VER-08" "ga-frontend-version not found or curl unavailable"
   fi
 
+  # VER-09: Supervisor image digest matches GHCR (not stale cache)
+  if [[ -d "$IMAGES_DIR" ]] && command -v skopeo >/dev/null 2>&1; then
+    SUP_TAR="$(ls "$IMAGES_DIR"/*hassio-supervisor*.tar 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$SUP_TAR" ]]; then
+      SUP_BUILD_DIGEST="$(basename "$SUP_TAR" .tar | grep -oP 'sha256_\K[a-f0-9]+' || true)"
+      SUP_REF="$(jq -r '.images.supervisor // .image.supervisor' "$VER_JSON" 2>/dev/null | sed "s/{arch}/${ARCH:-armv7}/")"
+      SUP_TAG="$(jq -r '.supervisor' "$VER_JSON" 2>/dev/null)"
+      if [[ -n "$SUP_REF" ]] && [[ -n "$SUP_TAG" ]] && [[ "$SUP_TAG" != "null" ]]; then
+        SUP_GHCR_DIGEST="$(skopeo inspect --override-arch arm --override-variant v7 "docker://${SUP_REF}:${SUP_TAG}" 2>/dev/null | jq -r '.Digest' | sed 's/sha256://' || true)"
+        if [[ -n "$SUP_BUILD_DIGEST" ]] && [[ -n "$SUP_GHCR_DIGEST" ]]; then
+          if [[ "$SUP_BUILD_DIGEST" == "$SUP_GHCR_DIGEST" ]]; then
+            _pass "VER-09: Supervisor image digest matches GHCR (fresh)"
+          else
+            _fail "VER-09: Supervisor STALE — build ${SUP_BUILD_DIGEST:0:12} != GHCR ${SUP_GHCR_DIGEST:0:12}"
+          fi
+        else
+          _skip "VER-09" "could not extract supervisor digests"
+        fi
+      else
+        _skip "VER-09" "could not resolve supervisor image ref"
+      fi
+    else
+      _skip "VER-09" "no supervisor tar found"
+    fi
+  else
+    _skip "VER-09" "skopeo not available or no images dir"
+  fi
+
+  # VER-10: All addon image digests match GHCR (not stale cache)
+  ADDON_JSON="${BR2EXT_NETBIRD:-/build/buildroot-external}/package/hassio/addon-images.json"
+  if [[ -d "$IMAGES_DIR" ]] && [[ -f "$ADDON_JSON" ]] && command -v skopeo >/dev/null 2>&1; then
+    VER10_PASS=0; VER10_FAIL=0; VER10_SKIP=0
+    for addon_name in $(jq -r '.addons | keys[]' "$ADDON_JSON" 2>/dev/null); do
+      addon_image="$(jq -r --arg n "$addon_name" '.addons[$n].image' "$ADDON_JSON" | sed "s/{arch}/${ARCH:-armv7}/")"
+      addon_version="$(jq -r --arg n "$addon_name" '.addons[$n].version' "$ADDON_JSON")"
+      addon_tar="$(ls "$IMAGES_DIR"/*"$(echo "$addon_name" | tr '/' '_')"*.tar 2>/dev/null | head -n 1 || true)"
+      if [[ -z "$addon_tar" ]]; then
+        addon_tar="$(ls "$IMAGES_DIR"/*"${addon_version}"*.tar 2>/dev/null | grep -i "$addon_name" | head -n 1 || true)"
+      fi
+      if [[ -n "$addon_tar" ]]; then
+        a_build="$(basename "$addon_tar" .tar | grep -oP 'sha256_\K[a-f0-9]+' || true)"
+        a_ghcr="$(skopeo inspect --override-arch arm --override-variant v7 "docker://${addon_image}:${addon_version}" 2>/dev/null | jq -r '.Digest' | sed 's/sha256://' || true)"
+        if [[ -n "$a_build" ]] && [[ -n "$a_ghcr" ]]; then
+          if [[ "$a_build" == "$a_ghcr" ]]; then
+            VER10_PASS=$((VER10_PASS + 1))
+          else
+            _fail "VER-10: Addon $addon_name STALE — ${a_build:0:12} != GHCR ${a_ghcr:0:12}"
+            VER10_FAIL=$((VER10_FAIL + 1))
+          fi
+        else
+          VER10_SKIP=$((VER10_SKIP + 1))
+        fi
+      else
+        VER10_SKIP=$((VER10_SKIP + 1))
+      fi
+    done
+    if [[ "$VER10_FAIL" -eq 0 ]] && [[ "$VER10_PASS" -gt 0 ]]; then
+      _pass "VER-10: All ${VER10_PASS} addon digests match GHCR (${VER10_SKIP} skipped)"
+    elif [[ "$VER10_FAIL" -eq 0 ]] && [[ "$VER10_PASS" -eq 0 ]]; then
+      _skip "VER-10" "no addon digests could be verified"
+    fi
+  else
+    _skip "VER-10" "addon-images.json, skopeo, or images dir not available"
+  fi
+
+  # VER-11: Core image io.hass.version label matches version.json tag
+  if [[ -f "$FE_VERSION_FILE" ]] && [[ -d "$IMAGES_DIR" ]]; then
+    CORE_TAR_V11="$(ls "$IMAGES_DIR"/*homeassistant*.tar 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$CORE_TAR_V11" ]]; then
+      CONFIG_PATH_V11=$(tar -xOf "$CORE_TAR_V11" manifest.json 2>/dev/null | jq -r '.[0].Config // empty' || true)
+      if [[ -n "$CONFIG_PATH_V11" ]]; then
+        LABEL_VERSION=$(tar -xOf "$CORE_TAR_V11" "$CONFIG_PATH_V11" 2>/dev/null | jq -r '.config.Labels."io.hass.version" // "unknown"' || true)
+        EXPECTED_VERSION="$(jq -r '.homeassistant."'${MACHINE:-tinker}'" // .core' "$VER_JSON" 2>/dev/null)"
+        if [[ "$LABEL_VERSION" == "$EXPECTED_VERSION" ]]; then
+          _pass "VER-11: Core io.hass.version label ($LABEL_VERSION) matches version.json"
+        elif [[ "$LABEL_VERSION" == "latest" ]]; then
+          _fail "VER-11: Core io.hass.version is 'latest' — MUST be a pinned version"
+        else
+          _fail "VER-11: Core io.hass.version ($LABEL_VERSION) != version.json ($EXPECTED_VERSION)"
+        fi
+      else
+        _skip "VER-11" "could not parse core image manifest"
+      fi
+    else
+      _skip "VER-11" "no core tar found"
+    fi
+  else
+    _skip "VER-11" "frontend version file or images dir not available"
+  fi
+
+  # VER-12: Frontend build date is recent (< 7 days old)
+  if [[ -f "$FE_VERSION_FILE" ]]; then
+    FE_PYVER="$(grep '^GA_FRONTEND_PYVERSION=' "$FE_VERSION_FILE" 2>/dev/null | cut -d= -f2)"
+    if [[ -n "$FE_PYVER" ]] && [[ "$FE_PYVER" != "unknown" ]]; then
+      # Frontend pyversion format: YYYYMMDD.N (e.g. 20260330.1)
+      FE_DATE="${FE_PYVER%%.*}"
+      if [[ ${#FE_DATE} -eq 8 ]]; then
+        FE_EPOCH=$(date -d "${FE_DATE:0:4}-${FE_DATE:4:2}-${FE_DATE:6:2}" +%s 2>/dev/null || echo 0)
+        NOW_EPOCH=$(date +%s)
+        AGE_DAYS=$(( (NOW_EPOCH - FE_EPOCH) / 86400 ))
+        if [[ "$AGE_DAYS" -le 7 ]]; then
+          _pass "VER-12: Frontend build date recent (${FE_DATE}, ${AGE_DAYS} days ago)"
+        else
+          _fail "VER-12: Frontend build date OLD (${FE_DATE}, ${AGE_DAYS} days ago — rebuild Core CI)"
+        fi
+      else
+        _skip "VER-12" "could not parse date from pyversion: $FE_PYVER"
+      fi
+    else
+      _skip "VER-12" "frontend pyversion unknown"
+    fi
+  else
+    _skip "VER-12" "ga-frontend-version not found"
+  fi
+
 else
   _skip "BLD: version.json" "only present after full build"
 fi

@@ -65,13 +65,30 @@ No device or emulator needed — checks the build output tree directly.
 - OVL-05a: ga-overlay-init.service exists
 - OVL-05b: ga-overlay-init.service enabled at boot
 
-### Version chain
+### Source verification (cross-repo, runs when repos available)
+- SRC-14a: ga-setup-pin.ts component exists
+- SRC-14b: wizard STEPS includes pin
+- SRC-14c: verifyGASetupPin API function exists
+- SRC-14d: Core has verify_pin endpoint
+- SRC-14e: Core has PIN rate limiting
+- SRC-15a: ga-setup-pin has autoPin property (QR support)
+- SRC-15b: wizard parses ?pin= from URL
+- SRC-15c: wizard cleans PIN from URL (history.replaceState)
+- SRC-15d: QR auto-inject E2E tests exist
+
+### Version chain & freshness
 - VER-01: version.json supervisor version is not "latest"
 - VER-02: version.json core version is not "latest"
 - VER-03: version.json tinker HA version is not "latest"
 - VER-04: version.json supervisor image uses greenautarky registry (both image and images)
 - VER-05: version.json core image uses greenautarky registry (both image and images)
 - VER-06: version.json OTA URL points to greenautarky
+- VER-07: Core image digest matches GHCR (not stale cache)
+- VER-08: Frontend SHA matches frontend repo HEAD (not stale CI)
+- VER-09: Supervisor image digest matches GHCR (not stale cache)
+- VER-10: All addon image digests match GHCR (not stale cache)
+- VER-11: Core io.hass.version label matches version.json tag
+- VER-12: Frontend build date recent (< 7 days old)
 
 ### Build-specific (in ga_build.sh verify_build_integrity)
 - BLD-01: Disk image exists and size sane (200-2048MB)
