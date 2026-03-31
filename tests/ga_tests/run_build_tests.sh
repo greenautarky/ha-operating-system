@@ -483,6 +483,31 @@ if [[ -f "$VER_JSON" ]]; then
     _skip "VER-07" "skopeo not available or no images dir"
   fi
 
+  # VER-08: Frontend SHA in Core image matches frontend repo HEAD
+  FE_VERSION_FILE="${TARGET}/etc/ga-frontend-version"
+  if [[ -f "$FE_VERSION_FILE" ]] && command -v curl >/dev/null 2>&1; then
+    BUILD_FE_SHA="$(grep '^GA_FRONTEND_SHA=' "$FE_VERSION_FILE" 2>/dev/null | cut -d= -f2)"
+    if [[ -n "$BUILD_FE_SHA" ]] && [[ "$BUILD_FE_SHA" != "unknown" ]]; then
+      REMOTE_FE_SHA="$(curl -sf --connect-timeout 10 \
+        -H "Accept: application/vnd.github.v3+json" \
+        "https://api.github.com/repos/greenautarky/frontend/commits/ga/custom-onboarding" 2>/dev/null \
+        | jq -r '.sha // empty' || true)"
+      if [[ -n "$REMOTE_FE_SHA" ]]; then
+        if [[ "$BUILD_FE_SHA" == "$REMOTE_FE_SHA" ]]; then
+          _pass "VER-08: Frontend SHA matches repo HEAD (${BUILD_FE_SHA:0:7})"
+        else
+          _fail "VER-08: Frontend STALE — build has ${BUILD_FE_SHA:0:7} but repo HEAD is ${REMOTE_FE_SHA:0:7}"
+        fi
+      else
+        _skip "VER-08" "could not fetch frontend repo HEAD (offline?)"
+      fi
+    else
+      _skip "VER-08" "frontend SHA unknown in $FE_VERSION_FILE"
+    fi
+  else
+    _skip "VER-08" "ga-frontend-version not found or curl unavailable"
+  fi
+
 else
   _skip "BLD: version.json" "only present after full build"
 fi
