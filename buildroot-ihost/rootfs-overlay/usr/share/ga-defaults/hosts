@@ -5,4 +5,4 @@
 
 # GreenAutarky services — fallback when NetBird DNS is unavailable
 # Primary resolution: NetBird DNS (managed via NetBird UI)
-100.126.142.217 influx.greenautarky.com loki.greenautarky.com
+100.126.142.217 influx.greenautarky.com loki.greenautarky.com ota.greenautarky.com
