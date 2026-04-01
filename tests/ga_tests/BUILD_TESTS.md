@@ -146,6 +146,18 @@ Must run on real iHost hardware. Needs network, Docker, HA running.
 ### From tailscale (all)
 - TS-01 through TS-05
 
+### From ota_update (needs real device + optional RAUCB_PATH)
+- OTA-01..01e: RAUC service available, booted slot, both A/B slots, status good
+- OTA-02: RAUC compatible is haos-ihost
+- OTA-03..03b: OS version from os-release, CPE version matches
+- OTA-04..04b: Data partition mounted, supervisor data present
+- OTA-05..05b: RAUC keyring and system.conf present
+- OTA-06: Slot B bundle version (if installed)
+- OTA-07..07b: Journal boot history survives OTA
+- OTA-08: Services active after boot (telegraf, fluent-bit, netbird)
+- OTA-09a..f: Full RAUC install test (requires RAUCB_PATH= env var)
+- OTA-10: Tampered bundle rejected by RAUC
+
 ### From crash_detection (destructive)
 - CRASH-04: Kernel panic detected
 - CRASH-05: Power loss detected
