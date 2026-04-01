@@ -35,17 +35,21 @@ run_test "OS-02b" "Shared secret is 64 hex chars (256-bit)" \
   "grep -qE '^[0-9a-f]{64}$' $KEY_FILE 2>/dev/null"
 
 # Test HMAC derivation with a known input
+# BusyBox has no openssl — use python3 from HA Core container
+HMAC_CMD="docker exec homeassistant python3 -c \"import hmac,hashlib,sys; print(hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest()[:16])\" \"\$(cat $KEY_FILE)\" GA-0000"
 run_test "OS-03" "HMAC-SHA256 derivation produces 16-char PSK" \
-  "PSK=\$(echo -n 'GA-0000' | openssl dgst -sha256 -hmac \"\$(cat $KEY_FILE)\" 2>/dev/null | cut -d' ' -f2 | cut -c1-16) && [ \${#PSK} -eq 16 ]"
+  "PSK=\$($HMAC_CMD 2>/dev/null) && [ \${#PSK} -eq 16 ]"
 
 # --- OS-04..06: WiFi scanning and OpenStick detection ---
 
 run_test "OS-04a" "WiFi interface wlan0 present" \
   "ip link show wlan0 >/dev/null 2>&1"
 
-# Scan for GA-* SSIDs (rescan first)
-nmcli dev wifi rescan 2>/dev/null
-sleep 3
+# Scan for GA-* SSIDs (multiple rescans — first scan often misses weak signals)
+for _scan in 1 2 3; do
+  nmcli dev wifi rescan 2>/dev/null
+  sleep 5
+done
 
 GA_SSIDS=$(nmcli -t -f SSID dev wifi list 2>/dev/null | grep "^${SSID_PREFIX}" | sort -u)
 
@@ -76,9 +80,9 @@ run_test "OS-06" "SSID format valid (GA-XXXX)" \
 
 # --- OS-07..09: Connection test ---
 
-# Derive PSK
+# Derive PSK (use python3 from HA container since BusyBox has no openssl)
 SECRET=$(cat "$KEY_FILE" | tr -d '\n')
-DERIVED_PSK=$(echo -n "$TARGET_SSID" | openssl dgst -sha256 -hmac "$SECRET" 2>/dev/null | cut -d' ' -f2 | cut -c1-16)
+DERIVED_PSK=$(docker exec homeassistant python3 -c "import hmac,hashlib,sys; print(hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest()[:16])" "$SECRET" "$TARGET_SSID" 2>/dev/null)
 
 run_test "OS-07" "PSK derived for $TARGET_SSID (${#DERIVED_PSK} chars)" \
   "[ ${#DERIVED_PSK} -eq 16 ]"
