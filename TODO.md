@@ -41,9 +41,11 @@
   - Build → Flash → Device Tests → E2E → create-release.sh → upload
   - CI integration: GitHub Actions job after build-os.yml succeeds?
   - Or manual trigger after human review of test-report.html?
-- [ ] **Release naming convention** — define tag format
-  - Options: `v16.3`, `v16.3-20260331`, semantic versioning?
-  - Must align with RAUC OTA URL pattern
+- [x] **Release naming convention** — resolved: `v16.3.X.Y` (e.g., `v16.3.1.1`)
+  - `16.3` = upstream base, `X` = GA release major, `Y` = GA release minor
+  - `VERSION_SUFFIX` in `buildroot-external/meta` controls `X.Y`
+  - `.0` suffix must NEVER be used (AwesomeVersion comparison bug)
+  - Aligns with RAUC OTA URL pattern in `stable.json`
 - [ ] **Release sign-off** — who approves a release?
   - Test report reviewed by: Thomas (OS), Ahmad (addons), Ramin (approval)
   - Minimum criteria: 0 FAIL in build tests, 0 FAIL in E2E, device test failures triaged
