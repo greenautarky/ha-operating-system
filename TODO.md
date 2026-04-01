@@ -2,14 +2,28 @@
 
 ## High Priority
 
-### Dev/Prod Configuration Strategy (needs discussion)
-- [ ] Define which configs/behaviors differ between dev and prod builds
-  - Telegraf: endpoints, collection intervals, verbosity?
-  - Fluent-Bit: log level, output targets, retention?
-  - journald: log retention, max size?
-  - ga-env.conf: which values drive which behavior?
-- [ ] Decide: build-time baking vs runtime override strategy
-- [ ] Document the dev vs prod matrix for all services
+### Dev/Prod Configuration Strategy (documented 2026-04-01)
+- [x] Define which configs/behaviors differ between dev and prod builds
+- [x] Document the dev vs prod matrix for all services
+
+  | Aspect | Dev | Prod |
+  |--------|-----|------|
+  | `GA_ENV` | `dev` | `prod` |
+  | `GA_LOG_LEVEL` | `debug` | `warning` |
+  | `GA_TELEMETRY` | `verbose` | `minimal` |
+  | Image filename | `bos_*_dev_*.img.xz` | `bos_*_prod_*.img.xz` |
+  | SBOM generation | Skipped | Auto |
+  | CVE scan (SBOM + containers) | Skipped | Auto |
+  | Legal-info archive | Skipped | Auto |
+  | Provisioning image | Skipped | Optional (`GA_PROVISIONING=true`) |
+
+  Telegraf/Fluent-Bit/journald: same config for both. Verbosity controlled
+  by `GA_LOG_LEVEL` env var at runtime, not separate config files.
+
+- [x] Decide: build-time baking vs runtime override strategy
+  - Build-time: `/etc/ga-env.conf` (baked defaults)
+  - Runtime: `/mnt/data/ga-env.conf` (override, survives OTA)
+  - Works well — no change needed
 
 ### Fluent-Bit Configuration
 - [x] Populate `buildroot-external/package/fluent-bit-config/parsers.conf` (HA log + JSON parsers)
@@ -21,8 +35,15 @@
 - [x] Test full OTA update flow with signed RAUC bundles
   - Validated 2026-04-01: 16.3 → 16.3.1.1 install, rollback, restore (58 tests, 0 failures)
   - Fully automated via `tests/run_ota_test.sh` (3 phases, 3 reboots)
-- [ ] Verify CA certificates in `buildroot-external/ota/` are non-expired
+- [x] Verify CA certificates in `buildroot-external/ota/` are non-expired
+  - Signing cert (`cert.pem`): expires 2035-09-18 (3457 days left)
+  - Keyring CA (`rel-ca.pem`): expires 2035-08-31 (3439 days left)
+  - `dev-ca.pem`: symlink → `rel-ca.pem`
+  - Both self-signed, 10-year validity, no renewal needed until ~2034
 - [ ] Document key rotation procedure
+  - When: ~2034 (1 year before expiry)
+  - New cert must be signed by same CA, or devices need keyring update via OTA first
+  - Consider: add secondary keyring slot for smooth transition
 
 ### OTA Delivery — Private Server (needs implementation)
 - [ ] **Host OTA bundles on private server via NetBird VPN**
@@ -64,7 +85,10 @@
 
 ### Build System
 - [ ] Document how to reproduce a build from archived configs
-- [ ] Add pre-build validation for required files (CA certs, defconfig, etc.)
+- [x] Add pre-build validation for required files (CA certs, defconfig, etc.)
+  - Checks: BUILDROOT_DIR, defconfig, cert.pem, key.pem, secrets (warn only)
+  - VERSION_SUFFIX warning for prod builds
+  - Fails fast before wasting build time
 
 ### Release Process (needs discussion)
 - [ ] **Release archive storage** — where to keep `*_release.tar.gz` (~3 GB)?
@@ -96,10 +120,13 @@
 - [ ] **SBOM delivery** — customer-facing or internal only?
   - CycloneDX 1.6 format ready (`sbom-cyclonedx.json`)
   - Some customers (enterprise/government) require SBOM with delivery
-- [ ] **Rollback procedure** — document how to roll back a bad release
-  - OTA: RAUC A/B slot fallback (automatic on boot failure)
-  - Manual: re-flash previous SD image
-  - Data partition: survives both OTA and re-flash
+- [x] **Rollback procedure** — documented 2026-04-01, validated on real device
+  - **Automatic**: RAUC marks slot as "bad" after 3 failed boots → falls back to previous slot
+  - **Manual OTA rollback**: `rauc status mark-bad booted && reboot` → boots previous slot
+  - **Restore after rollback**: `rauc status mark-good other && rauc status mark-active other && reboot`
+  - **Full re-flash**: `./scripts/verify-sd.sh --all bos_*.img.xz` (previous image)
+  - **Data partition**: survives both OTA and rollback (only rootfs switches)
+  - **Tested**: 16.3 → 16.3.1.1 → rollback to 16.3 → restore 16.3.1.1 (all PASS)
 
 ## Medium Priority
 

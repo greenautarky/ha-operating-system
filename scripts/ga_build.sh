@@ -162,17 +162,47 @@ echo "Using REL_CA_PEM=$REL_CA_PEM"
 echo "Using DEV_CA_PEM=$DEV_CA_PEM"
 
 # ---- Sanity checks (fail fast) ----
-[[ -d "$BUILDROOT_DIR" ]] || { echo "ERROR: BUILDROOT_DIR not found: $BUILDROOT_DIR" >&2; exit 1; }
-[[ -d "$BR2EXT_IHOST"  ]] || { echo "ERROR: BR2EXT_IHOST not found: $BR2EXT_IHOST" >&2; exit 1; }
-[[ -d "$BR2EXT_NETBIRD" ]] || { echo "ERROR: BR2EXT_NETBIRD not found: $BR2EXT_NETBIRD" >&2; exit 1; }
+echo "=== Pre-build validation ==="
+PREFLIGHT_FAIL=0
+
+[[ -d "$BUILDROOT_DIR" ]] || { echo "FAIL: BUILDROOT_DIR not found: $BUILDROOT_DIR" >&2; PREFLIGHT_FAIL=1; }
+[[ -d "$BR2EXT_IHOST"  ]] || { echo "FAIL: BR2EXT_IHOST not found: $BR2EXT_IHOST" >&2; PREFLIGHT_FAIL=1; }
+[[ -d "$BR2EXT_NETBIRD" ]] || { echo "FAIL: BR2EXT_NETBIRD not found: $BR2EXT_NETBIRD" >&2; PREFLIGHT_FAIL=1; }
 [[ -f "$BR2EXT_IHOST/configs/ga_ihost_full_defconfig" ]] || {
-  echo "ERROR: Defconfig not found: $BR2EXT_IHOST/configs/ga_ihost_full_defconfig" >&2
-  exit 1
+  echo "FAIL: Defconfig not found: $BR2EXT_IHOST/configs/ga_ihost_full_defconfig" >&2; PREFLIGHT_FAIL=1;
 }
 [[ -f "${BUILDROOT_DIR}/utils/config" ]] || {
-  echo "ERROR: Buildroot utils/config not found at: ${BUILDROOT_DIR}/utils/config" >&2
-  exit 1
+  echo "FAIL: Buildroot utils/config not found: ${BUILDROOT_DIR}/utils/config" >&2; PREFLIGHT_FAIL=1;
 }
+
+# CA certificates for RAUC bundle signing
+[[ -f "/build/cert.pem" ]] || [[ -f "cert.pem" ]] || {
+  echo "FAIL: RAUC signing cert (cert.pem) not found" >&2; PREFLIGHT_FAIL=1;
+}
+[[ -f "/build/key.pem" ]] || [[ -f "key.pem" ]] || {
+  echo "FAIL: RAUC signing key (key.pem) not found" >&2; PREFLIGHT_FAIL=1;
+}
+
+# Secrets required for build
+[[ -f "/build/secrets/wifi-install.psk" ]] || [[ -f "secrets/wifi-install.psk" ]] || {
+  echo "WARN: secrets/wifi-install.psk not found — WiFi fallback will not work" >&2;
+}
+[[ -f "/build/secrets/openstick-wifi.key" ]] || [[ -f "secrets/openstick-wifi.key" ]] || {
+  echo "WARN: secrets/openstick-wifi.key not found — OpenStick WiFi will not work" >&2;
+}
+
+# Version suffix set (not empty for release builds)
+VERSION_SUFFIX_CHECK=$(grep 'VERSION_SUFFIX=' "$BR2EXT_NETBIRD/meta" 2>/dev/null | cut -d'"' -f2)
+if [[ "$GA_ENV" == "prod" ]] && [[ -z "$VERSION_SUFFIX_CHECK" ]]; then
+  echo "WARN: VERSION_SUFFIX is empty in meta — prod build will use base version only" >&2
+fi
+
+if [[ $PREFLIGHT_FAIL -ne 0 ]]; then
+  echo "FATAL: Pre-build validation failed — fix errors above before building" >&2
+  exit 1
+fi
+echo "Pre-build validation passed."
+echo ""
 
 ensure_dev_ca_from_rel_ca() {
   mkdir -p "$OTA_DIR"
