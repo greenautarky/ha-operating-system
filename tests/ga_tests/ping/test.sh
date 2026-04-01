@@ -23,8 +23,9 @@ if ping -c 1 -W 2 127.0.0.1 >/dev/null 2>&1; then
     "GW=\$(grep GATEWAY_IP /mnt/data/telegraf/env 2>/dev/null | cut -d= -f2); [ -n \"\$GW\" ] && [ \"\$GW\" != 'unknown' ] && ping -c 1 -W 3 \$GW >/dev/null 2>&1"
   run_test "PING-04" "1.1.1.1 is pingable" \
     "ping -c 1 -W 3 1.1.1.1 >/dev/null 2>&1"
-  run_test "PING-05" "Internet reachable (curl 8.8.8.8)" \
-    "HTTP=\$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 http://8.8.8.8); [ \"\$HTTP\" != '000' ]"
+  # Use GA connectivity endpoint (works over VPN, not just direct internet)
+  run_test "PING-05" "Internet reachable (checkonline.greenautarky.com)" \
+    "curl -sf --connect-timeout 10 http://checkonline.greenautarky.com/online.txt 2>/dev/null | grep -q 'NetworkManager is online'"
 else
   # ping broken — verify connectivity via ARP + Telegraf ping metrics
   GW=$(grep GATEWAY_IP /mnt/data/telegraf/env 2>/dev/null | cut -d= -f2)
@@ -32,8 +33,9 @@ else
     "grep -q '${GW:-NO_GW}' /proc/net/arp 2>/dev/null"
   run_test "PING-04" "Telegraf ping plugin reporting data" \
     "journalctl -u telegraf --no-pager -q --since '3 hours ago' 2>/dev/null | grep -qi 'ping'"
-  run_test "PING-05" "Internet reachable (curl 8.8.8.8)" \
-    "HTTP=\$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 http://8.8.8.8); [ \"\$HTTP\" != '000' ]"
+  # Use GA connectivity endpoint (works over VPN, not just direct internet)
+  run_test "PING-05" "Internet reachable (checkonline.greenautarky.com)" \
+    "curl -sf --connect-timeout 10 http://checkonline.greenautarky.com/online.txt 2>/dev/null | grep -q 'NetworkManager is online'"
 fi
 
 skip_test "PING-07" "Data reaches InfluxDB" "no InfluxDB CLI on device"
