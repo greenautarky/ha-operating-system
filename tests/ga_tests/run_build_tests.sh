@@ -345,6 +345,11 @@ NB="${TARGET}/usr/bin/netbird"
   && _pass "BIN: os-agent binary exists" \
   || _fail "BIN: os-agent binary missing"
 
+# OpenSSL CLI (needed for HMAC-SHA256 PSK derivation on device)
+[[ -x "${TARGET}/usr/bin/openssl" ]] \
+  && _pass "BIN: openssl binary exists" \
+  || _fail "BIN: openssl binary missing (enable BR2_PACKAGE_LIBOPENSSL_BIN=y)"
+
 echo ""
 echo "--- Build artifacts ---"
 
