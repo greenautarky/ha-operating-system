@@ -46,24 +46,17 @@
   - Consider: add secondary keyring slot for smooth transition
 
 ### OTA Delivery — Private Server (needs implementation)
-- [ ] **Host OTA bundles on private server via NetBird VPN**
-  - NOT GitHub Releases (public repo would leak firmware binaries)
-  - Server: `ota.greenautarky.com` — DNS alias for ga-tools NetBird IP
-  - Only reachable via NetBird VPN (devices already connected)
-  - Caddy serves static files, no directory listing
-  - URL pattern: `https://ota.greenautarky.com/releases/{version}/{os_name}_{board}-{version}.raucb`
-- [ ] **Update `stable.json` OTA URL** to new private endpoint
-  - Change `greenautarky/haos-version/stable.json` → `ota` field
-  - From: `https://github.com/.../releases/download/{version}/...`
-  - To: `https://ota.greenautarky.com/releases/{version}/{os_name}_{board}-{version}.raucb`
+- [x] **Host OTA bundles on private server via NetBird VPN** (deployed 2026-04-01)
+  - Server: `ota.greenautarky.com` bound to NetBird IP `100.126.142.217`
+  - Internal TLS (self-signed), not reachable from public internet
+  - First bundle uploaded: `16.3.1.1` (223 MB)
+  - Verified: device can reach via NetBird, public access blocked
+- [x] **Update `stable.json` OTA URL** to `ota.greenautarky.com`
 - [ ] **Update `supervisor/const.py`** if `URL_HASSIO_VERSION` needs to change
   - Currently points to raw.githubusercontent.com for stable.json
-  - Consider: also serve stable.json from ota.greenautarky.com?
-  - Or: keep stable.json on GitHub (public, no secrets) — only bundles on private server
-- [ ] **NetBird DNS setup** — add `ota.greenautarky.com` as DNS alias in NetBird management
-  - Same pattern as `influx.greenautarky.com`, `loki.greenautarky.com`
-  - Points to ga-tools server NetBird IP
-- [ ] **Caddy config on ga-tools** — serve OTA files
+  - stable.json stays public (no secrets) — only bundles are private
+- [x] **NetBird DNS** — devices use `/etc/hosts` fallback to `100.126.142.217`
+- [x] **Caddy config on ga-tools** — deployed, bind to NetBird, tls internal
   ```
   ota.greenautarky.com {
       root * /srv/ota
