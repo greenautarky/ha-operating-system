@@ -1205,8 +1205,8 @@ get_original_image_basename() {
 }
 
 # Rename images with ga-build-id timestamp suffix and environment tag
-# haos_ihost_CoreBox-16.3.1.1.img.xz -> bos_ihost_CoreBox-16.3.1.1_dev_20260119123045.img.xz
-# haos_ihost_CoreBox-16.3.1.1.raucb  -> bos_ihost_CoreBox-16.3.1.1_prod_20260119123045.raucb
+# haos_ihost-16.3.1.1.img.xz -> bos_ihost-16.3.1.1_dev_20260119123045.img.xz
+# haos_ihost-16.3.1.1.raucb  -> bos_ihost-16.3.1.1_prod_20260119123045.raucb
 rename_images_with_build_id() {
   local orig_base new_base
   orig_base="$(get_original_image_basename)" || return 1
