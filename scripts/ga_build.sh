@@ -26,7 +26,7 @@ fi
 #  5) Writes build timestamp to /etc/ga-build-id and /etc/os-release in target rootfs
 #  6) Ensures rel-ca.pem satisfies post-build expectation for dev-ca.pem (symlink/copy)
 #  7) Re-finalizes target and rebuilds artifacts using 'all' (this tree has no 'images' target)
-#  8) Renames output images with ga-build-id timestamp suffix (haos_ -> gaos_)
+#  8) Renames output images with ga-build-id timestamp suffix (haos_ -> bos_)
 #  9) Creates provisioning image (factory image with embedded .img.xz)
 # 10) Archives build configurations for reproducibility (see below)
 # 11) Archives Buildroot legal-info (licenses) for compliance
@@ -41,9 +41,9 @@ fi
 #   - Host environment recorded (GCC, Make, Bash versions)
 #
 # Output Artifacts (in ${OUT}/images/):
-#   - gaos_ihost-*.img.xz              Compressed disk image
-#   - gaos_ihost-*.raucb               RAUC update bundle
-#   - gaos_ihost-*_provisioning.img.xz Factory provisioning image
+#   - bos_ihost-*.img.xz              Compressed disk image
+#   - bos_ihost-*.raucb               RAUC update bundle
+#   - bos_ihost-*_provisioning.img.xz Factory provisioning image
 #   - sbom.json                        Software Bill of Materials
 #   - build.log / build.log.xz         Complete build log
 #   - configs/                         Build configuration archive:
@@ -1205,17 +1205,17 @@ get_original_image_basename() {
 }
 
 # Rename images with ga-build-id timestamp suffix and environment tag
-# haos_ihost-16.3.img.xz -> gaos_ihost_CoreBox-16.3_dev_20260119123045.img.xz
-# haos_ihost-16.3.raucb  -> gaos_ihost_CoreBox-16.3_prod_20260119123045.raucb
+# haos_ihost_CoreBox-16.3.1.1.img.xz -> bos_ihost_CoreBox-16.3.1.1_dev_20260119123045.img.xz
+# haos_ihost_CoreBox-16.3.1.1.raucb  -> bos_ihost_CoreBox-16.3.1.1_prod_20260119123045.raucb
 rename_images_with_build_id() {
   local orig_base new_base
   orig_base="$(get_original_image_basename)" || return 1
 
-  # Convert haos_ prefix to gaos_ and append environment + timestamp
+  # Convert haos_ prefix to bos_ and append environment + timestamp
   local orig_name new_name
   local env_tag="${GA_ENV:-dev}"
   orig_name="$(basename "$orig_base")"
-  new_name="${orig_name/haos_/gaos_}_${env_tag}_${GA_BUILD_TIMESTAMP}"
+  new_name="${orig_name/haos_/bos_}_${env_tag}_${GA_BUILD_TIMESTAMP}"
   new_base="$(dirname "$orig_base")/${new_name}"
 
   echo "Renaming images: ${orig_name} -> ${new_name}"

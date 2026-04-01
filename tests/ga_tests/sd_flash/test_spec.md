@@ -7,7 +7,7 @@
 - RAUC slot layout and partition table
 
 ## Prerequisites
-- Built image: `ga_output/images/gaos_*.img.xz`
+- Built image: `ga_output/images/bos_*.img.xz`
 - SD card (16GB+ recommended)
 - Card reader or USB adapter on build host
 - `xz`, `dd` or `balenaEtcher` available
@@ -16,14 +16,14 @@
 
 ### SD-01: Image file exists after build
 - **Action**: Verify build produces expected artifacts
-- **Command**: `ls -lh ga_output/images/gaos_*.img.xz ga_output/images/gaos_*.raucb`
+- **Command**: `ls -lh ga_output/images/bos_*.img.xz ga_output/images/bos_*.raucb`
 - **Expected**: Both `.img.xz` (disk image) and `.raucb` (OTA bundle) present
 
 ### SD-02: Image filename contains build metadata
 - **Action**: Verify filename follows naming convention
-- **Command**: `ls ga_output/images/gaos_*.img.xz`
-- **Expected**: Filename format: `gaos_ihost_<variant>-<version>_<env>_<timestamp>.img.xz`
-  - Example: `gaos_ihost_CoreBox-16.3_dev_20260211143022.img.xz`
+- **Command**: `ls ga_output/images/bos_*.img.xz`
+- **Expected**: Filename format: `bos_ihost_<variant>-<version>_<env>_<timestamp>.img.xz`
+  - Example: `bos_ihost_CoreBox-16.3_dev_20260211143022.img.xz`
 
 ### SD-03: Flash to SD card (full procedure)
 - **Action**: Write image to SD card
@@ -31,7 +31,7 @@
   1. Identify SD card device: `lsblk` (e.g., `/dev/sdX`)
   2. Decompress and write:
      ```
-     xz -dc ga_output/images/gaos_*.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+     xz -dc ga_output/images/bos_*.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
      ```
   3. Sync: `sync`
 - **Expected**: Write completes without errors
@@ -106,7 +106,7 @@
 
 ### SD-12: Provisioning image exists after build
 - **Action**: Verify factory provisioning image is generated
-- **Command**: `ls -lh ga_output/images/gaos_*_provisioning.img.xz`
+- **Command**: `ls -lh ga_output/images/bos_*_provisioning.img.xz`
 - **Expected**: Provisioning image present (larger than base image — contains embedded .img.xz)
 
 ### SD-13: Provisioning image boots and self-updates

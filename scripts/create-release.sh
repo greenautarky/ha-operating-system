@@ -15,7 +15,7 @@
 #   --output-dir PATH      Where to write the release archive (default: releases/)
 #
 # Output:
-#   releases/gaos_ihost_CoreBox-16.3_prod_YYYYMMDDHHMMSS_release.tar.gz
+#   releases/bos_ihost_CoreBox-16.3_prod_YYYYMMDDHHMMSS_release.tar.gz
 #
 # Contents:
 #   images/
@@ -59,13 +59,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Find the latest image
-IMG_XZ="$(ls "${BUILD_DIR}/images/"gaos_*.img.xz 2>/dev/null | sort | tail -n 1 || true)"
+IMG_XZ="$(ls "${BUILD_DIR}/images/"bos_*.img.xz 2>/dev/null | sort | tail -n 1 || true)"
 if [[ -z "$IMG_XZ" ]]; then
-  echo "ERROR: No gaos_*.img.xz found in ${BUILD_DIR}/images/" >&2
+  echo "ERROR: No bos_*.img.xz found in ${BUILD_DIR}/images/" >&2
   exit 1
 fi
 
-# Extract build ID from filename (gaos_ihost_CoreBox-16.3_prod_20260331112238.img.xz)
+# Extract build ID from filename (bos_ihost_CoreBox-16.3_prod_20260331112238.img.xz)
 IMG_BASE="$(basename "$IMG_XZ" .img.xz)"
 BUILD_ID="$(echo "$IMG_BASE" | grep -oP '\d{14}$' || echo "unknown")"
 echo "Release for: $IMG_BASE (build $BUILD_ID)"
