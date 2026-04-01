@@ -38,7 +38,7 @@ run_test "OTA-02" "RAUC compatible is haos-ihost" \
 VERSION_ID=$(grep 'VERSION_ID=' /etc/os-release 2>/dev/null | cut -d= -f2)
 run_test_show "OTA-03" "OS version from os-release" "echo $VERSION_ID"
 
-CPE_VER=$(grep 'CPE_NAME=' /etc/os-release 2>/dev/null | grep -oP 'haos:\K[^:]+')
+CPE_VER=$(grep 'CPE_NAME=' /etc/os-release 2>/dev/null | sed 's/.*haos://;s/:.*//')
 run_test "OTA-03b" "CPE version matches VERSION_ID" \
   "[ '$VERSION_ID' = '$CPE_VER' ]"
 
