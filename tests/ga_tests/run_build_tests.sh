@@ -119,6 +119,36 @@ grep -qE 'storage\.total_limit_size\s+300M' "${TARGET}/etc/fluent-bit/fluent-bit
   && _pass "CFG-24b: ga-ethernet-guard.service enabled at boot" \
   || _fail "CFG-24b: ga-ethernet-guard.service NOT enabled"
 
+# CFG-28: ga-dns-inject script and config
+[[ -x "${TARGET}/usr/sbin/ga-dns-inject" ]] \
+  && _pass "CFG-28a: ga-dns-inject script exists and executable" \
+  || _fail "CFG-28a: ga-dns-inject NOT found on rootfs"
+
+[[ -f "${TARGET}/usr/share/ga-defaults/dns-inject.conf" ]] \
+  && _pass "CFG-28b: dns-inject.conf exists" \
+  || _fail "CFG-28b: dns-inject.conf NOT found"
+
+grep -q 'ota.greenautarky.com' "${TARGET}/usr/share/ga-defaults/dns-inject.conf" 2>/dev/null \
+  && _pass "CFG-28c: dns-inject.conf has ota.greenautarky.com" \
+  || _fail "CFG-28c: dns-inject.conf missing ota.greenautarky.com"
+
+grep -q 'influx.greenautarky.com' "${TARGET}/usr/share/ga-defaults/dns-inject.conf" 2>/dev/null \
+  && _pass "CFG-28d: dns-inject.conf has influx.greenautarky.com" \
+  || _fail "CFG-28d: dns-inject.conf missing influx.greenautarky.com"
+
+grep -q 'loki.greenautarky.com' "${TARGET}/usr/share/ga-defaults/dns-inject.conf" 2>/dev/null \
+  && _pass "CFG-28e: dns-inject.conf has loki.greenautarky.com" \
+  || _fail "CFG-28e: dns-inject.conf missing loki.greenautarky.com"
+
+# CFG-29: ga-dns-inject.service
+[[ -f "${TARGET}/etc/systemd/system/ga-dns-inject.service" ]] \
+  && _pass "CFG-29a: ga-dns-inject.service exists" \
+  || _fail "CFG-29a: ga-dns-inject.service NOT found"
+
+[[ -L "${TARGET}/etc/systemd/system/multi-user.target.wants/ga-dns-inject.service" ]] \
+  && _pass "CFG-29b: ga-dns-inject.service enabled at boot" \
+  || _fail "CFG-29b: ga-dns-inject.service NOT enabled"
+
 echo ""
 echo "--- NetworkManager WiFi defaults ---"
 

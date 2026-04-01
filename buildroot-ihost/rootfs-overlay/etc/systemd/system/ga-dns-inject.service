@@ -1,0 +1,13 @@
+[Unit]
+Description=Inject GA DNS entries into Supervisor CoreDNS
+After=hassos-supervisor.service docker.service
+Wants=hassos-supervisor.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 30
+ExecStart=/usr/sbin/ga-dns-inject
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

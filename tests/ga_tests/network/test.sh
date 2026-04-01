@@ -74,4 +74,34 @@ else
   skip_test "NET-12" "WiFi active when disabled (not disabled)"
 fi
 
+# --- Supervisor DNS injection tests ---
+
+# NET-14: ga-dns-inject service ran
+run_test "NET-14" "ga-dns-inject service ran successfully" \
+  "systemctl is-active ga-dns-inject >/dev/null 2>&1 || systemctl show ga-dns-inject --property=ActiveState 2>/dev/null | grep -q 'inactive'"
+
+# NET-15: CoreDNS hosts has GA entries
+DNS_HOSTS="/mnt/data/supervisor/dns/hosts"
+if [ -f "$DNS_HOSTS" ]; then
+  run_test "NET-15a" "CoreDNS hosts has ota.greenautarky.com" \
+    "grep -q 'ota.greenautarky.com' $DNS_HOSTS"
+
+  run_test "NET-15b" "CoreDNS hosts has influx.greenautarky.com" \
+    "grep -q 'influx.greenautarky.com' $DNS_HOSTS"
+
+  run_test "NET-15c" "CoreDNS hosts has loki.greenautarky.com" \
+    "grep -q 'loki.greenautarky.com' $DNS_HOSTS"
+else
+  run_test "NET-15a" "CoreDNS hosts file exists" "false"
+  run_test "NET-15b" "CoreDNS hosts has influx" "false"
+  run_test "NET-15c" "CoreDNS hosts has loki" "false"
+fi
+
+# NET-16: Supervisor can resolve GA services
+run_test "NET-16a" "Supervisor resolves ota.greenautarky.com" \
+  "docker exec hassio_supervisor sh -c 'getent hosts ota.greenautarky.com' >/dev/null 2>&1"
+
+run_test "NET-16b" "OTA endpoint reachable from device" \
+  "curl -sfk --connect-timeout 10 https://ota.greenautarky.com/index.txt 2>/dev/null | grep -q 'OTA'"
+
 suite_end

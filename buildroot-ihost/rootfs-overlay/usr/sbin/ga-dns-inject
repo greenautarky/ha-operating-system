@@ -1,0 +1,46 @@
+#!/bin/sh
+# ga-dns-inject — Inject GA service DNS entries into Supervisor CoreDNS
+#
+# The Supervisor manages its own DNS via hassio_dns (CoreDNS).
+# Host /etc/hosts entries are NOT visible inside the Supervisor containers.
+# This script appends GA service entries to the CoreDNS hosts file
+# after the Supervisor starts.
+#
+# DNS entries are defined in /usr/share/ga-defaults/dns-inject.conf
+# Format: one "IP HOSTNAME" per line
+#
+set -e
+
+INJECT_FILE="/usr/share/ga-defaults/dns-inject.conf"
+DNS_HOSTS="/mnt/data/supervisor/dns/hosts"
+MARKER="# GA-injected"
+
+if [ ! -f "$INJECT_FILE" ]; then
+  echo "ga-dns-inject: no inject file at $INJECT_FILE — skipping"
+  exit 0
+fi
+
+# Wait for hassio_dns hosts file to exist (Supervisor may still be starting)
+RETRIES=30
+while [ ! -f "$DNS_HOSTS" ] && [ "$RETRIES" -gt 0 ]; do
+  sleep 2
+  RETRIES=$((RETRIES - 1))
+done
+
+if [ ! -f "$DNS_HOSTS" ]; then
+  echo "ga-dns-inject: $DNS_HOSTS not found after 60s — giving up"
+  exit 1
+fi
+
+# Remove old injected entries (idempotent)
+sed -i "/$MARKER/d" "$DNS_HOSTS"
+
+# Append new entries
+while IFS= read -r line; do
+  [ -z "$line" ] && continue
+  case "$line" in \#*) continue ;; esac
+  echo "$line $MARKER" >> "$DNS_HOSTS"
+done < "$INJECT_FILE"
+
+COUNT=$(grep -c "$MARKER" "$DNS_HOSTS")
+echo "ga-dns-inject: injected $COUNT DNS entries into CoreDNS"
