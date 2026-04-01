@@ -2,7 +2,7 @@ VERSION_MAJOR="16"
 VERSION_MINOR="3"
 VERSION_SUFFIX="1.1"
 
-HASSOS_NAME="Home Assistant OS"
+HASSOS_NAME="GreenAutarky BOS"
 HASSOS_ID="haos"
 
 DEPLOYMENT="production"
