@@ -17,13 +17,50 @@
 
 ### OTA / RAUC
 - [x] Point `stable.json` OTA URL to `greenautarky/ha-operating-system` (was upstream iHost repo)
-- [ ] Publish first RAUC bundle as GitHub Release on `greenautarky/ha-operating-system`
-  - Release tag must match `{version}` in OTA URL pattern
-  - Asset filename: `{os_name}_{board}-{version}.raucb`
-  - Consider CI workflow to auto-publish `.raucb` from `ga_build.sh prod` output
-- [ ] Test full OTA update flow with signed RAUC bundles
+- [x] ~~Publish first RAUC bundle as GitHub Release~~ → replaced by private OTA delivery (see below)
+- [x] Test full OTA update flow with signed RAUC bundles
+  - Validated 2026-04-01: 16.3 → 16.3.1.1 install, rollback, restore (58 tests, 0 failures)
+  - Fully automated via `tests/run_ota_test.sh` (3 phases, 3 reboots)
 - [ ] Verify CA certificates in `buildroot-external/ota/` are non-expired
 - [ ] Document key rotation procedure
+
+### OTA Delivery — Private Server (needs implementation)
+- [ ] **Host OTA bundles on private server via NetBird VPN**
+  - NOT GitHub Releases (public repo would leak firmware binaries)
+  - Server: `ota.greenautarky.com` — DNS alias for ga-tools NetBird IP
+  - Only reachable via NetBird VPN (devices already connected)
+  - Caddy serves static files, no directory listing
+  - URL pattern: `https://ota.greenautarky.com/releases/{version}/{os_name}_{board}-{version}.raucb`
+- [ ] **Update `stable.json` OTA URL** to new private endpoint
+  - Change `greenautarky/haos-version/stable.json` → `ota` field
+  - From: `https://github.com/.../releases/download/{version}/...`
+  - To: `https://ota.greenautarky.com/releases/{version}/{os_name}_{board}-{version}.raucb`
+- [ ] **Update `supervisor/const.py`** if `URL_HASSIO_VERSION` needs to change
+  - Currently points to raw.githubusercontent.com for stable.json
+  - Consider: also serve stable.json from ota.greenautarky.com?
+  - Or: keep stable.json on GitHub (public, no secrets) — only bundles on private server
+- [ ] **NetBird DNS setup** — add `ota.greenautarky.com` as DNS alias in NetBird management
+  - Same pattern as `influx.greenautarky.com`, `loki.greenautarky.com`
+  - Points to ga-tools server NetBird IP
+- [ ] **Caddy config on ga-tools** — serve OTA files
+  ```
+  ota.greenautarky.com {
+      root * /srv/ota
+      file_server {
+          browse off
+      }
+  }
+  ```
+  - Directory structure: `/srv/ota/releases/16.3.1.1/haos_ihost-16.3.1.1.raucb`
+- [ ] **Upload script** — `scripts/publish-ota.sh` to upload .raucb to ga-tools
+  - SCP via NetBird: `scp *.raucb ga-tools:/srv/ota/releases/{version}/`
+  - Update stable.json with new version
+  - Notify fleet (optional webhook)
+- [ ] **Security considerations**
+  - RAUC bundles are signed — even if leaked, can't be tampered with
+  - VPN-only access prevents unauthorized download
+  - No directory listing prevents enumeration
+  - stable.json can stay public (only version numbers, no binaries)
 
 ### Build System
 - [ ] Document how to reproduce a build from archived configs
