@@ -309,15 +309,34 @@ Runs as a container with Supervisor API access (`hassio` role).
   - Publish .raucb as GitHub Release asset
   - Test Supervisor auto-update detection via stable.json OTA URL
 
-### Release Sign-off (Prio 1)
-- [ ] **Define formal approval workflow**
-  - Thomas: OS/kernel/build review
+### Release Sign-off / Freigabeprozess (Prio 1 — needs definition)
+- [ ] **Define release checklist** (what must pass before release)
+  - Build tests: 0 FAIL required?
+  - Device tests: 0 FAIL required or known failures triaged?
+  - E2E tests: 0 FAIL required?
+  - OTA test: must pass on at least 1 device?
+  - CVE scan: Critical findings block release?
+- [ ] **Define approval chain**
+  - Thomas: OS/kernel/build review + test results
   - Ahmad: addon/integration review
-  - Ramin: final release approval
-  - Minimum criteria: 0 FAIL build tests, 0 FAIL E2E, device failures triaged
-- [ ] **Changelog auto-generation** from git log between release tags
-  - Include: changes, test results summary, CVE scan summary, known issues
-  - Template in `scripts/generate-changelog.sh`
+  - Ramin: final business approval
+  - How: GitHub PR? Signed test-report.html? Email? Mattermost?
+- [ ] **Define release artifacts checklist**
+  - test-report.html reviewed and archived
+  - CHANGELOG.md generated (generate-changelog.sh)
+  - .raucb uploaded to OTA server (push-ota.sh --server)
+  - stable.json updated (hassos.ihost = new version)
+  - Git tag set (git tag v16.3.X.Y)
+  - Release archive created (create-release.sh)
+- [ ] **Define rollback criteria**
+  - When: crash loop, boot failure, critical regression
+  - Who decides: Thomas (technical) + Ramin (business)
+  - How fast: within 1h of report
+  - Method: `rauc status mark-bad booted && reboot` or full re-flash
+- [x] **Changelog auto-generation** — implemented in `scripts/generate-changelog.sh`
+  - Scans all 7 repos, groups by Conventional Commit type
+  - Integrated into create-release.sh
+- [ ] **Document Freigabeprozess** in ga-ihost-docs/RELEASING.md + draw.io diagram
 
 ### Branch Strategy & Code Review (Prio 2)
 - [ ] **Define Git branching model**
