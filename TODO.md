@@ -84,7 +84,7 @@
   - stable.json can stay public (only version numbers, no binaries)
 
 ### Build System
-- [ ] Document how to reproduce a build from archived configs
+- [x] Document how to reproduce a build from archived configs → `docs/REPRODUCIBILITY.md`
 - [x] Add pre-build validation for required files (CA certs, defconfig, etc.)
   - Checks: BUILDROOT_DIR, defconfig, cert.pem, key.pem, secrets (warn only)
   - VERSION_SUFFIX warning for prod builds
