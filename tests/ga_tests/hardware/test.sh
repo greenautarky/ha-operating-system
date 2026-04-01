@@ -134,6 +134,44 @@ run_test "HW-16b" "Install WiFi has low priority (Ethernet wins)" \
 run_test "HW-16c" "Install WiFi autoconnect enabled" \
   "nmcli -t -f connection.autoconnect connection show GreenAutarky-Install 2>/dev/null | grep -qi 'yes'"
 
+# --- Critical binaries & libraries ---
+
+# GA-specific binaries
+run_test "HW-17a" "openssl binary available" \
+  "command -v openssl >/dev/null 2>&1"
+
+if command -v openssl >/dev/null 2>&1; then
+  run_test "HW-17b" "openssl dgst works (HMAC-SHA256)" \
+    "echo -n test | openssl dgst -sha256 -hmac testkey 2>/dev/null | grep -qE '[0-9a-f]{64}'"
+else
+  run_test "HW-17b" "openssl dgst works" "false"
+fi
+
+run_test "HW-17c" "netbird binary available" \
+  "command -v netbird >/dev/null 2>&1"
+
+run_test "HW-17d" "os-agent binary available" \
+  "command -v os-agent >/dev/null 2>&1"
+
+# System binaries (critical for operations)
+for bin in nmcli rauc dockerd jq curl ip sha256sum; do
+  run_test "HW-18-$bin" "$bin available" \
+    "command -v $bin >/dev/null 2>&1"
+done
+
+# Functional checks
+run_test "HW-19a" "rauc status works" \
+  "rauc status >/dev/null 2>&1"
+
+run_test "HW-19b" "nmcli works" \
+  "nmcli general >/dev/null 2>&1"
+
+run_test "HW-19c" "Docker daemon running" \
+  "docker info >/dev/null 2>&1"
+
+run_test "HW-19d" "jq works" \
+  "echo '{}' | jq . >/dev/null 2>&1"
+
 # --- Summary dmesg scan ---
 
 DMESG_ERRS=$(dmesg | grep -ciE 'error|fail' 2>/dev/null || echo 0)
