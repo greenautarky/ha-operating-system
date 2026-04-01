@@ -25,7 +25,7 @@ setup_localtime
     echo "VERSION=\"$(hassos_version) (${BOARD_NAME})\""
     echo "ID=${HASSOS_ID}"
     echo "VERSION_ID=$(hassos_version)"
-    echo "PRETTY_NAME=\"${HASSOS_NAME} $(hassos_version)\""
+    echo "PRETTY_NAME=\"${HASSOS_NAME} $(hassos_version), based on Home Assistant\""
     echo "CPE_NAME=cpe:2.3:o:home-assistant:${HASSOS_ID}:$(hassos_version):*:${DEPLOYMENT}:*:*:*:${BOARD_ID}:*"
     echo "HOME_URL=https://www.home-assistant.io/"
     echo "VARIANT=\"${HASSOS_NAME} ${BOARD_NAME}\""
