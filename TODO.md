@@ -481,3 +481,18 @@ Runs as a container with Supervisor API access (`hassio` role).
   injecting directly into CoreDNS hosts file, but entries are lost on reboot.
 - **Validated**: Supervisor OTA update via `ha os update` works when DNS resolves
   (tested 2026-04-01: 16.3 → 16.3.1.1 via ota.greenautarky.com)
+
+### Network Topology & Config Review (needs discussion)
+- [ ] **Full review of network topology** — document all network paths, VPN tunnels, DNS resolution chains
+  - Device → LAN → Router → Internet
+  - Device → NetBird VPN → ga-tools (influx, loki, ota)
+  - Device → OpenStick WiFi → LTE → Internet
+  - Supervisor containers → hassio_dns → CoreDNS → upstream
+- [ ] **Network fallback strategy review** — what happens when each link fails?
+  - LAN down → WiFi fallback → OpenStick fallback
+  - NetBird down → services unreachable (no fallback currently)
+  - DNS down → /etc/hosts + CoreDNS injection fallback
+- [ ] **NetBird DNS integration** — investigate why Zones don't work on embedded Linux
+  - Root cause: NetworkManager `dns=default` + systemd-resolved `foreign` mode
+  - Possible fix: NetworkManager DNS plugin for NetBird, or `dns=systemd-resolved` mode
+  - Track upstream NetBird issue if exists
