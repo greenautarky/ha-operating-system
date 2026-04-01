@@ -331,10 +331,13 @@ Runs as a container with Supervisor API access (`hassio` role).
   - `master` = production-ready? Or `release/vX.Y` branches?
   - Feature branches with PR required before merge?
   - Hotfix branch workflow for urgent patches
-- [ ] **Enable branch protection on critical repos**
-  - Require PR review (4-Augen-Prinzip) before merge to master
-  - Require status checks to pass (build tests, CI)
-  - Repos: ha-operating-system, ha-core, frontend, ha-supervisor
+- [x] **Enable branch protection on ha-operating-system** (2026-04-01)
+  - Force push: blocked, branch deletion: blocked
+  - Direct push: still allowed (no PR requirement yet)
+- [ ] **Verschärfung Branch Protection** (nächster Schritt)
+  - PR-Pflicht (4-Augen-Prinzip) einführen
+  - Status Checks required (Build Tests müssen grün sein)
+  - Auf weitere Repos ausweiten: ha-core, frontend, ha-supervisor
 
 ### Performance & Monitoring (Prio 2)
 - [ ] **Performance trending between releases**
