@@ -325,6 +325,32 @@ case "$GA_ENV_VAL" in
   *) _fail "ENV-02: GA_ENV invalid: '$GA_ENV_VAL'" ;;
 esac
 
+# ENV-03: Prod build safety checks
+if [[ "$GA_ENV_VAL" == "prod" ]]; then
+  # VERSION_SUFFIX must be set (not empty) for prod builds
+  OS_RELEASE="${TARGET}/etc/os-release"
+  [[ -f "$OS_RELEASE" ]] || OS_RELEASE="${TARGET}/usr/lib/os-release"
+  PROD_VER="$(grep 'VERSION_ID=' "$OS_RELEASE" 2>/dev/null | cut -d= -f2)"
+  # Must have at least 3 segments (e.g. 16.3.1.1, not just 16.3)
+  if echo "$PROD_VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'; then
+    _pass "ENV-03a: Prod version has release suffix ($PROD_VER)"
+  else
+    _fail "ENV-03a: Prod build has NO release suffix ($PROD_VER) — bump VERSION_SUFFIX before releasing"
+  fi
+  # PRETTY_NAME must contain GreenAutarky BOS
+  if grep -q 'GreenAutarky BOS' "$OS_RELEASE" 2>/dev/null; then
+    _pass "ENV-03b: Prod build has GreenAutarky BOS branding"
+  else
+    _fail "ENV-03b: Prod build missing GreenAutarky BOS branding"
+  fi
+  # Image filename must be bos_ (not haos_ or gaos_)
+  if ls "${OUT}/images/"bos_*.img.xz >/dev/null 2>&1; then
+    _pass "ENV-03c: Prod image has bos_ prefix"
+  else
+    _fail "ENV-03c: Prod image missing bos_ prefix"
+  fi
+fi
+
 # ENV-08: os-release (may be at /etc/os-release or /usr/lib/os-release)
 { grep -q 'GA_BUILD_ID' "${TARGET}/etc/os-release" 2>/dev/null || \
   grep -q 'GA_BUILD_ID' "${TARGET}/usr/lib/os-release" 2>/dev/null; } \
