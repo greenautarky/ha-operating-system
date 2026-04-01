@@ -240,11 +240,11 @@ Runs as a container with Supervisor API access (`hassio` role).
   - stable.json changed in haos-version repo
 
 ### OTA & Rollback Testing (Prio 1)
-- [ ] **Test RAUC OTA update on real device**
+- [x] **Test RAUC OTA update on real device** — Tested 2026-04-01: 16.3 → 16.3.1.1 via rauc install, Slot A→B switch, data partition preserved
   - Flash old image → apply .raucb → verify new rootfs boots
   - Verify A/B slot switching works correctly
   - Test interrupted update (power loss during apply)
-- [ ] **Test A/B rollback**
+- [x] **Test A/B rollback** — Tested 2026-04-01: mark-bad booted → reboot → Slot B→A fallback works, mark-good + mark-active restores
   - Deploy intentionally broken image → verify automatic fallback to slot B
   - Measure rollback time
   - Verify data partition survives rollback
