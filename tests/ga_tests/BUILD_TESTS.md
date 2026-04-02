@@ -220,3 +220,15 @@ Must run on real iHost hardware. Needs network, Docker, HA running.
 - OS-07: PSK derived for detected SSID
 - OS-08: WiFi connection with derived PSK
 - OS-09: Internet reachable via OpenStick (connectivity check)
+- OS-10a: Auto-connect script present and executable
+- OS-10b: NM dispatcher 90-openstick-fallback present
+- OS-11: Auto-connect is no-op when online
+- OS-12: Auto-connect exits when key file missing (feature disabled)
+- OS-13a: Cooldown mechanism — respects active cooldown
+- OS-13b: Cooldown mechanism — clears expired cooldown
+- OS-14a: Dispatcher fires on connectivity-change NONE
+- OS-14b: Dispatcher fires on connectivity-change LIMITED
+- OS-14c: Dispatcher is no-op on connectivity-change FULL
+- OS-15: Dispatcher handles interface up event (boot-without-ethernet)
+- OS-16: Auto-connect skips if already connected
+- OS-17: Route metric 500 on active OpenStick connection
