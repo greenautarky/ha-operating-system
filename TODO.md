@@ -483,3 +483,10 @@ Runs as a container with Supervisor API access (`hassio` role).
   - Root cause: NetworkManager `dns=default` + systemd-resolved `foreign` mode
   - Possible fix: NetworkManager DNS plugin for NetBird, or `dns=systemd-resolved` mode
   - Track upstream NetBird issue if exists
+
+### NetBird v0.67.2 DNS Test
+- [ ] **Test ob NetBird DNS Zones jetzt funktionieren** nach Upgrade auf v0.67.2
+  - v0.67.0 hat "Improved DNS handling" — könnte unser systemd-resolved Problem fixen
+  - Test: `nslookup ota.greenautarky.com` auf dem Gerät (ohne /etc/hosts Fallback)
+  - Wenn ja: Supervisor-Fork DNS-Einträge werden Fallback, NetBird DNS ist primär
+  - Wenn nein: Supervisor-Fork DNS bleibt die primäre Lösung
