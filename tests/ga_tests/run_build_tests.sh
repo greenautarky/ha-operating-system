@@ -119,35 +119,7 @@ grep -qE 'storage\.total_limit_size\s+300M' "${TARGET}/etc/fluent-bit/fluent-bit
   && _pass "CFG-24b: ga-ethernet-guard.service enabled at boot" \
   || _fail "CFG-24b: ga-ethernet-guard.service NOT enabled"
 
-# CFG-28: ga-dns-inject script and config
-[[ -x "${TARGET}/usr/sbin/ga-dns-inject" ]] \
-  && _pass "CFG-28a: ga-dns-inject script exists and executable" \
-  || _fail "CFG-28a: ga-dns-inject NOT found on rootfs"
-
-[[ -f "${TARGET}/usr/share/ga-defaults/dns-inject.conf" ]] \
-  && _pass "CFG-28b: dns-inject.conf exists" \
-  || _fail "CFG-28b: dns-inject.conf NOT found"
-
-grep -q 'ota.greenautarky.com' "${TARGET}/usr/share/ga-defaults/dns-inject.conf" 2>/dev/null \
-  && _pass "CFG-28c: dns-inject.conf has ota.greenautarky.com" \
-  || _fail "CFG-28c: dns-inject.conf missing ota.greenautarky.com"
-
-grep -q 'influx.greenautarky.com' "${TARGET}/usr/share/ga-defaults/dns-inject.conf" 2>/dev/null \
-  && _pass "CFG-28d: dns-inject.conf has influx.greenautarky.com" \
-  || _fail "CFG-28d: dns-inject.conf missing influx.greenautarky.com"
-
-grep -q 'loki.greenautarky.com' "${TARGET}/usr/share/ga-defaults/dns-inject.conf" 2>/dev/null \
-  && _pass "CFG-28e: dns-inject.conf has loki.greenautarky.com" \
-  || _fail "CFG-28e: dns-inject.conf missing loki.greenautarky.com"
-
-# CFG-29: ga-dns-inject.service
-[[ -f "${TARGET}/etc/systemd/system/ga-dns-inject.service" ]] \
-  && _pass "CFG-29a: ga-dns-inject.service exists" \
-  || _fail "CFG-29a: ga-dns-inject.service NOT found"
-
-[[ -L "${TARGET}/etc/systemd/system/multi-user.target.wants/ga-dns-inject.service" ]] \
-  && _pass "CFG-29b: ga-dns-inject.service enabled at boot" \
-  || _fail "CFG-29b: ga-dns-inject.service NOT enabled"
+# CFG-28/29: removed — ga-dns-inject replaced by Supervisor fork DNS handling
 
 echo ""
 echo "--- NetworkManager WiFi defaults ---"
@@ -1123,6 +1095,32 @@ if [[ -n "$SRC" ]]; then
   else
     _fail "SRC-09: Found $STALE_COUNT file(s) with stale upstream refs in functional source"
   fi
+  # BLD-SUP-DNS: Supervisor fork has GA DNS entries in dns.py
+  SUP_ROOT=""
+  for sup_dir in "${SRC}/../supervisor" "/home/user/git/supervisor"; do
+    [[ -d "$sup_dir/supervisor" ]] && SUP_ROOT="$sup_dir" && break
+  done
+  if [[ -n "$SUP_ROOT" ]]; then
+    DNS_PY="${SUP_ROOT}/supervisor/plugins/dns.py"
+    if [[ -f "$DNS_PY" ]]; then
+      grep -q 'ota.greenautarky.com' "$DNS_PY" 2>/dev/null \
+        && _pass "BLD-SUP-DNS-a: dns.py has ota.greenautarky.com" \
+        || _fail "BLD-SUP-DNS-a: dns.py missing ota.greenautarky.com — Supervisor won't inject GA DNS"
+
+      grep -q 'influx.greenautarky.com' "$DNS_PY" 2>/dev/null \
+        && _pass "BLD-SUP-DNS-b: dns.py has influx.greenautarky.com" \
+        || _fail "BLD-SUP-DNS-b: dns.py missing influx.greenautarky.com"
+
+      grep -q 'loki.greenautarky.com' "$DNS_PY" 2>/dev/null \
+        && _pass "BLD-SUP-DNS-c: dns.py has loki.greenautarky.com" \
+        || _fail "BLD-SUP-DNS-c: dns.py missing loki.greenautarky.com"
+    else
+      _skip "BLD-SUP-DNS-a..c" "dns.py not found in supervisor fork"
+    fi
+  else
+    _skip "BLD-SUP-DNS-a..c" "supervisor repo not found"
+  fi
+
   # =========================================================================
   # Cross-repo version alignment (fetches stable.json, compares with local)
   # =========================================================================

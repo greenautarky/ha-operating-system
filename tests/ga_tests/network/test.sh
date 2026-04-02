@@ -74,11 +74,12 @@ else
   skip_test "NET-12" "WiFi active when disabled (not disabled)"
 fi
 
-# --- Supervisor DNS injection tests ---
+# --- Supervisor DNS (GA entries in CoreDNS, written by Supervisor fork) ---
 
-# NET-14: ga-dns-inject service ran
-run_test "NET-14" "ga-dns-inject service ran successfully" \
-  "systemctl is-active ga-dns-inject >/dev/null 2>&1 || systemctl show ga-dns-inject --property=ActiveState 2>/dev/null | grep -q 'inactive'"
+# NET-14: CoreDNS hosts file has GA entries (written by Supervisor _init_hosts)
+DNS_HOSTS_14="/mnt/data/supervisor/dns/hosts"
+run_test "NET-14" "CoreDNS hosts file has GA entries (Supervisor-managed)" \
+  "test -f $DNS_HOSTS_14 && grep -q 'greenautarky' $DNS_HOSTS_14 2>/dev/null"
 
 # NET-15: CoreDNS hosts has GA entries
 DNS_HOSTS="/mnt/data/supervisor/dns/hosts"

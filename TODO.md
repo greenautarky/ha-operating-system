@@ -461,19 +461,11 @@ Runs as a container with Supervisor API access (`hassio` role).
 - [x] Add network connectivity monitoring (`inputs.ping` with auto-detected gateway)
 - [x] Fluent-Bit endpoints configurable via env vars (removed from build script TODO)
 
-### Supervisor DNS Resolution for GA Services (BLOCKER for auto-OTA)
-- [ ] **NetBird DNS** (preferred) — configure in NetBird Management UI:
-  - `ota.greenautarky.com` → 100.126.142.217
-  - `influx.greenautarky.com` → 100.126.142.217
-  - `loki.greenautarky.com` → 100.126.142.217
-  - If NetBird DNS works, no OS-level changes needed
-- [ ] **Fallback: ga-dns-inject.service** — post-boot script injects entries into
-  Supervisor CoreDNS hosts file (`/mnt/data/supervisor/dns/hosts`)
-  - Script ready: `ga-dns-inject` + `dns-inject.conf` + systemd service
-  - Only needed if NetBird DNS doesn't work reliably
-- **Context**: Host `/etc/hosts` entries are NOT visible inside Supervisor containers.
-  The Supervisor uses its own DNS (hassio_dns/CoreDNS). Manual OTA test worked by
-  injecting directly into CoreDNS hosts file, but entries are lost on reboot.
+### Supervisor DNS Resolution for GA Services (DONE)
+- [x] GA DNS entries (influx, loki, ota) now handled in Supervisor fork's
+  `_init_hosts()` method (`supervisor/plugins/dns.py`) — no OS-level service needed
+- [x] `ga-dns-inject` service removed from OS (2026-04-02)
+- Host-level fallback: `/usr/share/ga-defaults/hosts` kept for curl/rauc
 - **Validated**: Supervisor OTA update via `ha os update` works when DNS resolves
   (tested 2026-04-01: 16.3 → 16.3.1.1 via ota.greenautarky.com)
 
