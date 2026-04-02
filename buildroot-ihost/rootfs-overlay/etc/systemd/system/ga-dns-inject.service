@@ -5,9 +5,9 @@ Wants=hassos-supervisor.service
 
 [Service]
 Type=oneshot
-ExecStartPre=/bin/sleep 30
 ExecStart=/usr/sbin/ga-dns-inject
 RemainAfterExit=yes
+TimeoutStartSec=360
 
 [Install]
 WantedBy=multi-user.target
