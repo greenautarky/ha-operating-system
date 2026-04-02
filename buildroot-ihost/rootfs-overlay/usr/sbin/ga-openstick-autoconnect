@@ -1,0 +1,114 @@
+#!/bin/sh
+# ga-openstick-autoconnect — Auto-connect to OpenStick WiFi when offline
+#
+# Called by NM dispatcher (90-openstick-fallback) when connectivity changes.
+# Scans for GA-XXXX SSIDs, derives PSK via HMAC-SHA256, connects.
+#
+# Fallback chain position: LAN → OpenStick → RNDIS → Install WiFi
+#
+set -e
+
+KEY_FILE="/usr/share/ga-wifi/openstick-wifi.key"
+SSID_PREFIX="GA-"
+CONN_NAME="openstick-auto"
+COOLDOWN_FILE="/mnt/data/.ga-openstick-cooldown"
+COOLDOWN_SECS=300
+LOG_TAG="ga-openstick"
+
+log() { logger -t "$LOG_TAG" "$1"; echo "$LOG_TAG: $1"; }
+
+# 1. Check connectivity — only act when offline
+CONNECTIVITY=$(nmcli -t -f CONNECTIVITY general 2>/dev/null || echo "unknown")
+if [ "$CONNECTIVITY" = "full" ]; then
+  exit 0
+fi
+
+# 2. Check if secret exists (feature disabled without key)
+if [ ! -f "$KEY_FILE" ]; then
+  exit 0
+fi
+
+# 3. Check cooldown
+if [ -f "$COOLDOWN_FILE" ]; then
+  COOLDOWN_UNTIL=$(cat "$COOLDOWN_FILE" 2>/dev/null || echo 0)
+  NOW=$(date +%s)
+  if [ "$NOW" -lt "$COOLDOWN_UNTIL" ]; then
+    exit 0
+  fi
+  rm -f "$COOLDOWN_FILE"
+fi
+
+# 4. Check if already connected via OpenStick
+if nmcli -t -f NAME connection show --active 2>/dev/null | grep -q "$CONN_NAME"; then
+  exit 0
+fi
+
+log "Connectivity=$CONNECTIVITY — scanning for OpenStick WiFi..."
+
+# 5. WiFi scan (multiple rescans for reliability)
+for _scan in 1 2 3; do
+  nmcli dev wifi rescan 2>/dev/null
+  sleep 5
+done
+
+# 6. Find GA-* SSIDs sorted by signal strength
+GA_SSIDS=$(nmcli -t -f SSID,SIGNAL dev wifi list 2>/dev/null \
+  | grep "^${SSID_PREFIX}" \
+  | sort -t: -k2 -rn \
+  | cut -d: -f1 \
+  | head -5)
+
+if [ -z "$GA_SSIDS" ]; then
+  log "No GA-* SSIDs found"
+  # Set cooldown
+  echo $(( $(date +%s) + COOLDOWN_SECS )) > "$COOLDOWN_FILE"
+  exit 0
+fi
+
+SECRET=$(cat "$KEY_FILE" | tr -d '\n')
+
+# 7. Try each SSID
+for SSID in $GA_SSIDS; do
+  # Validate format: GA- followed by 4 digits
+  if ! echo "$SSID" | grep -qE "^GA-[0-9]{4}$"; then
+    continue
+  fi
+
+  # Derive PSK
+  PSK=$(echo -n "$SSID" | openssl dgst -sha256 -hmac "$SECRET" 2>/dev/null | cut -d' ' -f2 | cut -c1-16)
+  if [ ${#PSK} -ne 16 ]; then
+    log "HMAC derivation failed for $SSID"
+    continue
+  fi
+
+  log "Trying $SSID..."
+
+  # Remove old connection if exists
+  nmcli connection delete "$CONN_NAME" 2>/dev/null || true
+
+  # Connect with route metric 500 (higher prio than RNDIS ~700)
+  if nmcli dev wifi connect "$SSID" password "$PSK" \
+       name "$CONN_NAME" ifname wlan0 2>/dev/null; then
+
+    # Set route metric for proper priority
+    nmcli connection modify "$CONN_NAME" ipv4.route-metric 500 2>/dev/null || true
+
+    # Wait for DHCP
+    sleep 10
+
+    # Verify internet
+    if curl -sf --connect-timeout 10 http://checkonline.greenautarky.com/online.txt 2>/dev/null | grep -q "NetworkManager is online"; then
+      log "Connected to $SSID — internet verified"
+      rm -f "$COOLDOWN_FILE"
+      exit 0
+    else
+      log "$SSID connected but no internet — disconnecting"
+      nmcli connection delete "$CONN_NAME" 2>/dev/null || true
+    fi
+  else
+    log "Failed to connect to $SSID"
+  fi
+done
+
+log "All GA-* SSIDs failed — cooldown ${COOLDOWN_SECS}s"
+echo $(( $(date +%s) + COOLDOWN_SECS )) > "$COOLDOWN_FILE"

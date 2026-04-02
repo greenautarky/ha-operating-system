@@ -1,0 +1,24 @@
+#!/bin/sh
+# NM Dispatcher — trigger OpenStick auto-connect on connectivity loss
+#
+# NetworkManager calls dispatcher scripts when connection state changes.
+# This script triggers the OpenStick auto-connect when connectivity drops.
+#
+# Arguments from NM: $1=interface $2=action
+# connectivity-change action provides CONNECTIVITY_STATE env var
+#
+
+INTERFACE="$1"
+ACTION="$2"
+
+case "$ACTION" in
+  connectivity-change)
+    # CONNECTIVITY_STATE: FULL, LIMITED, PORTAL, NONE
+    case "${CONNECTIVITY_STATE:-}" in
+      NONE|LIMITED)
+        # Run auto-connect in background (dispatcher must return quickly)
+        /usr/sbin/ga-openstick-autoconnect &
+        ;;
+    esac
+    ;;
+esac

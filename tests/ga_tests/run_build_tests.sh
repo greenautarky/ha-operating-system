@@ -121,6 +121,15 @@ grep -qE 'storage\.total_limit_size\s+300M' "${TARGET}/etc/fluent-bit/fluent-bit
 
 # CFG-28/29: removed — ga-dns-inject replaced by Supervisor fork DNS handling
 
+# CFG-30: OpenStick auto-connect
+[[ -x "${TARGET}/usr/sbin/ga-openstick-autoconnect" ]] \
+  && _pass "CFG-30a: ga-openstick-autoconnect script exists and executable" \
+  || _fail "CFG-30a: ga-openstick-autoconnect NOT found"
+
+[[ -x "${TARGET}/etc/NetworkManager/dispatcher.d/90-openstick-fallback" ]] \
+  && _pass "CFG-30b: NM dispatcher 90-openstick-fallback exists and executable" \
+  || _fail "CFG-30b: NM dispatcher 90-openstick-fallback NOT found"
+
 echo ""
 echo "--- NetworkManager WiFi defaults ---"
 

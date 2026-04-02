@@ -122,4 +122,12 @@ fi
 # Cleanup: remove test connection, let NM fall back to previous
 nmcli connection delete "openstick-test" 2>/dev/null
 
+# --- OS-10..11: Auto-connect service ---
+
+run_test "OS-10" "Auto-connect script present" \
+  "test -x /usr/sbin/ga-openstick-autoconnect"
+
+run_test "OS-11" "NM dispatcher 90-openstick-fallback present" \
+  "test -x /etc/NetworkManager/dispatcher.d/90-openstick-fallback"
+
 suite_end
