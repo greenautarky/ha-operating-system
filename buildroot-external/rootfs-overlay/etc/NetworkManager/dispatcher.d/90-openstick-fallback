@@ -16,7 +16,17 @@ case "$ACTION" in
     # CONNECTIVITY_STATE: FULL, LIMITED, PORTAL, NONE
     case "${CONNECTIVITY_STATE:-}" in
       NONE|LIMITED)
-        # Run auto-connect in background (dispatcher must return quickly)
+        /usr/sbin/ga-openstick-autoconnect &
+        ;;
+    esac
+    ;;
+  up|down)
+    # Also trigger on interface up/down — catches boot without connectivity
+    # (connectivity-change may not fire if device was never "full")
+    sleep 15  # Wait for NM to settle after interface change
+    CONN=$(nmcli -t -f CONNECTIVITY general 2>/dev/null || echo "none")
+    case "$CONN" in
+      none|limited)
         /usr/sbin/ga-openstick-autoconnect &
         ;;
     esac
