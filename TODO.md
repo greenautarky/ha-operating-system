@@ -47,7 +47,7 @@
 
 ### OTA Delivery — Private Server (needs implementation)
 - [x] **Host OTA bundles on private server via NetBird VPN** (deployed 2026-04-01)
-  - Server: `ota.greenautarky.com` bound to NetBird IP `100.126.142.217`
+  - Server: `ota.greenautarky.com` bound to NetBird IP `100.126.129.116`
   - Internal TLS (self-signed), not reachable from public internet
   - First bundle uploaded: `16.3.1.1` (223 MB)
   - Verified: device can reach via NetBird, public access blocked
@@ -55,7 +55,7 @@
 - [ ] **Update `supervisor/const.py`** if `URL_HASSIO_VERSION` needs to change
   - Currently points to raw.githubusercontent.com for stable.json
   - stable.json stays public (no secrets) — only bundles are private
-- [x] **NetBird DNS** — devices use `/etc/hosts` fallback to `100.126.142.217`
+- [x] **NetBird DNS** — devices use `/etc/hosts` fallback to `100.126.129.116`
 - [x] **Caddy config on ga-tools** — deployed, bind to NetBird, tls internal
   ```
   ota.greenautarky.com {
