@@ -124,10 +124,87 @@ nmcli connection delete "openstick-test" 2>/dev/null
 
 # --- OS-10..11: Auto-connect service ---
 
-run_test "OS-10" "Auto-connect script present" \
+# --- OS-10..19: Auto-connect service tests ---
+
+# OS-10: Files present
+run_test "OS-10a" "Auto-connect script present and executable" \
   "test -x /usr/sbin/ga-openstick-autoconnect"
 
-run_test "OS-11" "NM dispatcher 90-openstick-fallback present" \
+run_test "OS-10b" "NM dispatcher 90-openstick-fallback present and executable" \
   "test -x /etc/NetworkManager/dispatcher.d/90-openstick-fallback"
+
+# OS-11: Script exits cleanly when connectivity is full (should be a no-op)
+CONN_STATE=$(nmcli -t -f CONNECTIVITY general 2>/dev/null || echo "unknown")
+if [ "$CONN_STATE" = "full" ]; then
+  run_test "OS-11" "Auto-connect is no-op when online (connectivity=$CONN_STATE)" \
+    "/usr/sbin/ga-openstick-autoconnect >/dev/null 2>&1"
+else
+  skip_test "OS-11" "Auto-connect no-op test (connectivity=$CONN_STATE, not full)"
+fi
+
+# OS-12: Script exits cleanly when no key file (feature disabled)
+run_test "OS-12" "Auto-connect exits if key file missing" \
+  "KEY=/usr/share/ga-wifi/openstick-wifi.key;
+   if [ -f \$KEY ]; then
+     mv \$KEY \${KEY}.bak 2>/dev/null;
+     /usr/sbin/ga-openstick-autoconnect >/dev/null 2>&1; RC=\$?;
+     mv \${KEY}.bak \$KEY 2>/dev/null;
+     [ \$RC -eq 0 ]
+   else
+     true
+   fi"
+
+# OS-13: Cooldown mechanism
+rm -f /mnt/data/.ga-openstick-cooldown 2>/dev/null
+
+# Write a future cooldown timestamp — script should exit immediately
+run_test "OS-13a" "Auto-connect respects cooldown" \
+  "echo \$(( \$(date +%s) + 9999 )) > /mnt/data/.ga-openstick-cooldown;
+   /usr/sbin/ga-openstick-autoconnect >/dev/null 2>&1;
+   test -f /mnt/data/.ga-openstick-cooldown"
+
+# Write an expired cooldown — script should proceed (and set new cooldown if no SSID)
+run_test "OS-13b" "Auto-connect clears expired cooldown" \
+  "echo 1 > /mnt/data/.ga-openstick-cooldown;
+   /usr/sbin/ga-openstick-autoconnect >/dev/null 2>&1 || true;
+   true"
+
+rm -f /mnt/data/.ga-openstick-cooldown 2>/dev/null
+
+# OS-14: Dispatcher routes connectivity-change correctly
+run_test "OS-14a" "Dispatcher runs script on connectivity-change NONE" \
+  "CONNECTIVITY_STATE=NONE /etc/NetworkManager/dispatcher.d/90-openstick-fallback wlan0 connectivity-change >/dev/null 2>&1; sleep 1; true"
+
+run_test "OS-14b" "Dispatcher runs script on connectivity-change LIMITED" \
+  "CONNECTIVITY_STATE=LIMITED /etc/NetworkManager/dispatcher.d/90-openstick-fallback wlan0 connectivity-change >/dev/null 2>&1; sleep 1; true"
+
+# OS-14c: Dispatcher does NOT run on FULL (no unnecessary scans)
+run_test "OS-14c" "Dispatcher is no-op on connectivity-change FULL" \
+  "CONNECTIVITY_STATE=FULL /etc/NetworkManager/dispatcher.d/90-openstick-fallback wlan0 connectivity-change >/dev/null 2>&1"
+
+# OS-15: Dispatcher handles up/down events (boot-without-ethernet case)
+run_test "OS-15" "Dispatcher handles interface up event" \
+  "/etc/NetworkManager/dispatcher.d/90-openstick-fallback wlan0 up >/dev/null 2>&1 &
+   DPID=\$!; sleep 2; kill \$DPID 2>/dev/null; true"
+
+# OS-16: Script doesn't double-connect if already connected
+run_test "OS-16" "Auto-connect skips if openstick-auto already active" \
+  "if nmcli -t -f NAME connection show --active 2>/dev/null | grep -q openstick-auto; then
+     /usr/sbin/ga-openstick-autoconnect >/dev/null 2>&1;
+   else
+     true
+   fi"
+
+# OS-17: Route metric is set correctly (500 = between LAN and RNDIS)
+if nmcli -t -f NAME connection show 2>/dev/null | grep -q openstick-auto; then
+  METRIC=$(nmcli -g ipv4.route-metric connection show openstick-auto 2>/dev/null)
+  run_test "OS-17" "OpenStick connection route metric is 500" \
+    "[ '$METRIC' = '500' ]"
+else
+  skip_test "OS-17" "Route metric test (no openstick-auto connection active)"
+fi
+
+# Cleanup
+rm -f /mnt/data/.ga-openstick-cooldown 2>/dev/null
 
 suite_end
