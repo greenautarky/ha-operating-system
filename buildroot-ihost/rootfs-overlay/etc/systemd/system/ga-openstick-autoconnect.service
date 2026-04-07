@@ -1,0 +1,13 @@
+[Unit]
+Description=Scan for OpenStick WiFi and create persistent connection
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-openstick-autoconnect
+RemainAfterExit=no
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

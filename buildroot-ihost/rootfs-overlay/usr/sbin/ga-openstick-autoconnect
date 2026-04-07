@@ -1,10 +1,15 @@
 #!/bin/sh
-# ga-openstick-autoconnect — Auto-connect to OpenStick WiFi when offline
+# ga-openstick-autoconnect — Scan for OpenStick WiFi and create persistent connection
 #
-# Called by NM dispatcher (90-openstick-fallback) when connectivity changes.
-# Scans for GA-XXXX SSIDs, derives PSK via HMAC-SHA256, connects.
+# Scans for GA-XXXX SSIDs, derives PSK via HMAC-SHA256, creates a persistent
+# NM connection with autoconnect=yes. NM then manages failover automatically
+# via route metrics:
 #
-# Fallback chain position: LAN → OpenStick → RNDIS → Install WiFi
+#   Ethernet (100) > OpenStick (500) > RNDIS (700) > Install WiFi (800)
+#
+# Run by:
+#   - ga-openstick-autoconnect.timer (every 5 min — picks up new sticks)
+#   - ga-openstick-autoconnect.service (once at boot)
 #
 set -e
 
@@ -15,23 +20,19 @@ COOLDOWN_FILE="/mnt/data/.ga-openstick-cooldown"
 COOLDOWN_SECS=300
 LOG_TAG="ga-openstick"
 
-FORCE=false
-[ "${1:-}" = "--force" ] && FORCE=true
-
 log() { logger -t "$LOG_TAG" "$1"; echo "$LOG_TAG: $1"; }
 
-# 1. Check connectivity — only act when offline (skip with --force for testing)
-CONNECTIVITY=$(nmcli -t -f CONNECTIVITY general 2>/dev/null || echo "unknown")
-if [ "$CONNECTIVITY" = "full" ] && ! $FORCE; then
-  exit 0
-fi
-
-# 2. Check if secret exists (feature disabled without key)
+# 1. Check if secret exists (feature disabled without key)
 if [ ! -f "$KEY_FILE" ]; then
   exit 0
 fi
 
-# 3. Check cooldown
+# 2. Check if already connected — nothing to do
+if nmcli -t -f NAME connection show --active 2>/dev/null | grep -q "$CONN_NAME"; then
+  exit 0
+fi
+
+# 3. Check cooldown (avoid scan loops when no stick in range)
 if [ -f "$COOLDOWN_FILE" ]; then
   COOLDOWN_UNTIL=$(cat "$COOLDOWN_FILE" 2>/dev/null || echo 0)
   NOW=$(date +%s)
@@ -41,20 +42,15 @@ if [ -f "$COOLDOWN_FILE" ]; then
   rm -f "$COOLDOWN_FILE"
 fi
 
-# 4. Check if already connected via OpenStick
-if nmcli -t -f NAME connection show --active 2>/dev/null | grep -q "$CONN_NAME"; then
-  exit 0
-fi
+log "Scanning for OpenStick WiFi..."
 
-log "Connectivity=$CONNECTIVITY — scanning for OpenStick WiFi..."
-
-# 5. WiFi scan (multiple rescans for reliability)
+# 4. WiFi scan (multiple rescans for reliability)
 for _scan in 1 2 3; do
   nmcli dev wifi rescan 2>/dev/null
   sleep 5
 done
 
-# 6. Find GA-* SSIDs sorted by signal strength
+# 5. Find GA-* SSIDs sorted by signal strength
 GA_SSIDS=$(nmcli -t -f SSID,SIGNAL dev wifi list 2>/dev/null \
   | grep "^${SSID_PREFIX}" \
   | sort -t: -k2 -rn \
@@ -62,15 +58,14 @@ GA_SSIDS=$(nmcli -t -f SSID,SIGNAL dev wifi list 2>/dev/null \
   | head -5)
 
 if [ -z "$GA_SSIDS" ]; then
-  log "No GA-* SSIDs found"
-  # Set cooldown
+  log "No GA-* SSIDs found — cooldown ${COOLDOWN_SECS}s"
   echo $(( $(date +%s) + COOLDOWN_SECS )) > "$COOLDOWN_FILE"
   exit 0
 fi
 
 SECRET=$(cat "$KEY_FILE" | tr -d '\n')
 
-# 7. Try each SSID
+# 6. Try each SSID — create persistent autoconnect connection
 for SSID in $GA_SSIDS; do
   # Validate format: GA- followed by 4 digits
   if ! echo "$SSID" | grep -qE "^GA-[0-9]{4}$"; then
@@ -84,32 +79,41 @@ for SSID in $GA_SSIDS; do
     continue
   fi
 
-  log "Trying $SSID..."
+  log "Creating persistent connection for $SSID..."
 
   # Remove old connection if exists
   nmcli connection delete "$CONN_NAME" 2>/dev/null || true
 
-  # Connect with route metric 500 (higher prio than RNDIS ~700)
-  if nmcli dev wifi connect "$SSID" password "$PSK" \
-       name "$CONN_NAME" ifname wlan0 2>/dev/null; then
+  # Create persistent connection with autoconnect + correct priority
+  if nmcli connection add type wifi ifname wlan0 \
+       con-name "$CONN_NAME" \
+       ssid "$SSID" \
+       wifi-sec.key-mgmt wpa-psk \
+       wifi-sec.psk "$PSK" \
+       connection.autoconnect yes \
+       connection.autoconnect-priority 10 \
+       ipv4.route-metric 500 \
+       2>/dev/null; then
 
-    # Set route metric for proper priority
-    nmcli connection modify "$CONN_NAME" ipv4.route-metric 500 2>/dev/null || true
+    log "Connection '$CONN_NAME' created for $SSID (autoconnect=yes, priority=10, metric=500)"
+
+    # Activate now (NM will auto-activate on future boots/scans)
+    nmcli connection up "$CONN_NAME" 2>/dev/null || true
 
     # Wait for DHCP
     sleep 10
 
     # Verify internet
     if curl -sf --connect-timeout 10 http://checkonline.greenautarky.com/online.txt 2>/dev/null | grep -q "NetworkManager is online"; then
-      log "Connected to $SSID — internet verified"
+      log "Connected to $SSID — internet verified. Connection is persistent."
       rm -f "$COOLDOWN_FILE"
       exit 0
     else
-      log "$SSID connected but no internet — disconnecting"
+      log "$SSID connected but no internet — removing connection"
       nmcli connection delete "$CONN_NAME" 2>/dev/null || true
     fi
   else
-    log "Failed to connect to $SSID"
+    log "Failed to create connection for $SSID"
   fi
 done
 

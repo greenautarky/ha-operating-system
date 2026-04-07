@@ -220,35 +220,31 @@ Must run on real iHost hardware. Needs network, Docker, HA running.
 - OS-07: PSK derived for detected SSID
 - OS-08: WiFi connection with derived PSK
 - OS-09: Internet reachable via OpenStick (connectivity check)
-- OS-10a: Auto-connect script present and executable
-- OS-10b: NM dispatcher 90-openstick-fallback present
-- OS-11: Auto-connect is no-op when online
-- OS-12: Auto-connect exits when key file missing (feature disabled)
-- OS-13a: Cooldown mechanism — respects active cooldown
-- OS-13b: Cooldown mechanism — clears expired cooldown
-- OS-14a: Dispatcher fires on connectivity-change NONE
-- OS-14b: Dispatcher fires on connectivity-change LIMITED
-- OS-14c: Dispatcher is no-op on connectivity-change FULL
-- OS-15: Dispatcher handles interface up event (boot-without-ethernet)
-- OS-16: Auto-connect skips if already connected
-- OS-17: Route metric 500 on active OpenStick connection
-
-### From openstick — auto-connect integration (needs OpenStick in range)
-- OS-18: Auto-connect creates openstick-auto connection (via --force)
-- OS-19: Internet reachable via auto-connected OpenStick
-- OS-20: Route metric 500 on auto-connected connection
+- OS-10: Auto-connect script present and executable
+- OS-11: Auto-connect service exists
+- OS-12a: Auto-connect timer exists
+- OS-12b: Auto-connect timer is active
+- OS-13: Cooldown respected (future timestamp)
+- OS-14: Expired cooldown cleared
+- OS-15: Script exits if already connected
+- OS-16: Persistent connection created by script
+- OS-17a: Connection has autoconnect=yes
+- OS-17b: Connection has autoconnect-priority=10
+- OS-18: Connection is active on wlan0
+- OS-19: Route metric is 500
+- OS-20: OpenStick priority > Install WiFi priority
 
 ### Network failover chain (host-side, via serial)
-- FC-01: Ethernet is active (baseline)
-- FC-02: Connectivity is full (baseline)
-- FC-03: Default route via eth0 (baseline)
-- FC-04: OpenStick auto-connected after Ethernet disabled
-- FC-05: Internet reachable via OpenStick
-- FC-06: OpenStick route metric is 500
-- FC-07: Ethernet active again after re-enable
-- FC-08: Default route back to eth0
-- FC-09: Default route NOT via OpenStick after Ethernet returns
-- FC-10: Internet reachable without Ethernet (OpenStick or WiFi)
-- FC-11: Connectivity restored to full
-- FC-12: Default route via eth0 after full restore
-- FC-13: OpenStick (500) has priority over Install WiFi (800)
+- FC-01: Ethernet active (baseline)
+- FC-02: OpenStick active on wlan0 (baseline)
+- FC-03: Ethernet is default route (metric 100)
+- FC-04: OpenStick is secondary route (metric 500)
+- FC-05: OpenStick becomes default when Ethernet off
+- FC-06: Internet works via OpenStick
+- FC-07: Ethernet default again when re-enabled
+- FC-08: OpenStick still connected (secondary)
+- FC-09: Both Ethernet + OpenStick active simultaneously
+- FC-10: OpenStick priority > Install WiFi priority
+- FC-11: wlan0 uses openstick-auto (not Install WiFi)
+- FC-12: Persistent connection file exists
+- FC-13: Connection has autoconnect=yes
