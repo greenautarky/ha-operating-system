@@ -212,4 +212,65 @@ fi
 # Cleanup
 rm -f /mnt/data/.ga-openstick-cooldown 2>/dev/null
 
+# --- OS-18..20: Full auto-connect integration test ---
+# Only runs when a GA-* SSID was found earlier (OpenStick is in range)
+if [ -n "$GA_SSIDS" ] && [ -f "$KEY_FILE" ]; then
+  echo ""
+  echo "  >>> AUTO-CONNECT INTEGRATION TEST <<<"
+  echo ""
+
+  # OS-18: Trigger auto-connect by simulating connectivity loss
+  # We call the script directly with NM reporting "none" connectivity
+  # This is safer than actually disconnecting (would kill SSH over Ethernet)
+  rm -f /mnt/data/.ga-openstick-cooldown 2>/dev/null
+  nmcli connection delete "openstick-auto" 2>/dev/null
+
+  # Temporarily override nmcli connectivity check by calling script
+  # The script checks nmcli internally, so we need actual loss OR we test
+  # the dispatcher path which calls the script when CONNECTIVITY_STATE=NONE
+
+  # Call auto-connect script with --force (bypasses connectivity check)
+  # This tests the real scan→derive→connect flow without disconnecting SSH
+  /usr/sbin/ga-openstick-autoconnect --force >/dev/null 2>&1 &
+
+  # Wait for scan (3x5s) + connect (10s) + DHCP (10s) = ~35s max
+  echo "  Waiting for auto-connect (max 45s)..."
+  WAIT=0
+  CONNECTED=false
+  while [ "$WAIT" -lt 45 ]; do
+    if nmcli -t -f NAME connection show --active 2>/dev/null | grep -q "openstick-auto"; then
+      CONNECTED=true
+      break
+    fi
+    sleep 5
+    WAIT=$((WAIT + 5))
+  done
+
+  run_test "OS-18" "Auto-connect created openstick-auto connection" \
+    "$CONNECTED"
+
+  # OS-19: Internet reachable via auto-connected OpenStick
+  if $CONNECTED; then
+    sleep 5  # Wait for DHCP to settle
+    run_test "OS-19" "Internet reachable via auto-connected OpenStick" \
+      "curl -sf --connect-timeout 10 http://checkonline.greenautarky.com/online.txt 2>/dev/null | grep -q 'NetworkManager is online'"
+
+    # OS-20: Route metric is 500 (between LAN and RNDIS)
+    METRIC=$(nmcli -g ipv4.route-metric connection show openstick-auto 2>/dev/null)
+    run_test "OS-20" "Auto-connect route metric is 500 (got: ${METRIC:-none})" \
+      "[ '${METRIC:-0}' = '500' ]"
+  else
+    run_test "OS-19" "Internet via auto-connected OpenStick" "false"
+    run_test "OS-20" "Route metric 500" "false"
+  fi
+
+  # Cleanup: remove auto-connected connection
+  nmcli connection delete "openstick-auto" 2>/dev/null
+  rm -f /mnt/data/.ga-openstick-cooldown 2>/dev/null
+else
+  skip_test "OS-18" "Auto-connect integration (no OpenStick in range)"
+  skip_test "OS-19" "Internet via auto-connect"
+  skip_test "OS-20" "Route metric"
+fi
+
 suite_end

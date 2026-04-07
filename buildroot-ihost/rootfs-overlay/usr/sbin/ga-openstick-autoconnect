@@ -15,11 +15,14 @@ COOLDOWN_FILE="/mnt/data/.ga-openstick-cooldown"
 COOLDOWN_SECS=300
 LOG_TAG="ga-openstick"
 
+FORCE=false
+[ "${1:-}" = "--force" ] && FORCE=true
+
 log() { logger -t "$LOG_TAG" "$1"; echo "$LOG_TAG: $1"; }
 
-# 1. Check connectivity — only act when offline
+# 1. Check connectivity — only act when offline (skip with --force for testing)
 CONNECTIVITY=$(nmcli -t -f CONNECTIVITY general 2>/dev/null || echo "unknown")
-if [ "$CONNECTIVITY" = "full" ]; then
+if [ "$CONNECTIVITY" = "full" ] && ! $FORCE; then
   exit 0
 fi
 
