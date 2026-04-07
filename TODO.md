@@ -206,6 +206,10 @@ Runs as a container with Supervisor API access (`hassio` role).
 - [ ] Consider adding health-check/retry logic for DNS-dependent services (telegraf, fluent-bit)
 
 ### Custom Core Image / Onboarding
+- [x] Ethernet consent in onboarding — wizard step, API endpoint, default-disabled provisioning
+  - Frontend: `ga-setup-ethernet.ts`, `setEthernetPreference()` in API client
+  - Backend: `POST /api/greenautarky_onboarding/ethernet` endpoint
+  - Build tests: SRC-16a..c, Device tests: OB-13..14, E2E: `ethernet-consent.spec.ts`
 - [x] Rebuild with `greenautarky/haos-version` URL (PR #1 merged) and verify `version.json` references `ghcr.io/greenautarky/tinker-homeassistant`
 - [x] GA calver versioning scheme: use `.N` suffix (e.g. `2025.11.3.1`) — stays CALVER for AwesomeVersion
   - Do NOT use `-ga.N` (triggers SEMVER strategy, breaks comparisons)

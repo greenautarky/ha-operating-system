@@ -67,4 +67,18 @@ else
   skip_test "OB-10" "PIN file (not provisioned via ga-flasher)"
 fi
 
+# --- Ethernet consent ---
+# OB-13: Ethernet consent API endpoint exists
+run_test "OB-13" "Ethernet consent API endpoint exists" \
+  "curl -sf --connect-timeout 5 -X POST http://localhost:8123/api/greenautarky_onboarding/ethernet \
+   -H 'Content-Type: application/json' -d '{\"enable_ethernet\": false}' 2>/dev/null | grep -q 'status'"
+
+# OB-14: Default Ethernet state after provisioning
+if [ -f /mnt/data/ga-env.conf ]; then
+  run_test "OB-14" "Ethernet disabled by default after provisioning" \
+    "grep -q 'GA_ETHERNET_DISABLED=true' /mnt/data/ga-env.conf 2>/dev/null"
+else
+  skip_test "OB-14" "ga-env.conf not found (not provisioned)"
+fi
+
 suite_end

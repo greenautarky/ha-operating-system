@@ -1100,6 +1100,23 @@ if [[ -n "$SRC" ]]; then
     _skip "SRC-15a..d" "frontend repo not found"
   fi
 
+  # SRC-16: Ethernet consent integration (frontend + core)
+  if [[ -n "$FE_ROOT" ]]; then
+    [[ -f "${FE_ROOT}/src/panels/greenautarky-setup/ga-setup-ethernet.ts" ]] \
+      && _pass "SRC-16a: ga-setup-ethernet.ts component exists" \
+      || _fail "SRC-16a: ga-setup-ethernet.ts missing"
+
+    grep -q '"ethernet"' "${FE_ROOT}/src/panels/greenautarky-setup/ha-panel-greenautarky-setup.ts" 2>/dev/null \
+      && _pass "SRC-16b: wizard STEPS includes ethernet" \
+      || _fail "SRC-16b: wizard STEPS missing ethernet step"
+
+    grep -q 'setEthernetPreference' "${FE_ROOT}/src/data/greenautarky_setup.ts" 2>/dev/null \
+      && _pass "SRC-16c: setEthernetPreference API function exists" \
+      || _fail "SRC-16c: setEthernetPreference missing from API client"
+  else
+    _skip "SRC-16a..c" "frontend repo not found"
+  fi
+
   # SRC-09: Global stale reference scan across all functional source
   STALE_COUNT=0
   for dir in "${SRC}/buildroot-external/package" "${SRC}/buildroot-external/rootfs-overlay" "${SRC}/scripts"; do
