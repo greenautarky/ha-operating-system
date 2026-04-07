@@ -53,13 +53,18 @@ run_test "OS-03" "HMAC-SHA256 derivation produces 16-char PSK" \
 run_test "OS-04a" "WiFi interface wlan0 present" \
   "ip link show wlan0 >/dev/null 2>&1"
 
-# Scan for GA-* SSIDs (multiple rescans — first scan often misses weak signals)
-for _scan in 1 2 3; do
-  nmcli dev wifi rescan 2>/dev/null
-  sleep 5
+# Scan for GA-* SSIDs with retry — WiFi cache can be stale after other suites ran
+GA_SSIDS=""
+for _attempt in 1 2 3; do
+  for _scan in 1 2 3; do
+    nmcli dev wifi rescan 2>/dev/null
+    sleep 5
+  done
+  GA_SSIDS=$(nmcli -t -f SSID dev wifi list 2>/dev/null | grep "^${SSID_PREFIX}" | sort -u)
+  [ -n "$GA_SSIDS" ] && break
+  echo "  Scan attempt $_attempt: no GA-* found, retrying..."
+  sleep 10
 done
-
-GA_SSIDS=$(nmcli -t -f SSID dev wifi list 2>/dev/null | grep "^${SSID_PREFIX}" | sort -u)
 
 run_test "OS-04" "WiFi scan completed" \
   "nmcli -t -f SSID dev wifi list 2>/dev/null | head -1 | grep -q '.' "
