@@ -232,3 +232,23 @@ Must run on real iHost hardware. Needs network, Docker, HA running.
 - OS-15: Dispatcher handles interface up event (boot-without-ethernet)
 - OS-16: Auto-connect skips if already connected
 - OS-17: Route metric 500 on active OpenStick connection
+
+### From openstick — auto-connect integration (needs OpenStick in range)
+- OS-18: Auto-connect creates openstick-auto connection (via --force)
+- OS-19: Internet reachable via auto-connected OpenStick
+- OS-20: Route metric 500 on auto-connected connection
+
+### Network failover chain (host-side, via serial)
+- FC-01: Ethernet is active (baseline)
+- FC-02: Connectivity is full (baseline)
+- FC-03: Default route via eth0 (baseline)
+- FC-04: OpenStick auto-connected after Ethernet disabled
+- FC-05: Internet reachable via OpenStick
+- FC-06: OpenStick route metric is 500
+- FC-07: Ethernet active again after re-enable
+- FC-08: Default route back to eth0
+- FC-09: Default route NOT via OpenStick after Ethernet returns
+- FC-10: Internet reachable without Ethernet (OpenStick or WiFi)
+- FC-11: Connectivity restored to full
+- FC-12: Default route via eth0 after full restore
+- FC-13: OpenStick (500) has priority over Install WiFi (800)
