@@ -494,3 +494,34 @@ Runs as a container with Supervisor API access (`hassio` role).
   - Test: `nslookup ota.greenautarky.com` auf dem Gerät (ohne /etc/hosts Fallback)
   - Wenn ja: Supervisor-Fork DNS-Einträge werden Fallback, NetBird DNS ist primär
   - Wenn nein: Supervisor-Fork DNS bleibt die primäre Lösung
+
+### Datenvolumen-Einsparung (Prio 1)
+- [ ] **Telegraf Interval 15s → 300s (5 min)** — größte Einsparung (~1.2 GB → ~60 MB/Mo)
+  - `interval = "300s"` in telegraf.conf
+  - `flush_interval = "60s"`
+  - `ping_interval = 60.0` (statt 1.0 — allein ~100 MB/Mo Ersparnis)
+  - Docker Input: `interval = "300s"` (Container Stats sind teuer)
+- [ ] **Fluent-Bit: Flush Interval erhöhen** — 5s → 60s
+  - Reduziert HTTP-Requests zu Loki
+  - Batching spart Overhead (~10% weniger Volumen)
+- [ ] **Fluent-Bit: Log-Level auf warning** — info-Logs filtern
+  - Oder: nur error/warning Level an Loki senden
+  - Filter: `[FILTER] Name grep Match * Regex log (error|warn|critical)`
+- [ ] **NM Connectivity Check: 600s → 1800s (30 min)**
+  - Für LTE-Geräte reicht seltener (spart ~0.5 MB/Mo, aber reduziert Failover-Latenz)
+- [ ] **Evaluate: Telegraf Inputs reduzieren**
+  - Brauchen wir `net` Input alle 5 min? (Interface-Statistiken)
+  - Brauchen wir `wireless` Input? (RSSI/Signal — nur bei WiFi relevant)
+  - `docker` Input: nur Container CPU/Mem oder auch Network/IO?
+- [ ] **Evaluate: Kompression aktivieren**
+  - InfluxDB HTTP Gzip: `content_encoding = "gzip"` in Telegraf Output (~50% weniger)
+  - Loki Gzip: bereits im HTTP Push enthalten?
+
+**Geschätzte Einsparung nach Umsetzung:**
+
+| Service | Vorher | Nachher | Ersparnis |
+|---------|--------|---------|-----------|
+| Telegraf | ~1.2 GB/Mo | ~60 MB/Mo | 95% |
+| Fluent-Bit | ~300 MB/Mo | ~50 MB/Mo | 83% |
+| Sonstige | ~7 MB/Mo | ~5 MB/Mo | 30% |
+| **Total** | **~1.5 GB/Mo** | **~115 MB/Mo** | **92%** |
