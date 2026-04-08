@@ -37,8 +37,8 @@ jobs:
       - name: Clean workspace
         run: |
           # Previous builds run as root inside Docker, leaving root-owned files
-          # that actions/checkout cannot delete. Nuke everything.
-          sudo rm -rf "${GITHUB_WORKSPACE}"/*  "${GITHUB_WORKSPACE}"/.[!.]* 2>/dev/null || true
+          # that actions/checkout cannot delete. Nuke everything including ..dotfiles.
+          sudo find "${GITHUB_WORKSPACE}" -mindepth 1 -delete 2>/dev/null || true
 
       - name: Checkout
         uses: actions/checkout@v4
