@@ -61,6 +61,17 @@ if [ -f "$WIFI_DEFAULT" ]; then
     fi
 fi
 
+# --- WiFi power save disable — prevents beacon-loss disconnects ---
+POWERSAVE_SRC="${DEFAULTS}/NetworkManager/conf.d/99-disable-wifi-powersave.conf"
+POWERSAVE_DST="${OVERLAY}/etc/NetworkManager/conf.d/99-disable-wifi-powersave.conf"
+if [ -f "$POWERSAVE_SRC" ] && [ ! -f "$POWERSAVE_DST" ]; then
+    mkdir -p "$(dirname "$POWERSAVE_DST")"
+    cp "$POWERSAVE_SRC" "$POWERSAVE_DST"
+    log "installed WiFi power save config"
+else
+    log "WiFi power save config already in overlay — skipping"
+fi
+
 # --- Mask audio-setup.service (iHost has no audio hardware) ---
 AUDIO_MASK="/etc/systemd/system/audio-setup.service"
 if [ ! -L "$AUDIO_MASK" ] || [ "$(readlink "$AUDIO_MASK" 2>/dev/null)" != "/dev/null" ]; then

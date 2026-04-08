@@ -278,6 +278,18 @@ fi
   && _pass "OVL-05b: ga-overlay-init.service enabled at boot" \
   || _fail "OVL-05b: ga-overlay-init.service NOT enabled"
 
+# OVL-06: WiFi power save config NOT in overlaid /etc/ path
+if [[ -f "${TARGET}/etc/NetworkManager/conf.d/99-disable-wifi-powersave.conf" ]]; then
+  _fail "OVL-06: WiFi powersave config in /etc/ — will be hidden by overlay! Use /usr/share/ga-defaults/"
+else
+  _pass "OVL-06: WiFi powersave config correctly NOT in overlaid path"
+fi
+
+# OVL-06b: WiFi power save config in ga-defaults
+[[ -f "${TARGET}/usr/share/ga-defaults/NetworkManager/conf.d/99-disable-wifi-powersave.conf" ]] \
+  && _pass "OVL-06b: WiFi powersave config in /usr/share/ga-defaults/" \
+  || _fail "OVL-06b: WiFi powersave config missing from /usr/share/ga-defaults/"
+
 # --- Additional rootfs checks ---
 
 # CFG-25: audio-setup masking handled by ga-overlay-init at runtime
