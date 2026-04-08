@@ -1,0 +1,108 @@
+#!/bin/sh
+# ga-telemetry-gate — consent check for telemetry services
+#
+# Usage:
+#   ga-telemetry-gate <metrics|error_logs>
+#   ga-telemetry-gate write              (write consent marker files)
+#
+# Exit codes:
+#   0 = consent given (or force override active)
+#   1 = no consent / file missing / key is false
+#
+# Called by:
+#   - ga-telemetry-consent.service (oneshot, "write" mode → creates marker files)
+#   - Can be called standalone to check a single key
+#
+# Consent source:
+#   HA Core stores telemetry preferences in its .storage directory.
+#   On the host OS this maps to:
+#     /mnt/data/supervisor/homeassistant/.storage/greenautarky_telemetry
+#
+#   JSON format (HA Store wrapper):
+#     {"key":"greenautarky_telemetry","version":1,
+#      "data":{"error_logs":true,"metrics":false}}
+#
+# Dev override:
+#   Set GA_TELEMETRY_FORCE=1 in /mnt/data/ga-env.conf to bypass consent.
+#   Useful for dev/test devices that skip onboarding.
+#
+# Consent changes take effect after reboot.
+# The onboarding UI should inform the user that a reboot is required
+# when telemetry preferences are changed post-onboarding.
+
+STORE="${STORE_PATH:-/mnt/data/supervisor/homeassistant/.storage/greenautarky_telemetry}"
+MARKER_DIR="/mnt/data"
+MARKER_METRICS="$MARKER_DIR/.ga-consent-metrics"
+MARKER_ERROR_LOGS="$MARKER_DIR/.ga-consent-error_logs"
+
+# Load GA env for force override
+if [ -f /mnt/data/ga-env.conf ]; then
+    . /mnt/data/ga-env.conf
+fi
+
+# Check a single key from the consent store
+# Returns 0 (true) or 1 (false)
+check_key() {
+    KEY="$1"
+
+    # Dev override bypasses all checks
+    if [ "${GA_TELEMETRY_FORCE:-}" = "1" ]; then
+        return 0
+    fi
+
+    # No consent file = not yet onboarded = don't send data (GDPR opt-out default)
+    if [ ! -f "$STORE" ]; then
+        echo "ga-telemetry-gate: no consent file, blocking $KEY"
+        return 1
+    fi
+
+    # Parse JSON with sed (BusyBox — no jq/python available)
+    # Matches: "key" : true  or  "key":false  (with optional whitespace)
+    VALUE=$(sed -n "s/.*\"$KEY\"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p" "$STORE" | tail -1)
+
+    if [ "$VALUE" = "true" ]; then
+        return 0
+    else
+        echo "ga-telemetry-gate: $KEY consent not given (value=${VALUE:-missing})"
+        return 1
+    fi
+}
+
+# Write mode: evaluate both keys and create/remove marker files
+write_markers() {
+    if check_key "metrics"; then
+        touch "$MARKER_METRICS"
+        echo "ga-telemetry-gate: metrics consent → marker created"
+    else
+        rm -f "$MARKER_METRICS"
+        echo "ga-telemetry-gate: metrics no consent → marker removed"
+    fi
+
+    if check_key "error_logs"; then
+        touch "$MARKER_ERROR_LOGS"
+        echo "ga-telemetry-gate: error_logs consent → marker created"
+    else
+        rm -f "$MARKER_ERROR_LOGS"
+        echo "ga-telemetry-gate: error_logs no consent → marker removed"
+    fi
+}
+
+# --- Main ---
+ACTION="${1:-}"
+
+case "$ACTION" in
+    write)
+        write_markers
+        ;;
+    metrics|error_logs)
+        check_key "$ACTION"
+        exit $?
+        ;;
+    *)
+        echo "Usage: ga-telemetry-gate <metrics|error_logs|write>"
+        echo "  metrics     Check if metrics consent is given"
+        echo "  error_logs  Check if error_logs consent is given"
+        echo "  write       Write consent marker files for systemd ConditionPathExists"
+        exit 1
+        ;;
+esac

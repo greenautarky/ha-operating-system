@@ -1,7 +1,9 @@
 [Unit]
 Description=Fluent Bit log agent
-After=network-online.target hassio-supervisor.service netbird.service
+After=network-online.target hassio-supervisor.service netbird.service ga-telemetry-consent.service
 Wants=network-online.target
+# Only start if user consented to error log collection (marker written by ga-telemetry-consent.service)
+ConditionPathExists=/mnt/data/.ga-consent-error_logs
 
 [Service]
 Type=simple

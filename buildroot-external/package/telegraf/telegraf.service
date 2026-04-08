@@ -1,7 +1,9 @@
 [Unit]
 Description=Telegraf metrics agent
-After=network-online.target docker.service hassio-supervisor.service netbird.service
+After=network-online.target docker.service hassio-supervisor.service netbird.service ga-telemetry-consent.service
 Wants=network-online.target
+# Only start if user consented to metrics collection (marker written by ga-telemetry-consent.service)
+ConditionPathExists=/mnt/data/.ga-consent-metrics
 
 [Service]
 Type=simple

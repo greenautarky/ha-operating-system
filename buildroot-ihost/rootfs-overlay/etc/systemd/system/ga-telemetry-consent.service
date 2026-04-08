@@ -1,0 +1,13 @@
+[Unit]
+Description=Evaluate telemetry consent and write marker files
+# Must run after Supervisor has started (consent file lives in HA storage)
+After=hassio-supervisor.service
+Wants=hassio-supervisor.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/ga-telemetry-gate write
+
+[Install]
+WantedBy=multi-user.target

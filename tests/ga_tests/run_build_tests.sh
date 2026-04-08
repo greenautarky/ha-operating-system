@@ -139,6 +139,50 @@ grep -qE 'storage\.total_limit_size\s+300M' "${TARGET}/etc/fluent-bit/fluent-bit
   || _fail "CFG-30d: ga-openstick-autoconnect.timer NOT enabled"
 
 echo ""
+echo "--- Telemetry consent gate ---"
+
+# TEL-BLD-01: ga-telemetry-gate script exists
+[[ -x "${TARGET}/usr/sbin/ga-telemetry-gate" ]] \
+  && _pass "TEL-BLD-01: ga-telemetry-gate script exists and executable" \
+  || _fail "TEL-BLD-01: ga-telemetry-gate NOT found on rootfs"
+
+# TEL-BLD-02: ga-telemetry-gate supports write mode
+grep -q 'write_markers' "${TARGET}/usr/sbin/ga-telemetry-gate" 2>/dev/null \
+  && _pass "TEL-BLD-02: ga-telemetry-gate has write_markers function" \
+  || _fail "TEL-BLD-02: ga-telemetry-gate missing write_markers"
+
+# TEL-BLD-03: telegraf.service has ConditionPathExists for consent
+grep -q 'ConditionPathExists=.*ga-consent-metrics' "${TARGET}/etc/systemd/system/telegraf.service" 2>/dev/null \
+  && _pass "TEL-BLD-03: telegraf.service gated by consent marker" \
+  || _fail "TEL-BLD-03: telegraf.service NOT gated — will run without consent!"
+
+# TEL-BLD-04: fluent-bit.service has ConditionPathExists for consent
+FB_SVC_TEL="${TARGET}/usr/lib/systemd/system/fluent-bit.service"
+grep -q 'ConditionPathExists=.*ga-consent-error_logs' "$FB_SVC_TEL" 2>/dev/null \
+  && _pass "TEL-BLD-04: fluent-bit.service gated by consent marker" \
+  || _fail "TEL-BLD-04: fluent-bit.service NOT gated — will run without consent!"
+
+# TEL-BLD-05: ga-telemetry-consent.service exists
+[[ -f "${TARGET}/etc/systemd/system/ga-telemetry-consent.service" ]] \
+  && _pass "TEL-BLD-05: ga-telemetry-consent.service exists" \
+  || _fail "TEL-BLD-05: ga-telemetry-consent.service NOT found"
+
+# TEL-BLD-06: ga-telemetry-consent.service ordered after supervisor
+grep -q 'After=.*hassio-supervisor' "${TARGET}/etc/systemd/system/ga-telemetry-consent.service" 2>/dev/null \
+  && _pass "TEL-BLD-06: consent service ordered after supervisor" \
+  || _fail "TEL-BLD-06: consent service NOT ordered after supervisor"
+
+# TEL-BLD-07: ga-telemetry-gate checks GA_TELEMETRY_FORCE override
+grep -q 'GA_TELEMETRY_FORCE' "${TARGET}/usr/sbin/ga-telemetry-gate" 2>/dev/null \
+  && _pass "TEL-BLD-07: ga-telemetry-gate supports FORCE override" \
+  || _fail "TEL-BLD-07: ga-telemetry-gate missing FORCE override — dev devices won't work"
+
+# TEL-BLD-08: ga-telemetry-consent.service enabled
+[[ -L "${TARGET}/etc/systemd/system/multi-user.target.wants/ga-telemetry-consent.service" ]] \
+  && _pass "TEL-BLD-08: ga-telemetry-consent.service enabled" \
+  || _fail "TEL-BLD-08: ga-telemetry-consent.service NOT enabled"
+
+echo ""
 echo "--- NetworkManager WiFi defaults ---"
 
 NM_CONF="${TARGET}/etc/NetworkManager/NetworkManager.conf"
