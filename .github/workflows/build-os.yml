@@ -36,12 +36,9 @@ jobs:
     steps:
       - name: Clean workspace
         run: |
-          # Previous builds run as root inside Docker, leaving files the runner can't delete
-          WORKSPACE="${GITHUB_WORKSPACE:-$PWD}"
-          sudo rm -rf "$WORKSPACE/ga_output" "$WORKSPACE/cert.pem" "$WORKSPACE/key.pem" \
-                      "$WORKSPACE/secrets" "$WORKSPACE/scripts/local.env" 2>/dev/null || true
-          # Also clean the checkout directory itself if it exists with root-owned files
-          sudo find "$WORKSPACE" -user root -delete 2>/dev/null || true
+          # Previous builds run as root inside Docker, leaving root-owned files
+          # that actions/checkout cannot delete. Nuke everything.
+          sudo rm -rf "${GITHUB_WORKSPACE}"/*  "${GITHUB_WORKSPACE}"/.[!.]* 2>/dev/null || true
 
       - name: Checkout
         uses: actions/checkout@v4
