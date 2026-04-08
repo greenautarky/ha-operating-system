@@ -26,6 +26,9 @@ on:
           - dev
           - prod
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: self-hosted

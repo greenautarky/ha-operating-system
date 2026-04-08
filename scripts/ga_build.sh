@@ -104,6 +104,9 @@ fi
 #
 # -----------------------------------------------------------------------------
 
+# Buildroot's host-tar configure refuses to run as root without this
+export FORCE_UNSAFE_CONFIGURE=1
+
 unset BR2_EXTERNAL
 
 # Parse arguments: order-independent, e.g. "full dev" and "dev full" are equivalent.
