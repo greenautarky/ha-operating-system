@@ -41,6 +41,7 @@ jobs:
           mkdir -p secrets
           echo "${{ secrets.WIFI_INSTALL_PSK }}" > secrets/wifi-install.psk
           echo "${{ secrets.OPENSTICK_WIFI_KEY }}" > secrets/openstick-wifi.key
+          echo "${{ secrets.INFLUX_PASSWORD }}" > secrets/influx-password
           echo "${{ secrets.ROOT_PW_HASH_LINE }}" > scripts/local.env
           echo "${{ secrets.REL_CA_PEM }}" > buildroot-external/ota/rel-ca.pem
           # dev-ca.pem is a symlink to rel-ca.pem
