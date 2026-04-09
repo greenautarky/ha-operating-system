@@ -34,6 +34,10 @@ define TELEGRAF_INSTALL_TARGET_CMDS
 	    $(INSTALL) -D -m 0644 $(TELEGRAF_PKGDIR)/telegraf.conf \
 	        $(TARGET_DIR)/etc/telegraf/telegraf.conf; \
 	fi
+	if [ -f $(TELEGRAF_PKGDIR)/telegraf-debug.conf ]; then \
+	    $(INSTALL) -D -m 0644 $(TELEGRAF_PKGDIR)/telegraf-debug.conf \
+	        $(TARGET_DIR)/etc/telegraf/telegraf-debug.conf; \
+	fi
 
 	# Optional: standard dirs if you ever need them
 	mkdir -p \

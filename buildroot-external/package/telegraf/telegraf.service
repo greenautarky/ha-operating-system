@@ -27,8 +27,10 @@ ExecStartPre=/bin/sh -c '. /etc/os-release 2>/dev/null; echo "GA_BUILD_TIMESTAMP
 # EnvironmentFile overrides defaults above on subsequent starts
 EnvironmentFile=-/mnt/data/telegraf/env
 
-# Run Telegraf from rootfs config (OTA-updatable, per-device values via env vars)
-ExecStart=/usr/bin/telegraf --config /etc/telegraf/telegraf.conf
+# Use override config from data partition if present, otherwise rootfs default.
+# To switch to debug: cp /etc/telegraf/telegraf-debug.conf /mnt/data/telegraf/override.conf
+# To revert:          rm /mnt/data/telegraf/override.conf
+ExecStart=/bin/sh -c 'if [ -f /mnt/data/telegraf/override.conf ]; then exec /usr/bin/telegraf --config /mnt/data/telegraf/override.conf; else exec /usr/bin/telegraf --config /etc/telegraf/telegraf.conf; fi'
 
 Restart=always
 RestartSec=5

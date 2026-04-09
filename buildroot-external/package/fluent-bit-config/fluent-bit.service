@@ -25,8 +25,10 @@ ExecStartPre=/bin/sh -c 'LABEL=$(cat /mnt/data/ga-device-label 2>/dev/null); ech
 # EnvironmentFile overrides defaults above on subsequent starts
 EnvironmentFile=-/mnt/data/fluent-bit/env
 
-# Run from rootfs config (OTA-updatable, per-device values via env vars)
-ExecStart=/usr/bin/fluent-bit -c /etc/fluent-bit/fluent-bit.conf
+# Use override config from data partition if present, otherwise rootfs default.
+# To switch to debug: cp /etc/fluent-bit/fluent-bit-debug.conf /mnt/data/fluent-bit/override.conf
+# To revert:          rm /mnt/data/fluent-bit/override.conf
+ExecStart=/bin/sh -c 'if [ -f /mnt/data/fluent-bit/override.conf ]; then exec /usr/bin/fluent-bit -c /mnt/data/fluent-bit/override.conf; else exec /usr/bin/fluent-bit -c /etc/fluent-bit/fluent-bit.conf; fi'
 
 Restart=always
 RestartSec=5

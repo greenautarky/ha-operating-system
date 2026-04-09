@@ -13,6 +13,8 @@ define FLUENT_BIT_CONFIG_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/etc/fluent-bit/fluent-bit.conf
 	$(INSTALL) -D -m 0644 $(FLUENT_BIT_CONFIG_PKGDIR)/parsers.conf \
 		$(TARGET_DIR)/etc/fluent-bit/parsers.conf
+	$(INSTALL) -D -m 0644 $(FLUENT_BIT_CONFIG_PKGDIR)/fluent-bit-debug.conf \
+		$(TARGET_DIR)/etc/fluent-bit/fluent-bit-debug.conf
 
 	# Install systemd service (overrides upstream fluent-bit.service with GA version)
 	$(INSTALL) -D -m 0644 $(FLUENT_BIT_CONFIG_PKGDIR)/fluent-bit.service \
