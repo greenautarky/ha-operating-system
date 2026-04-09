@@ -51,13 +51,15 @@ jobs:
           echo "${{ secrets.WIFI_INSTALL_PSK }}" > secrets/wifi-install.psk
           echo "${{ secrets.OPENSTICK_WIFI_KEY }}" > secrets/openstick-wifi.key
           echo "${{ secrets.INFLUX_PASSWORD }}" > secrets/influx-password
-          echo "${{ secrets.ROOT_PW_HASH_LINE }}" > scripts/local.env
+          printf '%s\n' "$ROOT_PW_HASH_LINE" > scripts/local.env
           echo "${{ secrets.REL_CA_PEM }}" > buildroot-external/ota/rel-ca.pem
           ln -sf rel-ca.pem buildroot-external/ota/dev-ca.pem
           # RAUC bundle signing cert/key (multiline PEM — use printf to preserve newlines)
           printf '%s\n' "${{ secrets.RAUC_CERT_PEM }}" > cert.pem
           printf '%s\n' "${{ secrets.RAUC_KEY_PEM }}" > key.pem
           chmod 600 key.pem
+        env:
+          ROOT_PW_HASH_LINE: ${{ secrets.ROOT_PW_HASH_LINE }}
 
       - name: Build Docker image
         run: docker build -t hassos:local .
