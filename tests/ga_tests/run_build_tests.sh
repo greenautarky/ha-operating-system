@@ -183,6 +183,53 @@ grep -q 'GA_TELEMETRY_FORCE' "${TARGET}/usr/sbin/ga-telemetry-gate" 2>/dev/null 
   || _fail "TEL-BLD-08: ga-telemetry-consent.service NOT enabled"
 
 echo ""
+echo "--- GA services config (centralized endpoint IPs) ---"
+
+# SVC-01: ga-services.conf exists on rootfs
+[[ -f "${TARGET}/etc/ga-services.conf" ]] \
+  && _pass "SVC-01: ga-services.conf exists on rootfs" \
+  || _fail "SVC-01: ga-services.conf NOT found"
+
+# SVC-02: ga-services.conf has GA_SERVICES_IP
+grep -q 'GA_SERVICES_IP=' "${TARGET}/etc/ga-services.conf" 2>/dev/null \
+  && _pass "SVC-02: ga-services.conf has GA_SERVICES_IP" \
+  || _fail "SVC-02: ga-services.conf missing GA_SERVICES_IP"
+
+# SVC-03: ga-services.conf has all three service hostnames
+grep -q 'GA_INFLUX_HOST=' "${TARGET}/etc/ga-services.conf" 2>/dev/null \
+  && grep -q 'GA_LOKI_HOST=' "${TARGET}/etc/ga-services.conf" 2>/dev/null \
+  && grep -q 'GA_OTA_HOST=' "${TARGET}/etc/ga-services.conf" 2>/dev/null \
+  && _pass "SVC-03: ga-services.conf has all service hostnames" \
+  || _fail "SVC-03: ga-services.conf missing service hostnames"
+
+# SVC-04: ga-update-hosts script exists and executable
+[[ -x "${TARGET}/usr/sbin/ga-update-hosts" ]] \
+  && _pass "SVC-04: ga-update-hosts script exists and executable" \
+  || _fail "SVC-04: ga-update-hosts NOT found"
+
+# SVC-05: ga-update-hosts.service exists
+[[ -f "${TARGET}/etc/systemd/system/ga-update-hosts.service" ]] \
+  && _pass "SVC-05: ga-update-hosts.service exists" \
+  || _fail "SVC-05: ga-update-hosts.service NOT found"
+
+# SVC-06: ga-update-hosts.service enabled
+[[ -L "${TARGET}/etc/systemd/system/multi-user.target.wants/ga-update-hosts.service" ]] \
+  && _pass "SVC-06: ga-update-hosts.service enabled" \
+  || _fail "SVC-06: ga-update-hosts.service NOT enabled"
+
+# SVC-07: ga-update-hosts runs before supervisor
+grep -q 'Before=.*hassio-supervisor' "${TARGET}/etc/systemd/system/ga-update-hosts.service" 2>/dev/null \
+  && _pass "SVC-07: ga-update-hosts ordered before supervisor" \
+  || _fail "SVC-07: ga-update-hosts NOT ordered before supervisor"
+
+# SVC-08: ga-defaults/hosts does NOT contain hardcoded IP
+if grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+.*greenautarky' "${TARGET}/usr/share/ga-defaults/hosts" 2>/dev/null; then
+  _fail "SVC-08: ga-defaults/hosts still has hardcoded GA IP — should use ga-services.conf"
+else
+  _pass "SVC-08: ga-defaults/hosts has no hardcoded GA IPs (managed by ga-update-hosts)"
+fi
+
+echo ""
 echo "--- NetworkManager WiFi defaults ---"
 
 NM_CONF="${TARGET}/etc/NetworkManager/NetworkManager.conf"
@@ -1204,6 +1251,11 @@ if [[ -n "$SRC" ]]; then
       grep -q 'loki.greenautarky.com' "$DNS_PY" 2>/dev/null \
         && _pass "BLD-SUP-DNS-c: dns.py has loki.greenautarky.com" \
         || _fail "BLD-SUP-DNS-c: dns.py missing loki.greenautarky.com"
+
+      # SVC-09: Supervisor dns.py reads ga-services.conf (not hardcoded IP)
+      grep -q '_load_ga_services_ip' "$DNS_PY" 2>/dev/null \
+        && _pass "SVC-09: dns.py uses _load_ga_services_ip (centralized config)" \
+        || _fail "SVC-09: dns.py does NOT use _load_ga_services_ip — IP may be hardcoded"
     else
       _skip "BLD-SUP-DNS-a..c" "dns.py not found in supervisor fork"
     fi

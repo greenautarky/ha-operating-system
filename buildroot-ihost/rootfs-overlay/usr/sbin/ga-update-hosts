@@ -1,0 +1,83 @@
+#!/bin/sh
+# ga-update-hosts — Generate /etc/hosts entries from ga-services.conf
+#
+# Reads the central GA services configuration and writes host entries
+# so that GA backend services (InfluxDB, Loki, OTA) resolve correctly
+# even when NetBird DNS is unavailable.
+#
+# Called by ga-update-hosts.service at boot (after network + overlay).
+#
+# Sources (in priority order):
+#   1. /mnt/data/ga-services.conf   (runtime override, persistent)
+#   2. /etc/ga-services.conf        (rootfs default, OTA-updatable)
+#
+# Writes to:
+#   /mnt/data/hosts                 (overlay-mounted as /etc/hosts by HAOS)
+#
+# The hosts file is rebuilt from scratch each boot to ensure consistency.
+# Non-GA entries (localhost, etc.) are preserved from the base template.
+
+set -eu
+
+CONF_OVERRIDE="/mnt/data/ga-services.conf"
+CONF_DEFAULT="/etc/ga-services.conf"
+HOSTS_FILE="/mnt/data/hosts"
+MARKER="# ga-services managed entries (do not edit manually)"
+
+# Load config (override takes precedence)
+if [ -f "$CONF_OVERRIDE" ]; then
+    . "$CONF_OVERRIDE"
+    echo "ga-update-hosts: loaded override config from $CONF_OVERRIDE"
+elif [ -f "$CONF_DEFAULT" ]; then
+    . "$CONF_DEFAULT"
+    echo "ga-update-hosts: loaded default config from $CONF_DEFAULT"
+else
+    echo "ga-update-hosts: ERROR — no ga-services.conf found"
+    exit 1
+fi
+
+# Validate required variables
+if [ -z "${GA_SERVICES_IP:-}" ]; then
+    echo "ga-update-hosts: ERROR — GA_SERVICES_IP not set in config"
+    exit 1
+fi
+
+# Ensure hosts file exists with base entries
+if [ ! -f "$HOSTS_FILE" ]; then
+    cat > "$HOSTS_FILE" <<'BASE'
+127.0.0.1	localhost
+::1		localhost ip6-localhost ip6-loopback
+ff02::1		ip6-allnodes
+ff02::2		ip6-allrouters
+BASE
+    echo "ga-update-hosts: created base hosts file"
+fi
+
+# Remove old GA-managed entries
+if grep -q "$MARKER" "$HOSTS_FILE" 2>/dev/null; then
+    # Remove from marker to end-marker (or end of file)
+    sed -i "/$MARKER/,/^# end ga-services/d" "$HOSTS_FILE"
+fi
+
+# Build GA entries line
+GA_HOSTS_LINE="${GA_SERVICES_IP}"
+[ -n "${GA_INFLUX_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_INFLUX_HOST}"
+[ -n "${GA_LOKI_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_LOKI_HOST}"
+[ -n "${GA_OTA_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_OTA_HOST}"
+
+# Append GA entries
+{
+    echo ""
+    echo "$MARKER"
+    echo "${GA_HOSTS_LINE}"
+    echo "# end ga-services"
+} >> "$HOSTS_FILE"
+
+echo "ga-update-hosts: wrote ${GA_HOSTS_LINE} to $HOSTS_FILE"
+
+# Verify by resolving one hostname
+if getent hosts "${GA_INFLUX_HOST:-influx.greenautarky.com}" >/dev/null 2>&1; then
+    echo "ga-update-hosts: verification OK — ${GA_INFLUX_HOST} resolves"
+else
+    echo "ga-update-hosts: WARNING — ${GA_INFLUX_HOST} does not resolve yet (may need overlay mount)"
+fi

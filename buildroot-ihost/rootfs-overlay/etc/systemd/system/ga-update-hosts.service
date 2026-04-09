@@ -1,0 +1,15 @@
+[Unit]
+Description=Generate /etc/hosts from ga-services.conf
+# Must run after overlay is mounted (hosts file lives on /mnt/data)
+# and before services that need DNS resolution (telegraf, fluent-bit, supervisor)
+After=hassos-overlay.service hassos-config.service
+Before=hassio-supervisor.service telegraf.service fluent-bit.service netbird.service
+Wants=hassos-overlay.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/ga-update-hosts
+
+[Install]
+WantedBy=multi-user.target

@@ -3,6 +3,6 @@
 127.0.0.1       localhost
 ::1             localhost ip6-localhost ip6-loopback
 
-# GreenAutarky services — fallback when NetBird DNS is unavailable
-# Primary resolution: NetBird DNS (managed via NetBird UI)
-100.126.129.116 influx.greenautarky.com loki.greenautarky.com ota.greenautarky.com
+# GreenAutarky service entries are managed by ga-update-hosts.service
+# at boot, reading from /etc/ga-services.conf (or /mnt/data/ga-services.conf).
+# Do NOT add GA IPs here — they will be overwritten.
