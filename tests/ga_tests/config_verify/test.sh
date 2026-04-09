@@ -86,12 +86,8 @@ else
     "grep -q 'DEVICE_LABEL=unknown' /mnt/data/telegraf/env 2>/dev/null"
 fi
 
-# CFG-31: WiFi power save disabled
-CFG_POWERSAVE="/etc/NetworkManager/conf.d/99-disable-wifi-powersave.conf"
-if [ -f "$CFG_POWERSAVE" ] && grep -q 'wifi.powersave.*=.*2' "$CFG_POWERSAVE"; then
-  run_test "CFG-31" "WiFi power save disabled via NM config" "true"
-else
-  run_test "CFG-31" "WiFi power save disabled via NM config" "false"
-fi
+# CFG-31: WiFi power save disabled (can be in main conf or conf.d/)
+run_test "CFG-31" "WiFi power save disabled via NM config" \
+  "grep -rq 'wifi.powersave.*=.*2' /etc/NetworkManager/ 2>/dev/null"
 
 suite_end

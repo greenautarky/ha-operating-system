@@ -70,9 +70,15 @@ jobs:
           docker run --rm --privileged \
             -v "$(pwd):/build" \
             -v "$HOME/hassos-cache:/cache" \
+            -v /dev:/dev \
             -e FORCE_UNSAFE_CONFIGURE=1 \
+            -e INFLUX_PASSWORD="${INFLUX_PASSWORD}" \
             hassos:local \
-            bash -c "cd /build && ./scripts/ga_build.sh ${{ inputs.mode }} ${{ inputs.env }}"
+            bash -c "cd /build && ./scripts/ga_build.sh ${{ inputs.mode || 'update' }} ${{ inputs.env || 'dev' }}"
+          # Verify build actually produced images (docker exit code can be unreliable with tee+pipefail)
+          ls ga_output/images/bos_ihost-*.img.xz || { echo "ERROR: No output image found"; exit 1; }
+        env:
+          INFLUX_PASSWORD: ${{ secrets.INFLUX_PASSWORD }}
 
       - name: Upload image artifacts
         uses: actions/upload-artifact@v4
