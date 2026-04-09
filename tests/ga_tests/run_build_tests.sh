@@ -1264,6 +1264,110 @@ if [[ -n "$SRC" ]]; then
   fi
 
   # =========================================================================
+  # Integration: ga-services.conf ↔ service configs ↔ dns.py consistency
+  # =========================================================================
+  echo ""
+  echo "--- Integration: endpoint hostname consistency ---"
+
+  SVC_CONF="${SRC}/buildroot-external/rootfs-overlay/etc/ga-services.conf"
+  TEL_CONF="${SRC}/buildroot-external/package/telegraf/telegraf.conf"
+  TEL_DEBUG="${SRC}/buildroot-external/package/telegraf/telegraf-debug.conf"
+  FB_CONF="${SRC}/buildroot-external/package/fluent-bit-config/fluent-bit.conf"
+  FB_DEBUG="${SRC}/buildroot-external/package/fluent-bit-config/fluent-bit-debug.conf"
+
+  if [[ -f "$SVC_CONF" ]]; then
+    # Load hostnames from ga-services.conf
+    _INFLUX_HOST=$(grep 'GA_INFLUX_HOST=' "$SVC_CONF" | head -1 | cut -d= -f2)
+    _LOKI_HOST=$(grep 'GA_LOKI_HOST=' "$SVC_CONF" | head -1 | cut -d= -f2)
+    _OTA_HOST=$(grep 'GA_OTA_HOST=' "$SVC_CONF" | head -1 | cut -d= -f2)
+
+    # INT-01: telegraf.conf uses the same influx hostname as ga-services.conf
+    if [[ -f "$TEL_CONF" ]] && grep -q "$_INFLUX_HOST" "$TEL_CONF" 2>/dev/null; then
+      _pass "INT-01: telegraf.conf influx host matches ga-services.conf ($_INFLUX_HOST)"
+    else
+      _fail "INT-01: telegraf.conf influx host does NOT match ga-services.conf ($_INFLUX_HOST)"
+    fi
+
+    # INT-02: telegraf-debug.conf uses the same influx hostname
+    if [[ -f "$TEL_DEBUG" ]] && grep -q "$_INFLUX_HOST" "$TEL_DEBUG" 2>/dev/null; then
+      _pass "INT-02: telegraf-debug.conf influx host matches ga-services.conf"
+    elif [[ ! -f "$TEL_DEBUG" ]]; then
+      _skip "INT-02" "telegraf-debug.conf not found"
+    else
+      _fail "INT-02: telegraf-debug.conf influx host mismatch"
+    fi
+
+    # INT-03: fluent-bit.conf uses the same loki hostname as ga-services.conf
+    if [[ -f "$FB_CONF" ]] && grep -q "$_LOKI_HOST" "$FB_CONF" 2>/dev/null; then
+      _pass "INT-03: fluent-bit.conf loki host matches ga-services.conf ($_LOKI_HOST)"
+    else
+      _fail "INT-03: fluent-bit.conf loki host does NOT match ga-services.conf ($_LOKI_HOST)"
+    fi
+
+    # INT-04: fluent-bit-debug.conf uses the same loki hostname
+    if [[ -f "$FB_DEBUG" ]] && grep -q "$_LOKI_HOST" "$FB_DEBUG" 2>/dev/null; then
+      _pass "INT-04: fluent-bit-debug.conf loki host matches ga-services.conf"
+    elif [[ ! -f "$FB_DEBUG" ]]; then
+      _skip "INT-04" "fluent-bit-debug.conf not found"
+    else
+      _fail "INT-04: fluent-bit-debug.conf loki host mismatch"
+    fi
+
+    # INT-05: Supervisor dns.py has all three hostnames from ga-services.conf
+    if [[ -n "$SUP_ROOT" && -f "${SUP_ROOT}/supervisor/plugins/dns.py" ]]; then
+      _dns_ok=true
+      for _host in "$_INFLUX_HOST" "$_LOKI_HOST" "$_OTA_HOST"; do
+        grep -q "$_host" "${SUP_ROOT}/supervisor/plugins/dns.py" 2>/dev/null || _dns_ok=false
+      done
+      if $_dns_ok; then
+        _pass "INT-05: dns.py has all 3 hostnames from ga-services.conf"
+      else
+        _fail "INT-05: dns.py missing hostnames from ga-services.conf — containers won't resolve GA services"
+      fi
+    else
+      _skip "INT-05" "supervisor dns.py not available"
+    fi
+
+    # INT-06: ga-update-hosts script references all hostnames from ga-services.conf
+    _UH="${SRC}/buildroot-ihost/rootfs-overlay/usr/sbin/ga-update-hosts"
+    if [[ -f "$_UH" ]]; then
+      _uh_ok=true
+      for _var in "GA_INFLUX_HOST" "GA_LOKI_HOST" "GA_OTA_HOST"; do
+        grep -q "$_var" "$_UH" 2>/dev/null || _uh_ok=false
+      done
+      if $_uh_ok; then
+        _pass "INT-06: ga-update-hosts uses all hostname vars from ga-services.conf"
+      else
+        _fail "INT-06: ga-update-hosts missing hostname vars — /etc/hosts will be incomplete"
+      fi
+    else
+      _skip "INT-06" "ga-update-hosts not found"
+    fi
+
+    # INT-07: No hardcoded ga-tools IP in telegraf/fluent-bit configs
+    _SVC_IP=$(grep 'GA_SERVICES_IP=' "$SVC_CONF" | head -1 | cut -d= -f2)
+    _hardcoded=false
+    for _cfg in "$TEL_CONF" "$TEL_DEBUG" "$FB_CONF" "$FB_DEBUG"; do
+      [[ -f "$_cfg" ]] && grep -qE "^[^#]*$_SVC_IP" "$_cfg" 2>/dev/null && _hardcoded=true
+    done
+    if ! $_hardcoded; then
+      _pass "INT-07: No hardcoded ga-tools IP in service configs (using hostnames)"
+    else
+      _fail "INT-07: Found hardcoded IP $_SVC_IP in service config — should use hostname"
+    fi
+
+    # INT-08: ga-services.conf IP is valid IPv4
+    if echo "$_SVC_IP" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+      _pass "INT-08: GA_SERVICES_IP is valid IPv4 ($_SVC_IP)"
+    else
+      _fail "INT-08: GA_SERVICES_IP is NOT valid IPv4 ($_SVC_IP)"
+    fi
+
+  else
+    _skip "INT-01..08" "ga-services.conf not found at $SVC_CONF"
+  fi
+
+  # =========================================================================
   # Cross-repo version alignment (fetches stable.json, compares with local)
   # =========================================================================
   echo ""

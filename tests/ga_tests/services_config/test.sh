@@ -132,4 +132,50 @@ run_test "SVC-27" "ga-update-hosts runs before supervisor" \
 run_test "SVC-28" "ga-update-hosts runs after overlay mount" \
   "systemctl cat ga-update-hosts 2>/dev/null | grep -q 'After=.*hassos-overlay'"
 
+# =========================================================================
+# Integration: cross-file consistency (SVC-30..36)
+# =========================================================================
+
+echo ""
+echo "--- Integration: hostname consistency ---"
+
+# Load hostnames from config
+. "$CONF_DEFAULT" 2>/dev/null || true
+[ -f "$CONF_OVERRIDE" ] && . "$CONF_OVERRIDE" 2>/dev/null
+
+# SVC-30: telegraf.conf uses the influx hostname from ga-services.conf
+run_test "SVC-30" "telegraf.conf influx host matches ga-services.conf" \
+  "grep -q '${GA_INFLUX_HOST:-influx.greenautarky.com}' /etc/telegraf/telegraf.conf 2>/dev/null"
+
+# SVC-31: fluent-bit.conf uses the loki hostname from ga-services.conf
+run_test "SVC-31" "fluent-bit.conf loki host matches ga-services.conf" \
+  "grep -q '${GA_LOKI_HOST:-loki.greenautarky.com}' /etc/fluent-bit/fluent-bit.conf 2>/dev/null"
+
+# SVC-32: /etc/hosts IP matches ga-services.conf IP
+HOSTS_IP=$(grep 'influx.greenautarky.com' /etc/hosts 2>/dev/null | awk '{print $1}' | tail -1)
+run_test "SVC-32" "hosts IP ($HOSTS_IP) matches config IP ($EXPECTED_IP)" \
+  "test '$HOSTS_IP' = '$EXPECTED_IP'"
+
+# SVC-33: CoreDNS hosts (Supervisor) has same GA entries
+COREDNS_HOSTS="/mnt/data/supervisor/dns/hosts"
+if [ -f "$COREDNS_HOSTS" ]; then
+  run_test "SVC-33" "CoreDNS hosts has influx.greenautarky.com" \
+    "grep -q '${GA_INFLUX_HOST:-influx.greenautarky.com}' $COREDNS_HOSTS 2>/dev/null"
+
+  # SVC-34: CoreDNS hosts IP matches ga-services.conf IP
+  COREDNS_IP=$(grep 'influx.greenautarky.com' "$COREDNS_HOSTS" 2>/dev/null | awk '{print $1}' | tail -1)
+  run_test "SVC-34" "CoreDNS IP ($COREDNS_IP) matches config IP ($EXPECTED_IP)" \
+    "test '$COREDNS_IP' = '$EXPECTED_IP'"
+else
+  skip_test "SVC-33" "CoreDNS hosts file" "Supervisor not running or DNS not initialized"
+  skip_test "SVC-34" "CoreDNS IP match" "Supervisor not running or DNS not initialized"
+fi
+
+# SVC-35: No hardcoded ga-tools IP in service configs (should use hostnames)
+run_test "SVC-35" "telegraf.conf has no hardcoded IP (uses hostname)" \
+  "! grep -E '^[^#]*${EXPECTED_IP}' /etc/telegraf/telegraf.conf 2>/dev/null"
+
+run_test "SVC-36" "fluent-bit.conf has no hardcoded IP (uses hostname)" \
+  "! grep -E '^[^#]*${EXPECTED_IP}' /etc/fluent-bit/fluent-bit.conf 2>/dev/null"
+
 suite_end
