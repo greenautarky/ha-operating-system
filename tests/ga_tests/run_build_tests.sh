@@ -74,14 +74,14 @@ grep -q 'DEVICE_LABEL' "$FB_SVC" 2>/dev/null \
   && _pass "CFG-11: fluent-bit.service has DEVICE_LABEL" \
   || _fail "CFG-11: fluent-bit.service missing DEVICE_LABEL"
 
-# CFG-13/14: GA DNS fallback entries in ga-defaults (applied at runtime by ga-overlay-init)
-grep -q 'influx.greenautarky.com' "${TARGET}/usr/share/ga-defaults/hosts" 2>/dev/null \
-  && _pass "CFG-13: ga-defaults/hosts has influx fallback" \
-  || _fail "CFG-13: ga-defaults/hosts missing influx fallback"
+# CFG-13/14: GA DNS entries in ga-services.conf (single source of truth for endpoint IPs)
+grep -q 'influx.greenautarky.com' "${TARGET}/etc/ga-services.conf" 2>/dev/null \
+  && _pass "CFG-13: ga-services.conf has influx host" \
+  || _fail "CFG-13: ga-services.conf missing influx host"
 
-grep -q 'loki.greenautarky.com' "${TARGET}/usr/share/ga-defaults/hosts" 2>/dev/null \
-  && _pass "CFG-14: ga-defaults/hosts has loki fallback" \
-  || _fail "CFG-14: ga-defaults/hosts missing loki fallback"
+grep -q 'loki.greenautarky.com' "${TARGET}/etc/ga-services.conf" 2>/dev/null \
+  && _pass "CFG-14: ga-services.conf has loki host" \
+  || _fail "CFG-14: ga-services.conf missing loki host"
 
 # CFG-15/16: Service ordering
 grep -q 'netbird' "${TARGET}/etc/systemd/system/telegraf.service" 2>/dev/null \
@@ -344,10 +344,10 @@ else
   _pass "OVL-01: /etc/hosts does not have GA entries (safe)"
 fi
 
-# OVL-02: GA hosts defaults in safe location
-[[ -f "${TARGET}/usr/share/ga-defaults/hosts" ]] && grep -q 'greenautarky' "${TARGET}/usr/share/ga-defaults/hosts" 2>/dev/null \
-  && _pass "OVL-02: GA DNS entries in /usr/share/ga-defaults/hosts" \
-  || _fail "OVL-02: GA DNS entries missing from /usr/share/ga-defaults/hosts"
+# OVL-02: GA DNS config in safe location (ga-services.conf, not overlaid /etc/hosts)
+[[ -f "${TARGET}/etc/ga-services.conf" ]] && grep -q 'GA_SERVICES_IP' "${TARGET}/etc/ga-services.conf" 2>/dev/null \
+  && _pass "OVL-02: GA DNS config in /etc/ga-services.conf (safe from overlay)" \
+  || _fail "OVL-02: ga-services.conf missing or has no GA_SERVICES_IP"
 
 # OVL-03: GA timesyncd.conf not in overlaid path (upstream Buildroot default is OK)
 if grep -q 'greenautarky\|time.cloudflare.com' "${TARGET}/etc/systemd/timesyncd.conf" 2>/dev/null; then
