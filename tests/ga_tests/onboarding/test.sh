@@ -81,4 +81,20 @@ else
   skip_test "OB-14" "ga-env.conf not found (not provisioned)"
 fi
 
+# --- Password reset ---
+run_test "PW-01" "Password reset page accessible" \
+  "curl -sf --connect-timeout 5 http://localhost:8123/greenautarky-password-reset 2>/dev/null | grep -qi 'passwort'"
+
+run_test "PW-02" "Password reset API rejects wrong PIN" \
+  "HTTP_CODE=\$(curl -sf --connect-timeout 5 -o /dev/null -w '%{http_code}' \
+   -X POST http://localhost:8123/api/greenautarky_onboarding/password_reset/users \
+   -H 'Content-Type: application/json' -d '{\"pin\": \"000000\"}' 2>/dev/null); \
+   [ \"\$HTTP_CODE\" = '401' ] || [ \"\$HTTP_CODE\" = '404' ]"
+
+run_test "PW-03" "Password reset API rejects missing fields" \
+  "HTTP_CODE=\$(curl -sf --connect-timeout 5 -o /dev/null -w '%{http_code}' \
+   -X POST http://localhost:8123/api/greenautarky_onboarding/password_reset \
+   -H 'Content-Type: application/json' -d '{\"pin\": \"000000\", \"username\": \"\", \"new_password\": \"\"}' 2>/dev/null); \
+   [ \"\$HTTP_CODE\" = '400' ] || [ \"\$HTTP_CODE\" = '401' ] || [ \"\$HTTP_CODE\" = '404' ]"
+
 suite_end
