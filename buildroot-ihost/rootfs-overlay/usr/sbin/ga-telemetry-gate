@@ -31,7 +31,7 @@
 # when telemetry preferences are changed post-onboarding.
 
 STORE="${STORE_PATH:-/mnt/data/supervisor/homeassistant/.storage/greenautarky_telemetry}"
-MARKER_DIR="/mnt/data"
+MARKER_DIR="${MARKER_DIR:-/mnt/data}"
 MARKER_METRICS="$MARKER_DIR/.ga-consent-metrics"
 MARKER_ERROR_LOGS="$MARKER_DIR/.ga-consent-error_logs"
 

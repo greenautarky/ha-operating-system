@@ -33,14 +33,28 @@ else
     "! systemctl is-active fluent-bit"
 fi
 
-run_test "TEL-03" "GA_ENV set in telegraf env" \
-  "grep -q 'GA_ENV=' /mnt/data/telegraf/env 2>/dev/null"
+# TEL-03..06: Env files only exist if the service has started at least once.
+# If consent was never given, services never ran → no env file → skip, not fail.
+if [ -f /mnt/data/telegraf/env ]; then
+  run_test "TEL-03" "GA_ENV set in telegraf env" \
+    "grep -q 'GA_ENV=' /mnt/data/telegraf/env"
+else
+  skip_test "TEL-03" "GA_ENV in telegraf env" "service never started (no consent)"
+fi
 
-run_test "TEL-04" "GA_ENV set in fluent-bit env" \
-  "grep -q 'GA_ENV=' /mnt/data/fluent-bit/env 2>/dev/null"
+if [ -f /mnt/data/fluent-bit/env ]; then
+  run_test "TEL-04" "GA_ENV set in fluent-bit env" \
+    "grep -q 'GA_ENV=' /mnt/data/fluent-bit/env"
+else
+  skip_test "TEL-04" "GA_ENV in fluent-bit env" "service never started (no consent)"
+fi
 
-run_test "TEL-05" "DEVICE_UUID extracted (not unknown)" \
-  "grep 'DEVICE_UUID=' /mnt/data/telegraf/env 2>/dev/null | grep -qv 'unknown'"
+if [ -f /mnt/data/telegraf/env ]; then
+  run_test "TEL-05" "DEVICE_UUID extracted (not unknown)" \
+    "grep 'DEVICE_UUID=' /mnt/data/telegraf/env | grep -qv 'unknown'"
+else
+  skip_test "TEL-05" "DEVICE_UUID extracted" "service never started (no consent)"
+fi
 
 run_test "TEL-06" "DEVICE_UUID matches across services" \
   "[ \"$(grep DEVICE_UUID /mnt/data/telegraf/env 2>/dev/null)\" = \"$(grep DEVICE_UUID /mnt/data/fluent-bit/env 2>/dev/null)\" ]"
@@ -60,8 +74,12 @@ run_test "TEL-10" "Fluent-Bit no persistent errors (last 5 min)" \
 run_test "TEL-11" "Safe defaults in telegraf unit" \
   "systemctl cat telegraf 2>/dev/null | grep -q 'Environment=.*GA_ENV=dev'"
 
-run_test_show "TEL-ENV" "Telegraf env file contents" \
-  "cat /mnt/data/telegraf/env 2>/dev/null"
+if [ -f /mnt/data/telegraf/env ]; then
+  run_test_show "TEL-ENV" "Telegraf env file contents" \
+    "cat /mnt/data/telegraf/env"
+else
+  skip_test "TEL-ENV" "Telegraf env file contents" "service never started (no consent)"
+fi
 
 skip_test "TEL-12" "ga-env.conf override works" "mutates state (restarts telegraf)"
 
@@ -107,12 +125,21 @@ run_test "TEL-25" "gate allows when error_logs=true" \
 run_test "TEL-26" "GA_TELEMETRY_FORCE=1 bypasses consent check" \
   "GA_TELEMETRY_FORCE=1 STORE_PATH=/nonexistent /usr/sbin/ga-telemetry-gate metrics"
 
-# TEL-27: write mode creates correct markers
+# TEL-27: write mode creates correct markers (use temp MARKER_DIR to avoid side effects)
+# MARKER_DIR env var override requires the updated ga-telemetry-gate script.
 echo '{"key":"greenautarky_telemetry","version":1,"data":{"error_logs":true,"metrics":true}}' \
   > "$TMPDIR_TEL/store_both"
-# Temporarily redirect marker dir (script uses hardcoded /mnt/data — test actual markers instead)
-run_test "TEL-27" "write mode accepted (no crash)" \
-  "STORE_PATH=$TMPDIR_TEL/store_both /usr/sbin/ga-telemetry-gate write"
+GATE_BIN="/usr/sbin/ga-telemetry-gate"
+if grep -q 'MARKER_DIR:-' "$GATE_BIN" 2>/dev/null; then
+  run_test "TEL-27" "write mode creates markers in temp dir" \
+    "STORE_PATH=$TMPDIR_TEL/store_both MARKER_DIR=$TMPDIR_TEL $GATE_BIN write && test -f $TMPDIR_TEL/.ga-consent-metrics && test -f $TMPDIR_TEL/.ga-consent-error_logs"
+else
+  # Old rootfs without MARKER_DIR support — test write without side-effect check
+  run_test "TEL-27" "write mode accepted (no crash)" \
+    "STORE_PATH=$TMPDIR_TEL/store_both $GATE_BIN write"
+  # Clean up markers that leaked to /mnt/data
+  rm -f /mnt/data/.ga-consent-metrics /mnt/data/.ga-consent-error_logs 2>/dev/null
+fi
 
 rm -rf "$TMPDIR_TEL"
 
@@ -165,24 +192,29 @@ run_test "TEL-34" "fluent-bit.service has ConditionPathExists" \
   "systemctl cat fluent-bit 2>/dev/null | grep -q 'ConditionPathExists.*ga-consent-error_logs'"
 
 # TEL-35: Telegraf running ↔ marker exists (consistency check)
+# Four states: active+marker=OK, inactive+no_marker=OK, active+no_marker=BAD, inactive+marker=WARN
 TEL_ACTIVE=$(systemctl is-active telegraf 2>/dev/null)
 if [ "$TEL_ACTIVE" = "active" ] && [ ! -f "$METRICS_MARKER" ]; then
   run_test "TEL-35" "telegraf NOT running without consent marker" "false"
-elif [ "$TEL_ACTIVE" != "active" ] && [ -f "$METRICS_MARKER" ]; then
-  # Marker exists but service not running — could be a startup issue
-  warn_test "TEL-35" "telegraf not running despite consent marker (check logs)" "false"
+elif [ "$TEL_ACTIVE" = "active" ] && [ -f "$METRICS_MARKER" ]; then
+  run_test "TEL-35" "telegraf running with consent marker" "true"
+elif [ "$TEL_ACTIVE" != "active" ] && [ ! -f "$METRICS_MARKER" ]; then
+  run_test "TEL-35" "telegraf not running, no consent marker (consistent)" "true"
 else
-  run_test "TEL-35" "telegraf state consistent with consent marker" "true"
+  # Marker exists but service not running — startup issue or recent consent change
+  warn_test "TEL-35" "telegraf not running despite consent marker (check logs)" "false"
 fi
 
 # TEL-36: Fluent-Bit running ↔ marker exists
 FB_ACTIVE=$(systemctl is-active fluent-bit 2>/dev/null)
 if [ "$FB_ACTIVE" = "active" ] && [ ! -f "$ERRORS_MARKER" ]; then
   run_test "TEL-36" "fluent-bit NOT running without consent marker" "false"
-elif [ "$FB_ACTIVE" != "active" ] && [ -f "$ERRORS_MARKER" ]; then
-  warn_test "TEL-36" "fluent-bit not running despite consent marker (check logs)" "false"
+elif [ "$FB_ACTIVE" = "active" ] && [ -f "$ERRORS_MARKER" ]; then
+  run_test "TEL-36" "fluent-bit running with consent marker" "true"
+elif [ "$FB_ACTIVE" != "active" ] && [ ! -f "$ERRORS_MARKER" ]; then
+  run_test "TEL-36" "fluent-bit not running, no consent marker (consistent)" "true"
 else
-  run_test "TEL-36" "fluent-bit state consistent with consent marker" "true"
+  warn_test "TEL-36" "fluent-bit not running despite consent marker (check logs)" "false"
 fi
 
 # =========================================================================
