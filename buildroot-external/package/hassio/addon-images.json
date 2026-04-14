@@ -6,7 +6,7 @@
     },
     "ga_tailscale": {
       "image": "ghcr.io/greenautarky/ga_tailscale-{arch}",
-      "version": "0.27.0"
+      "version": "0.27.1"
     },
     "ga_ihosthardwarecontrol": {
       "image": "ghcr.io/greenautarky/ga_ihosthardwarecontrol-{arch}",
