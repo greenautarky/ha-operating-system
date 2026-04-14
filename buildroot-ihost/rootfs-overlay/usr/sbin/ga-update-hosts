@@ -12,7 +12,7 @@
 #   2. /etc/ga-services.conf        (rootfs default, OTA-updatable)
 #
 # Writes to:
-#   /mnt/data/hosts                 (overlay-mounted as /etc/hosts by HAOS)
+#   /mnt/overlay/etc/hosts           (bind-mounted as /etc/hosts by HAOS)
 #
 # The hosts file is rebuilt from scratch each boot to ensure consistency.
 # Non-GA entries (localhost, etc.) are preserved from the base template.
@@ -21,7 +21,7 @@ set -eu
 
 CONF_OVERRIDE="/mnt/data/ga-services.conf"
 CONF_DEFAULT="/etc/ga-services.conf"
-HOSTS_FILE="/mnt/data/hosts"
+HOSTS_FILE="/mnt/overlay/etc/hosts"
 MARKER="# ga-services managed entries (do not edit manually)"
 
 # Load config (override takes precedence)
