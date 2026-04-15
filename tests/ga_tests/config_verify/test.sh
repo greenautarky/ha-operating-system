@@ -90,4 +90,37 @@ fi
 run_test "CFG-31" "WiFi power save disabled via NM config" \
   "grep -rq 'wifi.powersave.*=.*2' /etc/NetworkManager/ 2>/dev/null"
 
+# --- HA reverse proxy config (trusted proxies + external URL) ---
+# These are set by ga-flasher stage 69 step 3c during provisioning.
+# On non-provisioned devices (fresh flash, no flasher run), these will fail — that's expected.
+
+HA_CFG="/mnt/data/supervisor/homeassistant/configuration.yaml"
+if [ -f "$HA_CFG" ]; then
+  run_test "CFG-32" "HA use_x_forwarded_for enabled" \
+    "grep -q 'use_x_forwarded_for.*true' $HA_CFG"
+
+  # Read expected IP from ga-services.conf
+  GA_IP=$(grep '^GA_SERVICES_IP=' /mnt/data/ga-services.conf 2>/dev/null \
+       || grep '^GA_SERVICES_IP=' /etc/ga-services.conf 2>/dev/null)
+  GA_IP="${GA_IP#GA_SERVICES_IP=}"
+
+  run_test "CFG-33" "HA trusted_proxies has 127.0.0.1 (Tailscale Funnel)" \
+    "grep -A10 'trusted_proxies' $HA_CFG | grep -q '127.0.0.1'"
+
+  if [ -n "$GA_IP" ]; then
+    run_test "CFG-34" "HA trusted_proxies has GA_SERVICES_IP ($GA_IP)" \
+      "grep -A10 'trusted_proxies' $HA_CFG | grep -q '$GA_IP'"
+  else
+    skip_test "CFG-34" "HA trusted_proxies has GA_SERVICES_IP (no ga-services.conf)"
+  fi
+
+  run_test "CFG-35" "HA external_url set to ki-butler domain" \
+    "grep -q 'ki-butler.greenautarky.com' $HA_CFG"
+else
+  skip_test "CFG-32" "HA use_x_forwarded_for enabled (no configuration.yaml)"
+  skip_test "CFG-33" "HA trusted_proxies has 127.0.0.1 (no configuration.yaml)"
+  skip_test "CFG-34" "HA trusted_proxies has GA_SERVICES_IP (no configuration.yaml)"
+  skip_test "CFG-35" "HA external_url set to ki-butler domain (no configuration.yaml)"
+fi
+
 suite_end
