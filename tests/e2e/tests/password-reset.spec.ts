@@ -35,15 +35,23 @@ test.describe('Password Reset — Page', () => {
 
   test('wrong PIN shows error message', async ({ page, deviceUrl }) => {
     await page.goto(`${deviceUrl}/greenautarky-password-reset`);
+
+    // Wait for any rate-limit countdown to expire before testing
+    const countdown = page.locator('text=/Nächster Versuch|retry/i');
+    if (await countdown.isVisible({ timeout: 1_000 }).catch(() => false)) {
+      await countdown.waitFor({ state: 'hidden', timeout: 30_000 });
+    }
+
     const pinInput = page.locator('#pin');
+    await expect(pinInput).toBeEnabled({ timeout: 10_000 });
     await pinInput.fill('000000');
     await page.locator('#btn-pin').click();
 
-    // Wait for error
-    const error = page.locator('#pin-error');
+    // Accept either "invalid PIN" or "too many attempts" (rate-limiter)
+    const error = page.locator('#pin-error, text=/zu viele versuche|too many/i');
     await expect(error).toBeVisible({ timeout: 10_000 });
     const errorText = (await error.textContent()) ?? '';
-    expect(/ungültige pin|invalid/i.test(errorText)).toBe(true);
+    expect(/ungültige pin|invalid|zu viele versuche|too many/i.test(errorText)).toBe(true);
   });
 
   test('back link goes to login', async ({ page, deviceUrl }) => {
@@ -81,7 +89,7 @@ test.describe('Password Reset — API', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pin: '000000', username: 'test', new_password: 'test' }),
     });
-    // 401 (wrong PIN), 404 (no PIN file or user not found), 400 (missing fields)
-    expect([400, 401, 404]).toContain(res.status);
+    // 401 (wrong PIN), 404 (no PIN file or user not found), 400 (missing fields), 429 (rate-limited)
+    expect([400, 401, 404, 429]).toContain(res.status);
   });
 });

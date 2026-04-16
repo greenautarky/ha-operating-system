@@ -148,7 +148,7 @@ OUT="${OUT:-/build/ga_output}"
 if [[ "$OUT" != /* ]]; then OUT="/build/${OUT}"; fi
 
 # ---- NetBird version (built via Buildroot golang-package) ----
-NETBIRD_TAG="${NETBIRD_TAG:-v0.67.2}"
+NETBIRD_TAG="${NETBIRD_TAG:-v0.66.2}"
 
 # ---- CA files expected by post-build script ----
 OTA_DIR="${OTA_DIR:-${BR2EXT_NETBIRD}/ota}"
@@ -198,6 +198,16 @@ PREFLIGHT_FAIL=0
 VERSION_SUFFIX_CHECK=$(grep 'VERSION_SUFFIX=' "$BR2EXT_NETBIRD/meta" 2>/dev/null | cut -d'"' -f2)
 if [[ "$GA_ENV" == "prod" ]] && [[ -z "$VERSION_SUFFIX_CHECK" ]]; then
   echo "WARN: VERSION_SUFFIX is empty in meta — prod build will use base version only" >&2
+fi
+
+# NetBird version consistency: NETBIRD_TAG (ga_build.sh) must match netbird.mk
+NB_MK_VERSION=$(grep '^NETBIRD_VERSION' "$BR2EXT_NETBIRD/package/netbird/netbird.mk" 2>/dev/null \
+  | sed 's/.*refs\/tags\/v//' | tr -d '[:space:]')
+NB_TAG_VERSION="${NETBIRD_TAG#v}"
+if [[ -n "$NB_MK_VERSION" ]] && [[ "$NB_MK_VERSION" != "$NB_TAG_VERSION" ]]; then
+  echo "FAIL: NetBird version mismatch — NETBIRD_TAG=$NB_TAG_VERSION but netbird.mk=$NB_MK_VERSION" >&2
+  echo "  Update NETBIRD_TAG in ga_build.sh or NETBIRD_VERSION in netbird.mk" >&2
+  PREFLIGHT_FAIL=1
 fi
 
 if [[ $PREFLIGHT_FAIL -ne 0 ]]; then
@@ -436,7 +446,7 @@ verify_build_integrity() {
     if echo "$nb_ver_out" | grep -q "${NETBIRD_TAG#v}"; then
       _check_pass "NetBird binary version: $nb_ver_out"
     else
-      _check_warn "NetBird version mismatch: got '$nb_ver_out', expected '${NETBIRD_TAG#v}'"
+      _check_fail "NetBird version mismatch: got '$nb_ver_out', expected '${NETBIRD_TAG#v}'"
     fi
   else
     _check_fail "NetBird binary not found at $nb"
