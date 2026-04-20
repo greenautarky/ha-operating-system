@@ -123,21 +123,28 @@
 
 ## Medium Priority
 
-### NetBird kernel-mode WireGuard (performance optimization)
+### NetBird kernel-mode WireGuard (DEFERRED — userspace stays default)
+
+**Decision (2026-04-16):** Keep userspace mode for now. LTE roaming reliability
+(OpenStick failover) is more important than CPU optimization for our use-case.
+
+**Background:**
 Currently NetBird runs userspace WireGuard (Go implementation via TUN device).
 The kernel WireGuard module IS built (`CONFIG_WIREGUARD=m`) but never loaded,
 so all crypto runs in userspace.
 
-- Userspace WG accounts for 1-7% CPU on the Cortex-A7 (visible as `/usr/bin/net+` in idle tests)
-- Kernel WG is 5-10x faster, lower CPU, lower latency
-- NetBird supports kernel mode auto-detection: loads `wireguard` module if available
+**Trade-offs:**
+- Userspace WG: 1-7% CPU on Cortex-A7 (visible as `/usr/bin/net+` in idle tests)
+- Kernel WG: 5-10x faster crypto, lower CPU, lower latency
+- BUT: kernel-mode roaming detection via netlink is slower (30-60s vs 5-10s)
+- LTE failover via OpenStick is critical for our network resilience
 
-Tasks:
-- [ ] Auto-load wireguard module at boot (e.g., `/etc/modules-load.d/wireguard.conf`)
-- [ ] Verify NetBird detects kernel-mode (`netbird status` shows "kernel" interface type)
-- [ ] Measure CPU impact before/after on idle device tests (IDLE-03/04)
-- [ ] Verify no regressions in NetBird connectivity (P2P, DERP fallback)
-- [ ] Document findings in performance section
+**Possible future work (only if CPU becomes critical):**
+- [ ] Hybrid mode: Kernel as default, userspace fallback for OpenStick devices
+- [ ] Auto-load wireguard module via `/etc/modules-load.d/wireguard.conf`
+- [ ] Roaming tests during OpenStick failover (must pass before enabling kernel mode)
+- [ ] Measure DNS Zones impact (already broken on Linux #5199, may worsen)
+- [ ] Per-device config switch via ga-env.conf flag
 
 ### GA Device Management Addon (`ga-device-manager`) (needs discussion)
 A new HA addon for remote fleet management, accessible over NetBird.
