@@ -123,6 +123,22 @@
 
 ## Medium Priority
 
+### NetBird kernel-mode WireGuard (performance optimization)
+Currently NetBird runs userspace WireGuard (Go implementation via TUN device).
+The kernel WireGuard module IS built (`CONFIG_WIREGUARD=m`) but never loaded,
+so all crypto runs in userspace.
+
+- Userspace WG accounts for 1-7% CPU on the Cortex-A7 (visible as `/usr/bin/net+` in idle tests)
+- Kernel WG is 5-10x faster, lower CPU, lower latency
+- NetBird supports kernel mode auto-detection: loads `wireguard` module if available
+
+Tasks:
+- [ ] Auto-load wireguard module at boot (e.g., `/etc/modules-load.d/wireguard.conf`)
+- [ ] Verify NetBird detects kernel-mode (`netbird status` shows "kernel" interface type)
+- [ ] Measure CPU impact before/after on idle device tests (IDLE-03/04)
+- [ ] Verify no regressions in NetBird connectivity (P2P, DERP fallback)
+- [ ] Document findings in performance section
+
 ### GA Device Management Addon (`ga-device-manager`) (needs discussion)
 A new HA addon for remote fleet management, accessible over NetBird.
 Runs as a container with Supervisor API access (`hassio` role).
