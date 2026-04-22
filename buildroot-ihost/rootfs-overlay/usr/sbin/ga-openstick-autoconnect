@@ -20,7 +20,7 @@ COOLDOWN_FILE="/mnt/data/.ga-openstick-cooldown"
 COOLDOWN_SECS=300
 LOG_TAG="ga-openstick"
 
-log() { logger -t "$LOG_TAG" "$1"; echo "$LOG_TAG: $1"; }
+log() { echo "$LOG_TAG: $1"; }
 
 # 1. Check if secret exists (feature disabled without key)
 if [ ! -f "$KEY_FILE" ]; then

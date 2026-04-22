@@ -1,0 +1,61 @@
+#!/bin/sh
+# ga-rtw-recover — Recover RTL8723DS WiFi if the cold-boot rtw88 probe failed.
+#
+# On iHost the rtw_8723ds driver occasionally fails its first probe with
+# `failed to dump efuse logical map` / error -22. rtw88 does not retry, so
+# wlan0 never appears. Reloading the module stack reruns the power sequence
+# and the second probe succeeds. This unit runs once at boot, before
+# NetworkManager, and reloads the stack only if probe failure is detected.
+set -eu
+
+LOG_TAG="ga-rtw-recover"
+SDIO_DEV="/sys/bus/sdio/devices/mmc1:0001:1"
+MODULE="rtw88_8723ds"
+
+log() { echo "$LOG_TAG: $*"; }
+
+if [ ! -d "$SDIO_DEV" ]; then
+    log "SDIO device not present — no iHost WiFi chip, nothing to do"
+    exit 0
+fi
+
+if [ -L "${SDIO_DEV}/driver" ] || [ -d /sys/class/net/wlan0 ]; then
+    log "driver bound / wlan0 present — nothing to do"
+    exit 0
+fi
+
+if ! dmesg | grep -qE 'rtw_8723ds.*(failed to dump efuse|probe.*failed)'; then
+    log "no probe-failure signature in dmesg — nothing to do"
+    exit 0
+fi
+
+log "rtw88_8723ds probe failed at boot — reloading module stack"
+
+for m in rtw88_8723ds rtw88_8723d rtw88_8723x rtw88_sdio; do
+    if lsmod | grep -q "^${m} "; then
+        if rmmod "$m" 2>/dev/null; then
+            log "unloaded $m"
+        else
+            log "rmmod $m failed — continuing"
+        fi
+    fi
+done
+
+if ! modprobe "$MODULE"; then
+    log "modprobe $MODULE failed"
+    exit 1
+fi
+
+# driver probe is async — poll briefly for wlan0
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -d /sys/class/net/wlan0 ] && break
+    sleep 1
+done
+
+if [ -d /sys/class/net/wlan0 ]; then
+    log "recovery successful — wlan0 present"
+    exit 0
+fi
+
+log "recovery FAILED — wlan0 still absent after reload"
+exit 1

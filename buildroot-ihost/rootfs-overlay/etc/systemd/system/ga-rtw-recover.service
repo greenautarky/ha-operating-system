@@ -1,0 +1,15 @@
+[Unit]
+Description=Recover rtw88_8723ds WiFi chip if cold-boot probe failed
+After=systemd-modules-load.service
+Before=NetworkManager.service network-pre.target
+Wants=network-pre.target
+ConditionPathExists=/sys/bus/sdio/devices/mmc1:0001:1
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-rtw-recover
+RemainAfterExit=yes
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target
