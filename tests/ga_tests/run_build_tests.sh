@@ -1256,6 +1256,23 @@ if [[ -n "$SRC" ]]; then
       grep -q '_load_ga_services_ip' "$DNS_PY" 2>/dev/null \
         && _pass "SVC-09: dns.py uses _load_ga_services_ip (centralized config)" \
         || _fail "SVC-09: dns.py does NOT use _load_ga_services_ip — IP may be hardcoded"
+
+      # SVC-09b: Supervisor dns.py uses dynamic OTA picker (consistent with host)
+      grep -q '_load_ga_ota_ip' "$DNS_PY" 2>/dev/null \
+        && _pass "SVC-09b: dns.py uses _load_ga_ota_ip (dynamic ota failover)" \
+        || _fail "SVC-09b: dns.py does NOT use _load_ga_ota_ip — ota may diverge from host /etc/hosts"
+
+      # SVC-09c: Supervisor dns.py hardcoded fallback matches current GA_SERVICES_IP
+      EXPECTED_IP=$(grep '^GA_SERVICES_IP=' "$BASE_DIR/buildroot-external/rootfs-overlay/etc/ga-services.conf" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'" | tr -d ' ')
+      if [ -n "$EXPECTED_IP" ]; then
+        if grep -q "_GA_HARDCODED_FALLBACK_IP = \"$EXPECTED_IP\"" "$DNS_PY" 2>/dev/null; then
+          _pass "SVC-09c: dns.py hardcoded fallback ($EXPECTED_IP) matches ga-services.conf"
+        else
+          _fail "SVC-09c: dns.py hardcoded fallback does NOT match ga-services.conf ($EXPECTED_IP)"
+        fi
+      else
+        _skip "SVC-09c" "could not parse GA_SERVICES_IP from ga-services.conf"
+      fi
     else
       _skip "BLD-SUP-DNS-a..c" "dns.py not found in supervisor fork"
     fi
