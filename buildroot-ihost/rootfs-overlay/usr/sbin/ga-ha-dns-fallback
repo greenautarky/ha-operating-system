@@ -1,0 +1,52 @@
+#!/bin/sh
+# ga-ha-dns-fallback — Configure HA Supervisor DNS with hardcoded upstream
+# fallback servers (Cloudflare 1.1.1.1 / 1.0.0.1).
+#
+# Why: HA Supervisor's hassio_dns container forwards to whatever DNS the host
+# uses (typically the LTE dongle). When the dongle DNS is overloaded or
+# flaky, container DNS resolution fails (SERVFAIL), which kills tailscaled's
+# bootstrap and other addon connectivity. Hardcoding Cloudflare as fallback
+# keeps things working even when the upstream DNS is unreliable.
+#
+# Vodafone fleet ACL: 1.1.1.1 was added on request, so this works on Vodafone-APN.
+#
+# Idempotent — only writes if servers/fallback differ from desired state.
+set -e
+
+DESIRED_FALLBACK="true"
+DESIRED_SERVERS="dns://1.1.1.1 dns://1.0.0.1"
+
+log() { echo "ga-ha-dns-fallback: $*"; }
+
+# Wait briefly for `ha` CLI + supervisor to be ready
+i=0
+while ! ha dns info >/dev/null 2>&1; do
+    i=$((i+1))
+    if [ "$i" -gt 30 ]; then
+        log "ha CLI not ready after 30s, exiting (will run on next boot)"
+        exit 0
+    fi
+    sleep 2
+done
+
+# Read current state
+current=$(ha dns info 2>/dev/null || echo "")
+fallback=$(echo "$current" | awk '/^fallback:/{print $2}')
+servers=$(echo "$current" | awk '/^servers:/{$1=""; sub(/^ /,""); print}')
+
+# Build expected pattern (servers come back as JSON-ish list, hard to compare exactly).
+# Simplification: only write if either fallback != true, or 1.1.1.1 not in servers.
+need_update=0
+[ "$fallback" != "true" ] && need_update=1
+echo "$servers" | grep -q '1.1.1.1' || need_update=1
+
+if [ "$need_update" = "0" ]; then
+    log "DNS upstream already configured (fallback=$fallback, servers contain 1.1.1.1) — skipping"
+    exit 0
+fi
+
+log "configuring DNS: --fallback $DESIRED_FALLBACK --servers '$DESIRED_SERVERS'"
+# shellcheck disable=SC2086
+ha dns options --fallback --servers dns://1.1.1.1 --servers dns://1.0.0.1 2>&1
+
+log "done"

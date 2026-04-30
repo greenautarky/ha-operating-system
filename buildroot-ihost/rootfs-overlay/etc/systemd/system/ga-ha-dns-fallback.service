@@ -1,0 +1,14 @@
+[Unit]
+Description=Configure HA Supervisor DNS upstream fallback (Cloudflare 1.1.1.1/1.0.0.1)
+After=hassos-supervisor.service network-online.target
+Wants=hassos-supervisor.service
+ConditionPathExists=/usr/sbin/ga-ha-dns-fallback
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-ha-dns-fallback
+RemainAfterExit=yes
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target
