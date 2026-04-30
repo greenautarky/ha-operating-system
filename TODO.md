@@ -46,16 +46,20 @@
   - Consider: add secondary keyring slot for smooth transition
 
 ### OTA Delivery — Private Server (needs implementation)
-- [x] **Host OTA bundles on private server via NetBird VPN** (deployed 2026-04-01)
-  - Server: `ota.greenautarky.com` bound to NetBird IP `100.126.129.116`
-  - Internal TLS (self-signed), not reachable from public internet
+- [x] **Host OTA bundles on private server** (deployed 2026-04-01, multi-path 2026-04-30)
+  - Server: `ota.greenautarky.com` on ga-tools, reachable via three paths:
+    - NetBird `100.126.142.217` (primary, WireGuard-encrypted)
+    - Tailscale `100.73.212.98` (secondary, only if tailscaled on device)
+    - Public `164.30.7.180` (fallback for total VPN outage)
+  - Caddy serves with Let's Encrypt cert; signed RAUC bundles
   - First bundle uploaded: `16.3.1.1` (223 MB)
-  - Verified: device can reach via NetBird, public access blocked
 - [x] **Update `stable.json` OTA URL** to `ota.greenautarky.com`
 - [ ] **Update `supervisor/const.py`** if `URL_HASSIO_VERSION` needs to change
   - Currently points to raw.githubusercontent.com for stable.json
   - stable.json stays public (no secrets) — only bundles are private
-- [x] **NetBird DNS** — devices use `/etc/hosts` fallback to `100.126.129.116`
+- [x] **Endpoint resolution** — `ga-resolve-ota` health-checks the IP list,
+  writes the first reachable to `/run/ga-resolve-ota.active`. `ga-update-hosts`
+  consumes that for `/etc/hosts`. Re-probes every 5 min via timer.
 - [x] **Caddy config on ga-tools** — deployed, bind to NetBird, tls internal
   ```
   ota.greenautarky.com {

@@ -130,7 +130,7 @@ test.describe('Caddy Proxy', () => {
     }
 
     // Login via Caddy and check that HA sees the real client IP
-    // (not 100.126.129.116) in the auth log
+    // (not the ga-tools NetBird IP from GA_SERVICES_IP) in the auth log
     const { haLogin } = await import('../helpers/auth');
     await haLogin(page, caddyUrl);
     await page.goto(`${caddyUrl}/profile`);
