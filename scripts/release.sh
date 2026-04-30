@@ -25,8 +25,10 @@ HA_OS_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 SUPERVISOR_REPO="${SUPERVISOR_REPO:-/home/user/git/ha-supervisor}"
 HAOS_VERSION_REPO="${HAOS_VERSION_REPO:-/home/user/git/haos-version}"
 
-# haos-version is on a feature branch (per current ihost release flow)
-HAOS_VERSION_BRANCH="${HAOS_VERSION_BRANCH:-feat/dsgw210-slot}"
+# haos-version: main is the authoritative branch for ihost (it's what
+# URL_HASSIO_VERSION in ha-supervisor const.py points at). DSGW210-specific
+# entries live on a separate branch and are not touched by release.sh.
+HAOS_VERSION_BRANCH="${HAOS_VERSION_BRANCH:-main}"
 SUPERVISOR_BRANCH="${SUPERVISOR_BRANCH:-ga/custom-version-url}"
 
 DRY_RUN=false
@@ -146,14 +148,16 @@ echo "  → $NEW_SUP ✓"
 
 echo "Applying haos-version stable.json..."
 python3 - <<PY
-import json, sys
+import json
+from collections import OrderedDict
 path = "$HAOS_VERSION_REPO/stable.json"
 with open(path) as f:
-    data = json.load(f)
+    data = json.load(f, object_pairs_hook=OrderedDict)
 data['supervisor'] = "$SUP_VERSION"
 data['hassos']['ihost'] = "$OS_VERSION"
+# Preserve the 2-space indent style on main (avoids whitespace churn in commit)
 with open(path, 'w') as f:
-    json.dump(data, f, indent=4)
+    json.dump(data, f, indent=2)
     f.write('\n')
 PY
 echo "  → supervisor=$SUP_VERSION, hassos.ihost=$OS_VERSION ✓"
