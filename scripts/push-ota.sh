@@ -22,6 +22,8 @@
 #   --fleet              Push to all NetBird peers with "kibson" in hostname
 #   --dry-run            Show what would happen without executing
 #   --no-reboot          Install but don't reboot (device mode)
+#   --force              Install even if device is already on target version
+#                        (useful for canary re-install of same-version dev iterations)
 #   --version VER        Version string (auto-detected from bundle if omitted)
 #
 # Server mode notes (--server):
@@ -39,6 +41,7 @@ MODE=""
 DEVICE_IP=""
 DRY_RUN=false
 NO_REBOOT=false
+FORCE=false
 VERSION=""
 SSH_KEY="${SSH_KEY:-$HOME/Nextcloud2/GreenAutarky/security_store/HomeassistantGreen0.pem}"
 SSH_PORT="${SSH_PORT:-22222}"
@@ -57,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     --fleet)     MODE="fleet"; shift ;;
     --dry-run)   DRY_RUN=true; shift ;;
     --no-reboot) NO_REBOOT=true; shift ;;
+    --force)     FORCE=true; shift ;;
     --version)   VERSION="$2"; shift 2 ;;
     *) echo "Unknown: $1"; exit 1 ;;
   esac
@@ -180,8 +184,12 @@ push_to_device() {
   echo "  Current: $current_ver → Target: $VERSION"
 
   if [[ "$current_ver" == "$VERSION" ]]; then
-    echo "  Already on target version — skipping"
-    return 0
+    if $FORCE; then
+      echo "  Already on $VERSION — re-installing anyway (--force)"
+    else
+      echo "  Already on target version — skipping (use --force to re-install)"
+      return 0
+    fi
   fi
 
   # Upload
