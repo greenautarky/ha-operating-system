@@ -17,13 +17,21 @@
 #
 # Options:
 #   --raucb PATH         Path to .raucb bundle
-#   --server             Upload to OTA server (ota.greenautarky.com)
-#   --device IP          Push to single device
+#   --server             Upload to ga-tools OTA path (devices pull from there)
+#   --device IP          Push to single device (direct rauc install)
 #   --fleet              Push to all NetBird peers with "kibson" in hostname
 #   --dry-run            Show what would happen without executing
-#   --no-reboot          Install but don't reboot
+#   --no-reboot          Install but don't reboot (device mode)
 #   --version VER        Version string (auto-detected from bundle if omitted)
 #
+# Server mode notes (--server):
+#   - SSH target is the ga-tools host alias (default: ga-tools_tailscale).
+#     ota.greenautarky.com is HTTPS-only via Caddy and not SSH-able.
+#   - Files are placed under /data/ota/releases/<version>/ (Caddy bind-mount).
+#   - Generates a sidecar .sha256 file in the filename-only format:
+#     "<sha>  <filename>\n" — devices verify against this.
+#   - Existing bundle for the same version is moved to _archive/ with a
+#     timestamp suffix (no overwrite without backup).
 set -euo pipefail
 
 RAUCB=""
@@ -34,8 +42,12 @@ NO_REBOOT=false
 VERSION=""
 SSH_KEY="${SSH_KEY:-$HOME/Nextcloud2/GreenAutarky/security_store/HomeassistantGreen0.pem}"
 SSH_PORT="${SSH_PORT:-22222}"
-OTA_SERVER="${OTA_SERVER:-ota.greenautarky.com}"
-OTA_SERVER_PATH="${OTA_SERVER_PATH:-/srv/ota/releases}"
+# OTA server (ga-tools): SSH target alias, NOT the public hostname.
+# Override via OTA_SSH_HOST if your ssh config uses a different alias.
+OTA_SSH_HOST="${OTA_SSH_HOST:-ga-tools_tailscale}"
+OTA_SERVER_PATH="${OTA_SERVER_PATH:-/data/ota/releases}"
+# Display name used in URLs / log output (Caddy-served hostname)
+OTA_PUBLIC_HOST="${OTA_PUBLIC_HOST:-ota.greenautarky.com}"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -75,28 +87,74 @@ echo "  Version:  $VERSION"
 echo "  Mode:     $MODE"
 echo ""
 
+# Device-side SSH (KIB-SON via NetBird, port 22222, with private key)
 SSH_CMD="ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $SSH_PORT -i $SSH_KEY"
 SCP_CMD="scp -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P $SSH_PORT -i $SSH_KEY"
 
-# --- Server mode: upload to OTA server ---
+# OTA-server SSH (ga-tools host alias — uses ~/.ssh/config, no port/key override)
+OTA_SSH="ssh -o ConnectTimeout=15 $OTA_SSH_HOST"
+OTA_SCP="scp -o ConnectTimeout=15"
+
+# --- Server mode: upload to ga-tools OTA path ---
 if [[ "$MODE" == "server" ]]; then
-  # Expected filename for Supervisor: haos_ihost-{version}.raucb
+  # Expected filename for Supervisor pull: haos_ihost-{version}.raucb
   OTA_FILENAME="haos_ihost-${VERSION}.raucb"
   DEST_DIR="${OTA_SERVER_PATH}/${VERSION}"
+  REMOTE_PATH="$DEST_DIR/$OTA_FILENAME"
+  REMOTE_SHA_PATH="$REMOTE_PATH.sha256"
 
-  echo "Uploading to $OTA_SERVER:$DEST_DIR/$OTA_FILENAME"
+  echo "Target: $OTA_SSH_HOST:$REMOTE_PATH"
+
+  # Pre-compute local SHA (devices verify against the sidecar)
+  echo "  Computing local SHA256..."
+  LOCAL_SHA=$(sha256sum "$RAUCB" | awk '{print $1}')
+  echo "  SHA256: $LOCAL_SHA"
+
   if $DRY_RUN; then
-    echo "  [DRY RUN] Would upload $RAUCB → $OTA_SERVER:$DEST_DIR/$OTA_FILENAME"
-  else
-    $SSH_CMD root@$OTA_SERVER "mkdir -p $DEST_DIR"
-    $SCP_CMD "$RAUCB" root@$OTA_SERVER:"$DEST_DIR/$OTA_FILENAME"
-    echo "  Upload complete."
-    echo ""
-    echo "  OTA URL: https://$OTA_SERVER/releases/$VERSION/$OTA_FILENAME"
-    echo ""
-    echo "  Devices will auto-update when Supervisor checks stable.json."
-    echo "  stable.json hassos.ihost must be '$VERSION' for update to trigger."
+    echo "  [DRY RUN] Would:"
+    echo "    1. ssh $OTA_SSH_HOST 'mkdir -p $DEST_DIR'"
+    echo "    2. archive any existing $OTA_FILENAME under _archive/"
+    echo "    3. scp $RAUCB → $OTA_SSH_HOST:$REMOTE_PATH"
+    echo "    4. write sidecar $REMOTE_SHA_PATH with: $LOCAL_SHA  $OTA_FILENAME"
+    echo "    5. verify remote SHA matches"
+    exit 0
   fi
+
+  # Step 1: ensure dir exists
+  $OTA_SSH "mkdir -p '$DEST_DIR' '$DEST_DIR/_archive'"
+
+  # Step 2: archive existing bundle if present (don't silently overwrite)
+  TS=$(date +%Y-%m-%d-%H%M)
+  EXISTING=$($OTA_SSH "test -f '$REMOTE_PATH' && echo yes || echo no" | tr -d '[:space:]')
+  if [[ "$EXISTING" == "yes" ]]; then
+    ARCHIVED_NAME="${OTA_FILENAME%.raucb}_pre-${TS}.raucb"
+    echo "  Archiving existing bundle to _archive/$ARCHIVED_NAME"
+    $OTA_SSH "mv '$REMOTE_PATH' '$DEST_DIR/_archive/$ARCHIVED_NAME'"
+  fi
+
+  # Step 3: upload bundle
+  echo "  Uploading bundle ($BUNDLE_SIZE)..."
+  $OTA_SCP "$RAUCB" "$OTA_SSH_HOST:$REMOTE_PATH"
+
+  # Step 4: write SHA256 sidecar (filename-only format, devices verify against this)
+  echo "  Writing SHA256 sidecar..."
+  $OTA_SSH "printf '%s  %s\n' '$LOCAL_SHA' '$OTA_FILENAME' > '$REMOTE_SHA_PATH'"
+
+  # Step 5: verify remote SHA matches what we uploaded
+  echo "  Verifying remote SHA..."
+  REMOTE_SHA=$($OTA_SSH "sha256sum '$REMOTE_PATH'" | awk '{print $1}')
+  if [[ "$LOCAL_SHA" != "$REMOTE_SHA" ]]; then
+    echo "  ERROR: SHA mismatch — local=$LOCAL_SHA remote=$REMOTE_SHA"
+    exit 1
+  fi
+  echo "  SHA verified ✓"
+
+  echo ""
+  echo "  Public URL: https://$OTA_PUBLIC_HOST/releases/$VERSION/$OTA_FILENAME"
+  echo "  Sidecar:    https://$OTA_PUBLIC_HOST/releases/$VERSION/$OTA_FILENAME.sha256"
+  echo ""
+  echo "  Devices will auto-update when Supervisor checks stable.json."
+  echo "  stable.json hassos.ihost must be '$VERSION' for update to trigger."
   exit 0
 fi
 
