@@ -5,7 +5,12 @@
 # so that GA backend services (InfluxDB, Loki, OTA) resolve correctly
 # even when NetBird DNS is unavailable.
 #
-# Called by ga-update-hosts.service at boot (after network + overlay).
+# OTA-host gets a dynamic IP picked by ga-resolve-ota (failover):
+#   - If /run/ga-resolve-ota.active exists, use that IP for GA_OTA_HOST
+#   - Otherwise fall back to the first IP in GA_OTA_IPS, or GA_SERVICES_IP
+#
+# Called by ga-update-hosts.service at boot (after ga-resolve-ota), and
+# re-triggered by ga-resolve-ota whenever the active OTA IP changes.
 #
 # Sources (in priority order):
 #   1. /mnt/data/ga-services.conf   (runtime override, persistent)
@@ -14,17 +19,20 @@
 # Writes to:
 #   /mnt/overlay/etc/hosts           (bind-mounted as /etc/hosts by HAOS)
 #
-# The hosts file is rebuilt from scratch each boot to ensure consistency.
-# Non-GA entries (localhost, etc.) are preserved from the base template.
+# IMPORTANT: HAOS bind-mounts /etc/hosts onto /mnt/overlay/etc/hosts.
+# We MUST write the file in-place (truncate + write) — never via rename.
+# `sed -i`, `cp -f`, `mv` all use rename(2) which destroys the bind-mount
+# inode link, leaving /etc/hosts pointing at an orphaned (Links: 0) file.
 
 set -eu
 
 CONF_OVERRIDE="/mnt/data/ga-services.conf"
 CONF_DEFAULT="/etc/ga-services.conf"
 HOSTS_FILE="/mnt/overlay/etc/hosts"
+OTA_ACTIVE_FILE="/run/ga-resolve-ota.active"
 MARKER="# ga-services managed entries (do not edit manually)"
+END_MARKER="# end ga-services"
 
-# Load config (override takes precedence)
 if [ -f "$CONF_OVERRIDE" ]; then
     . "$CONF_OVERRIDE"
     echo "ga-update-hosts: loaded override config from $CONF_OVERRIDE"
@@ -36,46 +44,70 @@ else
     exit 1
 fi
 
-# Validate required variables
 if [ -z "${GA_SERVICES_IP:-}" ]; then
     echo "ga-update-hosts: ERROR — GA_SERVICES_IP not set in config"
     exit 1
 fi
 
-# Ensure hosts file exists with base entries
-if [ ! -f "$HOSTS_FILE" ]; then
-    cat > "$HOSTS_FILE" <<'BASE'
-127.0.0.1	localhost
-::1		localhost ip6-localhost ip6-loopback
-ff02::1		ip6-allnodes
-ff02::2		ip6-allrouters
-BASE
-    echo "ga-update-hosts: created base hosts file"
+OTA_IP=""
+if [ -n "${GA_OTA_HOST:-}" ]; then
+    if [ -f "$OTA_ACTIVE_FILE" ]; then
+        OTA_IP=$(cat "$OTA_ACTIVE_FILE" 2>/dev/null | tr -d '[:space:]')
+        echo "ga-update-hosts: OTA dynamic pick from $OTA_ACTIVE_FILE = ${OTA_IP}"
+    fi
+    if [ -z "$OTA_IP" ] && [ -n "${GA_OTA_IPS:-}" ]; then
+        OTA_IP=$(echo "$GA_OTA_IPS" | awk '{print $1}')
+        echo "ga-update-hosts: OTA fallback to first GA_OTA_IPS entry = ${OTA_IP}"
+    fi
+    if [ -z "$OTA_IP" ]; then
+        OTA_IP="$GA_SERVICES_IP"
+        echo "ga-update-hosts: OTA falling back to GA_SERVICES_IP = ${OTA_IP}"
+    fi
 fi
 
-# Remove old GA-managed entries
-if grep -q "$MARKER" "$HOSTS_FILE" 2>/dev/null; then
-    # Remove from marker to end-marker (or end of file)
-    sed -i "/$MARKER/,/^# end ga-services/d" "$HOSTS_FILE"
-fi
-
-# Build GA entries line
 GA_HOSTS_LINE="${GA_SERVICES_IP}"
 [ -n "${GA_INFLUX_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_INFLUX_HOST}"
 [ -n "${GA_LOKI_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_LOKI_HOST}"
-[ -n "${GA_OTA_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_OTA_HOST}"
 
-# Append GA entries
-{
-    echo ""
-    echo "$MARKER"
-    echo "${GA_HOSTS_LINE}"
-    echo "# end ga-services"
-} >> "$HOSTS_FILE"
+# Build new content in memory, then truncate-write the file in-place.
+# Preserve any existing non-GA content (localhost, hostname pin, etc.).
+PRESERVED=""
+if [ -f "$HOSTS_FILE" ]; then
+    PRESERVED=$(awk -v m="$MARKER" -v e="$END_MARKER" '
+        $0 == m { skip=1; next }
+        $0 == e { skip=0; next }
+        !skip   { print }
+    ' "$HOSTS_FILE")
+else
+    PRESERVED='127.0.0.1	localhost
+::1		localhost ip6-localhost ip6-loopback
+ff02::1		ip6-allnodes
+ff02::2		ip6-allrouters'
+    echo "ga-update-hosts: creating base hosts file"
+fi
+
+# Strip trailing blank lines from preserved section
+PRESERVED=$(printf '%s\n' "$PRESERVED" | awk 'NF{c=NR} {a[NR]=$0} END{for(i=1;i<=c;i++)print a[i]}')
+
+NEW_CONTENT="$PRESERVED
+
+$MARKER
+$GA_HOSTS_LINE"
+if [ -n "${GA_OTA_HOST:-}" ] && [ -n "$OTA_IP" ]; then
+    NEW_CONTENT="$NEW_CONTENT
+$OTA_IP $GA_OTA_HOST"
+fi
+NEW_CONTENT="$NEW_CONTENT
+$END_MARKER"
+
+# In-place truncate-write — preserves bind-mount inode. Do NOT use sed -i,
+# cp -f, or mv (all rename-based) on this file.
+printf '%s\n' "$NEW_CONTENT" > "$HOSTS_FILE"
 
 echo "ga-update-hosts: wrote ${GA_HOSTS_LINE} to $HOSTS_FILE"
+[ -n "${GA_OTA_HOST:-}" ] && [ -n "$OTA_IP" ] && \
+    echo "ga-update-hosts: wrote ${OTA_IP} ${GA_OTA_HOST} to $HOSTS_FILE"
 
-# Verify by resolving one hostname
 if getent hosts "${GA_INFLUX_HOST:-influx.greenautarky.com}" >/dev/null 2>&1; then
     echo "ga-update-hosts: verification OK — ${GA_INFLUX_HOST} resolves"
 else

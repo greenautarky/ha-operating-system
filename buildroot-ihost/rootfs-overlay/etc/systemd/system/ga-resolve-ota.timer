@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic re-probe of GA OTA endpoints (5min cadence)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=ga-resolve-ota.service
+
+[Install]
+WantedBy=timers.target

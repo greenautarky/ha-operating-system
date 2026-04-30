@@ -1,0 +1,15 @@
+[Unit]
+Description=Probe GA OTA endpoints and pick best path (NetBird primary, Public fallback)
+# Must run after network is up but BEFORE ga-update-hosts so the latter can
+# consume /run/ga-resolve-ota.active.
+After=NetworkManager-wait-online.service hassos-overlay.service hassos-config.service
+Before=ga-update-hosts.service
+Wants=NetworkManager-wait-online.service hassos-overlay.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+ExecStart=/usr/sbin/ga-resolve-ota
+
+[Install]
+WantedBy=multi-user.target

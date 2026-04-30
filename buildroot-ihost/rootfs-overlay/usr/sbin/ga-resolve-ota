@@ -1,0 +1,74 @@
+#!/bin/sh
+# ga-resolve-ota — Health-check OTA endpoints, write best-IP to /run
+#
+# Probes each IP in $GA_OTA_IPS (priority order, space-separated) by issuing
+# a TLS+HTTP HEAD request via curl --resolve. Writes the first reachable IP
+# to /run/ga-resolve-ota.active. If the chosen IP changed, re-triggers
+# ga-update-hosts.service so /etc/hosts reflects the new path.
+#
+# Called from:
+#   - ga-resolve-ota.service (boot oneshot, before ga-update-hosts)
+#   - ga-resolve-ota.timer   (every 5min while running)
+#
+# Sources (in priority order):
+#   1. /mnt/data/ga-services.conf   (runtime override)
+#   2. /etc/ga-services.conf        (rootfs default)
+
+set -eu
+
+CONF_OVERRIDE="/mnt/data/ga-services.conf"
+CONF_DEFAULT="/etc/ga-services.conf"
+ACTIVE_FILE="/run/ga-resolve-ota.active"
+PROBE_TIMEOUT=4
+
+if [ -f "$CONF_OVERRIDE" ]; then
+    . "$CONF_OVERRIDE"
+elif [ -f "$CONF_DEFAULT" ]; then
+    . "$CONF_DEFAULT"
+else
+    echo "ga-resolve-ota: ERROR — no ga-services.conf found"
+    exit 1
+fi
+
+if [ -z "${GA_OTA_HOST:-}" ] || [ -z "${GA_OTA_IPS:-}" ]; then
+    echo "ga-resolve-ota: ERROR — GA_OTA_HOST and GA_OTA_IPS must be set"
+    exit 1
+fi
+
+CURRENT=""
+[ -f "$ACTIVE_FILE" ] && CURRENT=$(cat "$ACTIVE_FILE" 2>/dev/null || echo "")
+
+CHOSEN=""
+for ip in $GA_OTA_IPS; do
+    if curl -sk --resolve "${GA_OTA_HOST}:443:${ip}" \
+            --connect-timeout "$PROBE_TIMEOUT" --max-time "$PROBE_TIMEOUT" \
+            -o /dev/null -I "https://${GA_OTA_HOST}/" 2>/dev/null; then
+        CHOSEN="$ip"
+        echo "ga-resolve-ota: ${GA_OTA_HOST} reachable via ${ip}"
+        break
+    else
+        echo "ga-resolve-ota: ${GA_OTA_HOST} NOT reachable via ${ip}"
+    fi
+done
+
+if [ -z "$CHOSEN" ]; then
+    if [ -n "$CURRENT" ]; then
+        echo "ga-resolve-ota: WARN — no path reachable, retaining last-known ${CURRENT}"
+        exit 0
+    fi
+    FIRST_IP=$(echo "$GA_OTA_IPS" | awk '{print $1}')
+    echo "ga-resolve-ota: WARN — no path reachable, defaulting to first ${FIRST_IP}"
+    CHOSEN="$FIRST_IP"
+fi
+
+mkdir -p "$(dirname "$ACTIVE_FILE")"
+if [ "$CHOSEN" != "$CURRENT" ]; then
+    printf '%s\n' "$CHOSEN" > "$ACTIVE_FILE"
+    echo "ga-resolve-ota: active IP changed ${CURRENT:-<none>} -> ${CHOSEN}"
+    if [ -n "$CURRENT" ]; then
+        systemctl restart ga-update-hosts.service 2>/dev/null \
+            || echo "ga-resolve-ota: WARN — could not restart ga-update-hosts"
+    fi
+else
+    echo "ga-resolve-ota: active IP unchanged (${CHOSEN})"
+fi
