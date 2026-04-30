@@ -105,29 +105,44 @@ echo "Pre-flight checks:"
 FAILED=0
 preflight "$SUPERVISOR_REPO"     "$SUPERVISOR_BRANCH"     "ha-supervisor"  || FAILED=1
 preflight "$HAOS_VERSION_REPO"   "$HAOS_VERSION_BRANCH"   "haos-version"   || FAILED=1
+preflight "$HA_OS_REPO"          "master"                 "ha-operating-system" || FAILED=1
 [[ $FAILED -eq 0 ]] || { echo ""; echo "Pre-flight failed — aborting."; exit 1; }
 echo ""
 
 # Read current values to show diff
+META_FILE="$HA_OS_REPO/buildroot-external/meta"
 CUR_SUP=$(grep -E '^SUPERVISOR_VERSION' "$SUPERVISOR_REPO/supervisor/const.py" \
     | sed -E 's/.*"([^"]+)".*/\1/')
 CUR_OS=$(python3 -c "import json; print(json.load(open('$HAOS_VERSION_REPO/stable.json'))['hassos']['ihost'])")
 CUR_SUP_JSON=$(python3 -c "import json; print(json.load(open('$HAOS_VERSION_REPO/stable.json'))['supervisor'])")
+# Reconstruct OS version from meta (VERSION_MAJOR + VERSION_MINOR + VERSION_SUFFIX)
+META_MAJOR=$(grep '^VERSION_MAJOR=' "$META_FILE" | cut -d'"' -f2)
+META_MINOR=$(grep '^VERSION_MINOR=' "$META_FILE" | cut -d'"' -f2)
+META_SUFFIX=$(grep '^VERSION_SUFFIX=' "$META_FILE" | cut -d'"' -f2)
+CUR_META_OS="${META_MAJOR}.${META_MINOR}.${META_SUFFIX}"
+
+# Compute target meta values from requested OS_VERSION (e.g. 16.3.1.2 → MAJOR=16, MINOR=3, SUFFIX=1.2)
+NEW_MAJOR=$(echo "$OS_VERSION" | cut -d. -f1)
+NEW_MINOR=$(echo "$OS_VERSION" | cut -d. -f2)
+NEW_SUFFIX=$(echo "$OS_VERSION" | cut -d. -f3-)
 
 echo "Current values:"
 echo "  ha-supervisor const.py SUPERVISOR_VERSION = $CUR_SUP"
 echo "  haos-version stable.json supervisor       = $CUR_SUP_JSON"
 echo "  haos-version stable.json hassos.ihost     = $CUR_OS"
+echo "  buildroot-external/meta OS-version        = $CUR_META_OS"
 echo ""
 echo "Will change to:"
 echo "  ha-supervisor const.py SUPERVISOR_VERSION = $SUP_VERSION"
 echo "  haos-version stable.json supervisor       = $SUP_VERSION"
 echo "  haos-version stable.json hassos.ihost     = $OS_VERSION"
+echo "  buildroot-external/meta OS-version        = $OS_VERSION (MAJOR=$NEW_MAJOR MINOR=$NEW_MINOR SUFFIX=$NEW_SUFFIX)"
 echo ""
 
 # Skip-checks: bail if nothing changed
-if [[ "$CUR_SUP" == "$SUP_VERSION" && "$CUR_OS" == "$OS_VERSION" && "$CUR_SUP_JSON" == "$SUP_VERSION" ]]; then
-    echo "All three values already match the requested versions — nothing to do."
+if [[ "$CUR_SUP" == "$SUP_VERSION" && "$CUR_OS" == "$OS_VERSION" \
+      && "$CUR_SUP_JSON" == "$SUP_VERSION" && "$CUR_META_OS" == "$OS_VERSION" ]]; then
+    echo "All values already match the requested versions — nothing to do."
     exit 0
 fi
 
@@ -161,6 +176,15 @@ with open(path, 'w') as f:
     f.write('\n')
 PY
 echo "  → supervisor=$SUP_VERSION, hassos.ihost=$OS_VERSION ✓"
+
+echo "Applying buildroot-external/meta..."
+sed -i.bak -E "s|^VERSION_MAJOR=.*|VERSION_MAJOR=\"$NEW_MAJOR\"|" "$META_FILE"
+sed -i.bak -E "s|^VERSION_MINOR=.*|VERSION_MINOR=\"$NEW_MINOR\"|" "$META_FILE"
+sed -i.bak -E "s|^VERSION_SUFFIX=.*|VERSION_SUFFIX=\"$NEW_SUFFIX\"|" "$META_FILE"
+rm "$META_FILE.bak"
+NEW_META=$(grep '^VERSION_MAJOR=' "$META_FILE" | cut -d'"' -f2).$(grep '^VERSION_MINOR=' "$META_FILE" | cut -d'"' -f2).$(grep '^VERSION_SUFFIX=' "$META_FILE" | cut -d'"' -f2)
+[[ "$NEW_META" == "$OS_VERSION" ]] || { echo "  FAIL: meta edit didn't take ($NEW_META)"; exit 1; }
+echo "  → $NEW_META ✓"
 echo ""
 
 # Commit + push
@@ -187,6 +211,8 @@ commit_repo "$SUPERVISOR_REPO"   "supervisor/const.py" \
     "chore: bump SUPERVISOR_VERSION to $SUP_VERSION"   "$SUPERVISOR_BRANCH"
 commit_repo "$HAOS_VERSION_REPO" "stable.json" \
     "release: ihost $OS_VERSION + supervisor $SUP_VERSION" "$HAOS_VERSION_BRANCH"
+commit_repo "$HA_OS_REPO" "buildroot-external/meta" \
+    "chore: bump OS version to $OS_VERSION (buildroot-external/meta)" "master"
 
 echo ""
 echo "============================================="
