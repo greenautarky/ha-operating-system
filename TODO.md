@@ -1,5 +1,19 @@
 # TODO
 
+## Post-Release Migration Required
+
+### After next OS release rollout (≥ v1.3 with ga-resolve-ota)
+- [ ] **Migrate `trusted_proxies` on the 14 hotfix-rollout devices** —
+  ga-tools NetBird IP changed from `100.126.129.116` to `100.126.142.217` on
+  2026-04-30. Devices provisioned before that date have the old IP baked into
+  `/mnt/data/supervisor/homeassistant/configuration.yaml`. Caddy reverse-proxy
+  (`<id>.ki-butler.greenautarky.com`) traffic is no longer recognised as a
+  trusted proxy → real client IP is dropped from HA logs.
+  - Migration script: [`ga-flasher-py/work/dev-steps/53-migrate-trusted-proxies.sh`](https://github.com/greenautarky/ga-flasher-py/blob/main/work/dev-steps/53-migrate-trusted-proxies.sh) (idempotent — re-runs are safe)
+  - First need a fleet-ips-netbird.txt with current 100.126.x peer IPs (NOT the 10.42.x installer-AP list — those addresses are gone)
+  - Run dry-run first: `./53-migrate-trusted-proxies.sh --dry-run --fleet …`
+  - Verify on KIB-SON-00000031 after: `grep -A5 trusted_proxies /mnt/data/supervisor/homeassistant/configuration.yaml`
+
 ## High Priority
 
 ### Dev/Prod Configuration Strategy (documented 2026-04-01)
