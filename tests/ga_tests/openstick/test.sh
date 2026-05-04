@@ -216,6 +216,46 @@ else
   run_test "OS-20" "Priority over Install WiFi" "false"
 fi
 
+# --- OS-21..23: Powersave, MAC, and ARP liveness ---
+#
+# Regression guard: without explicit `wifi.powersave 2`, nmcli writes
+# `powersave=1` (=ignore) to the auto-generated profile, which overrides the
+# system-wide `wifi.powersave=2` from NetworkManager.conf. On RTW88 the AP
+# then queues ARP replies during station sleep windows → ARP cache stays
+# INCOMPLETE → no IP traffic flows.
+
+if [ "$CONN_EXISTS" -gt 0 ]; then
+  PS=$(nmcli -g 802-11-wireless.powersave connection show "$CONN_NAME" 2>/dev/null)
+  # nmcli prints "2" or "disable" depending on version; accept either form.
+  run_test "OS-21" "wifi.powersave is disabled (got: ${PS:-none})" \
+    "case '$PS' in 2|disable) true ;; *) false ;; esac"
+
+  MAC_MODE=$(nmcli -g 802-11-wireless.cloned-mac-address connection show "$CONN_NAME" 2>/dev/null)
+  run_test "OS-22" "wifi.cloned-mac-address is permanent (got: ${MAC_MODE:-none})" \
+    "[ '$MAC_MODE' = 'permanent' ]"
+
+  # End-to-end behavioural check: gateway ARP must resolve to a real MAC.
+  # If powersave is silently re-enabled, this is the symptom users see.
+  GW=$(nmcli -g IP4.GATEWAY connection show "$CONN_NAME" 2>/dev/null)
+  if [ -n "$GW" ]; then
+    ip neigh flush dev wlan0 2>/dev/null
+    ping -I wlan0 -c 1 -W 3 "$GW" >/dev/null 2>&1 || true
+    sleep 1
+    GW_ARP=$(ip neigh show "$GW" dev wlan0 2>/dev/null)
+    run_test "OS-23" "Gateway ARP resolves on wlan0 (no INCOMPLETE)" \
+      "echo '$GW_ARP' | grep -qE 'lladdr [0-9a-f:]+' && ! echo '$GW_ARP' | grep -q INCOMPLETE"
+  else
+    # NM doesn't expose IP4.GATEWAY (e.g. connection just created, DHCP not
+    # yet completed, or interface inactive). Not a regression of the bug
+    # this PR fixes — skip rather than report a false-positive failure.
+    skip_test "OS-23" "Gateway ARP resolves on wlan0" "no IP4.GATEWAY exposed by NM"
+  fi
+else
+  run_test "OS-21" "wifi.powersave disabled" "false"
+  run_test "OS-22" "wifi.cloned-mac-address permanent" "false"
+  run_test "OS-23" "Gateway ARP resolves on wlan0" "false"
+fi
+
 # Don't cleanup — leave persistent connection for NM to manage
 # nmcli connection delete "$CONN_NAME" 2>/dev/null
 

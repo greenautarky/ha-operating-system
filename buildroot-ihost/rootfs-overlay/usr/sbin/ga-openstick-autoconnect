@@ -84,7 +84,16 @@ for SSID in $GA_SSIDS; do
   # Remove old connection if exists
   nmcli connection delete "$CONN_NAME" 2>/dev/null || true
 
-  # Create persistent connection with autoconnect + correct priority
+  # Create persistent connection with autoconnect + correct priority.
+  # wifi.powersave=2 (disable) is REQUIRED — without it nmcli writes the
+  # connection-default value 1 (=ignore), which overrides the system-wide
+  # `wifi.powersave=2` from `[connection-wifi-defaults]` in NetworkManager.conf.
+  # On the Realtek RTW88 chip, leaving the driver-default powersave on causes
+  # the AP to queue ARP replies during sleep windows; the station misses them,
+  # the ARP cache stays INCOMPLETE, and no IP traffic flows even though the
+  # link looks associated. Setting powersave=2 here keeps the OS default in
+  # effect for the auto-generated profile.
+  # wifi.cloned-mac-address=permanent matches the OS default for stable identity.
   if nmcli connection add type wifi ifname wlan0 \
        con-name "$CONN_NAME" \
        ssid "$SSID" \
@@ -93,9 +102,11 @@ for SSID in $GA_SSIDS; do
        connection.autoconnect yes \
        connection.autoconnect-priority 10 \
        ipv4.route-metric 500 \
+       wifi.powersave 2 \
+       wifi.cloned-mac-address permanent \
        2>/dev/null; then
 
-    log "Connection '$CONN_NAME' created for $SSID (autoconnect=yes, priority=10, metric=500)"
+    log "Connection '$CONN_NAME' created for $SSID (autoconnect=yes, priority=10, metric=500, powersave=disabled)"
 
     # Activate now (NM will auto-activate on future boots/scans)
     nmcli connection up "$CONN_NAME" 2>/dev/null || true
