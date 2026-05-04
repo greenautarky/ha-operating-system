@@ -109,6 +109,21 @@ export FORCE_UNSAFE_CONFIGURE=1
 
 unset BR2_EXTERNAL
 
+# Optional runtime overrides passed to every make invocation as command-line
+# arguments. Command-line make-vars beat ANY makefile assignment (=, :=, ?=),
+# so this is the bullet-proof way to inject staged-rollout values without
+# editing source. Currently used for HASSIO_VERSION_URL — pointing the
+# hassio package's stable.json fetch at a non-main branch (e.g.
+# release/v1.X-rebuild) for canary/iteration builds without exposing that
+# value to the fleet via main. See ga-ihost-docs/RELEASE-STRATEGY.md.
+#
+# Why command-line and not env-var alone:
+#   `?=` in hassio.mk would also respect environment, BUT Buildroot's
+#   recursive make + sub-makes can strip or shadow env-vars depending on
+#   MAKEFLAGS state. Command-line args are the only level that always wins.
+declare -a MAKE_OVERRIDES=()
+[ -n "${HASSIO_VERSION_URL:-}" ] && MAKE_OVERRIDES+=("HASSIO_VERSION_URL=${HASSIO_VERSION_URL}")
+
 # Parse arguments: order-independent, e.g. "full dev" and "dev full" are equivalent.
 #   Mode args:  full | partial | kernel | update  (default: full)
 #   Env args:   dev | prod                        (default: dev)
@@ -539,8 +554,8 @@ rebuild_artifacts() {
   # Your tree has no 'images' target; use 'all' after target-finalize
   # Note: post-build.sh (called by target-finalize) writes os-release including
   # GA_BUILD_ID via GA_BUILD_TIMESTAMP and GA_ENV env vars exported by ga_build.sh
-  make -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" target-finalize
-  make -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" -j"$(nproc)" all
+  make -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "${MAKE_OVERRIDES[@]}" target-finalize
+  make -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "${MAKE_OVERRIDES[@]}" -j"$(nproc)" all
 }
 
 # -----------------------------------------------------------------------------
@@ -1792,7 +1807,7 @@ log_build_step "Configure ($MODE mode)" "completed"
 
 # 2) Build full system (including NetBird via Buildroot golang-package)
 log_build_step "Buildroot main build"
-make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" -j"$(nproc)" 2>&1 | tee -a "$BUILD_LOG"
+make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "${MAKE_OVERRIDES[@]}" -j"$(nproc)" 2>&1 | tee -a "$BUILD_LOG"
 
 # 3) Inject build ID and regenerate final artifacts
 log_build_step "Write build ID"
