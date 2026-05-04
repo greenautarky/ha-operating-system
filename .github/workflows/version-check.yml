@@ -3,9 +3,23 @@ name: Version Chain Check
 on:
   push:
     branches: [master]
+    # Run on any source change that could break the version chain or build
+    # invariants. The earlier path-list (only hassio/** + check-images.sh)
+    # missed openstick / wifi / kernel changes, ga_build.sh changes (where
+    # MAKE_OVERRIDES lives), new test additions, and workflow self-edits.
     paths:
-      - 'buildroot-external/package/hassio/**'
-      - 'scripts/check-images.sh'
+      - 'buildroot-external/**'
+      - 'buildroot-ihost/**'
+      - 'scripts/**'
+      - 'tests/ga_tests/**'
+      - '.github/workflows/version-check.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'buildroot-external/**'
+      - 'buildroot-ihost/**'
+      - 'scripts/**'
+      - 'tests/ga_tests/**'
   workflow_dispatch:
 
 jobs:

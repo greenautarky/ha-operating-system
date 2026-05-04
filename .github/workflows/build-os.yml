@@ -36,14 +36,39 @@ jobs:
     steps:
       - name: Clean workspace
         run: |
-          # Previous builds run as root inside Docker, leaving root-owned files
-          # that actions/checkout cannot delete. Nuke everything including ..dotfiles.
-          sudo find "${GITHUB_WORKSPACE}" -mindepth 1 -delete 2>/dev/null || true
+          # Previous builds run as root inside Docker and leave root-owned
+          # files (and root-owned read-only files like ga_output/..config.tmp
+          # from buildroot's atomic-write pattern). actions/checkout's own
+          # `clean: true` hits EACCES on those and aborts the whole job.
+          # We do an aggressive sudo-based pre-clean here, then disable
+          # checkout's own clean below.
+          set -e
+          if [ -n "$(ls -A "${GITHUB_WORKSPACE}" 2>/dev/null)" ]; then
+            # Ensure everything is writable + owned by the runner user before deletion
+            sudo chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}" 2>/dev/null || true
+            sudo chmod -R u+rwX "${GITHUB_WORKSPACE}" 2>/dev/null || true
+            # Bulletproof remove: rm -rf doesn't care about read-only or weird filenames
+            sudo rm -rf "${GITHUB_WORKSPACE:?}/." 2>/dev/null || true
+            # Belt-and-braces: catch dotfiles + double-dot temps (..config.tmp) that
+            # globs sometimes miss
+            sudo find "${GITHUB_WORKSPACE}" -mindepth 1 -delete 2>/dev/null || true
+          fi
+          # Verify workspace is empty — fail loud if not
+          if [ -n "$(ls -A "${GITHUB_WORKSPACE}" 2>/dev/null)" ]; then
+            echo "::error::Workspace cleanup failed; leftover files:"
+            sudo ls -laR "${GITHUB_WORKSPACE}" | head -50
+            exit 1
+          fi
+          echo "Workspace clean."
 
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: true
+          # We handle cleanup in 'Clean workspace' above. Disabling checkout's
+          # own clean prevents EACCES-on-..config.tmp loops when our pre-clean
+          # missed something.
+          clean: false
 
       - name: Prepare secrets
         run: |
