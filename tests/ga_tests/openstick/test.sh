@@ -74,52 +74,53 @@ run_test "OS-04" "WiFi scan completed" \
 run_test "OS-05" "OpenStick GA-* SSID detected in range" \
   "[ -n '$GA_SSIDS' ]"
 
+# OS-06..09 only make sense when an actual GA-* SSID is in scan range.
+# OS-10..23 (static checks + persistent-connection-state checks) can still
+# run on a device that doesn't currently see an OpenStick — useful for
+# fleet validation where the OpenStick may be powered off or out of range
+# at test-time. Don't early-exit here; let the rest of the suite flow.
 if [ -z "$GA_SSIDS" ]; then
-  run_test "OS-06" "SSID format valid (GA-XXXX)" "false"
-  run_test "OS-07" "PSK derivation for detected SSID" "false"
-  run_test "OS-08" "WiFi connection to OpenStick" "false"
-  run_test "OS-09" "Internet via OpenStick" "false"
-  run_test "OS-10" "Auto-connect service" "false"
-  run_test "OS-11" "Auto-connect timer" "false"
-  suite_end
-  exit $?
-fi
-
-TARGET_SSID=$(echo "$GA_SSIDS" | head -1)
-
-# OS-05 already passed above
-
-run_test "OS-06" "SSID format valid (GA-XXXX)" \
-  "echo '$TARGET_SSID' | grep -qE '^GA-[0-9]{4}$'"
-
-# Derive PSK
-SECRET=$(cat "$KEY_FILE" | tr -d '\n')
-DERIVED_PSK=$(derive_psk "$SECRET" "$TARGET_SSID")
-
-run_test "OS-07" "PSK derived for $TARGET_SSID (${#DERIVED_PSK} chars)" \
-  "[ ${#DERIVED_PSK} -eq 16 ]"
-
-# Manual connection test
-nmcli connection delete "openstick-test" 2>/dev/null
-
-CONNECT_OK=false
-if nmcli dev wifi connect "$TARGET_SSID" password "$DERIVED_PSK" \
-     name "openstick-test" ifname wlan0 2>/dev/null; then
-  CONNECT_OK=true
-fi
-
-run_test "OS-08" "WiFi connection to $TARGET_SSID" \
-  "$CONNECT_OK"
-
-if $CONNECT_OK; then
-  sleep 5
-  run_test "OS-09" "Internet reachable via OpenStick" \
-    "curl -sf --connect-timeout 10 http://checkonline.greenautarky.com/online.txt 2>/dev/null | grep -q 'NetworkManager is online'"
+  skip_test "OS-06" "SSID format valid (GA-XXXX)" "no GA-* SSID in scan range"
+  skip_test "OS-07" "PSK derivation for detected SSID" "no GA-* SSID in scan range"
+  skip_test "OS-08" "WiFi connection to OpenStick" "no GA-* SSID in scan range"
+  skip_test "OS-09" "Internet via OpenStick" "no GA-* SSID in scan range"
 else
-  run_test "OS-09" "Internet via OpenStick" "false"
-fi
+  TARGET_SSID=$(echo "$GA_SSIDS" | head -1)
 
-nmcli connection delete "openstick-test" 2>/dev/null
+  # OS-05 already passed above
+
+  run_test "OS-06" "SSID format valid (GA-XXXX)" \
+    "echo '$TARGET_SSID' | grep -qE '^GA-[0-9]{4}$'"
+
+  # Derive PSK
+  SECRET=$(cat "$KEY_FILE" | tr -d '\n')
+  DERIVED_PSK=$(derive_psk "$SECRET" "$TARGET_SSID")
+
+  run_test "OS-07" "PSK derived for $TARGET_SSID (${#DERIVED_PSK} chars)" \
+    "[ ${#DERIVED_PSK} -eq 16 ]"
+
+  # Manual connection test
+  nmcli connection delete "openstick-test" 2>/dev/null
+
+  CONNECT_OK=false
+  if nmcli dev wifi connect "$TARGET_SSID" password "$DERIVED_PSK" \
+       name "openstick-test" ifname wlan0 2>/dev/null; then
+    CONNECT_OK=true
+  fi
+
+  run_test "OS-08" "WiFi connection to $TARGET_SSID" \
+    "$CONNECT_OK"
+
+  if $CONNECT_OK; then
+    sleep 5
+    run_test "OS-09" "Internet reachable via OpenStick" \
+      "curl -sf --connect-timeout 10 http://checkonline.greenautarky.com/online.txt 2>/dev/null | grep -q 'NetworkManager is online'"
+  else
+    run_test "OS-09" "Internet via OpenStick" "false"
+  fi
+
+  nmcli connection delete "openstick-test" 2>/dev/null
+fi
 
 # --- OS-10..12: Auto-connect service + timer ---
 
@@ -251,9 +252,12 @@ if [ "$CONN_EXISTS" -gt 0 ]; then
     skip_test "OS-23" "Gateway ARP resolves on wlan0" "no IP4.GATEWAY exposed by NM"
   fi
 else
-  run_test "OS-21" "wifi.powersave disabled" "false"
-  run_test "OS-22" "wifi.cloned-mac-address permanent" "false"
-  run_test "OS-23" "Gateway ARP resolves on wlan0" "false"
+  # No openstick-auto connection on this device — can't validate the
+  # powersave/MAC properties of a connection that doesn't exist. Skip
+  # rather than mark FAIL so fleet test reports stay informative.
+  skip_test "OS-21" "wifi.powersave disabled" "no openstick-auto connection"
+  skip_test "OS-22" "wifi.cloned-mac-address permanent" "no openstick-auto connection"
+  skip_test "OS-23" "Gateway ARP resolves on wlan0" "no openstick-auto connection"
 fi
 
 # Don't cleanup — leave persistent connection for NM to manage
