@@ -38,14 +38,28 @@ jobs:
 
       - name: Run source-level build tests
         run: |
-          # Run the subset of tests that don't need build output
-          # (SRC-* and VER-* tests only)
+          # The runner needs an OUT arg to derive SRC=$OUT/.. — without it
+          # the script exits at line 9 (${1:?Usage:...}) before any test
+          # runs. We pass a dummy ga_output dir inside the workspace so
+          # SRC=$GITHUB_WORKSPACE for source-level checks; build-output
+          # checks (BLD-*, DT-*, REG-*) skip because the dir is empty.
           export REPO_ROOT="${GITHUB_WORKSPACE}"
           export FRONTEND_ROOT=""  # skip frontend source checks in CI
-          bash tests/ga_tests/run_build_tests.sh 2>&1 | tee test-output.txt || true
-          # Check for FAIL lines (excluding expected skips for build-only tests)
-          if grep -E '^\s*FAIL' test-output.txt | grep -v 'BLD-\|REG-\|DT-'; then
-            echo "::error::Source-level tests failed"
+          mkdir -p "${GITHUB_WORKSPACE}/ga_output"
+          bash tests/ga_tests/run_build_tests.sh "${GITHUB_WORKSPACE}/ga_output" \
+            2>&1 | tee test-output.txt
+          rc=${PIPESTATUS[0]}
+          # Source-level FAILs are blocking; build-only / device-tree FAILs
+          # are expected to be skipped (they need the actual build output).
+          src_fails=$(grep -E '^\s*FAIL' test-output.txt | grep -v 'BLD-\|REG-\|DT-' || true)
+          if [ -n "$src_fails" ]; then
+            echo "::error::Source-level tests failed:"
+            echo "$src_fails"
             exit 1
           fi
-          echo "Source-level tests passed (build-only tests skipped as expected)"
+          if [ "$rc" -ne 0 ]; then
+            # Script exited non-zero but no source-level FAILs in our filter:
+            # likely BLD-/DT-/REG- failures (expected, no build output) — OK.
+            echo "Note: script exited rc=$rc, but no source-level failures detected (build-only tests skipped as expected)."
+          fi
+          echo "Source-level tests passed."

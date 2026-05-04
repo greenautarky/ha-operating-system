@@ -950,21 +950,21 @@ if [[ -n "$SRC" ]]; then
       _pass "SRC-02: hassio.mk has no stale upstream refs"
     fi
 
-    # SRC-03: hassio.mk uses ?= for HASSIO_VERSION_URL so staged-rollout
+    # SRC-05: hassio.mk uses ?= for HASSIO_VERSION_URL so staged-rollout
     # builds can pass an alternate URL via env-var. Reverting to `=` would
     # silently make those builds use main's stable.json, baking the wrong
     # supervisor version into the bundle (caught in build #8 on 2026-05-04).
     # See ga-ihost-docs/RELEASE-STRATEGY.md and INCIDENTS/2026-05-04-*.
     if grep -qE '^HASSIO_VERSION_URL[[:space:]]+\?=' "$HASSIO_MK"; then
-      _pass "SRC-03: hassio.mk HASSIO_VERSION_URL uses ?= (env-var override compatible)"
+      _pass "SRC-05: hassio.mk HASSIO_VERSION_URL uses ?= (env-var override compatible)"
     else
-      _fail "SRC-03: hassio.mk HASSIO_VERSION_URL not conditional (?=) — staged-rollout env-var override breaks"
+      _fail "SRC-05: hassio.mk HASSIO_VERSION_URL not conditional (?=) — staged-rollout env-var override breaks"
     fi
   else
-    _skip "SRC-01/02/03" "hassio.mk not found"
+    _skip "SRC-01/02/05" "hassio.mk not found"
   fi
 
-  # SRC-04: ga_build.sh threads MAKE_OVERRIDES into make invocations so
+  # SRC-06: ga_build.sh threads MAKE_OVERRIDES into make invocations so
   # command-line overrides actually reach the package-level Makefile.
   # Without this, env-var-only overrides get stripped by Buildroot's
   # recursive make + sub-makes.
@@ -972,12 +972,12 @@ if [[ -n "$SRC" ]]; then
   if [[ -f "$GA_BUILD_SH" ]]; then
     if grep -q 'declare -a MAKE_OVERRIDES' "$GA_BUILD_SH" \
        && grep -q '"\${MAKE_OVERRIDES\[@\]}"' "$GA_BUILD_SH"; then
-      _pass "SRC-04: ga_build.sh threads MAKE_OVERRIDES into make invocations"
+      _pass "SRC-06: ga_build.sh threads MAKE_OVERRIDES into make invocations"
     else
-      _fail "SRC-04: ga_build.sh missing MAKE_OVERRIDES — staged-rollout env-var override won't propagate"
+      _fail "SRC-06: ga_build.sh missing MAKE_OVERRIDES — staged-rollout env-var override won't propagate"
     fi
   else
-    _skip "SRC-04" "ga_build.sh not found"
+    _skip "SRC-06" "ga_build.sh not found"
   fi
 
   # SRC-03: dind-import-containers.sh tags greenautarky
