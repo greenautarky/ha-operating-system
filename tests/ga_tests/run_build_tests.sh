@@ -1134,8 +1134,18 @@ if [[ -n "$SRC" ]]; then
     grep -q 'admin-login' "$PANEL_TS" 2>/dev/null \
       && _pass "SRC-12e: panel renders admin-login link" \
       || _fail "SRC-12e: panel missing admin-login link — admins cannot bypass GA setup"
+
+    # SRC-12f: Build-id rendered as a clickable anchor (URL-change escape hatch)
+    grep -qE '<a class="build-id"[^>]*href=' "$PANEL_TS" 2>/dev/null \
+      && _pass "SRC-12f: build-id is a clickable <a> (URL-change admin escape hatch)" \
+      || _fail "SRC-12f: build-id is not clickable — admin URL-change escape hatch missing"
+
+    # SRC-12g: Build-id anchor points to /admin (server-side admin shortcut)
+    grep -qE '<a class="build-id"[^>]*href="/admin"' "$PANEL_TS" 2>/dev/null \
+      && _pass "SRC-12g: build-id anchor links to /admin (server-resolved bypass)" \
+      || _fail "SRC-12g: build-id anchor does not link to /admin — server-side bypass not wired"
   else
-    _skip "SRC-12a..e" "frontend repo not found"
+    _skip "SRC-12a..g" "frontend repo not found"
   fi
 
   # SRC-13: Frontend version is CI-managed (pyproject.toml must use 0.0.0.dev0 placeholder)
@@ -1203,8 +1213,32 @@ if [[ -n "$SRC" ]]; then
     grep -q 'pin_locked_until' "${CORE_ROOT}/homeassistant/components/greenautarky_onboarding/http.py" 2>/dev/null \
       && _pass "SRC-14e: Core has PIN rate limiting" \
       || _fail "SRC-14e: Core missing PIN rate limiting"
+
+    # BLD-ADMIN-01: Core has GAAdminBypassView (the /admin endpoint)
+    GA_HTTP="${CORE_ROOT}/homeassistant/components/greenautarky_onboarding/http.py"
+    grep -q 'class GAAdminBypassView' "$GA_HTTP" 2>/dev/null \
+      && _pass "BLD-ADMIN-01: GAAdminBypassView class exists in core" \
+      || _fail "BLD-ADMIN-01: GAAdminBypassView missing — /admin endpoint not implemented"
+
+    # BLD-ADMIN-02: /admin URL is bound to the bypass view
+    grep -A 30 'class GAAdminBypassView' "$GA_HTTP" 2>/dev/null \
+      | grep -qE '^\s*url\s*=\s*"/admin"' \
+      && _pass "BLD-ADMIN-02: GAAdminBypassView is bound to /admin" \
+      || _fail "BLD-ADMIN-02: GAAdminBypassView is NOT bound to /admin"
+
+    # BLD-ADMIN-03: redirect_uri uses /config (not /lovelace) — avoids GA panel auto-default
+    grep -A 30 'class GAAdminBypassView' "$GA_HTTP" 2>/dev/null \
+      | grep -qE 'redirect_uri.*\{origin\}/config' \
+      && _pass "BLD-ADMIN-03: GAAdminBypassView uses /config (not /lovelace) so admin lands in HA Settings" \
+      || _fail "BLD-ADMIN-03: GAAdminBypassView redirect_uri does not point to /config — admin lands back on GA panel"
+
+    # BLD-ADMIN-04: GAAdminBypassView is registered in __init__.py (otherwise the URL is dead)
+    GA_INIT="${CORE_ROOT}/homeassistant/components/greenautarky_onboarding/__init__.py"
+    grep -q 'GAAdminBypassView' "$GA_INIT" 2>/dev/null \
+      && _pass "BLD-ADMIN-04: GAAdminBypassView is registered in greenautarky_onboarding/__init__.py" \
+      || _fail "BLD-ADMIN-04: GAAdminBypassView is NOT registered — /admin will return 404"
   else
-    _skip "SRC-14d..e" "ha-core repo not found"
+    _skip "SRC-14d..e + BLD-ADMIN-01..04" "ha-core repo not found"
   fi
 
   # SRC-15: QR code PIN auto-injection (frontend)
