@@ -1095,11 +1095,34 @@ if [[ -n "$SRC" ]]; then
       grep -q 'greenautarky-setup.html' "$CORE_WF" 2>/dev/null \
         && _pass "SRC-11: Core CI workflow verifies greenautarky-setup.html in wheel" \
         || _fail "SRC-11: Core CI workflow does NOT verify greenautarky-setup.html in wheel"
+
+      # BLD-VER-CONSISTENCY: HA_VERSION env in build-ga-core.yml matches the
+      # Core version selected at OS build time (from version.json fetched via
+      # stable.json on whichever release branch the build was pointed at).
+      # Catches a desync between the two sources of truth — e.g. someone
+      # bumps stable.json on release/v1.X-rebuild but forgets to bump
+      # HA_VERSION in build-ga-core.yml. The released image would then carry
+      # the wrong io.hass.version label, supervisor would loop.
+      if [[ -f "$VER_JSON" ]]; then
+        # Two-step extract: find the HA_VERSION line, then pull the version
+        # number out of it (greedy regex on a one-liner eats the leading "20").
+        HA_VER_ENV=$(grep -E '^[[:space:]]*HA_VERSION:' "$CORE_WF" 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?')
+        VER_TINKER=$(jq -r '.homeassistant.tinker // "unknown"' "$VER_JSON" 2>/dev/null)
+        if [[ -z "$HA_VER_ENV" ]]; then
+          _skip "BLD-VER-CONSISTENCY" "could not parse HA_VERSION env from build-ga-core.yml"
+        elif [[ "$HA_VER_ENV" = "$VER_TINKER" ]]; then
+          _pass "BLD-VER-CONSISTENCY: HA_VERSION ($HA_VER_ENV) in ha-core/build-ga-core.yml matches version.json (homeassistant.tinker=$VER_TINKER)"
+        else
+          _fail "BLD-VER-CONSISTENCY: HA_VERSION ($HA_VER_ENV) in ha-core/build-ga-core.yml does NOT match version.json (homeassistant.tinker=$VER_TINKER) — bump one to match the other"
+        fi
+      else
+        _skip "BLD-VER-CONSISTENCY" "version.json not yet available (build hasn't reached hassio.mk CONFIGURE_CMDS)"
+      fi
     else
-      _skip "SRC-11" "build-ga-core.yml not found"
+      _skip "SRC-11 + BLD-VER-CONSISTENCY" "build-ga-core.yml not found"
     fi
   else
-    _skip "SRC-11" "ha-core repo not found"
+    _skip "SRC-11 + BLD-VER-CONSISTENCY" "ha-core repo not found"
   fi
 
   # SRC-12: authorize.ts app-flow redirect (GA onboarding intercept)
