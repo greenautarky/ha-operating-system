@@ -43,6 +43,7 @@ SUPERVISOR_VERSION=""
 CORE_VERSION=""
 HAOS_BRANCH=""
 DO_COMMIT=0
+DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -51,6 +52,7 @@ while [[ $# -gt 0 ]]; do
         --core)       CORE_VERSION="$2"; shift 2 ;;
         --branch)     HAOS_BRANCH="$2"; shift 2 ;;
         --commit)     DO_COMMIT=1; shift ;;
+        --dry-run)    DRY_RUN=1; shift ;;
         -h|--help)
             sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
             exit 0
@@ -61,6 +63,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ $DRY_RUN -eq 1 && $DO_COMMIT -eq 1 ]]; then
+    echo "ERROR: --dry-run and --commit are mutually exclusive" >&2
+    exit 2
+fi
 
 if [[ -z "$OS_VERSION" || -z "$SUPERVISOR_VERSION" || -z "$CORE_VERSION" || -z "$HAOS_BRANCH" ]]; then
     cat >&2 <<USAGE
@@ -108,7 +115,7 @@ Sibling repos:
   ha-core      = ${HA_CORE_DIR}
   haos-version = ${HAOS_VERSION_DIR}
 
-Commit per-repo:    $([ $DO_COMMIT = 1 ] && echo "yes" || echo "${YELLOW}no${NC} (use --commit to commit)")
+Mode:                $([ $DRY_RUN = 1 ] && echo "${YELLOW}DRY-RUN${NC} (no edits, just preview)" || ([ $DO_COMMIT = 1 ] && echo "${GREEN}APPLY + COMMIT${NC}" || echo "${YELLOW}APPLY (no commit)${NC} — files modified, use --commit to commit"))
 Push:                ${RED}NEVER${NC} (push is your job — review the diffs)
 
 INFO
@@ -128,6 +135,8 @@ CURRENT_OS_SUFFIX=$(grep -oE 'VERSION_SUFFIX="[^"]*"' "$META" | cut -d'"' -f2 ||
 
 if [[ "$CURRENT_OS_SUFFIX" = "$OS_SUFFIX" ]]; then
     echo "  already at VERSION_SUFFIX=\"$OS_SUFFIX\" — nothing to do"
+elif [[ $DRY_RUN -eq 1 ]]; then
+    echo "  ${YELLOW}DRY-RUN${NC}: would set VERSION_SUFFIX: \"${CURRENT_OS_SUFFIX}\" → \"${OS_SUFFIX}\""
 else
     echo "  VERSION_SUFFIX: \"${CURRENT_OS_SUFFIX}\" → \"${OS_SUFFIX}\""
     sed -i "s/VERSION_SUFFIX=\"${CURRENT_OS_SUFFIX}\"/VERSION_SUFFIX=\"${OS_SUFFIX}\"/" "$META"
@@ -150,6 +159,8 @@ if [[ -z "$CURRENT_HA_VER" ]]; then
 fi
 if [[ "$CURRENT_HA_VER" = "$CORE_VERSION" ]]; then
     echo "  already at HA_VERSION: ${CORE_VERSION} — nothing to do"
+elif [[ $DRY_RUN -eq 1 ]]; then
+    echo "  ${YELLOW}DRY-RUN${NC}: would set HA_VERSION: ${CURRENT_HA_VER} → ${CORE_VERSION}"
 else
     echo "  HA_VERSION: ${CURRENT_HA_VER} → ${CORE_VERSION}"
     # Quoted or unquoted env: line (preserve quoting)
@@ -162,23 +173,27 @@ fi
 # --- 3. haos-version: stable.json on the release branch ---------------------
 banner "3. haos-version → stable.json on ${HAOS_BRANCH}"
 
-git -C "$HAOS_VERSION_DIR" fetch origin --quiet || true
-if git -C "$HAOS_VERSION_DIR" rev-parse --verify "$HAOS_BRANCH" >/dev/null 2>&1; then
-    git -C "$HAOS_VERSION_DIR" checkout "$HAOS_BRANCH"
-elif git -C "$HAOS_VERSION_DIR" rev-parse --verify "origin/$HAOS_BRANCH" >/dev/null 2>&1; then
-    git -C "$HAOS_VERSION_DIR" checkout -b "$HAOS_BRANCH" "origin/$HAOS_BRANCH"
+if [[ $DRY_RUN -eq 1 ]]; then
+    echo "  ${YELLOW}DRY-RUN${NC}: would checkout '${HAOS_BRANCH}' (creating from main if needed)"
+    echo "  ${YELLOW}DRY-RUN${NC}: would set stable.json supervisor=${SUPERVISOR_VERSION}, hassos.ihost=${OS_VERSION}, all homeassistant.* boards=${CORE_VERSION}"
 else
-    echo "  ${YELLOW}branch '${HAOS_BRANCH}' does not exist locally or on origin${NC}"
-    echo "  creating from current main..."
-    git -C "$HAOS_VERSION_DIR" checkout main
-    git -C "$HAOS_VERSION_DIR" pull --ff-only --quiet || true
-    git -C "$HAOS_VERSION_DIR" checkout -b "$HAOS_BRANCH"
-fi
+    git -C "$HAOS_VERSION_DIR" fetch origin --quiet || true
+    if git -C "$HAOS_VERSION_DIR" rev-parse --verify "$HAOS_BRANCH" >/dev/null 2>&1; then
+        git -C "$HAOS_VERSION_DIR" checkout "$HAOS_BRANCH"
+    elif git -C "$HAOS_VERSION_DIR" rev-parse --verify "origin/$HAOS_BRANCH" >/dev/null 2>&1; then
+        git -C "$HAOS_VERSION_DIR" checkout -b "$HAOS_BRANCH" "origin/$HAOS_BRANCH"
+    else
+        echo "  ${YELLOW}branch '${HAOS_BRANCH}' does not exist locally or on origin${NC}"
+        echo "  creating from current main..."
+        git -C "$HAOS_VERSION_DIR" checkout main
+        git -C "$HAOS_VERSION_DIR" pull --ff-only --quiet || true
+        git -C "$HAOS_VERSION_DIR" checkout -b "$HAOS_BRANCH"
+    fi
 
-STABLE_JSON="${HAOS_VERSION_DIR}/stable.json"
-[[ -f "$STABLE_JSON" ]] || { echo "${RED}ERROR:${NC} stable.json not found at $STABLE_JSON"; exit 5; }
+    STABLE_JSON="${HAOS_VERSION_DIR}/stable.json"
+    [[ -f "$STABLE_JSON" ]] || { echo "${RED}ERROR:${NC} stable.json not found at $STABLE_JSON"; exit 5; }
 
-python3 - "$STABLE_JSON" "$SUPERVISOR_VERSION" "$CORE_VERSION" "$OS_VERSION" <<'PY'
+    python3 - "$STABLE_JSON" "$SUPERVISOR_VERSION" "$CORE_VERSION" "$OS_VERSION" <<'PY'
 import json, sys, pathlib
 path, sup_v, core_v, os_v = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 p = pathlib.Path(path)
@@ -195,7 +210,8 @@ d["hassos"] = hassos
 p.write_text(json.dumps(d, indent=2) + "\n")
 PY
 
-git -C "$HAOS_VERSION_DIR" --no-pager diff -- stable.json | sed 's/^/    /' | head -60
+    git -C "$HAOS_VERSION_DIR" --no-pager diff -- stable.json | sed 's/^/    /' | head -60
+fi
 
 # --- commit if asked --------------------------------------------------------
 if [[ $DO_COMMIT = 1 ]]; then
@@ -234,6 +250,12 @@ After CI builds the staging tag, promote with:
     -f tag=${CORE_VERSION}
 
 NEXT
+elif [[ $DRY_RUN -eq 1 ]]; then
+    cat <<REVIEW
+
+${YELLOW}DRY-RUN — nothing changed.${NC} Re-run without --dry-run (or with --commit) to apply.
+
+REVIEW
 else
     cat <<REVIEW
 

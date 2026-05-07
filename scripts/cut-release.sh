@@ -55,6 +55,7 @@ BUNDLE=""
 HAOS_BRANCH=""
 DO_COMMIT=0
 DO_TAG=0
+DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -65,6 +66,7 @@ while [[ $# -gt 0 ]]; do
         --branch)     HAOS_BRANCH="$2"; shift 2 ;;
         --commit)     DO_COMMIT=1; shift ;;
         --tag)        DO_TAG=1; shift ;;
+        --dry-run)    DRY_RUN=1; shift ;;
         -h|--help)
             sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
             exit 0
@@ -75,6 +77,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ $DRY_RUN -eq 1 && ($DO_COMMIT -eq 1 || $DO_TAG -eq 1) ]]; then
+    echo "ERROR: --dry-run is mutually exclusive with --commit and --tag" >&2
+    exit 2
+fi
 
 if [[ -z "$OS_VERSION" || -z "$SUPERVISOR_VERSION" || -z "$CORE_VERSION" || -z "$BUNDLE" || -z "$HAOS_BRANCH" ]]; then
     cat >&2 <<USAGE
@@ -125,6 +132,7 @@ BUMP_ARGS=(
     --branch "$HAOS_BRANCH"
 )
 [[ $DO_COMMIT = 1 ]] && BUMP_ARGS+=(--commit)
+[[ $DRY_RUN = 1 ]]   && BUMP_ARGS+=(--dry-run)
 
 "${SCRIPT_DIR}/bump-release-version.sh" "${BUMP_ARGS[@]}"
 
@@ -164,11 +172,13 @@ PINS
 banner "Step 3 — render releases/${BUNDLE}/manifest.yaml in ${RELEASES_DIR}"
 
 REL_OUT_DIR="${RELEASES_DIR}/releases/${BUNDLE}"
-mkdir -p "$REL_OUT_DIR"
 
-# Strip frontend pyversion from ha-core (read it back from build-ga-core.yml
-# label by parsing the most-recent CI run? — simpler for now: leave as TBD,
-# user fills in after CI completes).
+if [[ $DRY_RUN -eq 1 ]]; then
+    echo "  ${YELLOW}DRY-RUN${NC}: would write ${REL_OUT_DIR}/manifest.yaml"
+    echo "             (with bundle=${BUNDLE}, OS=${OS_VERSION}, Sup=${SUPERVISOR_VERSION}, Core=${CORE_VERSION}, source_pins=current HEADs)"
+else
+
+mkdir -p "$REL_OUT_DIR"
 
 cat > "${REL_OUT_DIR}/manifest.yaml" <<EOF
 \$schema: "../../schemas/manifest.schema.json"
@@ -254,8 +264,11 @@ echo "  - released_at / released_by (at Stage 4 promote)"
 echo "  - gates (per-test results + sign-off entries)"
 echo "  - rollout.cohorts.pilot.devices (at Stage 3)"
 
+fi  # end of: if [[ $DRY_RUN -eq 1 ]] / else
+
 # --- 4. Run validator on the new manifest ----------------------------------
 
+if [[ $DRY_RUN -eq 0 ]]; then
 banner "Step 4 — validate manifest"
 
 if [[ -x "${RELEASES_DIR}/tools/validate.py" ]]; then
@@ -268,6 +281,8 @@ if [[ -x "${RELEASES_DIR}/tools/validate.py" ]]; then
 else
     echo "${YELLOW}validate.py not found at ${RELEASES_DIR}/tools/validate.py — skipping validation${NC}"
 fi
+
+fi  # end of: if [[ $DRY_RUN -eq 0 ]] (Step 4)
 
 # --- 5. Optionally create release tag in each repo --------------------------
 
@@ -317,6 +332,20 @@ fi
 
 banner "DONE"
 
+if [[ $DRY_RUN -eq 1 ]]; then
+cat <<DONE
+${YELLOW}DRY-RUN — nothing changed.${NC}
+
+Would have:
+  Bundle:    ${BUNDLE}
+  OS:        ${OS_VERSION}
+  Sup:       ${SUPERVISOR_VERSION}
+  Core:      ${CORE_VERSION}
+  Manifest:  ${REL_OUT_DIR}/manifest.yaml (would be written, not yet)
+
+Re-run without --dry-run (or with --commit) to apply.
+DONE
+else
 cat <<DONE
 Bundle:    ${BUNDLE}
 OS:        ${OS_VERSION}
@@ -341,3 +370,4 @@ Update manifest TBD fields (frontend_pyversion, digests, gates), then validate:
 
 Stage 4 fleet promote when ready: merge ${HAOS_BRANCH} → main on haos-version.
 DONE
+fi
