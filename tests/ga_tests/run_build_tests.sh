@@ -1118,11 +1118,114 @@ if [[ -n "$SRC" ]]; then
       else
         _skip "BLD-VER-CONSISTENCY" "version.json not yet available (build hasn't reached hassio.mk CONFIGURE_CMDS)"
       fi
+
+      # BLD-RELEASE-MANIFEST: extends BLD-VER-CONSISTENCY by adding the
+      # release manifest in greenautarky/releases as a third source of
+      # truth. The cut-release.sh flow promises that, for the v1.X bundle
+      # the operator is cutting toward:
+      #   manifest.versions.core       == HA_VERSION (build-ga-core.yml)
+      #                                == version.json.homeassistant.tinker
+      #   manifest.versions.supervisor == version.json.supervisor
+      #   manifest.versions.os         endswith buildroot-external/meta
+      #                                          VERSION_SUFFIX
+      # We pick the manifest by ``versions.core == HA_VER_ENV`` — that's
+      # what the operator just bumped, regardless of the OS / supervisor
+      # state. Falls back to the newest in-development manifest if no
+      # core-match exists (e.g. someone bumped HA_VERSION but didn't run
+      # cut-release.sh yet — that itself is the kind of drift this test
+      # exists to catch).
+      RELEASES_DIR=""
+      for r_dir in "${SRC}/../releases" "/home/user/git/releases"; do
+        [[ -d "$r_dir/releases" ]] && RELEASES_DIR="$r_dir" && break
+      done
+      if [[ -z "$RELEASES_DIR" ]]; then
+        _skip "BLD-RELEASE-MANIFEST" "greenautarky/releases checkout not found"
+      elif [[ ! -f "$VER_JSON" ]]; then
+        _skip "BLD-RELEASE-MANIFEST" "version.json not yet available"
+      elif [[ -z "$HA_VER_ENV" ]]; then
+        _skip "BLD-RELEASE-MANIFEST" "could not parse HA_VERSION env (BLD-VER-CONSISTENCY already failed)"
+      elif ! command -v python3 >/dev/null 2>&1; then
+        _skip "BLD-RELEASE-MANIFEST" "python3 not available for YAML parsing"
+      else
+        VER_SUP_BUILT="$(jq -r '.supervisor // "unknown"' "$VER_JSON" 2>/dev/null)"
+        META_SUFFIX="$(grep -oE 'VERSION_SUFFIX="[^"]*"' "${SRC}/buildroot-external/meta" 2>/dev/null | cut -d'"' -f2)"
+        # Inline python keeps the test self-contained (no extra deps);
+        # PyYAML is already required by tools in greenautarky/releases.
+        MATCH_OUT="$(python3 - "$RELEASES_DIR/releases" "$HA_VER_ENV" <<'PY' 2>/dev/null
+import os, sys, glob
+try:
+    import yaml
+except ImportError:
+    print("NOYAML"); sys.exit(0)
+root, target_core = sys.argv[1], sys.argv[2]
+candidates = []
+for p in sorted(glob.glob(os.path.join(root, "v*", "manifest.yaml"))):
+    try:
+        m = yaml.safe_load(open(p))
+    except Exception:
+        continue
+    if isinstance(m, dict):
+        candidates.append((p, m))
+if not candidates:
+    print("NOMANIFESTS"); sys.exit(0)
+exact = [(p, m) for p, m in candidates
+         if (m.get("versions") or {}).get("core") == target_core]
+chosen = exact[0] if exact else None
+if not chosen:
+    in_dev = [(p, m) for p, m in candidates if m.get("status") == "in-development"]
+    chosen = in_dev[-1] if in_dev else candidates[-1]
+p, m = chosen
+v = m.get("versions") or {}
+print("PATH=" + p)
+print("BUNDLE=" + str(m.get("bundle") or "?"))
+print("STATUS=" + str(m.get("status") or "?"))
+print("OS=" + str(v.get("os") or "?"))
+print("CORE=" + str(v.get("core") or "?"))
+print("SUP=" + str(v.get("supervisor") or "?"))
+print("MATCH_BY_CORE=" + ("yes" if exact else "no"))
+PY
+)"
+        if [[ "$MATCH_OUT" = "NOYAML" ]]; then
+          _skip "BLD-RELEASE-MANIFEST" "PyYAML not installed (pip install pyyaml)"
+        elif [[ "$MATCH_OUT" = "NOMANIFESTS" ]]; then
+          _skip "BLD-RELEASE-MANIFEST" "no manifest.yaml under $RELEASES_DIR/releases/"
+        elif [[ -z "$MATCH_OUT" ]]; then
+          _skip "BLD-RELEASE-MANIFEST" "manifest selection helper produced no output"
+        else
+          MAN_PATH=$(echo   "$MATCH_OUT" | grep '^PATH='          | cut -d= -f2-)
+          MAN_BUNDLE=$(echo "$MATCH_OUT" | grep '^BUNDLE='        | cut -d= -f2-)
+          MAN_STATUS=$(echo "$MATCH_OUT" | grep '^STATUS='        | cut -d= -f2-)
+          MAN_OS=$(echo     "$MATCH_OUT" | grep '^OS='            | cut -d= -f2-)
+          MAN_CORE=$(echo   "$MATCH_OUT" | grep '^CORE='          | cut -d= -f2-)
+          MAN_SUP=$(echo    "$MATCH_OUT" | grep '^SUP='           | cut -d= -f2-)
+          MATCHED=$(echo    "$MATCH_OUT" | grep '^MATCH_BY_CORE=' | cut -d= -f2-)
+          mismatches=()
+          if [[ "$MATCHED" != "yes" ]]; then
+            mismatches+=("no manifest with versions.core=$HA_VER_ENV — using newest in-development ($MAN_BUNDLE) as fallback; run cut-release.sh to land the bump")
+          fi
+          [[ "$MAN_CORE" = "$HA_VER_ENV"    ]] || mismatches+=("core: manifest=$MAN_CORE != build-ga-core.yml HA_VERSION=$HA_VER_ENV")
+          [[ "$MAN_CORE" = "$VER_TINKER"    ]] || mismatches+=("core: manifest=$MAN_CORE != version.json.homeassistant.tinker=$VER_TINKER")
+          [[ "$MAN_SUP"  = "$VER_SUP_BUILT" ]] || mismatches+=("supervisor: manifest=$MAN_SUP != version.json.supervisor=$VER_SUP_BUILT")
+          if [[ -n "$META_SUFFIX" ]]; then
+            # Manifest OS string ends with the buildroot suffix, e.g.
+            # "16.3.1.2" endswith "1.2".
+            case "$MAN_OS" in
+              *".$META_SUFFIX") : ;;
+              *) mismatches+=("os: manifest=$MAN_OS does not end with buildroot VERSION_SUFFIX=$META_SUFFIX") ;;
+            esac
+          fi
+          if [[ ${#mismatches[@]} -eq 0 ]]; then
+            _pass "BLD-RELEASE-MANIFEST: $MAN_BUNDLE ($MAN_STATUS) agrees with version.json + build-ga-core.yml + buildroot meta (os=$MAN_OS, core=$MAN_CORE, sup=$MAN_SUP)"
+          else
+            _fail "BLD-RELEASE-MANIFEST: $MAN_BUNDLE ($MAN_STATUS) at $MAN_PATH disagrees with build sources: $(printf '%s; ' "${mismatches[@]}")re-run cut-release.sh after bumping all sides in lock-step"
+          fi
+        fi
+      fi
     else
-      _skip "SRC-11 + BLD-VER-CONSISTENCY" "build-ga-core.yml not found"
+      _skip "SRC-11 + BLD-VER-CONSISTENCY + BLD-RELEASE-MANIFEST" "build-ga-core.yml not found"
     fi
   else
-    _skip "SRC-11 + BLD-VER-CONSISTENCY" "ha-core repo not found"
+    _skip "SRC-11 + BLD-VER-CONSISTENCY + BLD-RELEASE-MANIFEST" "ha-core repo not found"
   fi
 
   # SRC-12: authorize.ts app-flow redirect (GA onboarding intercept)
