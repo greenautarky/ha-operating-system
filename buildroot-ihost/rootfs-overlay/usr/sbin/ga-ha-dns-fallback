@@ -1,19 +1,36 @@
 #!/bin/sh
-# ga-ha-dns-fallback — Configure HA Supervisor DNS with hardcoded upstream
-# fallback servers (Cloudflare 1.1.1.1 / 1.0.0.1).
+# ga-ha-dns-fallback — Configure HA Supervisor DNS with explicit Cloudflare
+# upstream servers AND DoT fallback DISABLED.
 #
-# Why: HA Supervisor's hassio_dns container forwards to whatever DNS the host
-# uses (typically the LTE dongle). When the dongle DNS is overloaded or
-# flaky, container DNS resolution fails (SERVFAIL), which kills tailscaled's
-# bootstrap and other addon connectivity. Hardcoding Cloudflare as fallback
-# keeps things working even when the upstream DNS is unreliable.
+# Target state (set on every boot, idempotent):
+#   servers  = [dns://1.1.1.1, dns://1.0.0.1]
+#   fallback = false
 #
-# Vodafone fleet ACL: 1.1.1.1 was added on request, so this works on Vodafone-APN.
+# Why this exact combination (revised 2026-05-07):
+#   - Explicit `servers` (Cloudflare): forward lookups (HACS, GitHub, updates,
+#     Tailscale control plane) go directly to a known-good resolver, independent
+#     of which interface is up (Ethernet / WiFi / LTE-RNDIS / OpenStick LTE-WiFi).
+#     This was the original 2026-04-22 fix for the Dongle-DNS Single-Point-of-Failure.
+#   - `fallback=false` (DoT off): with fallback=true, HA Core's PTR sweeps for the
+#     local subnet escalate to DoT (1.1.1.1:853) when the DHCP-derived locals DNS
+#     doesn't answer RFC1918 PTRs. The DoT TLS handshake hangs ~75-95s per query
+#     and spikes hassio_dns to 180% CPU. Measured 2026-05-07 on kib-son-0;
+#     ga-flasher-py TODO §"DNS Fallback CPU Spike" has the full analysis.
+#   - /etc/hosts (populated by ga-update-hosts.service from ga-services.conf) keeps
+#     highest priority — GA endpoints (ota / influx / loki) resolve to NetBird IPs
+#     before any external DNS query.
+#
+# Vodafone fleet ACL: 1.1.1.1 is allow-listed, so this works on Vodafone-APN LTE.
+#
+# Defense-in-depth alongside ha-supervisor commit 6b427484 ("feat(dns): GA
+# defaults") which sets the same values as schema defaults. This service is the
+# runtime safety-net that kicks in on every boot, including when the supervisor
+# was reset/recreated for some reason.
 #
 # Idempotent — only writes if servers/fallback differ from desired state.
 set -e
 
-DESIRED_FALLBACK="true"
+DESIRED_FALLBACK="false"
 DESIRED_SERVERS="dns://1.1.1.1 dns://1.0.0.1"
 
 log() { echo "ga-ha-dns-fallback: $*"; }
@@ -32,21 +49,21 @@ done
 # Read current state
 current=$(ha dns info 2>/dev/null || echo "")
 fallback=$(echo "$current" | awk '/^fallback:/{print $2}')
-servers=$(echo "$current" | awk '/^servers:/{$1=""; sub(/^ /,""); print}')
 
-# Build expected pattern (servers come back as JSON-ish list, hard to compare exactly).
-# Simplification: only write if either fallback != true, or 1.1.1.1 not in servers.
+# Compare: only write if fallback != desired OR Cloudflare servers missing.
+# servers in `ha dns info` output appear as YAML list lines like "- dns://1.1.1.1".
 need_update=0
-[ "$fallback" != "true" ] && need_update=1
-echo "$servers" | grep -q '1.1.1.1' || need_update=1
+[ "$fallback" != "$DESIRED_FALLBACK" ] && need_update=1
+echo "$current" | grep -q 'dns://1.1.1.1' || need_update=1
+echo "$current" | grep -q 'dns://1.0.0.1' || need_update=1
 
 if [ "$need_update" = "0" ]; then
-    log "DNS upstream already configured (fallback=$fallback, servers contain 1.1.1.1) — skipping"
+    log "DNS upstream already at desired state (fallback=$fallback, Cloudflare servers present) — skipping"
     exit 0
 fi
 
-log "configuring DNS: --fallback $DESIRED_FALLBACK --servers '$DESIRED_SERVERS'"
+log "configuring DNS: --fallback=$DESIRED_FALLBACK --servers '$DESIRED_SERVERS'"
 # shellcheck disable=SC2086
-ha dns options --fallback --servers dns://1.1.1.1 --servers dns://1.0.0.1 2>&1
+ha dns options --fallback=$DESIRED_FALLBACK --servers dns://1.1.1.1 --servers dns://1.0.0.1 2>&1
 
 log "done"
