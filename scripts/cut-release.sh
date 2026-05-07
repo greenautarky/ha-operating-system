@@ -83,6 +83,29 @@ if [[ $DRY_RUN -eq 1 && ($DO_COMMIT -eq 1 || $DO_TAG -eq 1) ]]; then
     exit 2
 fi
 
+# Manifest source_pins integrity gate: without --commit the version bumps
+# remain uncommitted in the sibling repos' working trees, so `git rev-parse
+# HEAD` returns the PRE-bump SHA. The manifest would then claim "v<N> lives
+# at SHA X" while X does not contain the bumps. Audit trail breaks.
+# bump-release-version.sh --commit commits per-repo before returning, so
+# Step 2 captures the correct post-bump HEADs.
+if [[ $DRY_RUN -eq 0 && $DO_COMMIT -eq 0 ]]; then
+    cat >&2 <<'GATE'
+ERROR: cut-release.sh requires either --commit or --dry-run.
+
+Without --commit, source_pins in the manifest would capture PRE-bump SHAs
+(the HEADs before the version bumps land), which silently breaks the
+reproducibility/audit guarantee the manifest is supposed to provide.
+
+Pick one:
+  --commit    apply bumps and commit per repo, then write manifest with
+              correct post-bump source_pins (still NOT pushed — review
+              the commits, then push manually)
+  --dry-run   preview only — no edits, no manifest written
+GATE
+    exit 2
+fi
+
 if [[ -z "$OS_VERSION" || -z "$SUPERVISOR_VERSION" || -z "$CORE_VERSION" || -z "$BUNDLE" || -z "$HAOS_BRANCH" ]]; then
     cat >&2 <<USAGE
 ERROR: --os, --supervisor, --core, --bundle, and --branch are all required.
