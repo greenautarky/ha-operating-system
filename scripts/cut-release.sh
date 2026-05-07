@@ -46,6 +46,10 @@ HA_SUPERVISOR_DIR="${HA_SUPERVISOR_DIR:-${HOME}/git/ha-supervisor}"
 GA_FLASHER_DIR="${GA_FLASHER_DIR:-${HOME}/git/ga-flasher-py}"
 GA_DOCS_DIR="${GA_DOCS_DIR:-${HOME}/git/ga-ihost-docs}"
 RELEASES_DIR="${RELEASES_DIR:-${HOME}/git/releases}"
+# Optional GA addons (Weg A — manifest tracking via source-SHA + addon version).
+# If not cloned locally, the addon is silently skipped from the manifest.
+GA_HMVAPP_DIR="${GA_HMVAPP_DIR:-${HOME}/git/ga_hmvapp_addon}"
+GA_DEFAULT_ADDON_DIR="${GA_DEFAULT_ADDON_DIR:-${HOME}/git/ga_default_addon}"
 
 # --- args -------------------------------------------------------------------
 OS_VERSION=""
@@ -179,6 +183,24 @@ SHA_SUPERVISOR=$(git_sha "$HA_SUPERVISOR_DIR")
 SHA_HAOS_VERSION=$(git_sha "$HAOS_VERSION_DIR")
 SHA_FLASHER=$(git_sha "$GA_FLASHER_DIR")
 SHA_DOCS=$(git_sha "$GA_DOCS_DIR")
+SHA_HMVAPP=$(git_sha "$GA_HMVAPP_DIR")
+SHA_DEFAULT_ADDON=$(git_sha "$GA_DEFAULT_ADDON_DIR")
+
+# Read addon version from <addon>/config.yaml. Empty string if not parseable
+# or addon repo not cloned — caller decides how to handle.
+addon_version() {
+    local d="$1"
+    local cfg="$d/config.yaml"
+    if [[ ! -f "$cfg" ]]; then
+        echo ""
+        return
+    fi
+    grep -E '^[[:space:]]*version:' "$cfg" | head -1 \
+        | sed -E 's/^[[:space:]]*version:[[:space:]]*"?([^"#]*[^"#[:space:]]).*/\1/'
+}
+
+VERSION_HMVAPP=$(addon_version "$GA_HMVAPP_DIR")
+VERSION_DEFAULT_ADDON=$(addon_version "$GA_DEFAULT_ADDON_DIR")
 
 cat <<PINS
   ha-operating-system    : $SHA_HAOS
@@ -188,6 +210,8 @@ cat <<PINS
   haos-version           : $SHA_HAOS_VERSION
   ga-flasher-py          : $SHA_FLASHER
   ga-ihost-docs          : $SHA_DOCS
+  ga_hmvapp_addon        : $SHA_HMVAPP   ${VERSION_HMVAPP:+(version: $VERSION_HMVAPP)}
+  ga_default_addon       : $SHA_DEFAULT_ADDON   ${VERSION_DEFAULT_ADDON:+(version: $VERSION_DEFAULT_ADDON)}
 PINS
 
 # --- 3. Render releases/<bundle>/manifest.yaml ------------------------------
@@ -203,6 +227,21 @@ else
 
 mkdir -p "$REL_OUT_DIR"
 
+# Build optional addon-version block (versions.hm_vapp, versions.default_addon)
+# Only emitted when the addon repo is locally available — keeps manifests for
+# bundles that don't ship the addon clean (no '<missing>' clutter).
+ADDON_VERSIONS_BLOCK=""
+[[ "$SHA_HMVAPP" != "<missing>" ]] && \
+    ADDON_VERSIONS_BLOCK+=$'\n  hm_vapp: "'"${VERSION_HMVAPP:-TBD}"$'"'
+[[ "$SHA_DEFAULT_ADDON" != "<missing>" ]] && \
+    ADDON_VERSIONS_BLOCK+=$'\n  default_addon: "'"${VERSION_DEFAULT_ADDON:-TBD}"$'"'
+
+ADDON_PINS_BLOCK=""
+[[ "$SHA_HMVAPP" != "<missing>" ]] && \
+    ADDON_PINS_BLOCK+=$'\n  ga_hmvapp_addon: "'"$SHA_HMVAPP"$'"'
+[[ "$SHA_DEFAULT_ADDON" != "<missing>" ]] && \
+    ADDON_PINS_BLOCK+=$'\n  ga_default_addon: "'"$SHA_DEFAULT_ADDON"$'"'
+
 cat > "${REL_OUT_DIR}/manifest.yaml" <<EOF
 \$schema: "../../schemas/manifest.schema.json"
 
@@ -215,7 +254,7 @@ versions:
   os: "${OS_VERSION}"
   supervisor: "${SUPERVISOR_VERSION}"
   core: "${CORE_VERSION}"
-  frontend_pyversion: "TBD"                       # fill from build-ga-core.yml job output
+  frontend_pyversion: "TBD"                       # fill from build-ga-core.yml job output${ADDON_VERSIONS_BLOCK}
 
 source_pins:
   ha-operating-system: "${SHA_HAOS}"
@@ -224,7 +263,7 @@ source_pins:
   ha-supervisor: "${SHA_SUPERVISOR}"
   haos-version: "${SHA_HAOS_VERSION}"
   ga-flasher-py: "${SHA_FLASHER}"
-  ga-ihost-docs: "${SHA_DOCS}"
+  ga-ihost-docs: "${SHA_DOCS}"${ADDON_PINS_BLOCK}
 
 artifacts:
   raucb:
