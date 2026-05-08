@@ -32,3 +32,6 @@ images/*.tar
 .claude
 scan-results/
 releases/
+
+# Local-only backups (z2m state, device snapshots etc) — never commit
+.local-backups/
