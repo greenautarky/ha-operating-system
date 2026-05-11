@@ -16,6 +16,89 @@
 
 ## High Priority
 
+### Open Source License Compliance — system-wide audit (added 2026-05-11)
+
+We ship a Linux-based OS to end customers. The GA OS bundles upstream
+HAOS (Apache-2.0), the Linux kernel (GPL-2.0), Buildroot packages
+(many with copyleft licenses), and our own additions. Each shipped
+image carries license obligations we must satisfy as the distributor.
+None of this is blocking a single release, but it is the kind of
+thing that turns into a real incident if a customer (or worse, a
+copyleft-aware competitor) asks "where is the corresponding source
+code". Plan to address this systematically before broader rollout
+beyond canary + pilot.
+
+What we have to consider, at the system level:
+
+- [ ] **License inventory / SBOM publication**
+  - Buildroot already produces `legal-info/` (manifest CSV + license texts)
+    during `prod` builds. Verify it's complete + check for missing entries.
+  - Decision: where do customers see this? Options:
+    (a) Bundle a tarball into the image at `/usr/share/licenses/`
+        (large, but always available offline)
+    (b) Publish per-release at `https://greenautarky.com/legal/<version>/`
+        with a pointer in the image's `/etc/os-release` field
+    (c) Both — small NOTICE in image, full bundle online
+  - SBOM (CycloneDX or SPDX) for CRA (EU Cyber Resilience Act, effective
+    Dec 2027) — likely required for "products with digital elements".
+    Trivy already generates SBOM during `cve-scan.yml`; need to publish.
+
+- [ ] **GPL "written offer" for corresponding source**
+  - GPL-2.0/3.0 require: distributor MUST provide source code for
+    binaries, either bundled or via a "written offer valid for at
+    least 3 years". Covers Linux kernel, Buildroot tools, BusyBox,
+    NetworkManager, systemd (LGPL), etc.
+  - Decision: bundle source tarball, or publish + provide URL?
+  - Recommend: publish at `https://greenautarky.com/sources/<version>/`
+    + include short notice in the image (e.g., `/usr/share/legal/WRITTEN-OFFER.txt`).
+
+- [ ] **Modified-source disclosure**
+  - We patch the Linux kernel (`buildroot-ihost/board/sonoff/ihost/patches/linux/`)
+    and the HAOS Supervisor. Both are GPL — modifications must be made
+    available with the binaries.
+  - The repos `ha-operating-system`, `ha-supervisor`, `haos-version`
+    are already public on GitHub, which satisfies the obligation.
+  - **But**: check that the public repos contain the EXACT versions
+    shipped — every release tag must be reproducible from public source.
+
+- [ ] **Trademark / brand compliance**
+  - "Home Assistant" is a trademark of Open Home Foundation. We are a
+    derivative — the brand guidelines allow this but require disclosure.
+    Check: `os-release` says "GreenAutarky BOS, based on Home Assistant" ✓
+    but verify all UI / docs use the right language.
+  - Don't use the HA logo in marketing without compliant attribution.
+
+- [ ] **Apache-2.0 NOTICE files preserved**
+  - HAOS, NetBird (BSD), Caddy (Apache-2.0), and many ga-* dependencies
+    require preservation of `NOTICE` files. Buildroot's `legal-info`
+    should capture this — verify by sampling.
+
+- [ ] **Our own additions: choose and apply a clear license**
+  - `ha-operating-system/LICENSE.md` (and equivalents in `ga_manager`,
+    `ga-fleet-manager`, `ga-flasher-py`) need explicit license declaration.
+  - Current state inconsistent — some MIT (e.g. `ga_manager/LICENSE.md`),
+    others missing. Pick a default for new repos and document.
+
+- [ ] **Test the customer-side experience**
+  - Imagine a customer who emails: "Please send me the source for my
+    GA-OS device." Can we honor this within 30 days at zero scramble?
+  - Build a one-page operator runbook for this scenario.
+
+- [ ] **CRA (Cyber Resilience Act) preparedness — Dec 2027 effective**
+  - SBOM publication ✓ partially
+  - CVE handling process (we have `cve-scan.yml` ✓)
+  - Coordinated vulnerability disclosure policy — missing
+  - Hardware/software inventory mapping per device — partially
+    (fleet-manager polling has versions, but not vulnerability state)
+  - Add a short `SECURITY.md` to the public repos documenting how to
+    report security issues.
+
+**Estimated effort**: ~2 days of dedicated work to bring legal-info,
+NOTICE-preservation, written offer, and SBOM publication into a clean
+state. Not blocking v1.2 release, but should be done before v1.3 or
+before next major fleet expansion. **Trigger**: first customer outside
+the founder/pilot circle, OR pre-CRA-deadline (mid-2027).
+
 ### Dev/Prod Configuration Strategy (documented 2026-04-01)
 - [x] Define which configs/behaviors differ between dev and prod builds
 - [x] Document the dev vs prod matrix for all services
