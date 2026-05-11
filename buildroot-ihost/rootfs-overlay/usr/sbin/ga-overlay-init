@@ -72,13 +72,8 @@ else
     log "WiFi power save config already in overlay — skipping"
 fi
 
-# --- Mask audio-setup.service (iHost has no audio hardware) ---
-AUDIO_MASK="/etc/systemd/system/audio-setup.service"
-if [ ! -L "$AUDIO_MASK" ] || [ "$(readlink "$AUDIO_MASK" 2>/dev/null)" != "/dev/null" ]; then
-    ln -sf /dev/null "$AUDIO_MASK"
-    log "masked audio-setup.service (no audio on iHost)"
-else
-    log "audio-setup.service already masked — skipping"
-fi
+# Note: audio-setup.service masking moved to build-time (rootfs-overlay
+# symlink at /etc/systemd/system/audio-setup.service → /dev/null). Runtime
+# `ln` failed on read-only rootfs (observed 2026-05-11 on v1.2 canary).
 
 log "done"

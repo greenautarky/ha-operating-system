@@ -454,14 +454,16 @@ verify_build_integrity() {
   [[ -n "$raucb" ]] && _check_pass "RAUC bundle exists" || _check_fail "No .raucb found"
 
   # --- 2) NetBird binary ---
+  # Cross-built ARM binary cannot be executed on amd64 host (Exec format
+  # error). Use `strings` to find the embedded version constant — Go
+  # statically links the version string into the binary's .rodata section.
   local nb="${OUT}/target/usr/bin/netbird"
   if [[ -x "$nb" ]]; then
-    local nb_ver_out
-    nb_ver_out="$("$nb" version 2>/dev/null || echo "unknown")"
-    if echo "$nb_ver_out" | grep -q "${NETBIRD_TAG#v}"; then
-      _check_pass "NetBird binary version: $nb_ver_out"
+    local nb_expected="${NETBIRD_TAG#v}"
+    if strings "$nb" 2>/dev/null | grep -qFx "$nb_expected"; then
+      _check_pass "NetBird binary embeds version $nb_expected"
     else
-      _check_fail "NetBird version mismatch: got '$nb_ver_out', expected '${NETBIRD_TAG#v}'"
+      _check_fail "NetBird version $nb_expected not found in binary strings"
     fi
   else
     _check_fail "NetBird binary not found at $nb"
@@ -503,13 +505,15 @@ verify_build_integrity() {
     else
       _check_fail "version.json does NOT reference greenautarky"
     fi
-    # Check core version is 'latest'
+    # Check core version is a pinned semver-ish tag (per-release strategy
+    # since 2026-05-05 — no more rolling `latest`). Accept anything that
+    # looks like `YYYY.MM.PATCH[.SUFFIX]` or `latest` (back-compat).
     local core_ver
     core_ver="$(jq -r '.core // "unknown"' "$version_json" 2>/dev/null)"
-    if [[ "$core_ver" == "latest" ]]; then
-      _check_pass "Core image tag: latest"
+    if [[ "$core_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || [[ "$core_ver" == "latest" ]]; then
+      _check_pass "Core image tag: $core_ver"
     else
-      _check_warn "Core image tag: '$core_ver' (expected 'latest')"
+      _check_fail "Core image tag invalid: '$core_ver' (expected pinned version or 'latest')"
     fi
   else
     _check_warn "version.json not found (normal for non-full builds)"
