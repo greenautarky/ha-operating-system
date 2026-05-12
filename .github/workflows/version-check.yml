@@ -41,25 +41,29 @@ jobs:
           # The runner needs an OUT arg to derive SRC=$OUT/.. — without it
           # the script exits at line 9 (${1:?Usage:...}) before any test
           # runs. We pass a dummy ga_output dir inside the workspace so
-          # SRC=$GITHUB_WORKSPACE for source-level checks; build-output
-          # checks (BLD-*, DT-*, REG-*) skip because the dir is empty.
+          # SRC=$GITHUB_WORKSPACE for source-level checks; all build-output
+          # tests fail predictably because the dir is empty.
           export REPO_ROOT="${GITHUB_WORKSPACE}"
           export FRONTEND_ROOT=""  # skip frontend source checks in CI
           mkdir -p "${GITHUB_WORKSPACE}/ga_output"
           bash tests/ga_tests/run_build_tests.sh "${GITHUB_WORKSPACE}/ga_output" \
             2>&1 | tee test-output.txt
           rc=${PIPESTATUS[0]}
-          # Source-level FAILs are blocking; build-only / device-tree FAILs
-          # are expected to be skipped (they need the actual build output).
-          src_fails=$(grep -E '^\s*FAIL' test-output.txt | grep -v 'BLD-\|REG-\|DT-' || true)
+          # We only care about source-level failures here. Build-output
+          # tests will run as part of the actual prod build in
+          # build-os.yml. Filter is INCLUSIVE — only count FAILs from
+          # source-level test prefixes (SRC-, VER-, XVER-). Anything
+          # else is build-output-dependent and expected to fail in CI
+          # where no rootfs/, target/, or version.json exists.
+          src_fails=$(grep -E '^\s*FAIL\s+(SRC-|VER-|XVER-)' test-output.txt || true)
           if [ -n "$src_fails" ]; then
             echo "::error::Source-level tests failed:"
             echo "$src_fails"
             exit 1
           fi
           if [ "$rc" -ne 0 ]; then
-            # Script exited non-zero but no source-level FAILs in our filter:
-            # likely BLD-/DT-/REG- failures (expected, no build output) — OK.
-            echo "Note: script exited rc=$rc, but no source-level failures detected (build-only tests skipped as expected)."
+            # Script exited non-zero — that's expected, build-output tests
+            # have no rootfs to check against. We only care about source-level.
+            echo "Note: script exited rc=$rc, but no source-level FAILs detected (build-output tests will run during build-os.yml against the real rootfs)."
           fi
           echo "Source-level tests passed."

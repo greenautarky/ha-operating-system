@@ -40,23 +40,24 @@ jobs:
           # files (and root-owned read-only files like ga_output/..config.tmp
           # from buildroot's atomic-write pattern). actions/checkout's own
           # `clean: true` hits EACCES on those and aborts the whole job.
-          # We do an aggressive sudo-based pre-clean here, then disable
-          # checkout's own clean below.
+          #
+          # Use Docker for cleanup — the runner user has no NOPASSWD sudo
+          # (verified 2026-05-11 by CI failure: "sudo: a password is required").
+          # Docker is already required for the actual build below, so the
+          # tool is already there. The bind-mount runs as root inside the
+          # container and can rm root-owned files without sudo on the host.
           set -e
           if [ -n "$(ls -A "${GITHUB_WORKSPACE}" 2>/dev/null)" ]; then
-            # Ensure everything is writable + owned by the runner user before deletion
-            sudo chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}" 2>/dev/null || true
-            sudo chmod -R u+rwX "${GITHUB_WORKSPACE}" 2>/dev/null || true
-            # Bulletproof remove: rm -rf doesn't care about read-only or weird filenames
-            sudo rm -rf "${GITHUB_WORKSPACE:?}/." 2>/dev/null || true
-            # Belt-and-braces: catch dotfiles + double-dot temps (..config.tmp) that
-            # globs sometimes miss
-            sudo find "${GITHUB_WORKSPACE}" -mindepth 1 -delete 2>/dev/null || true
+            docker run --rm \
+              -v "${GITHUB_WORKSPACE}:/ws" \
+              --workdir /ws \
+              alpine:3.20 \
+              sh -c 'find . -mindepth 1 -delete 2>/dev/null; true'
           fi
           # Verify workspace is empty — fail loud if not
           if [ -n "$(ls -A "${GITHUB_WORKSPACE}" 2>/dev/null)" ]; then
             echo "::error::Workspace cleanup failed; leftover files:"
-            sudo ls -laR "${GITHUB_WORKSPACE}" | head -50
+            ls -laR "${GITHUB_WORKSPACE}" | head -50
             exit 1
           fi
           echo "Workspace clean."
