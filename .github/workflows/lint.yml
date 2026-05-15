@@ -92,5 +92,10 @@ jobs:
 
       - name: Lint workflows
         run: |
-          # actionlint scans .github/workflows/*.yml by default.
-          ./actionlint -color
+          # actionlint scans .github/workflows/*.yml by default. It also runs
+          # an embedded shellcheck on every `run:` block — by default that's
+          # at all-severities and yields a flood of SC2086 / SC2012 / SC2129
+          # style nits in our existing workflows. Match the explicit
+          # shellcheck step's severity (error only) so a single source of
+          # truth governs what counts as a fail.
+          ./actionlint -color -shellcheck 'shellcheck --severity=error'
