@@ -1,53 +1,129 @@
 #!/bin/sh
-# ga-telemetry-gate — consent check for telemetry services
+# ga-telemetry-gate — consent check for telemetry services (Privacy Tier model)
 #
 # Usage:
-#   ga-telemetry-gate <metrics|error_logs>
-#   ga-telemetry-gate write              (write consent marker files)
+#   ga-telemetry-gate <tier1|tier2|metrics|error_logs>   # check single tier, exit 0/1
+#   ga-telemetry-gate write                              # write marker files
+#   ga-telemetry-gate version                            # print accepted policy version
 #
-# Exit codes:
+# Exit codes (single-check mode):
 #   0 = consent given (or force override active)
-#   1 = no consent / file missing / key is false
+#   1 = no consent / file missing / key is false / stale (policy version mismatch)
 #
 # Called by:
 #   - ga-telemetry-consent.service (oneshot, "write" mode → creates marker files)
+#   - systemd ConditionPathExists on fluent-bit-tier1.service + telegraf.service
 #   - Can be called standalone to check a single key
 #
 # Consent source:
-#   HA Core stores telemetry preferences in its .storage directory.
-#   On the host OS this maps to:
+#   HA Core stores telemetry preferences in:
 #     /mnt/data/supervisor/homeassistant/.storage/greenautarky_telemetry
 #
-#   JSON format (HA Store wrapper):
-#     {"key":"greenautarky_telemetry","version":1,
-#      "data":{"error_logs":true,"metrics":false}}
+# Schema v2 (post-Phase E):
+#     {"key":"greenautarky_telemetry","version":2,"minor_version":0,
+#      "data":{
+#        "policy_version_accepted": 1,
+#        "tiers":{
+#          "tier1":{"value":true, "accepted_at":"...", "policy_version":1},
+#          "tier2":{"value":false,"accepted_at":"...", "policy_version":1}
+#        },
+#        "legacy":{"error_logs":true,"metrics":false}
+#      }
+#     }
+#
+# Schema v1 (pre-Phase E — still supported for upgrade-in-place):
+#     {"data":{"error_logs":bool,"metrics":bool}}
+#
+# Tier 0 is NOT gated here — it ships always via fluent-bit-tier0.service
+# (no ConditionPathExists). The Tier 0 data is processed under
+# DSGVO Art. 6 (b) Vertragserfüllung + (f) berechtigtes Interesse.
+#
+# Tier 1 (operative Fehlerbehebung) — default ON, opt-out:
+#   Marker: /mnt/data/.ga-consent-tier1
+#   Service: fluent-bit-tier1.service (was fluent-bit.service)
+#   Legacy alias: /mnt/data/.ga-consent-error_logs (kept for backward compat)
+#
+# Tier 2 (Performance & Patterns) — default OFF, opt-in:
+#   Marker: /mnt/data/.ga-consent-tier2
+#   Service: telegraf.service
+#   Legacy alias: /mnt/data/.ga-consent-metrics
 #
 # Dev override:
 #   Set GA_TELEMETRY_FORCE=1 in /mnt/data/ga-env.conf to bypass consent.
 #   Useful for dev/test devices that skip onboarding.
 #
+# Policy version handling:
+#   If the device's accepted policy_version < OS-baked policy_version,
+#   the markers are NOT written (regardless of consent values) — user
+#   must re-consent via the onboarding panel after a policy change.
+#
 # Consent changes take effect after reboot.
-# The onboarding UI should inform the user that a reboot is required
-# when telemetry preferences are changed post-onboarding.
 
 STORE="${STORE_PATH:-/mnt/data/supervisor/homeassistant/.storage/greenautarky_telemetry}"
 MARKER_DIR="${MARKER_DIR:-/mnt/data}"
-MARKER_METRICS="$MARKER_DIR/.ga-consent-metrics"
-MARKER_ERROR_LOGS="$MARKER_DIR/.ga-consent-error_logs"
+POLICY_VERSION_FILE="${POLICY_VERSION_FILE:-/etc/ga-policy-version}"
+
+# Phase C/E primary marker names:
+MARKER_TIER1="$MARKER_DIR/.ga-consent-tier1"
+MARKER_TIER2="$MARKER_DIR/.ga-consent-tier2"
+
+# Legacy aliases (kept for backward-compat of systemd ConditionPathExists in
+# older OS images — new OS builds use tier1/tier2 paths above):
+MARKER_LEGACY_ERROR_LOGS="$MARKER_DIR/.ga-consent-error_logs"
+MARKER_LEGACY_METRICS="$MARKER_DIR/.ga-consent-metrics"
 
 # Load GA env for force override
 if [ -f /mnt/data/ga-env.conf ]; then
     . /mnt/data/ga-env.conf
 fi
 
-# Check a single key from the consent store
-# Returns 0 (true) or 1 (false)
+# OS-baked policy version (the spec the OS image was built against)
+BAKED_POLICY_VERSION="$(cat "$POLICY_VERSION_FILE" 2>/dev/null || echo 0)"
+
+# Read the device's accepted policy version from the storage file.
+# Schema v2: data.policy_version_accepted
+# Schema v1: not present → treat as version 0 (forces re-consent for the bump)
+get_accepted_policy_version() {
+    if [ ! -f "$STORE" ]; then
+        echo "0"
+        return
+    fi
+    # Try v2 schema first
+    V=$(sed -n 's/.*"policy_version_accepted"[[:space:]]*:[[:space:]]*\([0-9]\+\).*/\1/p' "$STORE" | head -1)
+    if [ -n "$V" ]; then
+        echo "$V"
+        return
+    fi
+    # v1 schema — no policy_version_accepted field. If we have ANY consent values,
+    # treat as version 1 (pre-Phase E baseline). Otherwise 0.
+    if grep -q '"error_logs"\|"metrics"' "$STORE" 2>/dev/null; then
+        echo "1"
+    else
+        echo "0"
+    fi
+}
+
+# Check a single tier/key from the consent store.
+# Args: tier1 | tier2 | error_logs (alias for tier1) | metrics (alias for tier2)
+# Returns 0 (consent given) or 1 (not given / stale / missing)
 check_key() {
     KEY="$1"
+    # Normalize legacy alias names to canonical tier names
+    case "$KEY" in
+        error_logs) KEY="tier1" ;;
+        metrics)    KEY="tier2" ;;
+    esac
 
     # Dev override bypasses all checks
     if [ "${GA_TELEMETRY_FORCE:-}" = "1" ]; then
         return 0
+    fi
+
+    # Policy version gate — if baked > accepted, withhold consent
+    ACCEPTED=$(get_accepted_policy_version)
+    if [ "$BAKED_POLICY_VERSION" -gt "$ACCEPTED" ] 2>/dev/null; then
+        echo "ga-telemetry-gate: $KEY policy stale (baked=$BAKED_POLICY_VERSION > accepted=$ACCEPTED) → withholding consent"
+        return 1
     fi
 
     # No consent file = not yet onboarded = don't send data (GDPR opt-out default)
@@ -56,34 +132,47 @@ check_key() {
         return 1
     fi
 
-    # Parse JSON with sed (BusyBox — no jq/python available)
-    # Matches: "key" : true  or  "key":false  (with optional whitespace)
-    VALUE=$(sed -n "s/.*\"$KEY\"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p" "$STORE" | tail -1)
+    # Schema v2: look in data.tiers.<KEY>.value
+    VALUE=$(sed -n "/\"$KEY\"/,/[}]/p" "$STORE" 2>/dev/null \
+        | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' | head -1)
+
+    # Schema v1 fallback: data.<original_key> at top level
+    if [ -z "$VALUE" ]; then
+        case "$1" in
+            tier1|error_logs)
+                VALUE=$(sed -n 's/.*"error_logs"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$STORE" | tail -1)
+                ;;
+            tier2|metrics)
+                VALUE=$(sed -n 's/.*"metrics"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$STORE" | tail -1)
+                ;;
+        esac
+    fi
 
     if [ "$VALUE" = "true" ]; then
         return 0
-    else
-        echo "ga-telemetry-gate: $KEY consent not given (value=${VALUE:-missing})"
-        return 1
     fi
+    echo "ga-telemetry-gate: $KEY consent not given (value=${VALUE:-missing})"
+    return 1
 }
 
-# Write mode: evaluate both keys and create/remove marker files
+# Write mode: evaluate both consent tiers and create/remove marker files.
+# Writes both new (.ga-consent-tier1/2) AND legacy (.ga-consent-error_logs/metrics)
+# names so old systemd units keep working on transitional OS images.
 write_markers() {
-    if check_key "metrics"; then
-        touch "$MARKER_METRICS"
-        echo "ga-telemetry-gate: metrics consent → marker created"
+    if check_key "tier1"; then
+        touch "$MARKER_TIER1" "$MARKER_LEGACY_ERROR_LOGS"
+        echo "ga-telemetry-gate: tier1 consent → markers created"
     else
-        rm -f "$MARKER_METRICS"
-        echo "ga-telemetry-gate: metrics no consent → marker removed"
+        rm -f "$MARKER_TIER1" "$MARKER_LEGACY_ERROR_LOGS"
+        echo "ga-telemetry-gate: tier1 no consent → markers removed"
     fi
 
-    if check_key "error_logs"; then
-        touch "$MARKER_ERROR_LOGS"
-        echo "ga-telemetry-gate: error_logs consent → marker created"
+    if check_key "tier2"; then
+        touch "$MARKER_TIER2" "$MARKER_LEGACY_METRICS"
+        echo "ga-telemetry-gate: tier2 consent → markers created"
     else
-        rm -f "$MARKER_ERROR_LOGS"
-        echo "ga-telemetry-gate: error_logs no consent → marker removed"
+        rm -f "$MARKER_TIER2" "$MARKER_LEGACY_METRICS"
+        echo "ga-telemetry-gate: tier2 no consent → markers removed"
     fi
 }
 
@@ -94,15 +183,28 @@ case "$ACTION" in
     write)
         write_markers
         ;;
-    metrics|error_logs)
+    tier1|tier2|metrics|error_logs)
         check_key "$ACTION"
         exit $?
         ;;
+    version)
+        echo "baked=$BAKED_POLICY_VERSION accepted=$(get_accepted_policy_version)"
+        ;;
     *)
-        echo "Usage: ga-telemetry-gate <metrics|error_logs|write>"
-        echo "  metrics     Check if metrics consent is given"
-        echo "  error_logs  Check if error_logs consent is given"
-        echo "  write       Write consent marker files for systemd ConditionPathExists"
+        cat <<EOF
+Usage: ga-telemetry-gate <tier1|tier2|metrics|error_logs|write|version>
+  tier1       Check if Tier 1 (operative Fehlerbehebung) consent is given
+  tier2       Check if Tier 2 (Performance & Patterns) consent is given
+  error_logs  Legacy alias for tier1
+  metrics     Legacy alias for tier2
+  write       Write consent marker files for systemd ConditionPathExists
+  version     Print baked vs accepted policy version
+
+Tier 0 (Betriebsnotwendig) is NOT gated — it ships always under
+DSGVO Art. 6 (b) Vertragserfüllung + (f) berechtigtes Interesse.
+
+See ga-ihost-docs/PRIVACY_TIERS.md for the full model.
+EOF
         exit 1
         ;;
 esac

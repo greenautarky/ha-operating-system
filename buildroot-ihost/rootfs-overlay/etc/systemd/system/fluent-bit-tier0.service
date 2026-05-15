@@ -1,0 +1,41 @@
+[Unit]
+Description=Fluent Bit Tier-0 (always-on, no consent gate)
+Documentation=https://github.com/greenautarky/ga-ihost-docs/blob/main/PRIVACY_TIERS.md
+After=network-online.target hassio-supervisor.service netbird.service
+Wants=network-online.target
+# NO ConditionPathExists — Tier 0 ships regardless of consent state.
+# Legal basis: DSGVO Art. 6 (b) Vertragserfüllung + (f) berechtigtes Interesse.
+
+[Service]
+Type=simple
+
+# Writable dirs for tier-0 storage buffer + db
+ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit/storage/tier0
+ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit/db
+
+# Safe defaults (EnvironmentFile is read BEFORE ExecStartPre, so first boot needs these)
+Environment=GA_ENV=dev DEVICE_UUID=unknown DEVICE_LABEL=unknown LOKI_HOST=loki.greenautarky.com
+
+# Reuse the env file the tier-1 service builds — it contains DEVICE_LABEL etc.
+# If tier-1 hasn't run yet, fall through to baked defaults above.
+ExecStartPre=/bin/sh -c '[ -f /mnt/data/fluent-bit/env ] || ( \
+  [ -f /mnt/data/ga-env.conf ] && . /mnt/data/ga-env.conf || . /etc/ga-env.conf 2>/dev/null; \
+  echo "GA_ENV=${GA_ENV:-dev}" > /mnt/data/fluent-bit/env; \
+  UUID=$(grep -oE "[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}" /mnt/data/supervisor/homeassistant/.storage/core.uuid 2>/dev/null | head -1); \
+  echo "DEVICE_UUID=${UUID:-unknown}" >> /mnt/data/fluent-bit/env; \
+  LABEL=$(cat /mnt/data/ga-device-label 2>/dev/null); \
+  echo "DEVICE_LABEL=${LABEL:-unknown}" >> /mnt/data/fluent-bit/env; \
+)'
+
+EnvironmentFile=-/mnt/data/fluent-bit/env
+
+ExecStart=/usr/bin/fluent-bit -c /etc/fluent-bit/fluent-bit-tier0.conf
+
+Restart=on-failure
+RestartSec=10
+# Smaller resource budget than tier-1 — narrow scope keeps it light
+MemoryMax=64M
+CPUQuota=10%
+
+[Install]
+WantedBy=multi-user.target
