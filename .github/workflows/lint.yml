@@ -1,0 +1,100 @@
+name: Lint (shellcheck + actionlint)
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'scripts/**'
+      - 'buildroot-ihost/**'
+      - 'buildroot-external/**'
+      - 'tests/ga_tests/**'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'scripts/**'
+      - 'buildroot-ihost/**'
+      - 'buildroot-external/**'
+      - 'tests/ga_tests/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+# Why this exists:
+#   The Version Chain Check workflow validates the version chain + source-level
+#   test invariants, but it doesn't catch bash bugs (quoting, unused vars,
+#   subshell pitfalls) or workflow-yaml mistakes (wrong action ref, missing
+#   permissions). This workflow adds a thin lint pass over both.
+#
+# Severity:
+#   shellcheck --severity=error  — actual bugs only, not style suggestions.
+#                                   We can ratchet up later by removing the flag.
+#   actionlint                   — default rules (good signal-to-noise).
+#
+# What's scanned:
+#   - scripts/*.sh                                — build + release glue
+#   - buildroot-ihost/rootfs-overlay/usr/sbin/ga-*  — on-device scripts
+#   - buildroot-ihost/board/sonoff/ihost/**.sh    — board hooks
+#   - tests/ga_tests/**/*.sh                      — test runner + fixtures
+#   - .github/workflows/*.yml                     — actionlint
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: |
+          # The linter ships pre-installed on ubuntu-latest, but reinstalling
+          # keeps the invocation version-independent across image updates.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+
+      - name: Show shellcheck version
+        run: shellcheck --version | head -3
+
+      - name: Lint shell scripts
+        run: |
+          set -e
+          # Collect targets — find ignores files starting with '.' by default,
+          # which keeps editor backup files out of the scan.
+          mapfile -t targets < <(
+            find scripts -maxdepth 2 -type f -name '*.sh'
+            find buildroot-ihost/board/sonoff/ihost -type f -name '*.sh'
+            find buildroot-ihost/rootfs-overlay/usr/sbin -type f -name 'ga-*' -not -name '*.bak'
+            find buildroot-external/rootfs-overlay -type f -name '*.sh' 2>/dev/null || true
+            find tests/ga_tests -type f -name '*.sh'
+          )
+          echo "Scanning ${#targets[@]} shell scripts:"
+          printf '  %s\n' "${targets[@]}"
+          echo ""
+          # Severity = error keeps us out of style-bikeshed land. SC1091 is
+          # source-not-found (expected: we source files from /mnt/data that
+          # don't exist in the repo). SC2154 is unset-var-from-sourced-config.
+          shellcheck \
+            --severity=error \
+            --exclude=SC1091,SC2154 \
+            --color=always \
+            "${targets[@]}"
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install actionlint
+        run: |
+          # actionlint releases a small static binary; use the upstream
+          # download script which always picks the right arch.
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) \
+            >/dev/null
+          ./actionlint --version
+
+      - name: Lint workflows
+        run: |
+          # actionlint scans .github/workflows/*.yml by default. It also runs
+          # an embedded linter on every `run:` block — by default at full
+          # severity, which floods CI with SC2086 / SC2012 / SC2129 style
+          # nits from existing workflows. Override to error-only so a single
+          # source of truth governs what counts as a fail.
+          ./actionlint -color -shellcheck 'shellcheck --severity=error'
