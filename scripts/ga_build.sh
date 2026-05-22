@@ -455,18 +455,21 @@ verify_build_integrity() {
 
   # --- 2) NetBird binary ---
   # Cross-built ARM binary cannot be executed on amd64 host (Exec format
-  # error). Use `strings` to find the embedded version constant — Go
-  # statically links the version string into the binary's .rodata section.
-  # Substring match (-F, not -Fx) is robust against Go's variable string
-  # framing in the binary. False-positive risk for `X.Y.Z` is effectively
-  # zero in a ~30MB binary.
+  # error). Search the binary directly for the embedded version constant —
+  # Go links the `-X version.version=` string into the binary's data.
+  # NB: do NOT pipe through `strings` — on an ELF object file GNU strings
+  # defaults to scanning only loadable sections and can miss the Go version
+  # string (observed false-negative on the build container's binutils).
+  # `grep -a` reads the whole file as text: deterministic, no section logic.
+  # Substring match (-F) is robust; false-positive risk for `X.Y.Z` in a
+  # ~30MB binary is effectively zero.
   local nb="${OUT}/target/usr/bin/netbird"
   if [[ -x "$nb" ]]; then
     local nb_expected="${NETBIRD_TAG#v}"
-    if strings "$nb" 2>/dev/null | grep -qF "$nb_expected"; then
+    if grep -qaF "$nb_expected" "$nb" 2>/dev/null; then
       _check_pass "NetBird binary embeds version $nb_expected"
     else
-      _check_fail "NetBird version $nb_expected not found in binary strings"
+      _check_fail "NetBird version $nb_expected not found in binary"
     fi
   else
     _check_fail "NetBird binary not found at $nb"
