@@ -221,15 +221,20 @@ resolve_ga_manager_slug() {
 # Step 2: install + start the resolved ga_manager addon (idempotent).
 # ---------------------------------------------------------------------------
 addon_installed() {
-	# `ha addons info <slug>` succeeds only if the addon is known to the
-	# Supervisor; `version` is non-null once it is installed.
-	"$HA" addons info "$1" --no-progress --raw-json 2>/dev/null \
-		| grep -q '"version"' 2>/dev/null
+	# `ha addons info` answers for any store-KNOWN addon, installed or not —
+	# `--raw-json` always emits a "version" KEY, valued null until the addon
+	# is actually installed. The old `grep -q '"version"'` matched the key
+	# regardless of value, so every store addon looked installed and the real
+	# `ha addons install` was skipped. Test the VALUE with jq instead.
+	_v=$("$HA" addons info "$1" --no-progress --raw-json 2>/dev/null \
+		| jq -r '(.data.version // .version // empty)' 2>/dev/null)
+	[ -n "$_v" ]
 }
 
 addon_running() {
-	"$HA" addons info "$1" --no-progress --raw-json 2>/dev/null \
-		| grep -q '"state"[[:space:]]*:[[:space:]]*"started"' 2>/dev/null
+	_s=$("$HA" addons info "$1" --no-progress --raw-json 2>/dev/null \
+		| jq -r '(.data.state // .state // empty)' 2>/dev/null)
+	[ "$_s" = "started" ]
 }
 
 install_addon() {
