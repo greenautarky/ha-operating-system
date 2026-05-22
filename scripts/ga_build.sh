@@ -96,7 +96,7 @@ fi
 #   BR2EXT_IHOST     - Path to buildroot-ihost external tree (default: /build/buildroot-ihost)
 #   BR2EXT_NETBIRD   - Path to buildroot-external tree (default: /build/buildroot-external)
 #   OUT              - Output directory (default: /build/ga_output)
-#   NETBIRD_TAG      - NetBird version tag (default: v0.67.2)
+#   NETBIRD_TAG      - NetBird version tag (default: v0.66.2)
 #   GA_BUILD_TIMESTAMP - Override build timestamp (default: auto-generated)
 #   GA_ENV           - Environment stamp (default: from 2nd argument, or "dev")
 #   GA_PROVISIONING  - Set to "true" to create provisioning image (default: false)
