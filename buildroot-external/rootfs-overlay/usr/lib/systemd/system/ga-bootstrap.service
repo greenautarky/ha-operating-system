@@ -1,7 +1,8 @@
 [Unit]
 Description=GreenAutarky V1.2-clean first-boot addon bootstrap (install ga_manager)
 Documentation=https://github.com/greenautarky/ha-operating-system
-# Needs the Supervisor up — it installs the ga_manager local addon via the
+# Needs the Supervisor up — it registers the public greenautarky/vibe_addons
+# addon repository and installs the ga_manager addon from it via the
 # Supervisor API (through the hassio_cli container). The disk bootstrap
 # (eMMC erase + OS marker) is a separate, earlier unit.
 Requires=hassos-supervisor.service ga-bootstrap-disk.service
@@ -12,9 +13,10 @@ RequiresMountsFor=/mnt/data
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Idempotent — every boot. Installs + starts the baked ga_manager local
-# addon if it is not already installed/running. The helper waits for the
-# Supervisor API to be responsive before acting.
+# Idempotent — every boot. Registers the vibe_addons addon repository and
+# installs + starts the ga_manager addon from it if it is not already
+# installed/running. The helper waits for the Supervisor API to be
+# responsive before acting.
 ExecStart=/usr/libexec/ga-bootstrap
 # The Supervisor can be slow on a cold first boot; give the unit room.
 TimeoutStartSec=600

@@ -1340,21 +1340,26 @@ PY
 
   # =========================================================================
   # GAOS — V1.2-clean OS bake (replaces the retired fork model)
-  # Asserts the V1.2-clean OS ships ga_manager + the GA addons baked in as
-  # Supervisor local addons, installed on first boot by ga-bootstrap.service.
+  # Asserts the V1.2-clean OS bakes the GA addon container images into the
+  # local Docker store (addon-images.json) and that ga-bootstrap.service
+  # registers the public greenautarky/vibe_addons addon repository and
+  # installs the ga_manager addon FROM it (a repo-linked addon, NOT a
+  # `local_*` addon — so a self-provisioned device's install path is
+  # identical to a normal "add the repo, install the addon" flow).
   # See ga-ihost-docs/V1.2-CLEAN-REBUILD.md T4. These check the source
   # overlay tree, so they run without a full build.
   # =========================================================================
   echo ""
-  echo "--- GAOS: V1.2-clean OS bake (baked local addons + bootstrap) ---"
+  echo "--- GAOS: V1.2-clean OS bake (vibe_addons repo + image bake + bootstrap) ---"
 
   ADDON_IMAGES_JSON="${SRC}/buildroot-external/package/hassio/addon-images.json"
-  LOCAL_ADDONS_DIR="${SRC}/buildroot-external/rootfs-overlay/usr/share/ga/local-addons"
+  GA_BOOTSTRAP="${SRC}/buildroot-external/rootfs-overlay/usr/libexec/ga-bootstrap"
   OVL_SYSTEMD="${SRC}/buildroot-external/rootfs-overlay/usr/lib/systemd/system"
   OVL_ETC_SYSTEMD="${SRC}/buildroot-external/rootfs-overlay/etc/systemd/system"
 
   # GAOS-01: addon-images.json includes a ga_manager entry (so the addon
-  # container image is baked into the data partition's docker store).
+  # container image is baked into the data partition's docker store and the
+  # repo-linked addon installs offline on first boot).
   if [[ -f "$ADDON_IMAGES_JSON" ]]; then
     GAOS_MGR_IMG="$(jq -r '.addons.ga_manager.image // empty' "$ADDON_IMAGES_JSON" 2>/dev/null)"
     if [[ -n "$GAOS_MGR_IMG" ]]; then
@@ -1366,51 +1371,73 @@ PY
     _skip "GAOS-01" "addon-images.json not found at $ADDON_IMAGES_JSON"
   fi
 
-  # GAOS-02: local-addon overlay dirs exist, each with a config.yaml/json.
-  # These are the Supervisor local-addon metadata baked into the OS so the
-  # addons install offline on first boot.
-  if [[ -d "$LOCAL_ADDONS_DIR" ]]; then
-    for _addon in ga_manager ga_mosquitto ga_zigbee2mqtt sonoff_dongle_flasher_for_ihost; do
-      _adir="${LOCAL_ADDONS_DIR}/${_addon}"
-      if [[ -d "$_adir" ]] && { [[ -f "${_adir}/config.yaml" ]] || [[ -f "${_adir}/config.json" ]]; }; then
-        _pass "GAOS-02: local addon '${_addon}' baked with a config file"
-      else
-        _fail "GAOS-02: local addon '${_addon}' missing or has no config.yaml/config.json"
-      fi
-    done
+  # GAOS-02: ga-bootstrap registers the public vibe_addons addon repository
+  # (a repo-linked addon flow — NOT obsolete `local_*` addons). The vendored
+  # local-addons overlay tree must be GONE.
+  if [[ -f "$GA_BOOTSTRAP" ]]; then
+    grep -qE 'github\.com/greenautarky/vibe_addons' "$GA_BOOTSTRAP" 2>/dev/null \
+      && _pass "GAOS-02: ga-bootstrap registers the greenautarky/vibe_addons addon repo" \
+      || _fail "GAOS-02: ga-bootstrap does NOT reference the vibe_addons addon repo"
+    grep -qE '\bha\b.*store add|store add' "$GA_BOOTSTRAP" 2>/dev/null \
+      && _pass "GAOS-02b: ga-bootstrap uses 'ha store add' to register the repo" \
+      || _fail "GAOS-02b: ga-bootstrap does NOT 'ha store add' the repo"
   else
-    _fail "GAOS-02: local-addons overlay dir missing ($LOCAL_ADDONS_DIR)"
+    _fail "GAOS-02: ga-bootstrap script missing ($GA_BOOTSTRAP)"
+  fi
+  if [[ -d "${SRC}/buildroot-external/rootfs-overlay/usr/share/ga/local-addons" ]]; then
+    _fail "GAOS-02c: obsolete vendored local-addons overlay tree still present — must be removed"
+  else
+    _pass "GAOS-02c: obsolete vendored local-addons overlay tree removed"
   fi
 
-  # GAOS-03: ga_manager local addon config has the image: field — with it
-  # set, the Supervisor INSTALLS from the pre-baked image (offline) instead
-  # of building from a Dockerfile.
-  GAOS_MGR_CFG="${LOCAL_ADDONS_DIR}/ga_manager/config.yaml"
-  if [[ -f "$GAOS_MGR_CFG" ]]; then
-    grep -qE '^image:[[:space:]]*"?ghcr\.io/greenautarky/ga_manager' "$GAOS_MGR_CFG" 2>/dev/null \
-      && _pass "GAOS-03: ga_manager local addon config has image: (offline install from baked image)" \
-      || _fail "GAOS-03: ga_manager local addon config has no image: field — Supervisor would try to build from Dockerfile"
-  else
-    _skip "GAOS-03" "ga_manager local addon config.yaml not found"
-  fi
-
-  # GAOS-04: ga_manager addon version is consistent across addon-images.json
-  # and the local-addon config.yaml (and thus the GHCR tag).
-  if [[ -f "$ADDON_IMAGES_JSON" ]] && [[ -f "$GAOS_MGR_CFG" ]]; then
-    GAOS_IMG_VER="$(jq -r '.addons.ga_manager.version // empty' "$ADDON_IMAGES_JSON" 2>/dev/null)"
-    GAOS_CFG_VER="$(grep -E '^version:' "$GAOS_MGR_CFG" 2>/dev/null | head -1 | sed -E 's/^version:[[:space:]]*"?([^"]+)"?.*/\1/')"
-    if [[ -n "$GAOS_IMG_VER" ]] && [[ "$GAOS_IMG_VER" == "$GAOS_CFG_VER" ]]; then
-      _pass "GAOS-04: ga_manager version consistent (addon-images.json=$GAOS_IMG_VER == config.yaml=$GAOS_CFG_VER)"
+  # GAOS-03: ga-bootstrap resolves the repo-prefixed addon slug DYNAMICALLY
+  # (the Supervisor assigns a git-repo addon `<repo_id>_ga_manager`, a hash
+  # prefix — never `local_`). The script must NOT hardcode a `local_ga_manager`
+  # install slug.
+  if [[ -f "$GA_BOOTSTRAP" ]]; then
+    # Ignore comment lines — a header comment may mention `local_ga_manager`
+    # to explain the contrast; what matters is no code hardcodes it.
+    if grep -vE '^[[:space:]]*#' "$GA_BOOTSTRAP" 2>/dev/null \
+        | grep -qE 'local_ga_manager'; then
+      _fail "GAOS-03: ga-bootstrap still hardcodes a 'local_ga_manager' slug in code — must resolve dynamically"
     else
-      _fail "GAOS-04: ga_manager version mismatch (addon-images.json=$GAOS_IMG_VER != config.yaml=$GAOS_CFG_VER) — bump in lockstep"
+      _pass "GAOS-03: ga-bootstrap does not hardcode a 'local_ga_manager' slug in code"
+    fi
+    grep -qE 'resolve_ga_manager_slug|store addons' "$GA_BOOTSTRAP" 2>/dev/null \
+      && _pass "GAOS-03b: ga-bootstrap resolves the repo-prefixed slug from the store listing" \
+      || _fail "GAOS-03b: ga-bootstrap does NOT resolve the repo-prefixed slug dynamically"
+  else
+    _skip "GAOS-03" "ga-bootstrap script not found"
+  fi
+
+  # GAOS-04: every addon image baked into addon-images.json carries a real
+  # image ref (no empty/`latest` tag); the ga_manager image is on the
+  # greenautarky GHCR namespace — matching the vibe_addons config.yaml.
+  if [[ -f "$ADDON_IMAGES_JSON" ]]; then
+    GAOS_BAD=0
+    while IFS= read -r _img; do
+      [[ -z "$_img" || "$_img" == "null" ]] && GAOS_BAD=$((GAOS_BAD + 1))
+      [[ "$_img" == *":latest" ]] && GAOS_BAD=$((GAOS_BAD + 1))
+    done < <(jq -r '.addons | to_entries[] | .value.image' "$ADDON_IMAGES_JSON" 2>/dev/null)
+    if [[ "$GAOS_BAD" -eq 0 ]]; then
+      _pass "GAOS-04: all addon-images.json image refs are concrete (no empty/:latest)"
+    else
+      _fail "GAOS-04: addon-images.json has $GAOS_BAD bad image ref(s) (empty or :latest)"
+    fi
+    GAOS_MGR_IMG="$(jq -r '.addons.ga_manager.image // empty' "$ADDON_IMAGES_JSON" 2>/dev/null)"
+    if [[ "$GAOS_MGR_IMG" == ghcr.io/greenautarky/ga_manager-* ]]; then
+      _pass "GAOS-04b: ga_manager baked image matches the vibe_addons config.yaml image: ($GAOS_MGR_IMG)"
+    else
+      _fail "GAOS-04b: ga_manager baked image ($GAOS_MGR_IMG) != ghcr.io/greenautarky/ga_manager-{arch}"
     fi
   else
-    _skip "GAOS-04" "addon-images.json or ga_manager config.yaml not found"
+    _skip "GAOS-04" "addon-images.json not found"
   fi
 
   # GAOS-05: ga-bootstrap.service + ga-bootstrap-disk.service exist in the
-  # overlay. ga-bootstrap installs/runs the ga_manager local addon every
-  # boot; ga-bootstrap-disk does the early eMMC erase + OS marker.
+  # overlay. ga-bootstrap registers the vibe_addons repo and installs/runs
+  # the ga_manager addon from it every boot; ga-bootstrap-disk does the
+  # early eMMC erase + OS marker.
   for _svc in ga-bootstrap.service ga-bootstrap-disk.service; do
     [[ -f "${OVL_SYSTEMD}/${_svc}" ]] \
       && _pass "GAOS-05: ${_svc} unit present in overlay" \
@@ -1431,7 +1458,8 @@ PY
   fi
 
   # GAOS-07: ga-bootstrap.service is ordered after the Supervisor — it
-  # installs the ga_manager local addon through the Supervisor API.
+  # registers the vibe_addons repo and installs the ga_manager addon
+  # through the Supervisor API.
   if [[ -f "${OVL_SYSTEMD}/ga-bootstrap.service" ]]; then
     grep -qE '(After|Requires)=.*hassos-supervisor' "${OVL_SYSTEMD}/ga-bootstrap.service" 2>/dev/null \
       && _pass "GAOS-07: ga-bootstrap.service ordered after hassos-supervisor" \
