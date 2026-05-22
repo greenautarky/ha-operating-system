@@ -37,6 +37,13 @@ ADDON_DST="${LOCAL_ADDONS_DIR}/ga_manager"
 # name). ga_manager's config carries `slug: ga_manager` -> local_ga_manager.
 ADDON_SLUG="local_ga_manager"
 
+# Vendored custom_component(s) baked into the (read-only) rootfs, and where
+# they get staged so ga_manager (an addon — sees /mnt/data/supervisor/share
+# as /share) can read them. ga_manager's `converge` worker copies them from
+# /share into /config/custom_components and owns their drift afterwards.
+CUSTOM_COMPONENTS_SRC="/usr/share/ga/custom_components"
+CUSTOM_COMPONENTS_DST="/mnt/data/supervisor/share/ga-custom-components"
+
 HA="/usr/bin/ha"
 SUPERVISOR_WAIT_S=300
 INSTALL_WAIT_S=300
@@ -100,6 +107,35 @@ stage_local_addon() {
 		staged="${staged} ${name}"
 	done
 	log "staged local addons into ${LOCAL_ADDONS_DIR}:${staged}"
+}
+
+# ---------------------------------------------------------------------------
+# Step 1b: stage the vendored custom_component(s) onto /share.
+#
+# The component ships in the OS image (GA's own trusted build) — NOT in the
+# ga_manager addon image, so the addon image carries no private-repo content.
+# ga_manager (an addon) sees /mnt/data/supervisor/share as /share; its
+# `converge` worker copies the component from /share/ga-custom-components into
+# /config/custom_components on first boot. Re-staged every boot so an OS
+# update that ships a newer component is picked up.
+# ---------------------------------------------------------------------------
+stage_custom_components() {
+	if [ ! -d "$CUSTOM_COMPONENTS_SRC" ]; then
+		log "no vendored custom_components at ${CUSTOM_COMPONENTS_SRC} — skipping"
+		return 0
+	fi
+	mkdir -p "$CUSTOM_COMPONENTS_DST"
+	staged=""
+	for src in "$CUSTOM_COMPONENTS_SRC"/*/; do
+		[ -d "$src" ] || continue
+		name=$(basename "$src")
+		dst="${CUSTOM_COMPONENTS_DST}/${name}"
+		# Replace wholesale so a removed file in a newer component is gone.
+		rm -rf "$dst"
+		cp -rp "${src%/}" "$dst"
+		staged="${staged} ${name}"
+	done
+	log "staged custom_components into ${CUSTOM_COMPONENTS_DST}:${staged}"
 }
 
 # ---------------------------------------------------------------------------
@@ -169,6 +205,7 @@ main() {
 	fi
 
 	stage_local_addon
+	stage_custom_components
 	install_addon
 
 	log "first-boot addon bootstrap done"
