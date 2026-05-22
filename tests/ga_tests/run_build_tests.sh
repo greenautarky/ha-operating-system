@@ -516,24 +516,33 @@ RAUCB="$(ls "${OUT}/images/"*.raucb 2>/dev/null | head -1)"
 # version.json
 VER_JSON="${OUT}/build/hassio-1.0.0/version.json"
 if [[ -f "$VER_JSON" ]]; then
-  grep -q 'greenautarky' "$VER_JSON" \
-    && _pass "BLD: version.json references greenautarky" \
-    || _fail "BLD: version.json missing greenautarky"
+  # V1.2-clean: version.json mixes registries by design — Supervisor is a GA
+  # image (greenautarky), Core is stock upstream (ghcr.io/home-assistant/*).
+  # A blanket "references greenautarky" grep is meaningless now; assert the
+  # two image refs against their correct registries instead (see REG-01/02).
+  SUP_IMG="$(jq -r '.images.supervisor // "unknown"' "$VER_JSON" 2>/dev/null)"
+  CORE_IMG="$(jq -r '.images.core // "unknown"' "$VER_JSON" 2>/dev/null)"
+  if [[ "$SUP_IMG" == *greenautarky* ]] && [[ "$CORE_IMG" == ghcr.io/home-assistant/* ]]; then
+    _pass "BLD: version.json registries correct (supervisor=greenautarky, core=stock)"
+  else
+    _fail "BLD: version.json registries wrong (supervisor='$SUP_IMG' core='$CORE_IMG')"
+  fi
 
   CORE_TAG="$(jq -r '.core // "unknown"' "$VER_JSON" 2>/dev/null)"
   [[ "$CORE_TAG" =~ ^2025\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] \
     && _pass "BLD: Core image tag is '$CORE_TAG'" \
     || _fail "BLD: Core tag is '$CORE_TAG' (expected HA calver like 2025.11.3 or 2025.11.3.1)"
 
-  # REG: Verify all image refs use greenautarky (not upstream home-assistant or oliverc7)
-  SUP_IMG="$(jq -r '.images.supervisor // "unknown"' "$VER_JSON" 2>/dev/null)"
-  CORE_IMG="$(jq -r '.images.core // "unknown"' "$VER_JSON" 2>/dev/null)"
+  # REG: Verify image refs use the correct registry — V1.2-clean retires the
+  # Core fork: Supervisor stays a GA image, Core goes stock upstream.
+  # Mirrors hassio.mk HASSIO_CONFIGURE_CMDS validation.
   [[ "$SUP_IMG" == *greenautarky* ]] \
     && _pass "REG-01: Supervisor image is greenautarky: $SUP_IMG" \
     || _fail "REG-01: Supervisor image is NOT greenautarky: $SUP_IMG"
-  [[ "$CORE_IMG" == *greenautarky* ]] \
-    && _pass "REG-02: Core image is greenautarky: $CORE_IMG" \
-    || _fail "REG-02: Core image is NOT greenautarky: $CORE_IMG"
+  # REG-02 (V1.2-clean): Core fork retired — Core image must be stock upstream
+  [[ "$CORE_IMG" == ghcr.io/home-assistant/* ]] \
+    && _pass "REG-02: Core image is stock upstream: $CORE_IMG" \
+    || _fail "REG-02: Core image is NOT stock ghcr.io/home-assistant/*: $CORE_IMG"
 
   # REG: No upstream or oliverc7 refs in version.json
   if grep -qE 'oliverc7|iHost-Open-Source' "$VER_JSON" 2>/dev/null; then
@@ -589,15 +598,23 @@ if [[ -f "$VER_JSON" ]]; then
     [[ "$VER_IMGS_SUP" != *greenautarky* ]] && _fail "VER-04: images.supervisor is NOT greenautarky: $VER_IMGS_SUP"
   fi
 
-  # VER-05: core image uses greenautarky registry (both image and images)
-  VER_IMG_CORE="$(jq -r '.image.core // "unknown"' "$VER_JSON" 2>/dev/null)"
-  VER_IMGS_CORE="$(jq -r '.images.core // "unknown"' "$VER_JSON" 2>/dev/null)"
-  if [[ "$VER_IMG_CORE" == *greenautarky* ]] && [[ "$VER_IMGS_CORE" == *greenautarky* ]]; then
-    _pass "VER-05: core image refs both use greenautarky"
+  # VER-05 (V1.2-clean): core image is STOCK upstream (Core fork retired —
+  # see V1.2-CLEAN-REBUILD T2). Both .image.core and .images.core must point
+  # at ghcr.io/home-assistant/*. A `.image.core` key may be absent in a
+  # stock stable.json — only assert on refs that are present.
+  VER_IMG_CORE="$(jq -r '.image.core // empty' "$VER_JSON" 2>/dev/null)"
+  VER_IMGS_CORE="$(jq -r '.images.core // empty' "$VER_JSON" 2>/dev/null)"
+  VER05_OK=true
+  if [[ -n "$VER_IMGS_CORE" ]]; then
+    [[ "$VER_IMGS_CORE" == ghcr.io/home-assistant/* ]] \
+      || { _fail "VER-05: images.core is NOT stock ghcr.io/home-assistant/*: $VER_IMGS_CORE"; VER05_OK=false; }
   else
-    [[ "$VER_IMG_CORE" != *greenautarky* ]] && _fail "VER-05: image.core is NOT greenautarky: $VER_IMG_CORE"
-    [[ "$VER_IMGS_CORE" != *greenautarky* ]] && _fail "VER-05: images.core is NOT greenautarky: $VER_IMGS_CORE"
+    _fail "VER-05: images.core missing from version.json"; VER05_OK=false
   fi
+  if [[ -n "$VER_IMG_CORE" ]] && [[ "$VER_IMG_CORE" != ghcr.io/home-assistant/* ]]; then
+    _fail "VER-05: image.core is NOT stock ghcr.io/home-assistant/*: $VER_IMG_CORE"; VER05_OK=false
+  fi
+  $VER05_OK && _pass "VER-05: core image refs are stock upstream (ghcr.io/home-assistant/*)"
 
   # VER-06: OTA URL points to greenautarky
   VER_OTA="$(jq -r '.ota // "unknown"' "$VER_JSON" 2>/dev/null)"
@@ -636,30 +653,10 @@ if [[ -f "$VER_JSON" ]]; then
     _skip "VER-07" "skopeo not available or no images dir"
   fi
 
-  # VER-08: Frontend SHA in Core image matches frontend repo HEAD
-  FE_VERSION_FILE="${TARGET}/etc/ga-frontend-version"
-  if [[ -f "$FE_VERSION_FILE" ]] && command -v curl >/dev/null 2>&1; then
-    BUILD_FE_SHA="$(grep '^GA_FRONTEND_SHA=' "$FE_VERSION_FILE" 2>/dev/null | cut -d= -f2)"
-    if [[ -n "$BUILD_FE_SHA" ]] && [[ "$BUILD_FE_SHA" != "unknown" ]]; then
-      REMOTE_FE_SHA="$(curl -sf --connect-timeout 10 \
-        -H "Accept: application/vnd.github.v3+json" \
-        "https://api.github.com/repos/greenautarky/frontend/commits/ga/custom-onboarding" 2>/dev/null \
-        | jq -r '.sha // empty' || true)"
-      if [[ -n "$REMOTE_FE_SHA" ]]; then
-        if [[ "$BUILD_FE_SHA" == "$REMOTE_FE_SHA" ]]; then
-          _pass "VER-08: Frontend SHA matches repo HEAD (${BUILD_FE_SHA:0:7})"
-        else
-          _fail "VER-08: Frontend STALE — build has ${BUILD_FE_SHA:0:7} but repo HEAD is ${REMOTE_FE_SHA:0:7}"
-        fi
-      else
-        _skip "VER-08" "could not fetch frontend repo HEAD (offline?)"
-      fi
-    else
-      _skip "VER-08" "frontend SHA unknown in $FE_VERSION_FILE"
-    fi
-  else
-    _skip "VER-08" "ga-frontend-version not found or curl unavailable"
-  fi
+  # VER-08 — REMOVED (V1.2-clean T3): the greenautarky/frontend fork is
+  # retired, so there is no GA frontend SHA to track against a fork HEAD.
+  # Stock Core ships the stock home-assistant-frontend inside its own image;
+  # that the Core image contains a built frontend is asserted by BLD-FE-01.
 
   # VER-09: Supervisor image digest matches GHCR (not stale cache)
   if [[ -d "$IMAGES_DIR" ]] && command -v skopeo >/dev/null 2>&1; then
@@ -726,8 +723,12 @@ if [[ -f "$VER_JSON" ]]; then
     _skip "VER-10" "addon-images.json, skopeo, or images dir not available"
   fi
 
-  # VER-11: Core image io.hass.version label matches version.json tag
-  if [[ -f "$FE_VERSION_FILE" ]] && [[ -d "$IMAGES_DIR" ]]; then
+  # VER-11: Core image io.hass.version label matches version.json tag.
+  # V1.2-clean: this stays meaningful for STOCK Core — a wrong/`latest`
+  # label still loops the Supervisor. The old ga-frontend-version-file
+  # gate is dropped (the GA frontend fork is retired — T3); the check now
+  # depends only on the built Core image tar.
+  if [[ -d "$IMAGES_DIR" ]]; then
     CORE_TAR_V11="$(ls "$IMAGES_DIR"/*homeassistant*.tar 2>/dev/null | head -n 1 || true)"
     if [[ -n "$CORE_TAR_V11" ]]; then
       CONFIG_PATH_V11=$(tar -xOf "$CORE_TAR_V11" manifest.json 2>/dev/null | jq -r '.[0].Config // empty' || true)
@@ -748,33 +749,14 @@ if [[ -f "$VER_JSON" ]]; then
       _skip "VER-11" "no core tar found"
     fi
   else
-    _skip "VER-11" "frontend version file or images dir not available"
+    _skip "VER-11" "core images dir not available (full build needed)"
   fi
 
-  # VER-12: Frontend build date is recent (< 7 days old)
-  if [[ -f "$FE_VERSION_FILE" ]]; then
-    FE_PYVER="$(grep '^GA_FRONTEND_PYVERSION=' "$FE_VERSION_FILE" 2>/dev/null | cut -d= -f2)"
-    if [[ -n "$FE_PYVER" ]] && [[ "$FE_PYVER" != "unknown" ]]; then
-      # Frontend pyversion format: YYYYMMDD.N (e.g. 20260330.1)
-      FE_DATE="${FE_PYVER%%.*}"
-      if [[ ${#FE_DATE} -eq 8 ]]; then
-        FE_EPOCH=$(date -d "${FE_DATE:0:4}-${FE_DATE:4:2}-${FE_DATE:6:2}" +%s 2>/dev/null || echo 0)
-        NOW_EPOCH=$(date +%s)
-        AGE_DAYS=$(( (NOW_EPOCH - FE_EPOCH) / 86400 ))
-        if [[ "$AGE_DAYS" -le 7 ]]; then
-          _pass "VER-12: Frontend build date recent (${FE_DATE}, ${AGE_DAYS} days ago)"
-        else
-          _fail "VER-12: Frontend build date OLD (${FE_DATE}, ${AGE_DAYS} days ago — rebuild Core CI)"
-        fi
-      else
-        _skip "VER-12" "could not parse date from pyversion: $FE_PYVER"
-      fi
-    else
-      _skip "VER-12" "frontend pyversion unknown"
-    fi
-  else
-    _skip "VER-12" "ga-frontend-version not found"
-  fi
+  # VER-12 — REMOVED (V1.2-clean T3): "frontend build date < 7 days old"
+  # tracked the freshness of the greenautarky/frontend fork's CI build via
+  # the ga-frontend-version file. The fork is retired and that file is gone;
+  # stock home-assistant-frontend ships pinned inside stock Core, and its
+  # version is covered by VER-11's io.hass.version label check.
 
 else
   _skip "BLD: version.json" "only present after full build"
@@ -815,48 +797,61 @@ else
   _skip "REG-07: Supervisor tar" "only present after full build"
 fi
 
-# BLD-FE: Verify HA Core container image contains greenautarky onboarding frontend
+# BLD-FE: V1.2-clean — the greenautarky/frontend fork is RETIRED (T3).
+# The GA onboarding wizard no longer rides inside the Core image; it is a
+# `greenautarky_onboarding` custom_component bundled into the ga_manager
+# addon image. So the two checks here change shape:
+#   BLD-FE-01 — stock Core image carries a built STOCK frontend (catches a
+#               broken/empty Core image — the only frontend assertion the
+#               OS repo can still make about Core).
+#   BLD-FE-02 — the greenautarky_onboarding custom_component is vendored
+#               INTO the baked ga_manager addon image.
 echo ""
-echo "--- Frontend in Core image ---"
+echo "--- Frontend (V1.2-clean: stock Core + onboarding in ga_manager) ---"
 
+# Helper: collect all layer tars from a docker/OCI archive.
+#   1. <hash>/layer.tar       (OCI legacy directory layout)
+#   2. blobs/sha256/<hash>    (OCI content-addressable)
+#   3. <hash>.tar             (Docker save flat format)
+_layer_list() { tar -tf "$1" 2>/dev/null | grep -E 'layer\.tar$|^blobs/|^[a-f0-9]{64}\.tar$' || true; }
+# Helper: true if any layer in archive $1 contains a path matching regex $2.
+_archive_contains() {
+  local arch_tar="$1" rx="$2" layer
+  for layer in $(_layer_list "$arch_tar"); do
+    if tar -xf "$arch_tar" --to-stdout "$layer" 2>/dev/null | tar -tf - 2>/dev/null | grep -qE "$rx"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# BLD-FE-01: stock Core image contains a built stock frontend.
 CORE_TAR="$(ls "${OUT}/build/hassio-1.0.0/images/"*homeassistant* 2>/dev/null | head -1)"
 if [[ -n "$CORE_TAR" ]]; then
-  # Docker archive tars contain layer tars; list recursively to find frontend files
-  # The greenautarky-setup.html is installed via the wheel into the HA Core image
-  CORE_FE_FOUND=false
-  # Collect ALL layer tars from the archive — images may contain multiple formats
-  # simultaneously (OCI directory layout + Docker flat format). Search all of them.
-  #   1. <hash>/layer.tar  (OCI legacy directory layout)
-  #   2. blobs/sha256/<hash>  (OCI content-addressable)
-  #   3. <hash>.tar  (Docker save flat format)
-  LAYER_LIST="$(tar -tf "$CORE_TAR" 2>/dev/null | grep -E 'layer\.tar$|^blobs/|^[a-f0-9]{64}\.tar$' || true)"
-  for layer in $LAYER_LIST; do
-    if tar -xf "$CORE_TAR" --to-stdout "$layer" 2>/dev/null | tar -tf - 2>/dev/null | grep -q 'greenautarky-setup\.html'; then
-      CORE_FE_FOUND=true
-      break
-    fi
-  done
-  if $CORE_FE_FOUND; then
-    _pass "BLD-FE-01: Core image contains greenautarky-setup.html"
+  # The stock home-assistant-frontend wheel installs into the hass_frontend
+  # package; its built SPA shell is index.html under hass_frontend/.
+  if _archive_contains "$CORE_TAR" 'hass_frontend/.*index\.html$|hass_frontend/frontend_'; then
+    _pass "BLD-FE-01: Core image contains a built stock frontend (hass_frontend)"
   else
-    _fail "BLD-FE-01: Core image does NOT contain greenautarky-setup.html"
-  fi
-
-  # BLD-FE-02: Verify the greenautarky-setup JS entrypoint bundle exists (separate from .html)
-  CORE_JS_FOUND=false
-  for layer in $LAYER_LIST; do
-    if tar -xf "$CORE_TAR" --to-stdout "$layer" 2>/dev/null | tar -tf - 2>/dev/null | grep -qE 'greenautarky-setup.*\.js'; then
-      CORE_JS_FOUND=true
-      break
-    fi
-  done
-  if $CORE_JS_FOUND; then
-    _pass "BLD-FE-02: Core image contains greenautarky-setup JS bundle"
-  else
-    _fail "BLD-FE-02: Core image does NOT contain greenautarky-setup JS bundle"
+    _fail "BLD-FE-01: Core image does NOT contain a built stock frontend (hass_frontend missing)"
   fi
 else
-  _skip "BLD-FE-01/02: Core image frontend check" "only present after full build"
+  _skip "BLD-FE-01: stock frontend in Core image" "only present after full build"
+fi
+
+# BLD-FE-02: greenautarky_onboarding custom_component is vendored into the
+# baked ga_manager addon image. The ga_manager addon build (greenautarky/
+# ga_manager repo) vendors the component from ha-greenautarky-onboarding;
+# this asserts the baked image the OS ships actually carries it.
+GA_MGR_TAR="$(ls "${OUT}/build/hassio-1.0.0/images/"*ga_manager* 2>/dev/null | head -1)"
+if [[ -n "$GA_MGR_TAR" ]]; then
+  if _archive_contains "$GA_MGR_TAR" 'greenautarky_onboarding/(__init__\.py|manifest\.json)$'; then
+    _pass "BLD-FE-02: ga_manager addon image contains greenautarky_onboarding custom_component"
+  else
+    _fail "BLD-FE-02: ga_manager addon image does NOT contain greenautarky_onboarding custom_component"
+  fi
+else
+  _skip "BLD-FE-02: onboarding component in ga_manager image" "ga_manager addon image tar only present after full build"
 fi
 
 # =========================================================================
@@ -1045,44 +1040,17 @@ if [[ -n "$SRC" ]]; then
     _skip "SRC-08" "post-build.sh not found"
   fi
 
-  # SRC-10: Frontend build pipeline has greenautarky-setup entrypoint
-  FE_ROOT=""
-  for fe_dir in "${SRC}/../homeassistant_frontend" "/home/user/git/homeassistant_frontend"; do
-    [[ -d "$fe_dir/src" ]] && FE_ROOT="$fe_dir" && break
-  done
-  if [[ -n "$FE_ROOT" ]]; then
-    # SRC-10a: HTML template exists
-    [[ -f "${FE_ROOT}/src/html/greenautarky-setup.html.template" ]] \
-      && _pass "SRC-10a: greenautarky-setup.html.template exists" \
-      || _fail "SRC-10a: greenautarky-setup.html.template MISSING — frontend build will not produce GA setup page"
-
-    # SRC-10b: Entrypoint TS exists
-    [[ -f "${FE_ROOT}/src/entrypoints/greenautarky-setup.ts" ]] \
-      && _pass "SRC-10b: greenautarky-setup.ts entrypoint exists" \
-      || _fail "SRC-10b: greenautarky-setup.ts entrypoint MISSING"
-
-    # SRC-10c: bundle.cjs references the entrypoint
-    grep -q '"greenautarky-setup"' "${FE_ROOT}/build-scripts/bundle.cjs" 2>/dev/null \
-      && _pass "SRC-10c: bundle.cjs has greenautarky-setup entry" \
-      || _fail "SRC-10c: bundle.cjs MISSING greenautarky-setup entry — JS won't be compiled"
-
-    # SRC-10d: entry-html.js has the page in APP_PAGE_ENTRIES
-    grep -q '"greenautarky-setup.html"' "${FE_ROOT}/build-scripts/gulp/entry-html.js" 2>/dev/null \
-      && _pass "SRC-10d: entry-html.js has greenautarky-setup.html page" \
-      || _fail "SRC-10d: entry-html.js MISSING greenautarky-setup.html — HTML page won't be generated"
-
-    # SRC-10e: Panel Lit component with user creation step
-    grep -q 'ga-setup-create-user' "${FE_ROOT}/src/panels/greenautarky-setup/ha-panel-greenautarky-setup.ts" 2>/dev/null \
-      && _pass "SRC-10e: Lit panel includes user creation step" \
-      || _fail "SRC-10e: Lit panel MISSING user creation step"
-
-    # SRC-10f: build_frontend script has post-build verification
-    grep -q 'greenautarky-setup.html' "${FE_ROOT}/script/build_frontend" 2>/dev/null \
-      && _pass "SRC-10f: build_frontend verifies greenautarky-setup.html" \
-      || _fail "SRC-10f: build_frontend has NO verification for greenautarky-setup.html"
-  else
-    _skip "SRC-10a..f" "frontend repo not found"
-  fi
+  # SRC-10 — REMOVED (V1.2-clean T3): SRC-10a..f checked the greenautarky/
+  # frontend fork's build pipeline (greenautarky-setup.html.template,
+  # entrypoint TS, bundle.cjs, entry-html.js, the Lit panel, build_frontend
+  # verification). That fork is retired — the OS ships the stock
+  # home-assistant-frontend inside stock Core, and the GA setup wizard now
+  # lives as the greenautarky_onboarding custom_component built in the
+  # ha-greenautarky-onboarding repo. None of those source files exist in or
+  # near the OS repo any more, so there is nothing here for a build-time OS
+  # test to assert. The wizard build is covered by the ha-greenautarky-
+  # onboarding repo's own CI; that the component reaches the device is
+  # covered by BLD-FE-02 (vendored into the ga_manager addon image).
 
   # SRC-11: Core CI workflow verifies wheel contents
   CORE_ROOT=""
@@ -1228,86 +1196,32 @@ PY
     _skip "SRC-11 + BLD-VER-CONSISTENCY + BLD-RELEASE-MANIFEST" "ha-core repo not found"
   fi
 
-  # SRC-12: authorize.ts app-flow redirect (GA onboarding intercept)
-  # Verifies that authorize.ts contains the GA pre-check that redirects the HA
-  # Companion app to the GA setup wizard before auth, and that the panel
-  # handles the return redirect and Admin-Login escape hatch.
-  if [[ -n "$FE_ROOT" ]]; then
-    AUTH_TS="${FE_ROOT}/src/entrypoints/authorize.ts"
-    PANEL_TS="${FE_ROOT}/src/panels/greenautarky-setup/ha-panel-greenautarky-setup.ts"
+  # SRC-12 — REMOVED (V1.2-clean T3): SRC-12a..g asserted the GA app-flow
+  # redirect wired into the greenautarky/frontend fork's authorize.ts and the
+  # greenautarky-setup Lit panel (ga_bypass, ga_auth_redirect, the admin
+  # escape hatches). The frontend fork is retired — authorize.ts is stock
+  # again and the wizard panel moved to the greenautarky_onboarding
+  # custom_component (ha-greenautarky-onboarding repo). The OS build cannot
+  # assert against a fork that no longer exists; the redirect/escape-hatch
+  # behaviour is now the onboarding component repo's own test surface.
 
-    # SRC-12a: authorize.ts fetches the GA onboarding status endpoint
-    grep -q 'greenautarky_onboarding/status' "$AUTH_TS" 2>/dev/null \
-      && _pass "SRC-12a: authorize.ts fetches GA onboarding status" \
-      || _fail "SRC-12a: authorize.ts does NOT fetch GA onboarding status — app-flow redirect will not fire"
+  # SRC-13 — REMOVED (V1.2-clean T3): SRC-13a..c asserted that the
+  # greenautarky/frontend fork's version was CI-managed (pyproject.toml
+  # 0.0.0.dev0 placeholder + the GA Core fork's build-ga-core.yml injection
+  # step + the Core fork's frontend pin files). With the frontend fork
+  # retired and Core gone stock, there is no GA-managed frontend version:
+  # stock Core pins stock home-assistant-frontend itself. Frontend version
+  # correctness is now covered by VER-11 (Core io.hass.version label).
 
-    # SRC-12b: authorize.ts has the ga_bypass admin escape hatch
-    grep -q 'ga_bypass' "$AUTH_TS" 2>/dev/null \
-      && _pass "SRC-12b: authorize.ts has ga_bypass admin bypass" \
-      || _fail "SRC-12b: authorize.ts missing ga_bypass — admin cannot skip GA redirect"
-
-    # SRC-12c: authorize.ts stores the auth URL for return-redirect after setup
-    grep -q 'ga_auth_redirect' "$AUTH_TS" 2>/dev/null \
-      && _pass "SRC-12c: authorize.ts stores ga_auth_redirect in sessionStorage" \
-      || _fail "SRC-12c: authorize.ts does NOT store ga_auth_redirect — return redirect after onboarding will fail"
-
-    # SRC-12d: Panel reads ga_auth_redirect on completion (return to auth URL)
-    grep -q 'ga_auth_redirect' "$PANEL_TS" 2>/dev/null \
-      && _pass "SRC-12d: panel reads ga_auth_redirect for post-completion redirect" \
-      || _fail "SRC-12d: panel does NOT read ga_auth_redirect — app will not return to auth after onboarding"
-
-    # SRC-12e: Panel renders Admin-Login link (escape hatch for admins)
-    grep -q 'admin-login' "$PANEL_TS" 2>/dev/null \
-      && _pass "SRC-12e: panel renders admin-login link" \
-      || _fail "SRC-12e: panel missing admin-login link — admins cannot bypass GA setup"
-
-    # SRC-12f: Build-id rendered as a clickable anchor (URL-change escape hatch)
-    grep -qE '<a class="build-id"[^>]*href=' "$PANEL_TS" 2>/dev/null \
-      && _pass "SRC-12f: build-id is a clickable <a> (URL-change admin escape hatch)" \
-      || _fail "SRC-12f: build-id is not clickable — admin URL-change escape hatch missing"
-
-    # SRC-12g: Build-id anchor points to /admin (server-side admin shortcut)
-    grep -qE '<a class="build-id"[^>]*href="/admin"' "$PANEL_TS" 2>/dev/null \
-      && _pass "SRC-12g: build-id anchor links to /admin (server-resolved bypass)" \
-      || _fail "SRC-12g: build-id anchor does not link to /admin — server-side bypass not wired"
-  else
-    _skip "SRC-12a..g" "frontend repo not found"
-  fi
-
-  # SRC-13: Frontend version is CI-managed (pyproject.toml must use 0.0.0.dev0 placeholder)
-  if [[ -n "$FE_ROOT" ]]; then
-    # SRC-13a: pyproject.toml must NOT contain a hardcoded YYYYMMDD version
-    if grep -qE '^version\s*=\s*"202[0-9]{5}\.' "${FE_ROOT}/pyproject.toml" 2>/dev/null; then
-      _fail "SRC-13a: pyproject.toml has a hardcoded date version — must be 0.0.0.dev0 (CI injects the real version)"
-    else
-      _pass "SRC-13a: pyproject.toml uses placeholder version (CI-managed)"
-    fi
-
-    # SRC-13b: Core CI workflow has the version injection step
-    CORE_ROOT=""
-    for core_dir in "${SRC}/../homeassisant_core" "/home/user/git/homeassisant_core"; do
-      [[ -d "$core_dir/.github" ]] && CORE_ROOT="$core_dir" && break
-    done
-    if [[ -n "$CORE_ROOT" ]]; then
-      CORE_WF="${CORE_ROOT}/.github/workflows/build-ga-core.yml"
-      grep -q 'Compute and inject frontend version' "$CORE_WF" 2>/dev/null \
-        && _pass "SRC-13b: Core CI has version injection step" \
-        || _fail "SRC-13b: Core CI is MISSING version injection step — builds will use placeholder version"
-
-      # SRC-13c: Core pin files use placeholder (not a stale hardcoded version)
-      if grep -qE 'home-assistant-frontend==202[0-9]{5}\.' \
-        "${CORE_ROOT}/homeassistant/components/frontend/manifest.json" \
-        "${CORE_ROOT}/requirements_all.txt" 2>/dev/null; then
-        _fail "SRC-13c: Core repo has hardcoded frontend version — must be 0.0.0.dev0 (CI injects the real version)"
-      else
-        _pass "SRC-13c: Core pin files use placeholder version (CI-managed)"
-      fi
-    else
-      _skip "SRC-13b..c" "ha-core repo not found"
-    fi
-  else
-    _skip "SRC-13a..c" "frontend repo not found"
-  fi
+  # Locate the frontend repo checkout (legacy — frontend fork is retired by
+  # V1.2-clean T3, so this is normally absent). Kept defined for the
+  # still-present SRC-14/15/16 frontend checks below, which _skip cleanly
+  # when no checkout is found. These remaining frontend checks are out of
+  # this rewrite's scope (T2/T3 named families only).
+  FE_ROOT=""
+  for fe_dir in "${SRC}/../homeassistant_frontend" "/home/user/git/homeassistant_frontend"; do
+    [[ -d "$fe_dir/src" ]] && FE_ROOT="$fe_dir" && break
+  done
 
   # SRC-14: PIN verification integration (frontend + core)
   if [[ -n "$FE_ROOT" ]]; then
@@ -1385,7 +1299,9 @@ PY
       || _fail "SRC-15c: wizard not cleaning PIN from URL — security risk"
 
     # SRC-15d: E2E tests for QR auto-inject exist
-    grep -q 'QR auto-inject' "${SCRIPT_DIR}/../../e2e/tests/pin-verification.spec.ts" 2>/dev/null \
+    # SCRIPT_DIR was never defined — fall back to this script's own dir so
+    # the check is robust under `set -u` (pre-existing latent bug).
+    grep -q 'QR auto-inject' "${SCRIPT_DIR:-$(dirname "$0")}/../../e2e/tests/pin-verification.spec.ts" 2>/dev/null \
       && _pass "SRC-15d: QR auto-inject E2E tests exist" \
       || _fail "SRC-15d: QR auto-inject E2E tests missing"
   else
@@ -1421,6 +1337,109 @@ PY
   else
     _fail "SRC-09: Found $STALE_COUNT file(s) with stale upstream refs in functional source"
   fi
+
+  # =========================================================================
+  # GAOS — V1.2-clean OS bake (replaces the retired fork model)
+  # Asserts the V1.2-clean OS ships ga_manager + the GA addons baked in as
+  # Supervisor local addons, installed on first boot by ga-bootstrap.service.
+  # See ga-ihost-docs/V1.2-CLEAN-REBUILD.md T4. These check the source
+  # overlay tree, so they run without a full build.
+  # =========================================================================
+  echo ""
+  echo "--- GAOS: V1.2-clean OS bake (baked local addons + bootstrap) ---"
+
+  ADDON_IMAGES_JSON="${SRC}/buildroot-external/package/hassio/addon-images.json"
+  LOCAL_ADDONS_DIR="${SRC}/buildroot-external/rootfs-overlay/usr/share/ga/local-addons"
+  OVL_SYSTEMD="${SRC}/buildroot-external/rootfs-overlay/usr/lib/systemd/system"
+  OVL_ETC_SYSTEMD="${SRC}/buildroot-external/rootfs-overlay/etc/systemd/system"
+
+  # GAOS-01: addon-images.json includes a ga_manager entry (so the addon
+  # container image is baked into the data partition's docker store).
+  if [[ -f "$ADDON_IMAGES_JSON" ]]; then
+    GAOS_MGR_IMG="$(jq -r '.addons.ga_manager.image // empty' "$ADDON_IMAGES_JSON" 2>/dev/null)"
+    if [[ -n "$GAOS_MGR_IMG" ]]; then
+      _pass "GAOS-01: addon-images.json has a ga_manager entry ($GAOS_MGR_IMG)"
+    else
+      _fail "GAOS-01: addon-images.json has NO ga_manager entry — addon won't be baked offline"
+    fi
+  else
+    _skip "GAOS-01" "addon-images.json not found at $ADDON_IMAGES_JSON"
+  fi
+
+  # GAOS-02: local-addon overlay dirs exist, each with a config.yaml/json.
+  # These are the Supervisor local-addon metadata baked into the OS so the
+  # addons install offline on first boot.
+  if [[ -d "$LOCAL_ADDONS_DIR" ]]; then
+    for _addon in ga_manager ga_mosquitto ga_zigbee2mqtt sonoff_dongle_flasher_for_ihost; do
+      _adir="${LOCAL_ADDONS_DIR}/${_addon}"
+      if [[ -d "$_adir" ]] && { [[ -f "${_adir}/config.yaml" ]] || [[ -f "${_adir}/config.json" ]]; }; then
+        _pass "GAOS-02: local addon '${_addon}' baked with a config file"
+      else
+        _fail "GAOS-02: local addon '${_addon}' missing or has no config.yaml/config.json"
+      fi
+    done
+  else
+    _fail "GAOS-02: local-addons overlay dir missing ($LOCAL_ADDONS_DIR)"
+  fi
+
+  # GAOS-03: ga_manager local addon config has the image: field — with it
+  # set, the Supervisor INSTALLS from the pre-baked image (offline) instead
+  # of building from a Dockerfile.
+  GAOS_MGR_CFG="${LOCAL_ADDONS_DIR}/ga_manager/config.yaml"
+  if [[ -f "$GAOS_MGR_CFG" ]]; then
+    grep -qE '^image:[[:space:]]*"?ghcr\.io/greenautarky/ga_manager' "$GAOS_MGR_CFG" 2>/dev/null \
+      && _pass "GAOS-03: ga_manager local addon config has image: (offline install from baked image)" \
+      || _fail "GAOS-03: ga_manager local addon config has no image: field — Supervisor would try to build from Dockerfile"
+  else
+    _skip "GAOS-03" "ga_manager local addon config.yaml not found"
+  fi
+
+  # GAOS-04: ga_manager addon version is consistent across addon-images.json
+  # and the local-addon config.yaml (and thus the GHCR tag).
+  if [[ -f "$ADDON_IMAGES_JSON" ]] && [[ -f "$GAOS_MGR_CFG" ]]; then
+    GAOS_IMG_VER="$(jq -r '.addons.ga_manager.version // empty' "$ADDON_IMAGES_JSON" 2>/dev/null)"
+    GAOS_CFG_VER="$(grep -E '^version:' "$GAOS_MGR_CFG" 2>/dev/null | head -1 | sed -E 's/^version:[[:space:]]*"?([^"]+)"?.*/\1/')"
+    if [[ -n "$GAOS_IMG_VER" ]] && [[ "$GAOS_IMG_VER" == "$GAOS_CFG_VER" ]]; then
+      _pass "GAOS-04: ga_manager version consistent (addon-images.json=$GAOS_IMG_VER == config.yaml=$GAOS_CFG_VER)"
+    else
+      _fail "GAOS-04: ga_manager version mismatch (addon-images.json=$GAOS_IMG_VER != config.yaml=$GAOS_CFG_VER) — bump in lockstep"
+    fi
+  else
+    _skip "GAOS-04" "addon-images.json or ga_manager config.yaml not found"
+  fi
+
+  # GAOS-05: ga-bootstrap.service + ga-bootstrap-disk.service exist in the
+  # overlay. ga-bootstrap installs/runs the ga_manager local addon every
+  # boot; ga-bootstrap-disk does the early eMMC erase + OS marker.
+  for _svc in ga-bootstrap.service ga-bootstrap-disk.service; do
+    [[ -f "${OVL_SYSTEMD}/${_svc}" ]] \
+      && _pass "GAOS-05: ${_svc} unit present in overlay" \
+      || _fail "GAOS-05: ${_svc} NOT present in overlay (${OVL_SYSTEMD})"
+  done
+
+  # GAOS-06: both bootstrap services are ENABLED via .wants/ symlinks.
+  # ga-bootstrap → multi-user.target.wants, ga-bootstrap-disk → sysinit.
+  if [[ -L "${OVL_ETC_SYSTEMD}/multi-user.target.wants/ga-bootstrap.service" ]]; then
+    _pass "GAOS-06: ga-bootstrap.service enabled (multi-user.target.wants symlink)"
+  else
+    _fail "GAOS-06: ga-bootstrap.service NOT enabled — no multi-user.target.wants symlink"
+  fi
+  if [[ -L "${OVL_ETC_SYSTEMD}/sysinit.target.wants/ga-bootstrap-disk.service" ]]; then
+    _pass "GAOS-06: ga-bootstrap-disk.service enabled (sysinit.target.wants symlink)"
+  else
+    _fail "GAOS-06: ga-bootstrap-disk.service NOT enabled — no sysinit.target.wants symlink"
+  fi
+
+  # GAOS-07: ga-bootstrap.service is ordered after the Supervisor — it
+  # installs the ga_manager local addon through the Supervisor API.
+  if [[ -f "${OVL_SYSTEMD}/ga-bootstrap.service" ]]; then
+    grep -qE '(After|Requires)=.*hassos-supervisor' "${OVL_SYSTEMD}/ga-bootstrap.service" 2>/dev/null \
+      && _pass "GAOS-07: ga-bootstrap.service ordered after hassos-supervisor" \
+      || _fail "GAOS-07: ga-bootstrap.service NOT ordered after hassos-supervisor — addon install will race the Supervisor"
+  else
+    _skip "GAOS-07" "ga-bootstrap.service not found in overlay"
+  fi
+
   # BLD-SUP-DNS: Supervisor fork has GA DNS entries in dns.py
   SUP_ROOT=""
   for sup_dir in "${SRC}/../supervisor" "/home/user/git/supervisor"; do
