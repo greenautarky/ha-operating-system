@@ -22,12 +22,19 @@
 
 set -eu
 
-# Vendored local-addon metadata baked into the (read-only) rootfs.
-ADDON_SRC="/usr/share/ga/local-addons/ga_manager"
+# Vendored local-addon metadata baked into the (read-only) rootfs. This dir
+# holds ONE sub-directory per baked GA addon (ga_manager, ga_mosquitto,
+# ga_zigbee2mqtt, sonoff_dongle_flasher_for_ihost, ...).
+LOCAL_ADDONS_SRC="/usr/share/ga/local-addons"
+# The ga_manager source dir specifically — the only addon ga-bootstrap also
+# *installs* (the rest are installed by ga_manager's own `converge` worker).
+ADDON_SRC="${LOCAL_ADDONS_SRC}/ga_manager"
 # Where the Supervisor scans for local addons (on the data partition).
 LOCAL_ADDONS_DIR="/mnt/data/supervisor/addons/local"
 ADDON_DST="${LOCAL_ADDONS_DIR}/ga_manager"
-# Supervisor slug for a local addon = local_<dirname>.
+# Supervisor slug for a local addon = local_<config-slug>, where <config-slug>
+# is the `slug:` field inside the addon's config.{yaml,json} (NOT the dir
+# name). ga_manager's config carries `slug: ga_manager` -> local_ga_manager.
 ADDON_SLUG="local_ga_manager"
 
 HA="/usr/bin/ha"
@@ -56,21 +63,43 @@ wait_for_supervisor() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 1: stage the vendored local-addon metadata onto the data partition.
+# Step 1: stage EVERY vendored local-addon's metadata onto the data partition.
 #
 # The rootfs is read-only and squashfs; the Supervisor's local-addon store
 # lives on the (writable, NOT RAUC-updated) data partition. Copy the metadata
-# there every boot so an OS update that ships a newer config.yaml is picked
-# up. config.yaml carries an `image:` field -> Supervisor installs from the
+# there every boot so an OS update that ships a newer config is picked up.
+# Each config carries an `image:` field -> Supervisor installs from the
 # pre-baked image, no Dockerfile build, fully offline.
+#
+# ALL baked GA addons are staged here so they are *present* in the local
+# store: ga_manager (which ga-bootstrap then installs itself, below) plus
+# ga_mosquitto / ga_zigbee2mqtt / sonoff_dongle_flasher_for_ihost (which
+# ga_manager's `converge` worker installs — it can only find them if they
+# are already staged into the store). ga-bootstrap stages all, installs one.
 # ---------------------------------------------------------------------------
 stage_local_addon() {
-	[ -d "$ADDON_SRC" ] || die "vendored addon source missing: $ADDON_SRC"
+	[ -d "$LOCAL_ADDONS_SRC" ] || die "vendored local-addons source missing: $LOCAL_ADDONS_SRC"
+	[ -d "$ADDON_SRC" ] || die "vendored ga_manager addon source missing: $ADDON_SRC"
 	mkdir -p "$LOCAL_ADDONS_DIR"
-	mkdir -p "$ADDON_DST"
-	# Copy contents (config.yaml, DOCS.md, icon/logo). -p preserves modes.
-	cp -p "$ADDON_SRC"/* "$ADDON_DST"/ 2>/dev/null || true
-	log "staged local addon metadata into ${ADDON_DST}"
+
+	staged=""
+	for src in "$LOCAL_ADDONS_SRC"/*/; do
+		[ -d "$src" ] || continue
+		name=$(basename "$src")
+		# Skip a dir with no addon config — it cannot be a Supervisor addon.
+		if [ ! -f "${src}config.yaml" ] && [ ! -f "${src}config.yml" ] \
+				&& [ ! -f "${src}config.json" ]; then
+			warn "vendored dir ${name} has no addon config — skipping"
+			continue
+		fi
+		dst="${LOCAL_ADDONS_DIR}/${name}"
+		mkdir -p "$dst"
+		# Copy contents (config.{yaml,json}, DOCS.md, icon/logo, VENDORED.md).
+		# -p preserves modes. VENDORED.md is harmless extra metadata.
+		cp -p "$src"* "$dst"/ 2>/dev/null || true
+		staged="${staged} ${name}"
+	done
+	log "staged local addons into ${LOCAL_ADDONS_DIR}:${staged}"
 }
 
 # ---------------------------------------------------------------------------
