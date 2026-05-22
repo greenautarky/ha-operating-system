@@ -1,0 +1,156 @@
+#!/bin/sh
+# ga-bootstrap-disk - V1.2-clean OS first-boot disk bootstrap
+#
+# Runs early at every boot (idempotent), before the Supervisor starts.
+# Two jobs, in order:
+#
+#   1. eMMC erase  — iHost-only, fail-closed, runs at most once.
+#   2. Write the V1.2-clean OS marker /mnt/data/supervisor/share/.ga_os
+#      (= /share/.ga_os inside addon containers) — the contract ga_manager's
+#      `converge` trigger reads.
+#
+# The addon-install half of first-boot bootstrap is a separate unit
+# (ga-bootstrap.service / ga-bootstrap helper) because it needs the
+# Supervisor up; this unit only needs the data partition mounted.
+#
+# See ga-ihost-docs PROVISIONING-SELF-MIGRATION.md ("Locked design") and
+# V1.2-CLEAN-REBUILD.md (T4).
+
+set -eu
+
+DATA_DIR="/mnt/data"
+SHARE_DIR="${DATA_DIR}/supervisor/share"
+OS_MARKER="${SHARE_DIR}/.ga_os"
+EMMC_DONE_MARKER="${DATA_DIR}/.ga_emmc_erased"
+EMMC_DEVICE="/dev/mmcblk0"
+OS_VARIANT="v1.2-clean"
+
+log()  { echo "ga-bootstrap-disk: $*"; }
+warn() { echo "ga-bootstrap-disk: WARNING: $*" >&2; }
+
+# ---------------------------------------------------------------------------
+# Step 1: eMMC erase — iHost-only, fail-closed, once.
+#
+# Three guard layers; ALL must pass or the erase is skipped. "When in doubt,
+# skip" — a missed erase is operator-recoverable, a wrong erase is not.
+#
+#   Guard A (hardware): /proc/device-tree/compatible contains
+#                       "itead,sonoff-ihost".
+#   Guard B (target):   /dev/mmcblk0boot0 exists — the eMMC hardware boot
+#                       partition. SD cards do not have a boot0 partition,
+#                       so this proves mmcblk0 is the on-board eMMC.
+#   Guard C (root safety): root must be mounted from mmcblk2 (the SD card),
+#                       NOT mmcblk0. If root were on mmcblk0 we would be
+#                       erasing the running system — abort hard.
+#
+# A done-marker on the (persistent) data partition makes this run at most
+# once. Mirrors ga-flasher-py stages.d/35-invalidate-emmc.sh, with the
+# hardware guard added on top.
+# ---------------------------------------------------------------------------
+emmc_erase() {
+	if [ -f "$EMMC_DONE_MARKER" ]; then
+		log "eMMC erase already done (marker $EMMC_DONE_MARKER present) — skipping"
+		return 0
+	fi
+
+	# --- Guard A: hardware must be a Sonoff iHost --------------------------
+	# /proc/device-tree/compatible is a NUL-separated list of strings.
+	if [ ! -e /proc/device-tree/compatible ]; then
+		log "no /proc/device-tree/compatible — not a Sonoff iHost — skipping eMMC erase"
+		return 0
+	fi
+	if ! tr -d '\0' < /proc/device-tree/compatible | grep -q 'itead,sonoff-ihost'; then
+		log "not a Sonoff iHost (device-tree compatible mismatch) — skipping eMMC erase"
+		return 0
+	fi
+
+	# --- Guard B: target must be eMMC (boot0 partition present) -----------
+	if [ ! -e /dev/mmcblk0boot0 ]; then
+		log "/dev/mmcblk0boot0 absent — ${EMMC_DEVICE} is not eMMC (SD card?) — skipping eMMC erase"
+		return 0
+	fi
+
+	# --- Guard C: root must be on the SD card (mmcblk2), not the eMMC -----
+	# This is the dangerous case: if root is on mmcblk0 we would wipe the
+	# running OS. Abort the erase entirely (but do not fail the boot).
+	if ! grep -q 'mmcblk2' /proc/mounts; then
+		warn "root is NOT on mmcblk2 (SD card) — refusing to erase ${EMMC_DEVICE}"
+		warn "this is the dangerous case (root may be on the eMMC) — eMMC erase ABORTED"
+		return 0
+	fi
+	if grep -E '^/dev/mmcblk0' /proc/mounts | grep -qv 'mmcblk0boot'; then
+		warn "${EMMC_DEVICE} has a mounted data partition — refusing to erase"
+		warn "eMMC erase ABORTED"
+		return 0
+	fi
+
+	log "all three guards passed — erasing eMMC ${EMMC_DEVICE}"
+
+	# Unmount any stray eMMC partitions first (best-effort).
+	for part in ${EMMC_DEVICE}p*; do
+		[ -e "$part" ] || continue
+		umount "$part" 2>/dev/null || true
+	done
+
+	# Prefer blkdiscard (fast hardware TRIM); fall back to a zero-fill.
+	erased=0
+	if command -v blkdiscard >/dev/null 2>&1; then
+		if blkdiscard -f "$EMMC_DEVICE" 2>/dev/null; then
+			sync
+			log "blkdiscard succeeded on ${EMMC_DEVICE}"
+			erased=1
+		else
+			warn "blkdiscard failed — falling back to dd zero-fill"
+		fi
+	else
+		log "blkdiscard not available — using dd zero-fill"
+	fi
+
+	if [ "$erased" -eq 0 ]; then
+		# dd writing past the end of the device exits non-zero with
+		# "No space left on device" — that is the success case.
+		dd if=/dev/zero of="$EMMC_DEVICE" bs=4M conv=fsync 2>/dev/null || true
+		sync
+		log "dd zero-fill of ${EMMC_DEVICE} complete"
+		erased=1
+	fi
+
+	# Verify the first sector is zeroed (best-effort — informational only).
+	first32="$(dd if="$EMMC_DEVICE" bs=512 count=1 2>/dev/null \
+		| od -v -A n -t x1 -N 32 | tr -d ' \n' || true)"
+	case "$first32" in
+		0000000000000000000000000000000000000000000000000000000000000000)
+			log "verified: first sector of ${EMMC_DEVICE} is all zeros" ;;
+		*)
+			warn "first-sector verification inconclusive (erase reported success)" ;;
+	esac
+
+	# Done-marker — never erase again on this device.
+	{
+		echo "eMMC ${EMMC_DEVICE} erased by ga-bootstrap-disk"
+		echo "date: $(date '+%Y-%m-%d %H:%M:%S')"
+	} > "$EMMC_DONE_MARKER"
+	log "wrote done-marker ${EMMC_DONE_MARKER}"
+}
+
+# ---------------------------------------------------------------------------
+# Step 2: write the V1.2-clean OS marker.
+#
+# /share/.ga_os (inside addon containers) = /mnt/data/supervisor/share/.ga_os
+# on the host. ga_manager's converge worker reads it as the trigger gate:
+# the marker is present ONLY on the V1.2-clean OS, because this service ships
+# only on the V1.2-clean OS. Written every boot — idempotent.
+# ---------------------------------------------------------------------------
+write_os_marker() {
+	mkdir -p "$SHARE_DIR"
+	# Small non-empty content: variant + the addon version this OS bakes.
+	printf '%s\n' "$OS_VARIANT" > "$OS_MARKER"
+	log "wrote OS marker ${OS_MARKER} (${OS_VARIANT})"
+}
+
+main() {
+	emmc_erase
+	write_os_marker
+}
+
+main "$@"

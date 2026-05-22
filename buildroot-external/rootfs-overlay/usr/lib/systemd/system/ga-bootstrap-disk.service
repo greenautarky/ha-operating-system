@@ -1,0 +1,22 @@
+[Unit]
+Description=GreenAutarky V1.2-clean first-boot disk bootstrap (eMMC erase + OS marker)
+Documentation=man:systemd.special(7)
+DefaultDependencies=no
+# Needs only the data partition mounted — runs early, before the Supervisor.
+After=local-fs.target mnt-data.mount
+Before=basic.target hassos-supervisor.service
+RequiresMountsFor=/mnt/data
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# eMMC erase (iHost-only, fail-closed, marker-guarded once) + write the
+# V1.2-clean OS marker /mnt/data/supervisor/share/.ga_os. Idempotent — runs
+# every boot. A failure here must NOT block the boot: the eMMC step is
+# fully guarded internally, and a missing OS marker only means converge is
+# deferred (operator-recoverable).
+ExecStart=/usr/libexec/ga-bootstrap-disk
+
+[Install]
+WantedBy=sysinit.target

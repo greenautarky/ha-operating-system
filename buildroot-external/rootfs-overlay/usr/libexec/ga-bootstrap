@@ -1,0 +1,148 @@
+#!/bin/sh
+# ga-bootstrap - V1.2-clean OS first-boot addon bootstrap
+#
+# Runs at every boot (idempotent), AFTER the Supervisor is up. Ensures the
+# baked `ga_manager` local addon is installed and running. This is the only
+# job of this unit — once ga_manager is running it owns the rest of device
+# convergence (the `converge` worker, gated on the /share/.ga_os marker that
+# ga-bootstrap-disk writes).
+#
+# Why a boot service and not a one-time provisioning step: a v1.0/v1.1 field
+# device gets V1.2-clean via a RAUC OS update, which swaps the rootfs but
+# NOT the data partition — so the addon must be (re)installed on the device
+# after the OS update too. Idempotent + every-boot covers both fresh-flash
+# and OTA-upgrade paths.
+#
+# Host -> Supervisor API: there is no SUPERVISOR_TOKEN on the host. We use the
+# existing `/usr/bin/ha` wrapper, which runs `ha` inside the `hassio_cli`
+# container; that container holds a valid Supervisor token. Same mechanism
+# the OS already uses for the interactive CLI.
+#
+# See ga-ihost-docs V1.2-CLEAN-REBUILD.md (T4).
+
+set -eu
+
+# Vendored local-addon metadata baked into the (read-only) rootfs.
+ADDON_SRC="/usr/share/ga/local-addons/ga_manager"
+# Where the Supervisor scans for local addons (on the data partition).
+LOCAL_ADDONS_DIR="/mnt/data/supervisor/addons/local"
+ADDON_DST="${LOCAL_ADDONS_DIR}/ga_manager"
+# Supervisor slug for a local addon = local_<dirname>.
+ADDON_SLUG="local_ga_manager"
+
+HA="/usr/bin/ha"
+SUPERVISOR_WAIT_S=300
+INSTALL_WAIT_S=300
+
+log()  { echo "ga-bootstrap: $*"; }
+warn() { echo "ga-bootstrap: WARNING: $*" >&2; }
+die()  { echo "ga-bootstrap: ERROR: $*" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Wait for the Supervisor to be responsive. hassos-supervisor.service starts
+# the container; the API takes a little longer to come up.
+# ---------------------------------------------------------------------------
+wait_for_supervisor() {
+	i=0
+	while [ "$i" -lt "$SUPERVISOR_WAIT_S" ]; do
+		if "$HA" supervisor info --no-progress >/dev/null 2>&1; then
+			log "Supervisor API is responsive"
+			return 0
+		fi
+		sleep 3
+		i=$((i + 3))
+	done
+	return 1
+}
+
+# ---------------------------------------------------------------------------
+# Step 1: stage the vendored local-addon metadata onto the data partition.
+#
+# The rootfs is read-only and squashfs; the Supervisor's local-addon store
+# lives on the (writable, NOT RAUC-updated) data partition. Copy the metadata
+# there every boot so an OS update that ships a newer config.yaml is picked
+# up. config.yaml carries an `image:` field -> Supervisor installs from the
+# pre-baked image, no Dockerfile build, fully offline.
+# ---------------------------------------------------------------------------
+stage_local_addon() {
+	[ -d "$ADDON_SRC" ] || die "vendored addon source missing: $ADDON_SRC"
+	mkdir -p "$LOCAL_ADDONS_DIR"
+	mkdir -p "$ADDON_DST"
+	# Copy contents (config.yaml, DOCS.md, icon/logo). -p preserves modes.
+	cp -p "$ADDON_SRC"/* "$ADDON_DST"/ 2>/dev/null || true
+	log "staged local addon metadata into ${ADDON_DST}"
+}
+
+# ---------------------------------------------------------------------------
+# Step 2: install + start the addon (idempotent).
+# ---------------------------------------------------------------------------
+addon_installed() {
+	# `ha addons info <slug>` succeeds only if the addon is known to the
+	# Supervisor; `version` is non-null once it is installed.
+	"$HA" addons info "$ADDON_SLUG" --no-progress --raw-json 2>/dev/null \
+		| grep -q '"version"' 2>/dev/null
+}
+
+addon_running() {
+	"$HA" addons info "$ADDON_SLUG" --no-progress --raw-json 2>/dev/null \
+		| grep -q '"state"[[:space:]]*:[[:space:]]*"started"' 2>/dev/null
+}
+
+install_addon() {
+	# Make the Supervisor re-scan the local store so it sees the staged dir.
+	log "reloading the addon store"
+	"$HA" addons reload --no-progress >/dev/null 2>&1 \
+		|| warn "addons reload returned non-zero (continuing)"
+
+	if addon_installed; then
+		log "${ADDON_SLUG} already installed — skipping install"
+	else
+		log "installing ${ADDON_SLUG} from the baked local addon"
+		if ! "$HA" addons install "$ADDON_SLUG" --no-progress >/dev/null 2>&1; then
+			# One retry after another store reload — the first reload can
+			# race the Supervisor's own store refresh on a cold first boot.
+			warn "install failed — retrying after a store reload"
+			"$HA" addons reload --no-progress >/dev/null 2>&1 || true
+			sleep 5
+			"$HA" addons install "$ADDON_SLUG" --no-progress >/dev/null 2>&1 \
+				|| die "could not install ${ADDON_SLUG}"
+		fi
+
+		# Wait for the install to settle (offline install from a baked
+		# image is fast, but give it room).
+		i=0
+		while [ "$i" -lt "$INSTALL_WAIT_S" ]; do
+			addon_installed && break
+			sleep 3
+			i=$((i + 3))
+		done
+		addon_installed || die "${ADDON_SLUG} did not finish installing in time"
+		log "${ADDON_SLUG} installed"
+	fi
+
+	if addon_running; then
+		log "${ADDON_SLUG} already running — bootstrap complete"
+	else
+		log "starting ${ADDON_SLUG}"
+		"$HA" addons start "$ADDON_SLUG" --no-progress >/dev/null 2>&1 \
+			|| warn "could not start ${ADDON_SLUG} (Supervisor may auto-start it)"
+	fi
+}
+
+main() {
+	if [ ! -x "$HA" ]; then
+		die "$HA not found — cannot reach the Supervisor"
+	fi
+
+	log "waiting for the Supervisor..."
+	if ! wait_for_supervisor; then
+		die "Supervisor did not become responsive within ${SUPERVISOR_WAIT_S}s"
+	fi
+
+	stage_local_addon
+	install_addon
+
+	log "first-boot addon bootstrap done"
+}
+
+main "$@"
