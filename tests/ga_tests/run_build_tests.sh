@@ -799,15 +799,19 @@ fi
 
 # BLD-FE: V1.2-clean — the greenautarky/frontend fork is RETIRED (T3).
 # The GA onboarding wizard no longer rides inside the Core image; it is a
-# `greenautarky_onboarding` custom_component bundled into the ga_manager
-# addon image. So the two checks here change shape:
+# `greenautarky_onboarding` custom_component. The "vendor it into the
+# ga_manager addon image" plan was DROPPED (T4, commit 0d2c65ff3): the
+# ga_manager Dockerfile's clone of the private ha-greenautarky-onboarding
+# repo had no build credentials and was removed. The component now ships
+# inside the OS rootfs-overlay and is placed at runtime by ga-bootstrap.
+# So the two checks here are:
 #   BLD-FE-01 — stock Core image carries a built STOCK frontend (catches a
 #               broken/empty Core image — the only frontend assertion the
 #               OS repo can still make about Core).
-#   BLD-FE-02 — the greenautarky_onboarding custom_component is vendored
-#               INTO the baked ga_manager addon image.
+#   BLD-FE-02 — the greenautarky_onboarding custom_component is present in
+#               the OS rootfs-overlay (source-tree check, not an image tar).
 echo ""
-echo "--- Frontend (V1.2-clean: stock Core + onboarding in ga_manager) ---"
+echo "--- Frontend (V1.2-clean: stock Core + onboarding in OS overlay) ---"
 
 # Helper: collect all layer tars from a docker/OCI archive.
 #   1. <hash>/layer.tar       (OCI legacy directory layout)
@@ -839,19 +843,37 @@ else
   _skip "BLD-FE-01: stock frontend in Core image" "only present after full build"
 fi
 
-# BLD-FE-02: greenautarky_onboarding custom_component is vendored into the
-# baked ga_manager addon image. The ga_manager addon build (greenautarky/
-# ga_manager repo) vendors the component from ha-greenautarky-onboarding;
-# this asserts the baked image the OS ships actually carries it.
-GA_MGR_TAR="$(ls "${OUT}/build/hassio-1.0.0/images/"*ga_manager* 2>/dev/null | head -1)"
-if [[ -n "$GA_MGR_TAR" ]]; then
-  if _archive_contains "$GA_MGR_TAR" 'greenautarky_onboarding/(__init__\.py|manifest\.json)$'; then
-    _pass "BLD-FE-02: ga_manager addon image contains greenautarky_onboarding custom_component"
+# BLD-FE-02: greenautarky_onboarding custom_component ships inside the OS
+# rootfs-overlay (T4, commit 0d2c65ff3). The OS bakes it into the read-only
+# rootfs at /usr/share/ga/custom_components/greenautarky_onboarding/;
+# ga-bootstrap stages it to /share at runtime and ga_manager's converge
+# worker copies it into /config/custom_components. This is a source-tree
+# check (the overlay is part of the OS repo), so it does NOT need a full
+# build — but it does need the source tree, which is resolved here because
+# the SRC variable is only defined further down in the script.
+BLD_FE_SRC=""
+if [[ -d "/build/buildroot-external" ]]; then
+  BLD_FE_SRC="/build"
+elif [[ -d "${OUT}/../buildroot-external" ]]; then
+  BLD_FE_SRC="$(cd "${OUT}/.." && pwd)"
+elif [[ -d "$(dirname "$0")/../../buildroot-external" ]]; then
+  BLD_FE_SRC="$(cd "$(dirname "$0")/../.." && pwd)"
+fi
+if [[ -n "$BLD_FE_SRC" ]]; then
+  GA_ONBOARD_DIR="${BLD_FE_SRC}/buildroot-external/rootfs-overlay/usr/share/ga/custom_components/greenautarky_onboarding"
+  if [[ -f "${GA_ONBOARD_DIR}/__init__.py" ]] && [[ -f "${GA_ONBOARD_DIR}/manifest.json" ]]; then
+    # Also sanity-check the manifest declares the expected domain so a
+    # stray empty/wrong directory cannot pass this test.
+    if jq -e '.domain == "greenautarky_onboarding"' "${GA_ONBOARD_DIR}/manifest.json" >/dev/null 2>&1; then
+      _pass "BLD-FE-02: greenautarky_onboarding custom_component present in OS rootfs-overlay"
+    else
+      _fail "BLD-FE-02: greenautarky_onboarding manifest.json present but domain is wrong/missing"
+    fi
   else
-    _fail "BLD-FE-02: ga_manager addon image does NOT contain greenautarky_onboarding custom_component"
+    _fail "BLD-FE-02: greenautarky_onboarding custom_component MISSING from OS rootfs-overlay (expected __init__.py + manifest.json under ${GA_ONBOARD_DIR})"
   fi
 else
-  _skip "BLD-FE-02: onboarding component in ga_manager image" "ga_manager addon image tar only present after full build"
+  _skip "BLD-FE-02: onboarding component in OS overlay" "source tree (buildroot-external) not found"
 fi
 
 # =========================================================================
@@ -1050,7 +1072,7 @@ if [[ -n "$SRC" ]]; then
   # near the OS repo any more, so there is nothing here for a build-time OS
   # test to assert. The wizard build is covered by the ha-greenautarky-
   # onboarding repo's own CI; that the component reaches the device is
-  # covered by BLD-FE-02 (vendored into the ga_manager addon image).
+  # covered by BLD-FE-02 (vendored into the OS rootfs-overlay — T4).
 
   # SRC-11: Core CI workflow verifies wheel contents
   CORE_ROOT=""
@@ -1626,7 +1648,12 @@ PY
   echo ""
   echo "--- Cross-repo version alignment ---"
 
-  STABLE_JSON="$(curl -sf 'https://raw.githubusercontent.com/greenautarky/haos-version/main/stable.json' 2>/dev/null || true)"
+  # V1.2-clean WIP: fetch the version source from the release/v1.2-rebuild
+  # branch's stable.json (stock Core image + version, GA supervisor). This
+  # is the SAME branch the OS build itself reads — see hassio.mk
+  # HASSIO_VERSION_URL. Revert to main/ when release/v1.2-rebuild is merged
+  # at the V1.2 promote (mirror the hassio.mk comment when you do).
+  STABLE_JSON="$(curl -sf 'https://raw.githubusercontent.com/greenautarky/haos-version/release/v1.2-rebuild/stable.json' 2>/dev/null || true)"
 
   if [[ -n "$STABLE_JSON" ]]; then
     STABLE_CORE="$(echo "$STABLE_JSON" | jq -r '.core // "unknown"')"
@@ -1635,28 +1662,33 @@ PY
     STABLE_SUP_IMG="$(echo "$STABLE_JSON" | jq -r '.images.supervisor // "unknown"')"
     STABLE_CORE_TINKER="$(echo "$STABLE_JSON" | jq -r '.homeassistant.tinker // "unknown"')"
 
-    # XVER-01: stable.json core version uses calver (not -ga.N)
-    if [[ "$STABLE_CORE" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
-      _pass "XVER-01: stable.json core is calver: $STABLE_CORE"
+    # XVER-01 (V1.2-clean): stable.json core is a STOCK 3-part HA calver
+    # (YYYY.MM.PATCH). The retired fork used a 4-part `.N` GA suffix; clean
+    # V1.2 ships stock Core, so the version must be exactly 3 parts.
+    if [[ "$STABLE_CORE" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
+      _pass "XVER-01: stable.json core is a stock 3-part calver: $STABLE_CORE"
     else
-      _fail "XVER-01: stable.json core is NOT calver: $STABLE_CORE"
+      _fail "XVER-01: stable.json core is NOT a stock 3-part calver: $STABLE_CORE (V1.2-clean Core must be plain YYYY.MM.PATCH — no .N / -ga.N suffix)"
     fi
 
-    # XVER-02: stable.json supervisor version uses calver (not -ga.N)
-    if [[ "$STABLE_SUP" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
-      _pass "XVER-02: stable.json supervisor is calver: $STABLE_SUP"
+    # XVER-02 (V1.2-clean): stable.json supervisor is a GA-fork calver. The
+    # Supervisor stays a GA fork (permanent armv7 fork), so it keeps the
+    # 4-part `.N` GA build counter — currently 2025.11.5.2.
+    if [[ "$STABLE_SUP" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      _pass "XVER-02: stable.json supervisor is a GA-fork calver: $STABLE_SUP"
     else
-      _fail "XVER-02: stable.json supervisor is NOT calver: $STABLE_SUP"
+      _fail "XVER-02: stable.json supervisor is NOT a 4-part GA-fork calver: $STABLE_SUP (expected YYYY.MM.PATCH.N)"
     fi
 
-    # XVER-03: stable.json core image is greenautarky
-    [[ "$STABLE_CORE_IMG" == *greenautarky* ]] \
-      && _pass "XVER-03: stable.json core image is greenautarky" \
-      || _fail "XVER-03: stable.json core image is NOT greenautarky: $STABLE_CORE_IMG"
+    # XVER-03 (V1.2-clean): Core fork retired — stable.json core image must
+    # be STOCK upstream (ghcr.io/home-assistant/*), NOT greenautarky.
+    [[ "$STABLE_CORE_IMG" == ghcr.io/home-assistant/* ]] \
+      && _pass "XVER-03: stable.json core image is stock upstream: $STABLE_CORE_IMG" \
+      || _fail "XVER-03: stable.json core image is NOT stock ghcr.io/home-assistant/*: $STABLE_CORE_IMG"
 
-    # XVER-04: stable.json supervisor image is greenautarky
+    # XVER-04: stable.json supervisor image is greenautarky (GA fork stays)
     [[ "$STABLE_SUP_IMG" == *greenautarky* ]] \
-      && _pass "XVER-04: stable.json supervisor image is greenautarky" \
+      && _pass "XVER-04: stable.json supervisor image is greenautarky: $STABLE_SUP_IMG" \
       || _fail "XVER-04: stable.json supervisor image is NOT greenautarky: $STABLE_SUP_IMG"
 
     # XVER-05: stable.json core == tinker-specific core (no machine mismatch)
@@ -1673,29 +1705,33 @@ PY
         _fail "XVER-06: version.json core ($VJ_CORE) != stable.json core ($STABLE_CORE)"
       fi
     else
-      _skip "XVER-06" "version.json not found"
+      _skip "XVER-06" "version.json not found (full build needed)"
     fi
 
-    # XVER-07: build version.json core matches stable.json core
+    # XVER-07: build version.json supervisor matches stable.json supervisor.
+    # (XVER-06 already covers core; this catches a Supervisor desync — the
+    # OS reads version.json from the same branch this stable.json is on.)
     if [[ -f "$VER_JSON" ]]; then
-      BUILD_CORE="$(jq -r '.core // "unknown"' "$VER_JSON" 2>/dev/null)"
-      if [[ "$BUILD_CORE" == "$STABLE_CORE" ]]; then
-        _pass "XVER-07: build version.json core ($BUILD_CORE) matches stable.json ($STABLE_CORE)"
+      BUILD_SUP="$(jq -r '.supervisor // "unknown"' "$VER_JSON" 2>/dev/null)"
+      if [[ "$BUILD_SUP" == "$STABLE_SUP" ]]; then
+        _pass "XVER-07: build version.json supervisor ($BUILD_SUP) matches stable.json ($STABLE_SUP)"
       else
-        _fail "XVER-07: build version.json core ($BUILD_CORE) != stable.json ($STABLE_CORE)"
+        _fail "XVER-07: build version.json supervisor ($BUILD_SUP) != stable.json ($STABLE_SUP)"
       fi
     else
       _skip "XVER-07" "build version.json not present (full build needed)"
     fi
 
-    # XVER-08: No -ga.N pattern anywhere in stable.json (enforce calver)
+    # XVER-08: No -ga.N pattern anywhere in stable.json (enforce calver).
+    # AwesomeVersion treats a SemVer -ga.N suffix differently — it must
+    # never appear; the GA build counter is the 4-part `.N` instead.
     if echo "$STABLE_JSON" | grep -qE '"[0-9]{4}\.[0-9]+\.[0-9]+-ga\.[0-9]+"'; then
-      _fail "XVER-08: stable.json still contains -ga.N version (must use .N calver)"
+      _fail "XVER-08: stable.json still contains a -ga.N version (must use .N calver)"
     else
       _pass "XVER-08: stable.json has no -ga.N versions (clean calver)"
     fi
   else
-    _skip "XVER-01..08" "could not fetch stable.json (offline or network error)"
+    _skip "XVER-01..08" "could not fetch stable.json from release/v1.2-rebuild (offline or network error)"
   fi
 
 else
