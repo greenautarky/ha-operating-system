@@ -30,6 +30,8 @@ define HASSIO_CONFIGURE_CMDS
 	# HomeAssistantOS Deploy only landing page for "core" by setting version to "landingpage", but we are using the full core image whether BR2_PACKAGE_HASSIO_FULL_CORE is set or not
 	curl -s $(HASSIO_VERSION_URL)$(HASSIO_VERSION_CHANNEL)".json" | jq '.core = $(HASSIO_CORE_VERSION)' > $(@D)/version.json;
 	# Validate version.json: reject "latest" and wrong registries (catches stale stable.json)
+	# V1.2-clean: Core is STOCK upstream (ghcr.io/home-assistant/*) — GA value
+	# moved to a custom_component. Only the Supervisor stays a GA image.
 	@VJ=$(@D)/version.json; \
 	SUP=$$(jq -r '.supervisor' $$VJ); \
 	CORE=$$(jq -r '.core' $$VJ); \
@@ -41,7 +43,7 @@ define HASSIO_CONFIGURE_CMDS
 	if [ "$$CORE" = "latest" ] || [ -z "$$CORE" ]; then echo "ERROR: version.json core='$$CORE' (must be pinned version)"; FAIL=1; fi; \
 	if [ "$$TINKER" = "latest" ] || [ -z "$$TINKER" ]; then echo "ERROR: version.json tinker='$$TINKER' (must be pinned version)"; FAIL=1; fi; \
 	if ! echo "$$SUP_IMG" | grep -q greenautarky; then echo "ERROR: version.json supervisor image='$$SUP_IMG' (must use greenautarky)"; FAIL=1; fi; \
-	if ! echo "$$CORE_IMG" | grep -q greenautarky; then echo "ERROR: version.json core image='$$CORE_IMG' (must use greenautarky)"; FAIL=1; fi; \
+	if ! echo "$$CORE_IMG" | grep -qE '^ghcr\.io/home-assistant/'; then echo "ERROR: version.json core image='$$CORE_IMG' (V1.2-clean: Core must be stock ghcr.io/home-assistant/*)"; FAIL=1; fi; \
 	if [ $$FAIL -ne 0 ]; then echo "FATAL: version.json validation failed — check haos-version stable.json"; exit 1; fi; \
 	echo "version.json validated: supervisor=$$SUP core=$$CORE tinker=$$TINKER"
 endef
