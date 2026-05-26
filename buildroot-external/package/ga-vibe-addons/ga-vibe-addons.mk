@@ -22,7 +22,7 @@ GA_VIBE_ADDONS_REDISTRIBUTE = NO
 # resulting tree carries `.git` (required for the file:// store-add to
 # look like a real git repo to the Supervisor's git client).
 GA_VIBE_ADDONS_SOURCE =
-GA_VIBE_ADDONS_DEPENDENCIES = host-git
+# git is provided by the build host / hassos:local container — no BR package
 
 GA_VIBE_ADDONS_REPO_URL = https://github.com/greenautarky/vibe_addons.git
 GA_VIBE_ADDONS_REPO_REF = main
