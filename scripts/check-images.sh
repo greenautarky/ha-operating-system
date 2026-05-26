@@ -140,6 +140,76 @@ if [ -f "$ADDON_IMAGES_JSON" ]; then
     done
 fi
 
+# --- vibe_addons lockstep with addon-images.json ---
+#
+# The OS bundle pins addon versions via addon-images.json. Provisioning
+# installs from the public vibe_addons addon repo — so its config
+# versions MUST match the bundle pins, or a freshly-provisioned device
+# would land on whatever vibe_addons HEAD currently says (version drift).
+# Match by `image:` (NOT slug — vibe_addons uses different naming, e.g.
+# addon-images.json key `ga_tailscale` lives in vibe_addons/tailscale/
+# with slug `ga_tailscale`; some addons use config.json, others config.yaml).
+# Discipline: when bumping an addon in the bundle, bump vibe_addons/main
+# in the same change set.
+_read_addon_field() {
+    # $1 = config file path (.yaml or .json), $2 = top-level field name
+    local f="$1" field="$2"
+    case "$f" in
+        *.json) jq -r ".${field} // empty" "$f" 2>/dev/null ;;
+        *)      awk -v F="$field" '$0 ~ "^"F":"{sub("^"F":[[:space:]]*", ""); gsub(/^"|"$/, ""); print; exit}' "$f" ;;
+    esac
+}
+
+if [ -f "$ADDON_IMAGES_JSON" ] && command -v git >/dev/null 2>&1; then
+    echo ""
+    echo "--- vibe_addons lockstep with addon-images.json ---"
+    VIBE_TMP=$(mktemp -d)
+    trap 'rm -rf "$VIBE_TMP"' EXIT
+    VIBE_REPO_URL="${VIBE_ADDONS_REPO_URL:-https://github.com/greenautarky/vibe_addons}"
+    VIBE_REPO_REF="${VIBE_ADDONS_REPO_REF:-main}"
+    if ! git clone --depth=1 --quiet --branch "$VIBE_REPO_REF" "$VIBE_REPO_URL" "$VIBE_TMP/vibe_addons" 2>/dev/null; then
+        printf "${YELLOW}WARN${NC}: could not clone %s @ %s — skipping vibe_addons lockstep check\n" \
+            "$VIBE_REPO_URL" "$VIBE_REPO_REF"
+    else
+        for key in $(jq -r '.addons | keys[]' "$ADDON_IMAGES_JSON"); do
+            expected_image=$(jq -r ".addons.\"${key}\".image" "$ADDON_IMAGES_JSON")
+            expected_version=$(jq -r ".addons.\"${key}\".version" "$ADDON_IMAGES_JSON")
+            # Find the vibe_addons subdir whose config `image:` field == expected_image
+            found_dir=""
+            found_slug=""
+            for dir in "$VIBE_TMP/vibe_addons"/*/; do
+                cfg=""
+                for c in "$dir/config.yaml" "$dir/config.json"; do
+                    [ -f "$c" ] && cfg="$c" && break
+                done
+                [ -z "$cfg" ] && continue
+                img=$(_read_addon_field "$cfg" image)
+                if [ "$img" = "$expected_image" ]; then
+                    found_dir="$dir"
+                    found_slug=$(_read_addon_field "$cfg" slug)
+                    found_version=$(_read_addon_field "$cfg" version)
+                    break
+                fi
+            done
+            if [ -z "$found_dir" ]; then
+                printf "${RED}FAIL${NC}: addon-images.json[%s] image=%s has no matching addon in vibe_addons\n" \
+                    "$key" "$expected_image"
+                fail_count=$((fail_count + 1))
+                continue
+            fi
+            if [ "$found_version" = "$expected_version" ]; then
+                printf "${GREEN}OK${NC}: %s (slug=%s, dir=%s) version %s — vibe_addons in lockstep\n" \
+                    "$key" "$found_slug" "$(basename "$found_dir")" "$found_version"
+                pass_count=$((pass_count + 1))
+            else
+                printf "${RED}FAIL${NC}: %s version mismatch — addon-images.json=%s vibe_addons/%s=%s — bump one to match\n" \
+                    "$key" "$expected_version" "$(basename "$found_dir")" "$found_version"
+                fail_count=$((fail_count + 1))
+            fi
+        done
+    fi
+fi
+
 # --- Summary ---
 echo ""
 echo "=== Summary ==="
