@@ -1393,23 +1393,13 @@ PY
     _skip "GAOS-01" "addon-images.json not found at $ADDON_IMAGES_JSON"
   fi
 
-  # GAOS-02: ga-bootstrap registers vibe_addons as a repo-linked addon
-  # repository from the OS-baked snapshot via a file:// URL (NOT the public
-  # github.com URL — that made first-boot install dependent on GitHub
-  # reachability + a successful git-clone + a successful integrity check,
-  # every link a flake source). The new flow: the ga-vibe-addons BR package
-  # clones the public repo at build time and vendors it into
-  # /usr/share/ga/vibe_addons (with .git); ga-bootstrap copies it to
-  # /mnt/data/supervisor/ga-vibe-addons (Supervisor sees /data/ga-vibe-addons)
-  # and `ha store add file:///data/ga-vibe-addons`. Still NOT a `local_*`
-  # addon — installed slug is `<repo_id>_ga_manager`.
+  # GAOS-02: ga-bootstrap registers the public vibe_addons addon repository
+  # (a repo-linked addon flow — NOT obsolete `local_*` addons). The vendored
+  # local-addons overlay tree must be GONE.
   if [[ -f "$GA_BOOTSTRAP" ]]; then
-    grep -qE 'file:///data/ga-vibe-addons' "$GA_BOOTSTRAP" 2>/dev/null \
-      && _pass "GAOS-02: ga-bootstrap registers vibe_addons via the file:// URL (offline-deterministic)" \
-      || _fail "GAOS-02: ga-bootstrap does NOT register vibe_addons via the file:// URL"
-    grep -qE '/usr/share/ga/vibe_addons' "$GA_BOOTSTRAP" 2>/dev/null \
-      && _pass "GAOS-02a: ga-bootstrap references the rootfs-baked /usr/share/ga/vibe_addons snapshot" \
-      || _fail "GAOS-02a: ga-bootstrap does NOT reference the baked /usr/share/ga/vibe_addons snapshot"
+    grep -qE 'github\.com/greenautarky/vibe_addons' "$GA_BOOTSTRAP" 2>/dev/null \
+      && _pass "GAOS-02: ga-bootstrap registers the greenautarky/vibe_addons addon repo" \
+      || _fail "GAOS-02: ga-bootstrap does NOT reference the vibe_addons addon repo"
     grep -qE '\bha\b.*store add|store add' "$GA_BOOTSTRAP" 2>/dev/null \
       && _pass "GAOS-02b: ga-bootstrap uses 'ha store add' to register the repo" \
       || _fail "GAOS-02b: ga-bootstrap does NOT 'ha store add' the repo"
@@ -1420,15 +1410,6 @@ PY
     _fail "GAOS-02c: obsolete vendored local-addons overlay tree still present — must be removed"
   else
     _pass "GAOS-02c: obsolete vendored local-addons overlay tree removed"
-  fi
-  # GAOS-02d: the ga-vibe-addons Buildroot package exists in the source tree
-  # (the BR package that clones vibe_addons at build time and vendors it into
-  # the rootfs — without it, the bake never happens and the file:// store-add
-  # would point at a non-existent path on the device).
-  if [[ -f "${SRC}/buildroot-external/package/ga-vibe-addons/ga-vibe-addons.mk" ]]; then
-    _pass "GAOS-02d: ga-vibe-addons BR package present in source"
-  else
-    _fail "GAOS-02d: ga-vibe-addons BR package missing — bake won't happen"
   fi
 
   # GAOS-03: ga-bootstrap resolves the repo-prefixed addon slug DYNAMICALLY

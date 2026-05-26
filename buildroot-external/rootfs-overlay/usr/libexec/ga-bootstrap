@@ -41,28 +41,12 @@
 
 set -eu
 
-# The vibe_addons addon repo is staged from the rootfs-baked snapshot
-# (/usr/share/ga/vibe_addons, the ga-vibe-addons Buildroot package) onto
-# the writable data partition at first boot, then registered with the
-# Supervisor via a file:// URL. Three properties matter:
-#  - first-boot install is OFFLINE-deterministic — no GitHub clone in the
-#    critical path, so no DNS/network/integrity-check flake.
-#  - the addon set is PINNED to the OS release (the snapshot's config.yaml
-#    versions match addon-images.json — no drift to `vibe_addons` HEAD).
-#  - the file:// URL is STABLE for the device's life, so ga_manager-driven
-#    updates (`cd $LIVE && git fetch origin && ha store reload` then
-#    `ha addons update <slug>`) preserve Supervisor repo-id / slugs.
-# The baked snapshot includes `.git` with origin = the public URL, so the
-# writable copy can later `git fetch origin` to pull new addon versions.
-# Each addon config.yaml still carries an `image:` key -> Supervisor pulls
-# the prebuilt image from GHCR (or uses the OS-baked one when present).
-VIBE_ADDONS_BAKED="/usr/share/ga/vibe_addons"
-# Writable copy on the data partition. Host path -> Supervisor sees this
-# as /data/ga-vibe-addons (host /mnt/data/supervisor/ is the Supervisor
-# container's /data/).
-VIBE_ADDONS_LIVE_HOST="/mnt/data/supervisor/ga-vibe-addons"
-# The URL passed to `ha store add` — path is from the Supervisor's POV.
-VIBE_ADDONS_REPO="file:///data/ga-vibe-addons"
+# The public GA addon repository. Adding this to the Supervisor makes every
+# GA addon (ga_manager, mosquitto, zigbee2mqtt, the dongle flasher, ...)
+# available as a repo-linked addon. Each addon dir carries a `config.yaml`
+# with an `image:` key -> Supervisor pulls the prebuilt image from GHCR,
+# never builds from the (private) source repo.
+VIBE_ADDONS_REPO="https://github.com/greenautarky/vibe_addons"
 # The addon-slug *identity* (the `slug:` field inside vibe_addons'
 # ga_manager/config.yaml) — the stable suffix. The Supervisor-assigned full
 # slug is `<repo_id>_ga_manager`; <repo_id> is resolved at runtime.
@@ -134,29 +118,7 @@ stage_custom_components() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 1a-bis: seed the writable vibe_addons snapshot on the data partition
-# from the rootfs-baked copy. Idempotent: re-runs (incl. after an OS RAUC
-# update) are no-ops if the writable .git is already present, so any
-# ga_manager-driven `git fetch origin` history survives.
-# ---------------------------------------------------------------------------
-prepare_vibe_addons() {
-	if [ -d "${VIBE_ADDONS_LIVE_HOST}/.git" ]; then
-		log "vibe_addons writable snapshot already present at ${VIBE_ADDONS_LIVE_HOST}"
-		return 0
-	fi
-	if [ ! -d "${VIBE_ADDONS_BAKED}/.git" ]; then
-		die "baked vibe_addons snapshot missing at ${VIBE_ADDONS_BAKED} (.git absent) — OS bundle broken"
-	fi
-	log "seeding ${VIBE_ADDONS_LIVE_HOST} from baked ${VIBE_ADDONS_BAKED}"
-	rm -rf "${VIBE_ADDONS_LIVE_HOST}"
-	mkdir -p "$(dirname "${VIBE_ADDONS_LIVE_HOST}")"
-	cp -a "${VIBE_ADDONS_BAKED}" "${VIBE_ADDONS_LIVE_HOST}"
-	# origin URL is already set in the bake — no need to re-set here. ga_manager
-	# is the future update path; it owns `git fetch origin` + `ha store reload`.
-}
-
-# ---------------------------------------------------------------------------
-# Step 1b: register the vibe_addons addon repository (idempotent).
+# Step 1b: register the public vibe_addons addon repository (idempotent).
 #
 # `ha store add` is idempotent on the Supervisor side, but we check first so
 # a re-boot doesn't emit a spurious "already exists" error. The Supervisor
@@ -324,7 +286,6 @@ main() {
 	fi
 
 	stage_custom_components
-	prepare_vibe_addons
 	add_addon_repo
 
 	log "resolving the repo-prefixed ga_manager slug..."
