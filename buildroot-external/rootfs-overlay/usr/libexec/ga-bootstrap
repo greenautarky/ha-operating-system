@@ -142,17 +142,35 @@ add_addon_repo() {
 		log "addon repository ${VIBE_ADDONS_REPO} already registered — skipping add"
 		return 0
 	fi
-	log "registering addon repository ${VIBE_ADDONS_REPO}"
-	if ! "$HA" store add "$VIBE_ADDONS_REPO" --no-progress >/dev/null 2>&1; then
-		# One retry — a cold first boot can race the Supervisor's own
-		# store initialisation.
-		warn "store add failed — retrying once"
-		sleep 5
-		"$HA" store add "$VIBE_ADDONS_REPO" --no-progress >/dev/null 2>&1 \
-			|| die "could not register addon repository ${VIBE_ADDONS_REPO}"
-	fi
-	# Nudge a store reload so the clone + scan starts promptly.
-	"$HA" store reload --no-progress >/dev/null 2>&1 || true
+
+	# First-boot `ha store add` is racy: in the first ~1-2 min of a fresh
+	# device's life, the Supervisor's git clone of the repo can fail in
+	# subtle ways even though raw connectivity is fine — observed:
+	#   - "Cmd('git') failed exit(8) — stderr: error: invalid HEAD"
+	#     (post-clone integrity check on a not-quite-settled .git state)
+	#   - "Cmd('git') failed exit(128)" (clone bailed out)
+	# Both clear up within a couple of minutes; the same `ha store add` then
+	# succeeds. Retry with exponential backoff over a ~8 min budget. A
+	# successful API response is NOT trusted on its own — the clone happens
+	# async, so verify with `addon_repo_present` before declaring success.
+	# Pre-sleep before attempt N (0 = no pre-sleep on the first try):
+	for pre_sleep in 0 10 30 60 120 240; do
+		if [ "$pre_sleep" -gt 0 ]; then
+			log "waiting ${pre_sleep}s before retry..."
+			"$HA" store reload --no-progress >/dev/null 2>&1 || true
+			sleep "$pre_sleep"
+		fi
+		log "registering addon repository ${VIBE_ADDONS_REPO}"
+		if "$HA" store add "$VIBE_ADDONS_REPO" --no-progress >/dev/null 2>&1 \
+				&& addon_repo_present; then
+			log "addon repository registered"
+			# Nudge a store reload so the addon scan starts promptly.
+			"$HA" store reload --no-progress >/dev/null 2>&1 || true
+			return 0
+		fi
+		warn "store add did not register the repo (likely a transient clone error)"
+	done
+	die "could not register addon repository ${VIBE_ADDONS_REPO} after 6 attempts (~8 min)"
 }
 
 # ---------------------------------------------------------------------------
