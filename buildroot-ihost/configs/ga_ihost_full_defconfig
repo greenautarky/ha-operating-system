@@ -187,6 +187,7 @@ BR2_PACKAGE_MATTER=y
 BR2_PACKAGE_FLUENT_BIT=y
 # Added config package for Fluentbit, since Fluentbit already exists as package in buildroot
 BR2_PACKAGE_FLUENT_BIT_CONFIG=y
+BR2_PACKAGE_GA_VIBE_ADDONS=y
 BR2_PACKAGE_NETBIRD=y
 BR2_PACKAGE_TELEGRAF=y
 
