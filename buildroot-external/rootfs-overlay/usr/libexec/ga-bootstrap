@@ -1,0 +1,321 @@
+#!/bin/sh
+# ga-bootstrap - V1.2-clean OS first-boot addon bootstrap
+#
+# Runs at every boot (idempotent), AFTER the Supervisor is up. Ensures the
+# public `greenautarky/vibe_addons` addon repository is registered with the
+# Supervisor and that the `ga_manager` addon from it is installed and
+# running. This is the only job of this unit — once ga_manager is running it
+# owns the rest of device convergence (the `converge` worker, gated on the
+# /share/.ga_os marker that ga-bootstrap-disk writes).
+#
+# Why a repo-linked addon and not a `local_*` addon: a self-provisioned
+# device's addon install path must be IDENTICAL to a normal "add the repo,
+# install the addon" flow — `<repo>_ga_manager`, not `local_ga_manager` —
+# so the fleet is consistent regardless of how a device was set up. The
+# private `ga_manager` source repo is never needed: the vibe_addons
+# `config.yaml` carries an `image:` key, so the Supervisor PULLS the
+# prebuilt image from GHCR and never builds from source. Offline installs
+# still work because the OS bakes the addon images into the local Docker
+# store via addon-images.json (untouched by this script).
+#
+# Why a boot service and not a one-time provisioning step: a v1.0/v1.1 field
+# device gets V1.2-clean via a RAUC OS update, which swaps the rootfs but
+# NOT the data partition — so the repo + addon must be (re)registered and
+# (re)installed on the device after the OS update too. Idempotent +
+# every-boot covers both fresh-flash and OTA-upgrade paths.
+#
+# Host -> Supervisor API: there is no SUPERVISOR_TOKEN on the host. We use the
+# existing `/usr/bin/ha` wrapper, which runs `ha` inside the `hassio_cli`
+# container; that container holds a valid Supervisor token. Same mechanism
+# the OS already uses for the interactive CLI.
+#
+# CRITICAL — the repo-prefixed slug: when a git-based addon repository is
+# added, the Supervisor assigns each addon the slug `<repo_id>_<addon_slug>`
+# where `<repo_id>` is a Supervisor-derived identifier for the repository
+# (a hash of the repo URL — NOT `local`, NOT the repo name). So after the
+# repo is added the `ga_manager` addon is reachable as e.g. `<hash>_ga_manager`.
+# This prefix is NEVER hardcoded — it is resolved dynamically below from the
+# store listing.
+#
+# See ga-ihost-docs V1.2-CLEAN-REBUILD.md (T4).
+
+set -eu
+
+# The public GA addon repository. Adding this to the Supervisor makes every
+# GA addon (ga_manager, mosquitto, zigbee2mqtt, the dongle flasher, ...)
+# available as a repo-linked addon. Each addon dir carries a `config.yaml`
+# with an `image:` key -> Supervisor pulls the prebuilt image from GHCR,
+# never builds from the (private) source repo.
+VIBE_ADDONS_REPO="https://github.com/greenautarky/vibe_addons"
+# The addon-slug *identity* (the `slug:` field inside vibe_addons'
+# ga_manager/config.yaml) — the stable suffix. The Supervisor-assigned full
+# slug is `<repo_id>_ga_manager`; <repo_id> is resolved at runtime.
+ADDON_SLUG_SUFFIX="ga_manager"
+
+# Vendored custom_component(s) baked into the (read-only) rootfs, and where
+# they get staged so ga_manager (an addon — sees /mnt/data/supervisor/share
+# as /share) can read them. ga_manager's `converge` worker copies them from
+# /share into /config/custom_components and owns their drift afterwards.
+CUSTOM_COMPONENTS_SRC="/usr/share/ga/custom_components"
+CUSTOM_COMPONENTS_DST="/mnt/data/supervisor/share/ga-custom-components"
+
+HA="/usr/bin/ha"
+SUPERVISOR_WAIT_S=300
+INSTALL_WAIT_S=300
+# After `ha store add` the Supervisor clones the repo asynchronously — the
+# addons in it do not appear in the store the instant the command returns.
+# Poll the store until the ga_manager addon shows up before installing it.
+STORE_SCAN_WAIT_S=120
+
+log()  { echo "ga-bootstrap: $*"; }
+warn() { echo "ga-bootstrap: WARNING: $*" >&2; }
+die()  { echo "ga-bootstrap: ERROR: $*" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Wait for the Supervisor to be responsive. hassos-supervisor.service starts
+# the container; the API takes a little longer to come up.
+# ---------------------------------------------------------------------------
+wait_for_supervisor() {
+	i=0
+	while [ "$i" -lt "$SUPERVISOR_WAIT_S" ]; do
+		if "$HA" supervisor info --no-progress >/dev/null 2>&1; then
+			log "Supervisor API is responsive"
+			return 0
+		fi
+		sleep 3
+		i=$((i + 3))
+	done
+	return 1
+}
+
+# ---------------------------------------------------------------------------
+# Step 1a: stage the vendored custom_component(s) onto /share.
+#
+# The component ships in the OS image (GA's own trusted build) — NOT in the
+# ga_manager addon image, so the addon image carries no private-repo content.
+# ga_manager (an addon) sees /mnt/data/supervisor/share as /share; its
+# `converge` worker copies the component from /share/ga-custom-components into
+# /config/custom_components on first boot. Re-staged every boot so an OS
+# update that ships a newer component is picked up.
+# ---------------------------------------------------------------------------
+stage_custom_components() {
+	if [ ! -d "$CUSTOM_COMPONENTS_SRC" ]; then
+		log "no vendored custom_components at ${CUSTOM_COMPONENTS_SRC} — skipping"
+		return 0
+	fi
+	mkdir -p "$CUSTOM_COMPONENTS_DST"
+	staged=""
+	for src in "$CUSTOM_COMPONENTS_SRC"/*/; do
+		[ -d "$src" ] || continue
+		name=$(basename "$src")
+		dst="${CUSTOM_COMPONENTS_DST}/${name}"
+		# Replace wholesale so a removed file in a newer component is gone.
+		rm -rf "$dst"
+		cp -rp "${src%/}" "$dst"
+		staged="${staged} ${name}"
+	done
+	log "staged custom_components into ${CUSTOM_COMPONENTS_DST}:${staged}"
+}
+
+# ---------------------------------------------------------------------------
+# Step 1b: register the public vibe_addons addon repository (idempotent).
+#
+# `ha store add` is idempotent on the Supervisor side, but we check first so
+# a re-boot doesn't emit a spurious "already exists" error. The Supervisor
+# clones the repo *asynchronously* after the command returns — the addons in
+# it do not appear immediately; the slug-resolution step below polls for them.
+# ---------------------------------------------------------------------------
+addon_repo_present() {
+	# `ha store repositories --raw-json` lists configured repos. The vibe
+	# repo's `source` field equals the URL we added (with/without a trailing
+	# slash). `jq` is part of the OS image (BR2_PACKAGE_JQ=y).
+	"$HA" store repositories --no-progress --raw-json 2>/dev/null \
+		| jq -e --arg url "$VIBE_ADDONS_REPO" '
+			(.data.repositories // .repositories // .data // [])
+			| map((.source // "") | rtrimstr("/"))
+			| any(. == ($url | rtrimstr("/")))
+		' >/dev/null 2>&1
+}
+
+add_addon_repo() {
+	if addon_repo_present; then
+		log "addon repository ${VIBE_ADDONS_REPO} already registered — skipping add"
+		return 0
+	fi
+
+	# First-boot `ha store add` is racy: in the first ~1-2 min of a fresh
+	# device's life, the Supervisor's git clone of the repo can fail in
+	# subtle ways even though raw connectivity is fine — observed:
+	#   - "Cmd('git') failed exit(8) — stderr: error: invalid HEAD"
+	#     (post-clone integrity check on a not-quite-settled .git state)
+	#   - "Cmd('git') failed exit(128)" (clone bailed out)
+	# Both clear up within a couple of minutes; the same `ha store add` then
+	# succeeds. Retry with exponential backoff over a ~8 min budget. A
+	# successful API response is NOT trusted on its own — the clone happens
+	# async, so verify with `addon_repo_present` before declaring success.
+	# Pre-sleep before attempt N (0 = no pre-sleep on the first try):
+	for pre_sleep in 0 10 30 60 120 240; do
+		if [ "$pre_sleep" -gt 0 ]; then
+			log "waiting ${pre_sleep}s before retry..."
+			"$HA" store reload --no-progress >/dev/null 2>&1 || true
+			sleep "$pre_sleep"
+		fi
+		log "registering addon repository ${VIBE_ADDONS_REPO}"
+		if "$HA" store add "$VIBE_ADDONS_REPO" --no-progress >/dev/null 2>&1 \
+				&& addon_repo_present; then
+			log "addon repository registered"
+			# Nudge a store reload so the addon scan starts promptly.
+			"$HA" store reload --no-progress >/dev/null 2>&1 || true
+			return 0
+		fi
+		warn "store add did not register the repo (likely a transient clone error)"
+	done
+	die "could not register addon repository ${VIBE_ADDONS_REPO} after 6 attempts (~8 min)"
+}
+
+# ---------------------------------------------------------------------------
+# Step 1c: resolve the repo-prefixed `ga_manager` slug.
+#
+# The Supervisor assigns a git-repo addon the slug `<repo_id>_<addon_slug>`,
+# where `<repo_id>` is a Supervisor-derived hash of the repo URL — NOT
+# `local`, NOT `vibe_addons`. The prefix MUST NOT be hardcoded. We query the
+# store and pick the addon whose slug ends in `_ga_manager` AND whose
+# `repository` field points at the vibe_addons repo.
+#
+# `ha store add` is asynchronous (the Supervisor clones + scans the repo in
+# the background), so poll the store until the addon appears, up to
+# STORE_SCAN_WAIT_S. Prints the resolved full slug on stdout; empty on
+# failure.
+# ---------------------------------------------------------------------------
+resolve_ga_manager_slug() {
+	# The repository identifier the Supervisor assigned the vibe repo. The
+	# repo's `slug` in `store repositories` IS the `<repo_id>` used as the
+	# addon-slug prefix. Resolve it so we can confirm an addon belongs to
+	# *this* repo (defensive — two repos could both ship a `ga_manager`).
+	_repo_id=$(
+		"$HA" store repositories --no-progress --raw-json 2>/dev/null \
+		| jq -r --arg url "$VIBE_ADDONS_REPO" '
+			(.data.repositories // .repositories // .data // [])
+			| map(select((.source // "" | rtrimstr("/")) == ($url | rtrimstr("/"))))
+			| (.[0].slug // "")
+		' 2>/dev/null
+	)
+	[ "$_repo_id" = "null" ] && _repo_id=""
+
+	i=0
+	while [ "$i" -lt "$STORE_SCAN_WAIT_S" ]; do
+		# Pick the addon whose slug ends in `_ga_manager`. Prefer one whose
+		# `repository` field is the resolved vibe repo id; if the repo id
+		# could not be resolved, fall back to the slug-suffix match alone
+		# (the OS image only ever adds this one repo). Sorted for a
+		# deterministic pick if (defensively) more than one matches.
+		_store_json=$("$HA" store addons --no-progress --raw-json 2>/dev/null || echo "")
+		_slug=$(
+			printf '%s' "$_store_json" \
+			| jq -r --arg suffix "$ADDON_SLUG_SUFFIX" --arg repo "$_repo_id" '
+				(.data.addons // .addons // .data // [])
+				| map(select((.slug // "") | (. == $suffix or endswith("_" + $suffix))))
+				| ( (map(select(($repo != "") and ((.repository // "") == $repo)))
+				     | map(.slug)) as $byRepo
+				  | if ($byRepo | length) > 0 then ($byRepo | sort | .[0])
+				    elif ($repo == "") and (length > 0) then (map(.slug) | sort | .[0])
+				    else empty end )
+			' 2>/dev/null
+		)
+		[ "$_slug" = "null" ] && _slug=""
+		if [ -n "$_slug" ]; then
+			echo "$_slug"
+			return 0
+		fi
+		sleep 3
+		i=$((i + 3))
+		# Re-trigger a store reload mid-wait — a slow clone may need a nudge.
+		"$HA" store reload --no-progress >/dev/null 2>&1 || true
+	done
+	return 1
+}
+
+# ---------------------------------------------------------------------------
+# Step 2: install + start the resolved ga_manager addon (idempotent).
+# ---------------------------------------------------------------------------
+addon_installed() {
+	# `ha addons info` answers for any store-KNOWN addon, installed or not —
+	# `--raw-json` always emits a "version" KEY, valued null until the addon
+	# is actually installed. The old `grep -q '"version"'` matched the key
+	# regardless of value, so every store addon looked installed and the real
+	# `ha addons install` was skipped. Test the VALUE with jq instead.
+	_v=$("$HA" addons info "$1" --no-progress --raw-json 2>/dev/null \
+		| jq -r '(.data.version // .version // empty)' 2>/dev/null)
+	[ -n "$_v" ]
+}
+
+addon_running() {
+	_s=$("$HA" addons info "$1" --no-progress --raw-json 2>/dev/null \
+		| jq -r '(.data.state // .state // empty)' 2>/dev/null)
+	[ "$_s" = "started" ]
+}
+
+install_addon() {
+	_slug="$1"
+	if addon_installed "$_slug"; then
+		log "${_slug} already installed — skipping install"
+	else
+		log "installing ${_slug} from the ${VIBE_ADDONS_REPO} repository"
+		if ! "$HA" addons install "$_slug" --no-progress >/dev/null 2>&1; then
+			# One retry after a store reload — the first attempt can race
+			# the Supervisor's own store refresh on a cold first boot.
+			warn "install failed — retrying after a store reload"
+			"$HA" store reload --no-progress >/dev/null 2>&1 || true
+			sleep 5
+			"$HA" addons install "$_slug" --no-progress >/dev/null 2>&1 \
+				|| die "could not install ${_slug}"
+		fi
+
+		# Wait for the install to settle. The addon image is pre-baked into
+		# the local Docker store (addon-images.json), so this is fast even
+		# offline — but give it room.
+		i=0
+		while [ "$i" -lt "$INSTALL_WAIT_S" ]; do
+			addon_installed "$_slug" && break
+			sleep 3
+			i=$((i + 3))
+		done
+		addon_installed "$_slug" || die "${_slug} did not finish installing in time"
+		log "${_slug} installed"
+	fi
+
+	if addon_running "$_slug"; then
+		log "${_slug} already running — bootstrap complete"
+	else
+		log "starting ${_slug}"
+		"$HA" addons start "$_slug" --no-progress >/dev/null 2>&1 \
+			|| warn "could not start ${_slug} (Supervisor may auto-start it)"
+	fi
+}
+
+main() {
+	if [ ! -x "$HA" ]; then
+		die "$HA not found — cannot reach the Supervisor"
+	fi
+
+	log "waiting for the Supervisor..."
+	if ! wait_for_supervisor; then
+		die "Supervisor did not become responsive within ${SUPERVISOR_WAIT_S}s"
+	fi
+
+	stage_custom_components
+	add_addon_repo
+
+	log "resolving the repo-prefixed ga_manager slug..."
+	resolved_slug=$(resolve_ga_manager_slug) || die \
+		"could not resolve a '<repo>_${ADDON_SLUG_SUFFIX}' addon from the " \
+		"${VIBE_ADDONS_REPO} repository within ${STORE_SCAN_WAIT_S}s — the " \
+		"repo clone/scan may have failed; check 'ha store repositories'"
+	log "resolved ga_manager addon slug: ${resolved_slug}"
+
+	install_addon "$resolved_slug"
+
+	log "first-boot addon bootstrap done"
+}
+
+main "$@"

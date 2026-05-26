@@ -1,0 +1,341 @@
+"""Integration for greenautarky post-onboarding setup wizard.
+
+Phase 2 onboarding: the built frontend Lit panel is served at
+/greenautarky-setup.html (like stock onboarding.html). A sidebar panel
+is also registered so the wizard is accessible from the mobile app.
+Handles user account creation, GDPR consent, and analytics preferences.
+
+After onboarding, manages consent re-confirmation via HA repairs system.
+
+This is the custom_component form of the integration. It used to live as a
+built-in component in our HA Core fork (greenautarky/ha-core branch
+ga/custom-onboarding); migrated 2026-05-XX to decouple from HA Core
+lifecycle. See ga-ihost-docs/MIGRATION-CUSTOM-COMPONENT.md.
+
+Two changes vs. the built-in version that lived in the fork:
+1. Frontend assets (HTML + JS bundles) are bundled inside this component
+   and registered via `async_register_static_paths` — they used to be
+   shipped via the GA-customized home-assistant-frontend PyPI package.
+2. The `/` → `/greenautarky-setup.html` redirect was a patch to
+   `frontend/__init__.py` `IndexView.get()` in the fork; it is now a
+   client-side JS module injected via `frontend.add_extra_js_url`.
+   (The aiohttp-middleware approach tried in v0.1.x does not work from
+   a custom_component — the middleware list is frozen by setup time;
+   see ga-ihost-docs/MIGRATION-CUSTOM-COMPONENT-FINDINGS.md Finding 20.)
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any
+
+from homeassistant.components import panel_custom
+from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.http import StaticPathConfig
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
+from homeassistant.helpers.typing import ConfigType
+
+from .consent import async_check_and_create_issues
+from .const import DOMAIN, STORAGE_KEY, STORAGE_VERSION
+from .http import (
+    GAAdminBypassView,
+    GAConsentAcceptView,
+    GAConsentPageView,
+    GAConsentStatusView,
+    GAOnboardingCompleteView,
+    GAOnboardingCreateUserView,
+    GAOnboardingEthernetView,
+    GAOnboardingGDPRView,
+    GAOnboardingPageView,
+    GAOnboardingResetView,
+    GAOnboardingStatusView,
+    GAOnboardingTelemetryView,
+    GAPasswordResetPageView,
+    GAPasswordResetUsersView,
+    GAPasswordResetView,
+    GAPinVerifyView,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+URL_BASE = "/greenautarky_onboarding_static"
+PANEL_URL_PATH = "greenautarky-setup-panel"
+
+# URL of the client-side `/` → wizard redirect JS module (Finding 20 fix).
+REDIRECT_JS_URL = "/greenautarky_onboarding_redirect.js"
+
+DEFAULT_STATE: dict[str, Any] = {
+    "completed": False,
+    "gdpr_accepted": False,
+    "steps_done": [],
+    "consents": {},
+}
+
+
+def _migrate_v1_to_v2(state: dict[str, Any]) -> dict[str, Any]:
+    """Migrate storage from v1 to v2: add consents dict.
+
+    If GDPR was already accepted during onboarding, seed consents.gdpr
+    with version 1 so the user isn't immediately prompted to re-confirm.
+    """
+    if "consents" not in state:
+        state["consents"] = {}
+    if state.get("gdpr_accepted") and "gdpr" not in state["consents"]:
+        state["consents"]["gdpr"] = {
+            "version": 1,
+            "accepted_at": "migrated-from-v1",
+        }
+    return state
+
+
+async def _async_setup_common(hass: HomeAssistant) -> bool:
+    """Shared setup logic — called from both async_setup (yaml) and async_setup_entry (config_flow).
+
+    Idempotent: re-entry detected via DOMAIN-in-hass.data.
+    """
+    if DOMAIN in hass.data:
+        return True
+
+    store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+    state = await store.async_load()
+
+    # `loaded_from_storage` distinguishes a real GA-provisioned device from
+    # an old / pre-existing one. See the `state is None` branch below.
+    loaded_from_storage = state is not None
+
+    if state is None:
+        # No stored onboarding state.
+        #
+        # A factory-provisioned GA device ALWAYS has this storage entry —
+        # provisioning stage 91 writes it (completed=false, tenant_mode=true)
+        # so the wizard runs on first boot.
+        #
+        # Its ABSENCE therefore means this is NOT a freshly GA-provisioned
+        # device: it is an OLD device that was set up before GA onboarding
+        # existed (or any device the installer chose not to trigger). Such a
+        # customer is already up and running — they must NOT be dragged into
+        # the onboarding wizard. Default to completed=true: no wizard, no
+        # `/` redirect, no sidebar panel. The API views are still registered
+        # (harmless) so a later explicit trigger can still start the wizard.
+        #
+        # To deliberately run the wizard on such a device, write the
+        # storage entry explicitly (installer SET_TRIGGER=always, or the
+        # factory pipeline). Presence of the storage entry is the wizard
+        # opt-in signal.
+        state = {
+            "completed": True,
+            "tenant_mode": False,
+            "gdpr_accepted": False,
+            "steps_done": [],
+            "consents": {},
+        }
+        _LOGGER.info(
+            "No greenautarky onboarding state stored — treating device as "
+            "already onboarded (no wizard). This is expected on devices "
+            "field-upgraded from before GA onboarding existed."
+        )
+    elif "consents" not in state:
+        state = _migrate_v1_to_v2(state)
+        await store.async_save(state)
+
+    hass.data[DOMAIN] = {"store": store, "state": state}
+
+    # Register onboarding HTTP views (always — status check needs to work)
+    hass.http.register_view(GAOnboardingPageView())
+    hass.http.register_view(GAAdminBypassView())
+    hass.http.register_view(GAOnboardingStatusView())
+    hass.http.register_view(GAOnboardingGDPRView())
+    hass.http.register_view(GAOnboardingTelemetryView())
+    hass.http.register_view(GAOnboardingEthernetView())
+    hass.http.register_view(GAOnboardingCompleteView())
+    hass.http.register_view(GAOnboardingCreateUserView())
+    hass.http.register_view(GAOnboardingResetView())
+    hass.http.register_view(GAPinVerifyView())
+
+    # Password reset views (unauthenticated, PIN-gated)
+    hass.http.register_view(GAPasswordResetPageView())
+    hass.http.register_view(GAPasswordResetUsersView())
+    hass.http.register_view(GAPasswordResetView())
+
+    # Consent HTTP views (authenticated, always available)
+    hass.http.register_view(GAConsentPageView())
+    hass.http.register_view(GAConsentStatusView())
+    hass.http.register_view(GAConsentAcceptView())
+
+    # Bundled frontend assets — used to be shipped via the GA-customized
+    # home-assistant-frontend PyPI package. Now bundled with this component
+    # so we don't need a forked frontend at all.
+    await _async_register_frontend_bundle(hass)
+
+    # Sidebar panel (mobile app), only shown while onboarding incomplete
+    if not state.get("completed"):
+        await _async_register_panel(hass)
+        _LOGGER.info("greenautarky onboarding available at /greenautarky-setup")
+
+    # Install the `/` → wizard redirect as a client-side JS module
+    # injected into the HA frontend (replaces the aiohttp middleware
+    # approach, which cannot work from a custom_component — Finding 20).
+    if not state.get("completed"):
+        _register_redirect_js(hass)
+
+    # Check for outdated consents and create repair issues if needed.
+    # Only for devices with a REAL stored onboarding state — an old device
+    # with no stored state never gave GA consent, so consent-version checks
+    # would just produce spurious "please re-confirm" repair issues.
+    if loaded_from_storage and state.get("completed"):
+        async_check_and_create_issues(hass, state)
+
+    return True
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Yaml-style setup (legacy / fallback path).
+
+    Lets `greenautarky_onboarding:` in configuration.yaml still work.
+    Modern install path uses config_entry → async_setup_entry.
+    """
+    return await _async_setup_common(hass)
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Config-entry setup (Variant B — triggered by storage entry on restart).
+
+    Installer or HAOS overlay writes a config_entry to
+    `.storage/core.config_entries`; HA Core then calls this on next start.
+    """
+    return await _async_setup_common(hass)
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Clean up on unload.
+
+    NOTE: HA Core does not currently support removing registered HTTP views
+    or middlewares at runtime. Unloading + reloading the integration
+    in a single HA Core process will leak duplicate handlers. A full HA
+    Core restart is needed for a clean unload. This is acceptable because
+    the integration is install-once / live-forever (customer onboarding
+    state is permanent).
+    """
+    hass.data.pop(DOMAIN, None)
+    return True
+
+
+async def _async_register_frontend_bundle(hass: HomeAssistant) -> None:
+    """Register the bundled HTML + JS assets as HA static paths.
+
+    Originally these were served by the GA-customized home-assistant-frontend
+    PyPI package; now bundled inside this component. URL paths match the
+    upstream registrations (/greenautarky-setup.html, /frontend_latest/...,
+    /frontend_es5/...) so the HTML's hardcoded asset references continue to
+    work.
+
+    NOTE: HA's `frontend` component also registers `/frontend_latest` and
+    `/frontend_es5` as broad static directories. Our specific-file
+    registrations take precedence for the greenautarky bundles. If we
+    later see asset 404s, this would be the first place to look.
+    """
+    # The filesystem scan runs in an executor — iterdir()/exists() are
+    # blocking calls and must not run inside the event loop (Finding 21).
+    configs = await hass.async_add_executor_job(_scan_frontend_bundle)
+    if configs is None:
+        _LOGGER.error(
+            "frontend_bundle/ missing — wizard HTML will 404. "
+            "Reinstall the custom_component."
+        )
+        return
+
+    await hass.http.async_register_static_paths(configs)
+    _LOGGER.debug("Registered %d static paths for the wizard bundle", len(configs))
+
+
+def _scan_frontend_bundle() -> list[StaticPathConfig] | None:
+    """Synchronously scan frontend_bundle/ and build StaticPathConfig list.
+
+    Runs in an executor (filesystem I/O). Returns None if the bundle dir
+    is missing.
+    """
+    bundle_dir = Path(__file__).parent / "frontend_bundle"
+    if not bundle_dir.exists():
+        return None
+
+    configs = [
+        StaticPathConfig(
+            "/greenautarky-setup.html",
+            str(bundle_dir / "greenautarky-setup.html"),
+            True,
+        ),
+        # The `/` → wizard redirect JS module (injected via add_extra_js_url).
+        StaticPathConfig(
+            REDIRECT_JS_URL,
+            str(bundle_dir / "ga-onboarding-redirect.js"),
+            True,
+        ),
+    ]
+    # Hashed JS bundles — register each file individually under the upstream URLs.
+    for sub in ("frontend_latest", "frontend_es5"):
+        sub_dir = bundle_dir / sub
+        if not sub_dir.exists():
+            continue
+        for file in sub_dir.iterdir():
+            if file.is_file() and file.name.startswith("greenautarky-setup"):
+                configs.append(
+                    StaticPathConfig(f"/{sub}/{file.name}", str(file), True)
+                )
+    return configs
+
+
+async def _async_register_panel(hass: HomeAssistant) -> None:
+    """Register the panel so the wizard is accessible from the HA app."""
+    panel_dir = Path(__file__).parent / "panel" / "dist"
+
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(URL_BASE, str(panel_dir), cache_headers=False)]
+    )
+
+    await panel_custom.async_register_panel(
+        hass=hass,
+        frontend_url_path=PANEL_URL_PATH,
+        webcomponent_name="ga-onboarding-panel",
+        sidebar_title="Einrichtung",
+        sidebar_icon="mdi:rocket-launch",
+        module_url=f"{URL_BASE}/entrypoint.js",
+        embed_iframe=False,
+        require_admin=False,
+    )
+
+
+def _register_redirect_js(hass: HomeAssistant) -> None:
+    """Inject the `/` → wizard redirect as a client-side JS module.
+
+    Replaces the IndexView patch from the GA HA Core fork. The aiohttp
+    middleware approach (v0.1.x) does not work from a custom_component —
+    the middleware list is frozen by the time we set up (Finding 20).
+
+    `frontend.add_extra_js_url` is the blessed API for custom integrations
+    to inject JS into the HA frontend. The module (`ga-onboarding-redirect.js`,
+    served as a static path by `_async_register_frontend_bundle`) checks the
+    onboarding status and redirects the browser to /greenautarky-setup.html
+    while onboarding is incomplete.
+
+    Trade-off vs. the server-side patch: the HA frontend bundle begins
+    loading before the redirect fires, so there is a brief flash of the
+    HA UI. Acceptable for a one-time onboarding flow.
+
+    Defensive: `add_extra_js_url` indexes `hass.data["frontend_extra_module_url"]`,
+    which only exists once the `frontend` component has set up. On a real
+    device `frontend` is always present, but in minimal HA setups / unit
+    tests it may not be — so a KeyError here is non-fatal: the wizard
+    stays reachable directly at /greenautarky-setup.html.
+    """
+    try:
+        add_extra_js_url(hass, REDIRECT_JS_URL)
+    except KeyError:
+        _LOGGER.warning(
+            "frontend component not available — onboarding redirect JS not "
+            "injected; wizard still reachable directly at /greenautarky-setup.html"
+        )
+        return
+    _LOGGER.debug("Registered onboarding redirect JS module at %s", REDIRECT_JS_URL)
