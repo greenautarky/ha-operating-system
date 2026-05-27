@@ -75,20 +75,36 @@ if [ -z "$KEY" ]; then
     die "setup key file $KEY_FILE is empty"
 fi
 
-# 3. Wait briefly for network. systemd unit has After=network-online.target,
-#    but on a freshly-booted device WiFi association may still complete after
-#    network-online (NM/wpa_supplicant race). 30s budget = generous.
-log "waiting up to 30s for outbound connectivity..."
+# 3. Wait for api.netbird.io to be REACHABLE — not just DNS-resolvable.
+#    network-online.target fires when NetworkManager reports a default
+#    route, but the bench WiFi's DHCP-supplied DNS sometimes takes 30+
+#    seconds to start answering on first boot (observed on KIB-SON-31
+#    2026-05-27: getent failed for ~3 min, then succeeded). We now combine
+#    DNS resolution + an HTTP HEAD probe so we catch both "DNS not ready"
+#    and "DNS works but mgmt-plane unreachable" cases.
+#
+#    180 s budget × Restart=on-failure (60 s gap) = 3 retries in ~13 min.
+log "waiting up to 180s for api.netbird.io to be reachable..."
+DEADLINE=180
+INTERVAL=5
 i=0
-while [ $i -lt 30 ]; do
+while [ "$i" -lt "$DEADLINE" ]; do
+    # getent for DNS (fast common case; uses NSS / systemd-resolved)
     if /usr/bin/getent hosts api.netbird.io >/dev/null 2>&1; then
-        break
+        # belt-and-braces: HTTP HEAD with a tight per-call timeout so a
+        # slow/captive DNS doesn't paper over a real outage. ANY HTTP
+        # response (200/401/etc.) is good — we just need the mgmt plane
+        # to be reachable.
+        if /usr/bin/curl -sI --max-time 5 -o /dev/null https://api.netbird.io/ 2>/dev/null; then
+            log "api.netbird.io reachable after ${i}s"
+            break
+        fi
     fi
-    sleep 2
-    i=$((i + 2))
+    sleep "$INTERVAL"
+    i=$((i + INTERVAL))
 done
-if [ $i -ge 30 ]; then
-    die "no DNS for api.netbird.io after 30s — retry next boot or via Restart=on-failure"
+if [ "$i" -ge "$DEADLINE" ]; then
+    die "api.netbird.io unreachable after ${DEADLINE}s (DNS + HTTPS HEAD both failed) — retry next boot via Restart=on-failure"
 fi
 
 # 4. Register. The --setup-key flag does the actual auth + peer create.

@@ -106,26 +106,32 @@ else
         || warn "timedatectl set-timezone failed"
 fi
 
-# ---- 3d. updater.json: auto_update=false (= ga-flasher-py stage 92) ---------
+# ---- 3d. auto_update=false (= ga-flasher-py stage 92) -----------------------
 # Why: fleet devices must NOT auto-update Supervisor — the OTA rollout is
 # operator-controlled via push-ota.sh + RAUC bundle promotion. Auto-update
 # bypasses that, can introduce surprise downtime during Supervisor restarts.
 # See memory: incident_ga1_hang_2026_05_06.md (supervisor auto-update of
 # hassio_cli triggered eMMC stall).
-if [ -f "$UPDATER_JSON" ]; then
-    current_auto=$("/usr/bin/jq" -r '.auto_update // "missing"' "$UPDATER_JSON" 2>/dev/null)
-    if [ "$current_auto" = "false" ]; then
-        log "updater.json auto_update=false (already set)"
-    else
-        log "updater.json: setting auto_update=false (was: $current_auto)"
-        tmp="/mnt/data/supervisor/.updater.json.tmp"
-        "/usr/bin/jq" '.auto_update = false' "$UPDATER_JSON" > "$tmp" 2>/dev/null \
-            && mv "$tmp" "$UPDATER_JSON" \
-            || warn "jq edit of updater.json failed"
-    fi
+#
+# IMPORTANT — go via the Supervisor API, not direct jq on updater.json.
+# Observed on KIB-SON-31 first boot 2026-05-27: editing updater.json with
+# jq successfully writes the file, but Supervisor's in-memory state still
+# holds auto_update=true and Supervisor REWRITES the file on the next
+# refresh cycle (typically within seconds). The `ha supervisor options`
+# CLI uses the API which mutates Supervisor's in-memory state too, so the
+# change actually sticks.
+current_auto=$("$HA" supervisor info --no-progress --raw-json 2>/dev/null \
+    | "/usr/bin/jq" -r '.data.auto_update // "missing"')
+if [ "$current_auto" = "false" ]; then
+    log "supervisor auto_update=false (already set)"
 else
-    warn "updater.json not yet present — Supervisor will create it; retrying next boot"
-    exit 1
+    log "supervisor: setting auto_update=false (was: $current_auto) via API"
+    if "$HA" supervisor options --auto-update=false --no-progress >/dev/null 2>&1; then
+        log "  ha supervisor options --auto-update=false → OK"
+    else
+        warn "ha supervisor options --auto-update=false failed — will retry next boot"
+        exit 1
+    fi
 fi
 
 # ---- 3e. Weather entity (Met.no, Home: Berlin coordinates) ------------------

@@ -37,8 +37,12 @@ run_test "HA-INIT-D-06" "dns.json has both 1.1.1.1 and 1.0.0.1" \
   "grep -q 1.1.1.1 $DNS_JSON && grep -q 1.0.0.1 $DNS_JSON"
 
 # HA-INIT-D-07: auto-update OFF (= ga-flasher-py stage 92).
-run_test "HA-INIT-D-07" "updater.json auto_update=false" \
-  "grep -E '\"auto_update\"[[:space:]]*:[[:space:]]*false' $UPDATER_JSON >/dev/null"
+# Query the Supervisor runtime API — NOT updater.json. Observed
+# 2026-05-27 KIB-SON-31: editing updater.json directly with jq doesn't
+# stick (Supervisor rewrites from its in-memory state). The API mutates
+# the in-memory state so the change is durable.
+run_test "HA-INIT-D-07" "supervisor auto_update=false (via API)" \
+  "test \"\$(ha supervisor info --raw-json --no-progress 2>/dev/null | jq -r '.data.auto_update')\" = 'false'"
 
 # HA-INIT-D-08: timezone Europe/Berlin.
 run_test "HA-INIT-D-08" "system timezone Europe/Berlin" \
