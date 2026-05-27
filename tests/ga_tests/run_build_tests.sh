@@ -1887,10 +1887,20 @@ fi
 
 NB_BIN="${TARGET}/usr/bin/netbird"
 if [[ -x "$NB_BIN" ]]; then
-  # Pull the expected NETBIRD_TAG from scripts/ga_build.sh; strip leading 'v'.
+  # Pull the expected NETBIRD_TAG from scripts/ga_build.sh and let bash
+  # do parameter-expansion. ga_build.sh's line is the defensive form
+  # `NETBIRD_TAG="${NETBIRD_TAG:-v0.66.2}"`, so awk-and-strip-quotes leaves
+  # the literal `${...}` text in the buffer and grep then never matches.
+  # Sourcing the line into a subshell gives us the real value regardless
+  # of which of {literal, defensive-default, quoted, unquoted} form is used.
   NB_EXPECTED=""
   if [[ -n "${SRC:-}" && -f "${SRC}/scripts/ga_build.sh" ]]; then
-    NB_EXPECTED=$(awk -F= '/^NETBIRD_TAG=/{gsub(/[" v]/,"",$2); print $2; exit}' "${SRC}/scripts/ga_build.sh")
+    NB_EXPECTED=$(
+      unset NETBIRD_TAG
+      # shellcheck source=/dev/null
+      eval "$(grep -E '^NETBIRD_TAG=' "${SRC}/scripts/ga_build.sh" | head -1)" 2>/dev/null
+      printf '%s' "${NETBIRD_TAG#v}"
+    )
   fi
   if [[ -n "$NB_EXPECTED" ]]; then
     if grep -qaF "$NB_EXPECTED" "$NB_BIN" 2>/dev/null; then
