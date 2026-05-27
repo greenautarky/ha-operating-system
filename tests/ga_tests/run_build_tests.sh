@@ -2010,10 +2010,13 @@ if [[ -f "$HA_INIT_SCRIPT" ]]; then
   else
     _fail "HA-INIT-02b: tz NOT via supervisor API — would be reverted by Supervisor at ~t=90s"
   fi
-  if grep -qE 'timedatectl set-timezone' "$HA_INIT_SCRIPT"; then
-    _fail "HA-INIT-02b: ga-ha-init still uses 'timedatectl set-timezone' — Supervisor will overwrite"
+  # Match only NON-COMMENT lines (the regression-check). Comments may legitimately
+  # mention the broken-API form when explaining WHY we don't use it (this commit's
+  # own comment block does exactly that).
+  if grep -vE '^[[:space:]]*#' "$HA_INIT_SCRIPT" | grep -qE 'timedatectl set-timezone'; then
+    _fail "HA-INIT-02b: ga-ha-init still calls 'timedatectl set-timezone' in code — Supervisor will overwrite"
   else
-    _pass "HA-INIT-02b: ga-ha-init does not call 'timedatectl set-timezone' (correct)"
+    _pass "HA-INIT-02b: ga-ha-init does not call 'timedatectl set-timezone' in code (correct)"
   fi
 fi
 
