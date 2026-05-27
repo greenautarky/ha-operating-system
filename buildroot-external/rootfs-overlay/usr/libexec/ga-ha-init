@@ -94,16 +94,29 @@ for addon_suffix in ga_manager ga_zigbee2mqtt ga_mosquitto ga_tailscale ga_ihost
 done
 
 # ---- 3c. Timezone default Europe/Berlin ------------------------------------
-# Operator can override at runtime via `timedatectl set-timezone`; that
-# write goes through the /etc/localtime bind mount to /mnt/overlay and
-# persists, so we never clobber a manual setting later.
-current_tz=$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')
+# Go via Supervisor API — NOT `timedatectl set-timezone`. Same pattern as
+# 3d (auto_update): Supervisor owns the host timezone and re-syncs from
+# its own in-memory state, so a direct timedatectl call gets overwritten
+# within ~90s. Observed live KIB-SON-31 first boot 2026-05-27:
+#   18:28:21 supervisor set host tz to Europe/Luxembourg (its own default)
+#   18:28:55 ga-ha-init's timedatectl set-timezone Europe/Berlin → succeeded
+#   18:30:19 supervisor re-synced host tz back to UTC (then later Luxembourg)
+# `ha supervisor info | jq .timezone` was still 'Europe/Luxembourg' even
+# though our timedatectl call returned 0. The API call mutates Supervisor's
+# in-memory tz so the change actually sticks; operator can later override
+# via the HA UI which also goes through the API.
+current_tz=$("$HA" supervisor info --no-progress --raw-json 2>/dev/null \
+    | "/usr/bin/jq" -r '.data.timezone // "missing"')
 if [ "$current_tz" = "Europe/Berlin" ]; then
-    log "timezone already Europe/Berlin"
+    log "supervisor timezone already Europe/Berlin"
 else
-    log "setting timezone Europe/Berlin (was: ${current_tz:-unset})"
-    /usr/bin/timedatectl set-timezone Europe/Berlin 2>/dev/null \
-        || warn "timedatectl set-timezone failed"
+    log "supervisor: setting timezone Europe/Berlin (was: $current_tz) via API"
+    if "$HA" supervisor options --timezone Europe/Berlin --no-progress >/dev/null 2>&1; then
+        log "  ha supervisor options --timezone=Europe/Berlin → OK"
+    else
+        warn "ha supervisor options --timezone failed — will retry next boot"
+        exit 1
+    fi
 fi
 
 # ---- 3d. auto_update=false (= ga-flasher-py stage 92) -----------------------

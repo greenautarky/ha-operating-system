@@ -1999,6 +1999,24 @@ if [[ -f "$HA_INIT_SCRIPT" ]]; then
   done
 fi
 
+# HA-INIT-02b: timezone MUST go via Supervisor API, not `timedatectl set-timezone`.
+# Direct timedatectl call gets reverted by Supervisor ~90s later (Supervisor
+# re-syncs host tz from its own in-memory state). Caught live KIB-SON-31
+# 2026-05-27. The `ha supervisor options --timezone` form mutates the API
+# state and sticks.
+if [[ -f "$HA_INIT_SCRIPT" ]]; then
+  if grep -qE 'supervisor options.*--timezone' "$HA_INIT_SCRIPT"; then
+    _pass "HA-INIT-02b: tz set via 'ha supervisor options --timezone' (API path)"
+  else
+    _fail "HA-INIT-02b: tz NOT via supervisor API — would be reverted by Supervisor at ~t=90s"
+  fi
+  if grep -qE 'timedatectl set-timezone' "$HA_INIT_SCRIPT"; then
+    _fail "HA-INIT-02b: ga-ha-init still uses 'timedatectl set-timezone' — Supervisor will overwrite"
+  else
+    _pass "HA-INIT-02b: ga-ha-init does not call 'timedatectl set-timezone' (correct)"
+  fi
+fi
+
 # HA-INIT-03: idempotency marker logic.
 if [[ -f "$HA_INIT_SCRIPT" ]]; then
   grep -q 'ga-ha-init-applied' "$HA_INIT_SCRIPT" \

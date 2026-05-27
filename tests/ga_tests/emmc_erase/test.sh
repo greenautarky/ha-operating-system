@@ -25,17 +25,23 @@ run_test "EMMC-ERASE-D-03" "ga-emmc-erase.service is active" \
 run_test "EMMC-ERASE-D-04" "marker /mnt/data/.ga_emmc_erased present" \
   "test -f $MARKER && test -s $MARKER"
 
-run_test "EMMC-ERASE-D-05" "marker contains method= (blkdiscard or dd-zero-*)" \
-  "grep -qE 'method=(blkdiscard|dd-zero|no-emmc)' $MARKER"
+# EMMC-ERASE-D-05: marker SHAPE — accept either our format (method=...)
+# OR ga-bootstrap-disk's format ("erased by ga-bootstrap-disk"). On a stock
+# V1.2-clean image, ga-bootstrap-disk fires ~1s BEFORE ga-emmc-erase and
+# wins the marker; our service then detects the marker and idempotent-exits.
+# Both producers leave the eMMC genuinely zeroed (D-06 is the wipe-truth
+# test). See: todo_v12_bake_followups_2026_05_27.md item #2.
+run_test "EMMC-ERASE-D-05" "marker SHAPE (method= or ga-bootstrap-disk)" \
+  "grep -qE 'method=(blkdiscard|dd-zero|no-emmc)|erased by ga-bootstrap-disk' $MARKER"
 
-# EMMC-ERASE-D-06: actual wipe verification. The first 16 MiB of mmcblk0
-# should be zeros (blkdiscard reads as zeros on supported eMMC; dd zero-fill
-# definitely produces zeros). Read 64 KiB worth and md5 it — known zero MD5
-# is f8e7297adea0b8f9e9d6fa3c46bce7a3 (64 KiB of zeros).
-# On a board without eMMC (no-emmc marker), skip this check.
+# EMMC-ERASE-D-06: actual wipe verification. Read first 64 KiB of /dev/mmcblk0
+# and verify it's zero — `fcd6bcb56c1689fcef28b57c22475bad` is the canonical
+# md5 of 65536 zero bytes (verified live KIB-SON-31 2026-05-27 against
+# `head -c 65536 /dev/zero | md5sum`). Skip on no-emmc boards (e.g. HA Green
+# where this code path doesn't run).
 if ! grep -q 'method=no-emmc' "$MARKER" 2>/dev/null; then
   run_test "EMMC-ERASE-D-06" "/dev/mmcblk0 first 64 KiB is zeros (md5 sanity)" \
-    "head -c 65536 /dev/mmcblk0 2>/dev/null | md5sum | awk '{print \$1}' | grep -q '^fa43239bcee7b97ca62f007cc68487a0$\\|^f8e7297adea0b8f9e9d6fa3c46bce7a3$\\|^7029066c27ac6f5ef18d660d5741979a$'"
+    "head -c 65536 /dev/mmcblk0 2>/dev/null | md5sum | awk '{print \$1}' | grep -qx 'fcd6bcb56c1689fcef28b57c22475bad'"
 fi
 
 # EMMC-ERASE-D-07: root is genuinely on mmcblk2 (SD) — sanity / safety

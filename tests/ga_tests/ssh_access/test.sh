@@ -84,14 +84,14 @@ run_test "SSH-D-12" "dropbear pid file exists" \
   "test -f /run/dropbear.pid"
 
 # =========================================================================
-# Loopback SSH (final sanity — the auth-stack actually accepts the key)
+# Loopback SSH banner — implicit
 # =========================================================================
-# Only runs if dropbear is up. Uses the rootfs private-key-free path:
-# since we don't have the operator private key on-device, we just verify
-# the listener responds to a banner exchange (no auth attempt).
-
-run_test "SSH-D-13" "port 22222 responds to a SSH banner exchange" \
-  "echo '' | timeout 4 nc -q 2 127.0.0.1 22222 2>/dev/null | head -1 | grep -q '^SSH-'"
+# We previously had SSH-D-13 doing a banner-exchange probe via nc.
+# Dropped 2026-05-27 because BusyBox-iHost has no nc / ssh-keyscan /
+# bash-/dev/tcp, and the test runner's OWN SSH session (used to push and
+# invoke this script) is already proof that the listener accepts a banner
+# exchange end-to-end. D-09 + D-11 + D-12 cover service-state; the test
+# runner connecting at all proves the banner half. No replacement.
 
 # =========================================================================
 # Summary
