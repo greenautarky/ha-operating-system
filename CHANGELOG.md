@@ -12,6 +12,34 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## 16.3.1.2 (V1.2-clean) — in flight, 2026-05-27 fifth update
+
+Build #6 reflash KIB-SON-31 still failed HA-INIT-D-08 despite the dual-call
+fix from update 4. Root-caused live: Supervisor itself reverts the host
+tz at boot+~120s during its `host.control` startup sync. Even though
+config.json already records `Europe/Berlin` (our API call persisted), the
+sync apparently uses a cached snapshot taken at Supervisor dbus-init
+time (t~80s, BEFORE ga-ha-init runs).
+
+### Fixed — defensive late re-apply against Supervisor host-sync revert
+
+Workaround: ga-ha-init's tz block now forks a child that sleeps 180s
+(safely past Supervisor's host-sync at ~120s), then re-runs
+`timedatectl set-timezone Europe/Berlin` if the host tz has drifted.
+Verified live KIB-SON-31 at boot+8min: re-apply sets CEST, holds (no
+further Supervisor sync after the boot one). Idempotent if already Berlin.
+
+The parent process exits normally so systemd doesn't wait. Child logs
+via `logger -t ga-ha-init-late` so the re-apply is visible in journalctl.
+
+**Long-term fix (deferred to tomorrow)**: pre-seed
+`/mnt/overlay/etc/localtime → /usr/share/zoneinfo/Europe/Berlin` in the
+rootfs build (post-build.d hook), so Supervisor's cached startup snapshot
+IS Berlin from the start and the revert becomes a no-op. Tracked in
+`todo_v12_bake_followups_2026_05_27.md` item #7.
+
+---
+
 ## 16.3.1.2 (V1.2-clean) — in flight, 2026-05-27 fourth update
 
 Build #5 flashed + retested KIB-SON-31. New HA-INIT-D-08 result: still

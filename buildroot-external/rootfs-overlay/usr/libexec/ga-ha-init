@@ -137,6 +137,39 @@ else
     log "host timezone already Europe/Berlin"
 fi
 
+# ---- 3c'. Defensive late-reapply against Supervisor's startup revert -------
+# Live KIB-SON-31 Build #6 reflash 2026-05-27: Supervisor calls
+# `[supervisor.host.control] Setting host timezone: UTC` at boot+~120s
+# even though config.json already has Europe/Berlin. The cause appears to
+# be Supervisor caching the host's tz snapshot at its own dbus init time
+# (t~80s, BEFORE ga-ha-init runs) and then "applying" that cached UTC at
+# t~120s during its host.control sync. ga-ha-init's tz set at t~85s gets
+# silently overwritten ~35s later.
+#
+# Workaround: fork a child that sleeps 180s past Supervisor's host-sync
+# event (which finishes ~120s after Supervisor's own startup at t~80s)
+# and re-applies timedatectl. Re-apply is idempotent and cheap. The
+# parent exits normally so systemd doesn't wait.
+#
+# Long-term fix (deferred — see todo_v12_bake_followups_2026_05_27.md
+# item #7): pre-seed /mnt/overlay/etc/localtime → Berlin in the rootfs
+# build (post-build.d hook), so Supervisor's cached snapshot IS Berlin
+# from the start and the revert sets the same value (no-op).
+(
+    sleep 180
+    final_tz=$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')
+    if [ "$final_tz" != "Europe/Berlin" ]; then
+        logger -t ga-ha-init-late "tz reverted to ${final_tz:-unset} (Supervisor host.control sync) — re-applying Berlin"
+        /usr/bin/timedatectl set-timezone Europe/Berlin 2>/dev/null \
+            && logger -t ga-ha-init-late "tz re-applied Berlin OK" \
+            || logger -t ga-ha-init-late "tz re-apply FAILED"
+    else
+        logger -t ga-ha-init-late "tz held Europe/Berlin past Supervisor host-sync — no re-apply needed"
+    fi
+) </dev/null >/dev/null 2>&1 &
+disown 2>/dev/null || true
+log "  (forked late-tz-reapply: sleeps 180s, re-applies if Supervisor reverted)"
+
 # ---- 3d. auto_update=false (= ga-flasher-py stage 92) -----------------------
 # Why: fleet devices must NOT auto-update Supervisor — the OTA rollout is
 # operator-controlled via push-ota.sh + RAUC bundle promotion. Auto-update
