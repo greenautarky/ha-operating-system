@@ -86,6 +86,38 @@ with NetBird, but dropbear never starts → port 22222 closed forever.
 seed `/mnt/overlay/root/.ssh/authorized_keys` via SD-mux + a `sudo install`
 write. From this build forward, no manual seed is needed.
 
+### Changed — NetBird bumped 0.66.2 → 0.71.4
+
+Five minor versions, ~60 days of upstream changes. The only release in
+the window with non-empty release notes was **0.68.0**:
+
+- Added **NAT-PMP/UPnP support** (`pull/5202`) — material win for
+  residential NAT'd iHost devices; clients can now punch holes
+  themselves instead of always going through `relay.netbird.io`.
+- `[client] Add TCP DNS support for local listener` — only matters
+  if NetBird's local DNS is in use.
+- Various daemon stability fixes (SSH server deadlock, network
+  collection on down interfaces, etc.) — not directly used by us.
+
+0.69.0, 0.70.0, 0.71.0, 0.71.4 have empty release notes; we're
+trusting the version number. Bump motivated specifically by
+KIB-SON-31's "NetBird stuck Connecting" failure observed today —
+hypothesis is that one of the daemon-stability fixes between 0.66
+and 0.71 may improve handshake reliability. Will be re-tested
+against KIB-SON-31 on this image's first flash.
+
+Updated in three places, all kept in lock-step by `ga_build.sh`'s
+NetBird version-consistency check (which would fail the build if any
+of them drift):
+- `scripts/ga_build.sh` — `NETBIRD_TAG="${NETBIRD_TAG:-v0.71.4}"`
+- `buildroot-external/package/netbird/netbird.mk` — `NETBIRD_VERSION = refs/tags/v0.71.4` + the embedded `-X version.version=0.71.4` ldflag
+- `scripts/ga_build.sh` comment block (default-value documentation)
+
+NB-INT-01 (added above) auto-tracks the bump — it sources the
+`NETBIRD_TAG` line through bash and `grep -qaF`s the result against
+the rootfs binary, so any future bump that fails to update one
+of the three places will fail NB-INT-01 too.
+
 ### Notes
 
 - The pubkey baked in is the existing `HomeassistantGreen0.pub`. To add
@@ -94,4 +126,6 @@ write. From this build forward, no manual seed is needed.
   (one pubkey per line) and rebuild — already-deployed devices keep their
   existing `authorized_keys` (the seed is non-destructive).
 - This is a **rootfs-only change** — no Core / Supervisor / addon image
-  bumps. RAUC OTA from any V1.2-clean device to this build is in-place.
+  bumps. RAUC OTA from any V1.2-clean device to this build is in-place
+  (NetBird binary swap survives a RAUC slot-flip; daemon restart
+  automatic via systemd unit re-enable on first boot of the new slot).
