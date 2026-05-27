@@ -1740,6 +1740,183 @@ else
 fi
 
 # =========================================================================
+# SSH-01..05: operator SSH key baked into image + seeded on first boot
+# =========================================================================
+# Why: HAOS dropbear has `ConditionFileNotEmpty=/root/.ssh/authorized_keys`.
+# /root/.ssh is bind-mounted from /mnt/overlay/root/.ssh (sdc7 overlay
+# partition), which is EMPTY on a freshly-flashed device. Without an
+# authorized_keys seed the bind mount shadows the rootfs default → dropbear
+# never starts → port 22222 closed → device unreachable except via serial.
+# Discovered live on KIB-SON-31 on 2026-05-27 — root cause of "device is up
+# but SSH doesn't work after fresh flash".
+#
+# Source of truth: buildroot-external/rootfs-overlay/usr/share/ga-ssh/authorized_keys
+# Seeded to:       /mnt/overlay/root/.ssh/authorized_keys (by hassos-overlay)
+# Bind-mounted to: /root/.ssh/authorized_keys (by root-.ssh.mount)
+
+GA_SSH_AK="${TARGET}/usr/share/ga-ssh/authorized_keys"
+HASSOS_OVERLAY_SH="${TARGET}/usr/libexec/hassos-overlay"
+
+# SSH-01: baked authorized_keys file present on rootfs.
+if [[ -f "$GA_SSH_AK" ]]; then
+  _pass "SSH-01: /usr/share/ga-ssh/authorized_keys baked on rootfs"
+else
+  _fail "SSH-01: /usr/share/ga-ssh/authorized_keys missing (fresh-flash devices will have NO SSH access)"
+fi
+
+# SSH-02: file is non-empty and contains at least one valid OpenSSH pubkey.
+# Lines starting with # or blank are ignored (the file uses # for comments).
+if [[ -f "$GA_SSH_AK" ]]; then
+  PUBKEY_COUNT=$(grep -cE '^(ssh-rsa|ssh-ed25519|ssh-dss|ecdsa-sha2-) ' "$GA_SSH_AK" 2>/dev/null || echo 0)
+  if [[ "${PUBKEY_COUNT}" -ge 1 ]]; then
+    _pass "SSH-02: ${PUBKEY_COUNT} valid OpenSSH pubkey(s) in authorized_keys"
+  else
+    _fail "SSH-02: no valid OpenSSH pubkey lines found in $GA_SSH_AK"
+  fi
+fi
+
+# SSH-03: file world-readable + root-owned (it gets copied to a 0600 file
+# at runtime; the source itself only needs to be readable by the script).
+if [[ -f "$GA_SSH_AK" ]]; then
+  PERMS=$(stat -c '%a' "$GA_SSH_AK" 2>/dev/null)
+  # 644 (or 444 read-only) is fine; anything more permissive is fine for a public key
+  # but we want to flag if it's writable by group/world (security hygiene).
+  case "$PERMS" in
+    644|640|444|440|600|400) _pass "SSH-03: authorized_keys perms $PERMS (safe)" ;;
+    *)                       _fail "SSH-03: authorized_keys perms $PERMS (unexpected — check umask)" ;;
+  esac
+fi
+
+# SSH-04: hassos-overlay copies the file into /mnt/overlay/root/.ssh on first boot.
+# Guarded by `[ ! -f ... ]` (idempotent — preserves operator edits).
+if [[ -f "$HASSOS_OVERLAY_SH" ]]; then
+  if grep -q '/usr/share/ga-ssh/authorized_keys' "$HASSOS_OVERLAY_SH" 2>/dev/null \
+     && grep -q '/mnt/overlay/root/.ssh/authorized_keys' "$HASSOS_OVERLAY_SH" 2>/dev/null; then
+    _pass "SSH-04: hassos-overlay seeds /mnt/overlay/root/.ssh/authorized_keys"
+  else
+    _fail "SSH-04: hassos-overlay missing the SSH-key seed block"
+  fi
+  # SSH-04b: the copy is guarded (idempotent) — never clobbers operator additions.
+  if grep -B1 '/mnt/overlay/root/.ssh/authorized_keys' "$HASSOS_OVERLAY_SH" 2>/dev/null \
+       | grep -q '!\s*-f' ; then
+    _pass "SSH-04b: hassos-overlay seed is guarded (never overwrites existing)"
+  else
+    _fail "SSH-04b: hassos-overlay seed missing the [ ! -f ] guard (will overwrite operator edits on every boot)"
+  fi
+else
+  _fail "SSH-04: hassos-overlay script missing at $HASSOS_OVERLAY_SH"
+fi
+
+# SSH-05: dropbear unit unchanged invariant — ConditionFileNotEmpty must
+# still require /root/.ssh/authorized_keys. If someone weakens this we
+# risk shipping an SSH-listening device with no key authorization.
+DROPBEAR_UNIT="${TARGET}/usr/lib/systemd/system/dropbear.service.d/hassos.conf"
+if [[ -f "$DROPBEAR_UNIT" ]]; then
+  grep -qE 'ConditionFileNotEmpty=/root/\.ssh/authorized_keys' "$DROPBEAR_UNIT" \
+    && _pass "SSH-05: dropbear unit still gates on authorized_keys (no orphan-listener risk)" \
+    || _fail "SSH-05: dropbear ConditionFileNotEmpty=/root/.ssh/authorized_keys removed — SSH could listen with no keys!"
+fi
+
+# =========================================================================
+# BS-RETRY-01..02: ga-bootstrap exponential-backoff retry for `ha store add`
+# =========================================================================
+# Commit 9b6c28198. First-boot `ha store add` is racy because the
+# Supervisor's git clone can fail post-API-success ("invalid HEAD",
+# exit 128) within the first 1-2 minutes. Retry sequence: 0 / 10 / 30 / 60 /
+# 120 / 240 = ~8 min budget. Regression-guard so a later edit doesn't
+# silently drop the retry.
+
+if [[ -f "$GA_BOOTSTRAP" ]]; then
+  # BS-RETRY-01: the exact backoff sequence is present.
+  if grep -qE 'for[[:space:]]+pre_sleep[[:space:]]+in[[:space:]]+0[[:space:]]+10[[:space:]]+30[[:space:]]+60[[:space:]]+120[[:space:]]+240' "$GA_BOOTSTRAP"; then
+    _pass "BS-RETRY-01: ga-bootstrap has exponential-backoff retry (0 10 30 60 120 240)"
+  else
+    _fail "BS-RETRY-01: ga-bootstrap exponential-backoff sequence missing/changed"
+  fi
+  # BS-RETRY-02: success requires BOTH 'ha store add' OK AND the repo
+  # actually appearing in the store. The Supervisor clones asynchronously
+  # so a 0 exit-code is not trust-worthy on its own (memory note in the
+  # script's comment + commit body).
+  if grep -qE 'addon_repo_present' "$GA_BOOTSTRAP" \
+     && grep -qE 'ha[[:space:]]+store[[:space:]]+add' "$GA_BOOTSTRAP"; then
+    _pass "BS-RETRY-02: ga-bootstrap verifies addon_repo_present after ha store add"
+  else
+    _fail "BS-RETRY-02: ga-bootstrap missing addon_repo_present verification"
+  fi
+fi
+
+# =========================================================================
+# BS-JQ-01: ga-bootstrap addon_installed tests version VALUE, not key
+# =========================================================================
+# Commit feba8fa12. Old code `grep -q '"version"'` matched the JSON key
+# (always present, value can be null on uninstalled addons) → addon_installed
+# always returned true → ga_manager appeared "installed" pre-install and the
+# install step was skipped. Fixed to jq with `.data.version // .version //
+# empty`. Regression-guard so we don't slide back into the trap.
+
+if [[ -f "$GA_BOOTSTRAP" ]]; then
+  # The fix uses a `jq -r` extracting `.data.version // .version // empty`
+  # (with a -e exit check) inside addon_installed. Match the pattern flexibly.
+  if grep -qE 'addon_installed' "$GA_BOOTSTRAP"; then
+    if grep -qE '\.data\.version[[:space:]]*//[[:space:]]*\.version' "$GA_BOOTSTRAP" \
+       || grep -qE 'jq[[:space:]]+-[er]+[^|]+\.data\.version' "$GA_BOOTSTRAP"; then
+      _pass "BS-JQ-01: ga-bootstrap addon_installed checks version VALUE via jq (.data.version // .version)"
+    else
+      _fail "BS-JQ-01: ga-bootstrap addon_installed missing the version-value jq pattern (regression to key-only check?)"
+    fi
+    # BS-JQ-02: must NOT be the buggy `grep -q '\"version\"'` pattern alone
+    # for addon_installed determination.
+    if grep -B2 'addon_installed' "$GA_BOOTSTRAP" 2>/dev/null | grep -qE "grep -q '\"version\"'" ; then
+      _fail "BS-JQ-02: ga-bootstrap addon_installed still uses old grep -q '\"version\"' (matches the KEY, not the value)"
+    else
+      _pass "BS-JQ-02: ga-bootstrap addon_installed does not use the broken grep -q '\"version\"' pattern"
+    fi
+  fi
+fi
+
+# =========================================================================
+# NB-INT-01: NetBird binary on rootfs embeds expected version
+# =========================================================================
+# Commit 11038a1ef. Build-side `verify_build_integrity` used to pipe netbird
+# through `strings` before grep — strings can skip non-loadable ELF sections
+# and silently miss the Go `-X version.version=` constant, causing a false
+# FAIL that aborts the build. Fixed to `grep -qaF` (raw whole-file). This
+# test additionally asserts the version IS embedded in the rootfs binary,
+# so a regression to the broken pattern OR a missing version-injection
+# surfaces here too.
+
+NB_BIN="${TARGET}/usr/bin/netbird"
+if [[ -x "$NB_BIN" ]]; then
+  # Pull the expected NETBIRD_TAG from scripts/ga_build.sh; strip leading 'v'.
+  NB_EXPECTED=""
+  if [[ -n "${SRC:-}" && -f "${SRC}/scripts/ga_build.sh" ]]; then
+    NB_EXPECTED=$(awk -F= '/^NETBIRD_TAG=/{gsub(/[" v]/,"",$2); print $2; exit}' "${SRC}/scripts/ga_build.sh")
+  fi
+  if [[ -n "$NB_EXPECTED" ]]; then
+    if grep -qaF "$NB_EXPECTED" "$NB_BIN" 2>/dev/null; then
+      _pass "NB-INT-01: NetBird rootfs binary embeds version $NB_EXPECTED (via grep -qaF, not strings)"
+    else
+      _fail "NB-INT-01: NetBird rootfs binary does NOT embed expected version $NB_EXPECTED"
+    fi
+  else
+    _skip "NB-INT-01" "could not determine NETBIRD_TAG from scripts/ga_build.sh"
+  fi
+else
+  _skip "NB-INT-01" "NetBird binary not present on rootfs (build incomplete?)"
+fi
+
+# NB-INT-02: scripts/ga_build.sh must NOT regress to `strings | grep` for
+# the version check (the gotcha that caused the false-FAIL in commit 11038a1).
+if [[ -n "${SRC:-}" && -f "${SRC}/scripts/ga_build.sh" ]]; then
+  # Look in the verify_build_integrity function area for the BAD pattern.
+  if grep -qE 'strings[[:space:]]+"\$nb"[[:space:]]*\|[[:space:]]*grep' "${SRC}/scripts/ga_build.sh"; then
+    _fail "NB-INT-02: scripts/ga_build.sh regressed to 'strings | grep' for NetBird version (silently misses sections — re-fix per 11038a1ef)"
+  else
+    _pass "NB-INT-02: scripts/ga_build.sh uses grep -a directly for NetBird version (no strings-pipe regression)"
+  fi
+fi
+
+# =========================================================================
 # Summary
 # =========================================================================
 echo ""
