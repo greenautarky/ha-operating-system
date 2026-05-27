@@ -94,29 +94,47 @@ for addon_suffix in ga_manager ga_zigbee2mqtt ga_mosquitto ga_tailscale ga_ihost
 done
 
 # ---- 3c. Timezone default Europe/Berlin ------------------------------------
-# Go via Supervisor API — NOT `timedatectl set-timezone`. Same pattern as
-# 3d (auto_update): Supervisor owns the host timezone and re-syncs from
-# its own in-memory state, so a direct timedatectl call gets overwritten
-# within ~90s. Observed live KIB-SON-31 first boot 2026-05-27:
-#   18:28:21 supervisor set host tz to Europe/Luxembourg (its own default)
-#   18:28:55 ga-ha-init's timedatectl set-timezone Europe/Berlin → succeeded
-#   18:30:19 supervisor re-synced host tz back to UTC (then later Luxembourg)
-# `ha supervisor info | jq .timezone` was still 'Europe/Luxembourg' even
-# though our timedatectl call returned 0. The API call mutates Supervisor's
-# in-memory tz so the change actually sticks; operator can later override
-# via the HA UI which also goes through the API.
-current_tz=$("$HA" supervisor info --no-progress --raw-json 2>/dev/null \
+# DUAL-CALL required, learned the hard way on KIB-SON-31 reflashes 2026-05-27:
+#
+# 1. `ha supervisor options --timezone Europe/Berlin` sets SUPERVISOR's intent.
+#    Required because Supervisor periodically re-syncs the host tz from its
+#    own in-memory state. If Supervisor's intent is Luxembourg/UTC and we
+#    only set the host via timedatectl, Supervisor reverts ~90s later.
+#    (Observed: 18:28:55 timedatectl set → 18:30:19 supervisor reverted.)
+#
+# 2. `timedatectl set-timezone Europe/Berlin` sets the HOST immediately.
+#    Required because Supervisor's API call returns 200 OK but does NOT
+#    propagate to systemd-timedated for several minutes on a fresh-boot
+#    device — its info-API fields read as `null` during this window.
+#    (Observed Build #5 KIB-SON-31: API succeeded at t=80s, host still UTC
+#    at t=5min and t=20min.)
+#
+# Result of doing both: Supervisor's intent == host state, so the eventual
+# Supervisor sync is a no-op. Order matters: API first so Supervisor's
+# intent is correct BEFORE we set the host, otherwise the next sync wins.
+current_sup_tz=$("$HA" supervisor info --no-progress --raw-json 2>/dev/null \
     | "/usr/bin/jq" -r '.data.timezone // "missing"')
-if [ "$current_tz" = "Europe/Berlin" ]; then
-    log "supervisor timezone already Europe/Berlin"
-else
-    log "supervisor: setting timezone Europe/Berlin (was: $current_tz) via API"
+if [ "$current_sup_tz" != "Europe/Berlin" ]; then
+    log "supervisor: setting timezone Europe/Berlin (was: $current_sup_tz) via API"
     if "$HA" supervisor options --timezone Europe/Berlin --no-progress >/dev/null 2>&1; then
         log "  ha supervisor options --timezone=Europe/Berlin → OK"
     else
         warn "ha supervisor options --timezone failed — will retry next boot"
         exit 1
     fi
+else
+    log "supervisor timezone already Europe/Berlin"
+fi
+current_host_tz=$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')
+if [ "$current_host_tz" != "Europe/Berlin" ]; then
+    log "host: setting timezone Europe/Berlin (was: ${current_host_tz:-unset}) via timedatectl"
+    if /usr/bin/timedatectl set-timezone Europe/Berlin 2>/dev/null; then
+        log "  timedatectl set-timezone Europe/Berlin → OK"
+    else
+        warn "timedatectl set-timezone failed — Supervisor's API setting will eventually sync"
+    fi
+else
+    log "host timezone already Europe/Berlin"
 fi
 
 # ---- 3d. auto_update=false (= ga-flasher-py stage 92) -----------------------

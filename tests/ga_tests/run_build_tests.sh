@@ -1999,24 +1999,27 @@ if [[ -f "$HA_INIT_SCRIPT" ]]; then
   done
 fi
 
-# HA-INIT-02b: timezone MUST go via Supervisor API, not `timedatectl set-timezone`.
-# Direct timedatectl call gets reverted by Supervisor ~90s later (Supervisor
-# re-syncs host tz from its own in-memory state). Caught live KIB-SON-31
-# 2026-05-27. The `ha supervisor options --timezone` form mutates the API
-# state and sticks.
+# HA-INIT-02b: timezone DUAL-CALL — script MUST call both the Supervisor
+# API AND timedatectl. Either alone is insufficient:
+#   - API alone: Supervisor accepts but doesn't propagate to systemd-timedated
+#     for several minutes on fresh boot (info-API fields read null in that
+#     window). Host stays UTC.
+#   - timedatectl alone: Supervisor periodically re-syncs host tz from its
+#     own in-memory state. If Supervisor's intent != Berlin, ~90s later
+#     Supervisor reverts host to Luxembourg/UTC.
+# Caught live KIB-SON-31 Build #5 reflash 2026-05-27.
 if [[ -f "$HA_INIT_SCRIPT" ]]; then
-  if grep -qE 'supervisor options.*--timezone' "$HA_INIT_SCRIPT"; then
-    _pass "HA-INIT-02b: tz set via 'ha supervisor options --timezone' (API path)"
+  # Strip comments first so we only check executable code.
+  HA_INIT_CODE=$(grep -vE '^[[:space:]]*#' "$HA_INIT_SCRIPT")
+  if grep -qE 'supervisor options.*--timezone' <<<"$HA_INIT_CODE"; then
+    _pass "HA-INIT-02b: tz uses 'ha supervisor options --timezone' (Supervisor intent)"
   else
-    _fail "HA-INIT-02b: tz NOT via supervisor API — would be reverted by Supervisor at ~t=90s"
+    _fail "HA-INIT-02b: tz missing Supervisor API call — Supervisor would revert any timedatectl set"
   fi
-  # Match only NON-COMMENT lines (the regression-check). Comments may legitimately
-  # mention the broken-API form when explaining WHY we don't use it (this commit's
-  # own comment block does exactly that).
-  if grep -vE '^[[:space:]]*#' "$HA_INIT_SCRIPT" | grep -qE 'timedatectl set-timezone'; then
-    _fail "HA-INIT-02b: ga-ha-init still calls 'timedatectl set-timezone' in code — Supervisor will overwrite"
+  if grep -qE 'timedatectl set-timezone' <<<"$HA_INIT_CODE"; then
+    _pass "HA-INIT-02b: tz uses 'timedatectl set-timezone' (host immediate)"
   else
-    _pass "HA-INIT-02b: ga-ha-init does not call 'timedatectl set-timezone' in code (correct)"
+    _fail "HA-INIT-02b: tz missing timedatectl call — host tz would stay UTC for several minutes"
   fi
 fi
 

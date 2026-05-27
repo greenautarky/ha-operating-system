@@ -12,6 +12,42 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## 16.3.1.2 (V1.2-clean) — in flight, 2026-05-27 fourth update
+
+Build #5 flashed + retested KIB-SON-31. New HA-INIT-D-08 result: still
+FAIL but with a different root cause than update 3. Investigated live;
+the API-only fix is necessary but not sufficient. Final fix below.
+
+### Fixed — ga-ha-init timezone needs DUAL call (real bug, take 2)
+
+Update 3 switched ga-ha-init from `timedatectl set-timezone` →
+`ha supervisor options --timezone`. The API call succeeds, Supervisor's
+recorded tz becomes `Europe/Berlin`, but on a fresh boot Supervisor
+DOES NOT propagate that to systemd-timedated for several minutes —
+its info-API fields read `null` during this startup window. Result:
+host stays `UTC` even though Supervisor's intent is correct.
+
+Observed Build #5 KIB-SON-31 (FQDN kibu-140-131):
+- t=80s: ga-ha-init runs API call → "OK"
+- t=5min: `ha supervisor info | jq .timezone` = `Europe/Berlin`,
+  `timedatectl status` = `UTC`
+- t=20min: same — Supervisor never auto-syncs to host without a kick
+
+**Fix**: call BOTH in order:
+1. `ha supervisor options --timezone Europe/Berlin` — sets Supervisor's
+   recorded intent (required so Supervisor doesn't revert host later).
+2. `timedatectl set-timezone Europe/Berlin` — sets the host immediately
+   (required because Supervisor won't sync host for several minutes).
+
+Order matters — API first so Supervisor's intent is `Berlin` BEFORE we
+mutate the host; otherwise Supervisor's next sync wins. Verified live
+on KIB-SON-31 between Build #5 and Build #6.
+
+HA-INIT-02b restructured to assert BOTH calls are present (single-call
+of either form is a regression).
+
+---
+
 ## 16.3.1.2 (V1.2-clean) — in flight, 2026-05-27 third update
 
 Post-flash device-test fallout from the second update. Build #3 flashed
