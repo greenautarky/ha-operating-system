@@ -12,6 +12,122 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## 16.3.1.2 (V1.2-clean) — in flight, 2026-05-27 second update
+
+Second sweep today: bake more of the ga-flasher-py provisioning chain into the
+OS image so fresh-flashed devices come up self-sufficient. Pairs with the
+morning's SSH bake.
+
+### Added — NetBird auto-registration on first boot (stage 40 → baked)
+
+- `secrets/netbird-setup-key.txt` (gitignored) → injected into rootfs at
+  `/usr/share/ga-netbird/setup-key` (mode 0600) by new post-build hook
+  `buildroot-ihost/board/sonoff/ihost/post-build.d/88-netbird-setup-key.sh`.
+- New first-boot service `ga-netbird-register.service` runs
+  `/usr/libexec/ga-netbird-register` after netbird.service comes up. Calls
+  `netbird up --setup-key …` once; idempotent (skips when daemon is already
+  past NeedsLogin). `Restart=on-failure` covers the case where first boot
+  comes up before WiFi associates.
+- `ConditionPathExists=/usr/share/ga-netbird/setup-key` guard means the
+  unit cleanly no-ops on devices built without the key (build still
+  succeeds, just devices need manual `netbird up` later).
+- **Replaces ga-flasher-py stage 40** for the fleet-default path. Stage 40
+  can be deleted once we've validated on a few canaries.
+
+### Added — `ga-ha-init`: HA fleet-default configuration on first boot (stage 69 most + 92)
+
+New `/usr/libexec/ga-ha-init` (run via `ga-ha-init.service`) applies the
+fleet-wide deterministic parts of HA configuration on first boot, gated
+by an idempotency marker at `/share/.ga-ha-init-applied`:
+
+- **DNS**: `fallback=false`, explicit servers `1.1.1.1` + `1.0.0.1` —
+  prevents the DoT-on-RFC1918-PTR 180% CPU spike on captive WiFi.
+- **Addon watchdog**: enabled for installed GA addons (`ga_manager`,
+  `ga_zigbee2mqtt`, `ga_mosquitto`, …) — auto-restart on crash.
+- **Timezone**: `Europe/Berlin`. Operator override at runtime persists
+  via the `/etc/localtime` bind mount.
+- **Weather location**: Met.no, Berlin (52.5200, 13.4050). UI override
+  always wins.
+- **`updater.json`**: `auto_update=false` — fleet OTA is operator-driven
+  via push-ota.sh + RAUC, never automatic. Prevents incidents like
+  `incident_ga1_hang_2026_05_06.md`.
+
+**Replaces** the fleet-wide deterministic parts of `ga-flasher-py` stages
+69 + 92. The per-device parts of stage 69 (admin password) stay in the
+provisioner because they're per-device by definition.
+
+### Added — `ga-emmc-erase`: forced SD-only boot (stage 35 → baked)
+
+New `/usr/libexec/ga-emmc-erase` (run via `ga-emmc-erase.service` BEFORE
+`hassos-supervisor.service` to avoid I/O contention) wipes the eMMC on
+first boot. Forces the iHost to always boot from SD on subsequent
+power-cycles (the bootrom can intermittently chain to eMMC factory firmware
+when SD has a transient I/O glitch).
+
+Safety:
+
+- Refuses to run if root is NOT on `mmcblk2` (SD) — prevents bricking
+  a device that's somehow booted off eMMC.
+- `blkdiscard` first (fast hardware TRIM); falls back to `dd` zero-fill
+  of the first 16 MiB if blkdiscard fails (corrupts partition tables,
+  same effect).
+- Idempotency marker `/mnt/data/.ga_emmc_erased` with method + epoch +
+  device — one-shot per device lifetime.
+
+**Replaces ga-flasher-py stage 35.**
+
+### Removed (still need a ga-flasher-py PR to drop the stages)
+
+These stages are now redundant — the responsible feature lives elsewhere.
+Tracking removal as a follow-up PR to ga-flasher-py (not in this commit
+since it touches a different repo):
+
+- **Stage 91 (reset-onboarding)** — redundant with `ga_manager` converge
+  step 9 ("Arm the onboarding wizard — only if HA onboarding is still
+  pending"). The custom_component `greenautarky_onboarding` is already
+  baked into the OS overlay; ga_manager re-arms on every converge.
+- **Stage 62 (update-zigbee-dongle)** — redundant with `ga_manager`
+  converge step 5 (tiered pre-check shipped today as 0.22.3). Wins via
+  Tier-0 MQTT bridge/info read = zero outage on devices already at
+  baseline firmware.
+- **Stage 45 (setup-wifi)** — was a TODO stub; the `GreenAutarky-Install`
+  install/factory WiFi fallback is baked via `ga-overlay-init`. Customer
+  home-WiFi mechanism is a separate design problem (`/share/customer-wifi.*`?)
+  — filed as a memory todo for later.
+
+### Tests — new build-time and device-time coverage
+
+Build tests (`tests/ga_tests/run_build_tests.sh`):
+
+- **NB-REG-01..05** — register script + unit + ConditionPathExists guard +
+  Restart=on-failure + key file perms (when secret was baked).
+- **HA-INIT-01..06** — ga-ha-init script + unit + DNS/watchdog/tz/weather/
+  auto-update content checks + marker logic + ordering after supervisor +
+  enabled at boot.
+- **EMMC-ERASE-01..05** — script + unit + safety-check-present +
+  marker-guarded + ordering before supervisor + enabled at boot.
+
+Device tests (new categories under `tests/ga_tests/`):
+
+- **`netbird_reg/test.sh`** (NB-REG-D-01..07) — script present, service
+  active, daemon NOT NeedsLogin, NetBird IP assigned, Management plane
+  connected.
+- **`ha_init/test.sh`** (HA-INIT-D-01..10) — service active, marker written,
+  DNS `fallback=false`, Cloudflare servers present, auto-update OFF,
+  timezone Europe/Berlin, addon watchdog enabled, idempotent re-run guard.
+- **`emmc_erase/test.sh`** (EMMC-ERASE-D-01..07) — service active, marker
+  with method= field, /dev/mmcblk0 first 64 KiB is zeros, root still on
+  mmcblk2 (SD).
+
+### Provisioner shrinkage
+
+After this commit + the morning SSH bake + tomorrow's planned bakes (50,
+61, 65, 70 Tailscale), ga-flasher-py's 43 stages collapse to ~21
+irreducible per-device + infrastructure stages. Audit in
+`memory/feedback_*` and the V1.2-CLEAN-REBUILD doc.
+
+---
+
 ## 16.3.1.2 (V1.2-clean) — in flight, 2026-05-27 update
 
 This release is being iterated on the `ga/v1.2-clean-rebuild` branch and

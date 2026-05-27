@@ -1927,6 +1927,147 @@ if [[ -n "${SRC:-}" && -f "${SRC}/scripts/ga_build.sh" ]]; then
 fi
 
 # =========================================================================
+# NB-REG-01..05: NetBird auto-register on first boot
+# =========================================================================
+# Source-of-truth + machinery for the OS-baked NetBird registration.
+# Replaces ga-flasher-py stage 40 for the fleet-default registration path.
+NB_REG_SCRIPT="${TARGET}/usr/libexec/ga-netbird-register"
+NB_REG_UNIT="${TARGET}/usr/lib/systemd/system/ga-netbird-register.service"
+NB_REG_KEY="${TARGET}/usr/share/ga-netbird/setup-key"
+
+if [[ -x "$NB_REG_SCRIPT" ]]; then
+  _pass "NB-REG-01: ga-netbird-register script present + executable"
+else
+  _fail "NB-REG-01: ga-netbird-register script missing or not executable at $NB_REG_SCRIPT"
+fi
+
+if [[ -f "$NB_REG_UNIT" ]]; then
+  grep -q '^ConditionPathExists=/usr/share/ga-netbird/setup-key' "$NB_REG_UNIT" \
+    && _pass "NB-REG-02: ga-netbird-register.service has ConditionPathExists guard (skips when no key baked)" \
+    || _fail "NB-REG-02: ga-netbird-register.service missing ConditionPathExists guard"
+  grep -qE '^Restart=on-failure' "$NB_REG_UNIT" \
+    && _pass "NB-REG-03: ga-netbird-register.service has Restart=on-failure (handles slow-network first boot)" \
+    || _fail "NB-REG-03: ga-netbird-register.service missing Restart=on-failure"
+else
+  _fail "NB-REG-02..03: ga-netbird-register.service unit not present at $NB_REG_UNIT"
+fi
+
+if [[ -L "${TARGET}/etc/systemd/system/multi-user.target.wants/ga-netbird-register.service" ]]; then
+  _pass "NB-REG-04: ga-netbird-register.service enabled (multi-user.target.wants symlink)"
+else
+  _fail "NB-REG-04: ga-netbird-register.service NOT enabled (no multi-user.target.wants symlink)"
+fi
+
+# NB-REG-05: setup key file is present iff secret was provided at build.
+# Build tolerates missing key (warn-only); on a build WITH the key, the
+# file must exist + be 0600 + non-empty.
+if [[ -f "$NB_REG_KEY" ]]; then
+  PERMS=$(stat -c '%a' "$NB_REG_KEY" 2>/dev/null)
+  SIZE=$(stat -c '%s' "$NB_REG_KEY" 2>/dev/null)
+  if [[ "$PERMS" == "600" && "$SIZE" -gt 5 ]]; then
+    _pass "NB-REG-05: setup-key file baked (mode 600, $SIZE bytes)"
+  else
+    _fail "NB-REG-05: setup-key baked but wrong perms ($PERMS) or empty ($SIZE bytes)"
+  fi
+else
+  _skip "NB-REG-05" "no setup-key baked (secret missing at build time — fresh-flash devices won't auto-register)"
+fi
+
+# =========================================================================
+# HA-INIT-01..06: ga-ha-init first-boot HA configuration
+# =========================================================================
+# DNS off / watchdog on / weather Met.no Berlin / timezone Europe/Berlin /
+# write GA_ENV / set updater.json auto_update=false. Replaces fleet-wide
+# parts of ga-flasher-py stage 69 + all of stage 92.
+HA_INIT_SCRIPT="${TARGET}/usr/libexec/ga-ha-init"
+HA_INIT_UNIT="${TARGET}/usr/lib/systemd/system/ga-ha-init.service"
+
+if [[ -x "$HA_INIT_SCRIPT" ]]; then
+  _pass "HA-INIT-01: ga-ha-init script present + executable"
+else
+  _fail "HA-INIT-01: ga-ha-init script missing or not executable at $HA_INIT_SCRIPT"
+fi
+
+# HA-INIT-02: script handles all the fleet-wide settings we promised.
+if [[ -f "$HA_INIT_SCRIPT" ]]; then
+  for needle in 'ha dns options' 'fallback=false' 'watchdog' 'Europe/Berlin' 'auto_update' 'core options'; do
+    if grep -qF "$needle" "$HA_INIT_SCRIPT"; then
+      _pass "HA-INIT-02: ga-ha-init touches '$needle'"
+    else
+      _fail "HA-INIT-02: ga-ha-init missing handling of '$needle'"
+    fi
+  done
+fi
+
+# HA-INIT-03: idempotency marker logic.
+if [[ -f "$HA_INIT_SCRIPT" ]]; then
+  grep -q 'ga-ha-init-applied' "$HA_INIT_SCRIPT" \
+    && _pass "HA-INIT-03: ga-ha-init marker-guarded (idempotent across reboots)" \
+    || _fail "HA-INIT-03: ga-ha-init missing marker guard — would re-run on every boot"
+fi
+
+# HA-INIT-04: unit ordering — after hassos-supervisor (we hit its API).
+if [[ -f "$HA_INIT_UNIT" ]]; then
+  grep -q 'After=hassos-supervisor.service' "$HA_INIT_UNIT" \
+    && _pass "HA-INIT-04: ga-ha-init.service ordered After=hassos-supervisor.service" \
+    || _fail "HA-INIT-04: ga-ha-init.service missing After=hassos-supervisor.service ordering"
+fi
+
+# HA-INIT-05: Restart=on-failure (handles slow first boot).
+if [[ -f "$HA_INIT_UNIT" ]]; then
+  grep -qE '^Restart=on-failure' "$HA_INIT_UNIT" \
+    && _pass "HA-INIT-05: ga-ha-init.service has Restart=on-failure" \
+    || _fail "HA-INIT-05: ga-ha-init.service missing Restart=on-failure"
+fi
+
+# HA-INIT-06: enabled at boot.
+if [[ -L "${TARGET}/etc/systemd/system/multi-user.target.wants/ga-ha-init.service" ]]; then
+  _pass "HA-INIT-06: ga-ha-init.service enabled (multi-user.target.wants symlink)"
+else
+  _fail "HA-INIT-06: ga-ha-init.service NOT enabled"
+fi
+
+# =========================================================================
+# EMMC-ERASE-01..04: ga-emmc-erase first-boot wipe (= ga-flasher-py stage 35)
+# =========================================================================
+EMMC_SCRIPT="${TARGET}/usr/libexec/ga-emmc-erase"
+EMMC_UNIT="${TARGET}/usr/lib/systemd/system/ga-emmc-erase.service"
+
+if [[ -x "$EMMC_SCRIPT" ]]; then
+  _pass "EMMC-ERASE-01: ga-emmc-erase script present + executable"
+else
+  _fail "EMMC-ERASE-01: ga-emmc-erase script missing or not executable"
+fi
+
+# EMMC-ERASE-02: safety check (refuse if root NOT on SD).
+if [[ -f "$EMMC_SCRIPT" ]]; then
+  grep -qE 'mmcblk2|SD_ROOT_PATTERN' "$EMMC_SCRIPT" \
+    && _pass "EMMC-ERASE-02: ga-emmc-erase has safety check (root-must-be-on-SD)" \
+    || _fail "EMMC-ERASE-02: ga-emmc-erase missing safety check — would brick a non-SD-booted device!"
+fi
+
+# EMMC-ERASE-03: idempotency marker.
+if [[ -f "$EMMC_SCRIPT" ]]; then
+  grep -q '.ga_emmc_erased' "$EMMC_SCRIPT" \
+    && _pass "EMMC-ERASE-03: ga-emmc-erase marker-guarded (one-shot per device)" \
+    || _fail "EMMC-ERASE-03: ga-emmc-erase missing marker — would re-erase every boot"
+fi
+
+# EMMC-ERASE-04: unit runs BEFORE hassos-supervisor (avoid I/O contention).
+if [[ -f "$EMMC_UNIT" ]]; then
+  grep -q 'Before=hassos-supervisor.service' "$EMMC_UNIT" \
+    && _pass "EMMC-ERASE-04: ga-emmc-erase.service ordered Before=hassos-supervisor.service" \
+    || _fail "EMMC-ERASE-04: ga-emmc-erase.service missing Before=hassos-supervisor ordering"
+fi
+
+# EMMC-ERASE-05: enabled at boot.
+if [[ -L "${TARGET}/etc/systemd/system/multi-user.target.wants/ga-emmc-erase.service" ]]; then
+  _pass "EMMC-ERASE-05: ga-emmc-erase.service enabled (multi-user.target.wants symlink)"
+else
+  _fail "EMMC-ERASE-05: ga-emmc-erase.service NOT enabled"
+fi
+
+# =========================================================================
 # Summary
 # =========================================================================
 echo ""

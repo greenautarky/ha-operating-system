@@ -1,0 +1,21 @@
+[Unit]
+Description=GA — Erase eMMC on first boot (forces SD-only boot)
+# /mnt/data must be mounted (the marker file lives there) before we run.
+Requires=mnt-data.mount
+After=mnt-data.mount
+# Run before Supervisor — don't compete with Docker for I/O on the eMMC
+# silicon (even though we're not USING /var/lib/docker, the eMMC's TRIM
+# command is global to the device and can pause other I/O for seconds).
+Before=hassos-supervisor.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/ga-emmc-erase
+RemainAfterExit=yes
+# eMMC erase is destructive but idempotent (marker-guarded). On the
+# RARE failure where blkdiscard AND dd both fail, retrying buys nothing
+# — fail loud and don't keep trying.
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

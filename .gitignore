@@ -13,9 +13,14 @@ ga_output*/
 *.pem
 buildroot-ihost/rootfs-overlay/etc/shadow
 
-# Local build secrets
+# Local build secrets — ignore files inside (NOT the dir itself, so
+# .example template files can be re-included via the !secrets/*.example
+# negation. Excluding the dir with `secrets/` blocks ALL negations
+# beneath it per the gitignore docs.)
 scripts/local.env
-secrets/
+secrets/*
+!secrets/.gitkeep
+!secrets/*.example
 *.env.local
 serial-password.txt
 

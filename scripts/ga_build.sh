@@ -208,6 +208,13 @@ PREFLIGHT_FAIL=0
 [[ -f "/build/secrets/openstick-wifi.key" ]] || [[ -f "secrets/openstick-wifi.key" ]] || {
   echo "WARN: secrets/openstick-wifi.key not found — OpenStick WiFi will not work" >&2;
 }
+# NetBird auto-register on first boot needs a reusable setup key from the
+# NetBird admin panel. If absent, the OS builds fine but freshly-flashed
+# devices stay in `Daemon status: NeedsLogin` and don't auto-tunnel —
+# operator must register them via `netbird up` or ga-flasher-py stage 40.
+[[ -f "/build/secrets/netbird-setup-key.txt" ]] || [[ -f "secrets/netbird-setup-key.txt" ]] || {
+  echo "WARN: secrets/netbird-setup-key.txt not found — fresh-flash devices will NOT auto-register with NetBird" >&2;
+}
 
 # Version suffix set (not empty for release builds)
 VERSION_SUFFIX_CHECK=$(grep 'VERSION_SUFFIX=' "$BR2EXT_NETBIRD/meta" 2>/dev/null | cut -d'"' -f2)

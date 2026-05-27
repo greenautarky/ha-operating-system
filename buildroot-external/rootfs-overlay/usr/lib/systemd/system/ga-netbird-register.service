@@ -1,0 +1,26 @@
+[Unit]
+Description=GA — Register NetBird peer on first boot (baked setup key)
+# Daemon already starts via netbird.service; we add the `up` step.
+Requires=netbird.service
+After=netbird.service network-online.target
+Wants=network-online.target
+# If the setup key wasn't baked, ga-netbird-register exits 0 cleanly — the
+# unit still completes; this ConditionPathExists is a fast-path skip so we
+# don't even start the unit on devices that have no key. Operator can drop
+# /usr/share/ga-netbird/setup-key in a future image to enable it later.
+ConditionPathExists=/usr/share/ga-netbird/setup-key
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/ga-netbird-register
+RemainAfterExit=yes
+# On failure (no internet at first boot, expired key, mgmt unreachable)
+# retry once a minute so devices that come up before WiFi association
+# still register as soon as the network is up. Stops as soon as the
+# register script exits 0 (which happens on first success — daemon
+# moves out of NeedsLogin and the script's idempotency check returns 0).
+Restart=on-failure
+RestartSec=60s
+
+[Install]
+WantedBy=multi-user.target
