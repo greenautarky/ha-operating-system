@@ -89,16 +89,17 @@ DEADLINE=180
 INTERVAL=5
 i=0
 while [ "$i" -lt "$DEADLINE" ]; do
-    # getent for DNS (fast common case; uses NSS / systemd-resolved)
-    if /usr/bin/getent hosts api.netbird.io >/dev/null 2>&1; then
-        # belt-and-braces: HTTP HEAD with a tight per-call timeout so a
-        # slow/captive DNS doesn't paper over a real outage. ANY HTTP
-        # response (200/401/etc.) is good — we just need the mgmt plane
-        # to be reachable.
-        if /usr/bin/curl -sI --max-time 5 -o /dev/null https://api.netbird.io/ 2>/dev/null; then
-            log "api.netbird.io reachable after ${i}s"
-            break
-        fi
+    # curl -sI tests both DNS resolution AND HTTPS reachability in one
+    # shot — ANY HTTP response (200/401/404/etc.) means the mgmt plane
+    # is reachable. We used to wrap this in a `getent hosts` pre-check
+    # for speed, but iHost's BusyBox OS lacks /usr/bin/getent — the gate
+    # always failed, the inner curl never ran, and the pre-flight burned
+    # the full 180 s budget on every retry. curl handles DNS itself, so
+    # the extra layer was pure liability. (Observed live KIB-SON-31
+    # 2026-05-27 — 4 consecutive retries all hit the 180 s timeout.)
+    if /usr/bin/curl -sI --max-time 5 -o /dev/null https://api.netbird.io/ 2>/dev/null; then
+        log "api.netbird.io reachable after ${i}s"
+        break
     fi
     sleep "$INTERVAL"
     i=$((i + INTERVAL))
