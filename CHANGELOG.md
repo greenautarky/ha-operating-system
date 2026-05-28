@@ -12,6 +12,30 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## 16.3.1.2 (V1.2-clean) — in flight, 2026-05-28 ninth update
+
+### Changed — ga-ha-init sheds watchdog + weather (ownership moved/dropped)
+
+Pairs with ga_manager 0.23.0 (converge now owns the on-device provisioning
+steps). `ga-ha-init` now owns only DNS-off + timezone + auto_update.
+
+- **Watchdog loop removed** — it always no-op'd: `ga-ha-init` runs at
+  boot+~85s, *before* ga_manager's converge installs the addons, so there was
+  nothing to set the flag on (the long-standing HA-INIT-D-09 skip). Watchdog
+  is now enforced by ga_manager converge step 8 (after the addons exist) and
+  verified by the `addon.options_drift` healthcheck.
+- **Weather/location block removed (dropped, not migrated)** — the
+  `ha core options '{"location":…}'` call always failed here (needs the HA
+  owner account, created later by converge), a guaranteed WARN no-op. The
+  customer sets their real location in the onboarding wizard, so a generic
+  Berlin fleet-default is low-value and not worth a fragile Core write.
+- Build test HA-INIT-02 needles trimmed to what ga-ha-init still owns
+  (`ha dns options`, `fallback=false`, `Europe/Berlin`, `auto_update`);
+  device HA-INIT-D-09 reframed as an END-state check (ga_manager fills it in).
+  Verified live KIB-SON-31: ha_init 10/0/1, emmc_erase 7/0/0.
+
+---
+
 ## 16.3.1.2 (V1.2-clean) — in flight, 2026-05-28 eighth update
 
 Provisioning-gap cleanup, following a full survey of ga-flasher-py stages

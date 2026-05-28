@@ -1988,9 +1988,13 @@ else
   _fail "HA-INIT-01: ga-ha-init script missing or not executable at $HA_INIT_SCRIPT"
 fi
 
-# HA-INIT-02: script handles all the fleet-wide settings we promised.
+# HA-INIT-02: script handles the fleet-wide settings it OWNS. Watchdog and
+# weather/location were removed 2026-05-28 (watchdog → ga_manager converge
+# step 8 since ga-ha-init runs before addons install; weather dropped — needs
+# the owner account that doesn't exist at boot+85s). ga-ha-init now owns: DNS,
+# timezone, auto_update.
 if [[ -f "$HA_INIT_SCRIPT" ]]; then
-  for needle in 'ha dns options' 'fallback=false' 'watchdog' 'Europe/Berlin' 'auto_update' 'core options'; do
+  for needle in 'ha dns options' 'fallback=false' 'Europe/Berlin' 'auto_update'; do
     if grep -qF "$needle" "$HA_INIT_SCRIPT"; then
       _pass "HA-INIT-02: ga-ha-init touches '$needle'"
     else

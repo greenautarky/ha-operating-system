@@ -1,10 +1,12 @@
 #!/bin/sh
 # HA-init test suite — runs ON the device.
-# Verifies that ga-ha-init successfully applied the fleet-wide defaults
-# on first boot (DNS off, watchdog on, weather/timezone Berlin,
-# auto_update=false). Replaces ga-flasher-py stage 69 (most parts) + 92.
+# Verifies the fleet-wide defaults applied at first boot. ga-ha-init owns
+# DNS-off + timezone Berlin + auto_update=false (= ga-flasher-py stage 69
+# parts + 92). Addon watchdog moved to ga_manager converge step 8 (ga-ha-init
+# runs before addons install); weather/location dropped (needs the owner
+# account). D-09 below still asserts the watchdog END state.
 #
-# Counterpart build tests: HA-INIT-01..06 in run_build_tests.sh.
+# Counterpart build tests: HA-INIT-01..09 in run_build_tests.sh.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
 suite_start "HA Init (fleet defaults)"
@@ -63,12 +65,12 @@ fi
 run_test "HA-INIT-D-08b" "ga-ha-init-tz-reapply.timer loaded" \
   "systemctl list-timers --all 2>/dev/null | grep -q ga-ha-init-tz-reapply || systemctl is-enabled ga-ha-init-tz-reapply.timer >/dev/null 2>&1"
 
-# HA-INIT-D-09: at least one addon has watchdog enabled (proves the loop touched something).
-# Note: ga-ha-init runs at t~80s post-boot — BEFORE ga_manager (step 5) installs
-# addons. So on a fresh boot, ga-ha-init's watchdog loop touches 0 addons and
-# the late re-apply in ga_manager step 8 owns this. If no addons present yet,
-# SKIP (not FAIL) — the test asserts the END state, ga_manager fills it in.
-# Tracked: todo_v12_bake_followups_2026_05_27.md item #1 (DNS+watchdog dedup).
+# HA-INIT-D-09: at least one addon has watchdog enabled (END-state check).
+# Watchdog is owned by ga_manager converge step 8 (addon_set_flags), which
+# runs AFTER addons are installed — ga-ha-init no longer touches watchdog
+# (its loop ran pre-install, always a no-op; removed 2026-05-28). If addons
+# aren't installed yet (converge not run), SKIP — converge fills it in.
+# Tracked: todo_v12_bake_followups_2026_05_27.md item #1 + #9.
 # Count addons that are TRULY installed (`version_installed` != null). The
 # bare addon-list endpoint also returns "available" addons whose state is
 # "started" but `version_installed` is null — calling `ha addons options
@@ -76,7 +78,7 @@ run_test "HA-INIT-D-08b" "ga-ha-init-tz-reapply.timer loaded" \
 # warning we see in ga-ha-init's journal. So SKIP if 0 truly-installed.
 installed_count=$(ha addons --raw-json --no-progress 2>/dev/null | jq '[.data.addons[] | select(.version_installed != null)] | length' 2>/dev/null)
 if [ "${installed_count:-0}" -eq 0 ]; then
-  skip_test "HA-INIT-D-09" "at least one addon has watchdog=true" "0 truly-installed addons (ga_manager step 5 not yet completed)"
+  skip_test "HA-INIT-D-09" "at least one addon has watchdog=true" "0 truly-installed addons (ga_manager converge step 1 not yet completed)"
 else
   run_test "HA-INIT-D-09" "at least one addon has watchdog=true" \
     "ha addons --raw-json --no-progress 2>/dev/null | jq -e '.data.addons[] | select(.watchdog == true)' >/dev/null"

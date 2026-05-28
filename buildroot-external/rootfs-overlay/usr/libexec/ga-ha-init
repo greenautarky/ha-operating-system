@@ -79,19 +79,14 @@ if ! "$HA" dns options --servers "dns://1.1.1.1" --servers "dns://1.0.0.1" --fal
     exit 1
 fi
 
-# ---- 3b. Addon watchdog ON (auto-restart on crash) --------------------------
-log "enabling watchdog on installed GA addons"
-for addon_suffix in ga_manager ga_zigbee2mqtt ga_mosquitto ga_tailscale ga_ihosthardwarecontrol ga_influxdbv1; do
-    # Resolve the repo-prefixed slug (vibe_addons assigns a <hash>_<name> prefix).
-    slug=$("$HA" addons --raw-json --no-progress 2>/dev/null \
-        | "/usr/bin/jq" -r --arg s "$addon_suffix" '.data.addons[]
-            | select(.slug | endswith("_"+$s) or . == $s)
-            | .slug' 2>/dev/null | head -1)
-    [ -z "$slug" ] && continue
-    "$HA" addons options "$slug" --watchdog --no-progress >/dev/null 2>&1 \
-        && log "  watchdog on for $slug" \
-        || warn "  could not set watchdog for $slug (addon may be uninstalled)"
-done
+# ---- 3b. Addon watchdog — MOVED to ga_manager converge step 8 --------------
+# This loop used to enable watchdog on the GA addons, but it ALWAYS no-op'd:
+# ga-ha-init runs at ~boot+85s, BEFORE ga_manager's converge installs the
+# addons, so there was nothing to set the flag on (the long-standing
+# HA-INIT-D-09 device-test skip). Ownership now lives in ga_manager converge
+# step 8 (addon_set_flags, driven by addon_expectations) which runs AFTER the
+# addons are installed and is verified by the addon.options_drift healthcheck.
+# Removed here 2026-05-28 to avoid a misleading no-op.
 
 # ---- 3c. Timezone default Europe/Berlin ------------------------------------
 # DUAL-CALL required, learned the hard way on KIB-SON-31 reflashes 2026-05-27:
@@ -192,14 +187,15 @@ else
     fi
 fi
 
-# ---- 3e. Weather entity (Met.no, Home: Berlin coordinates) ------------------
-# Fleet default — Berlin (52.5200, 13.4050). Operator can override per
-# device via the HA UI; our write here only happens once per device
-# lifecycle (gated on the marker).
-log "weather configuration is best-effort — UI override always wins"
-"$HA" core options --raw-json '{"location":{"latitude":52.5200,"longitude":13.4050,"elevation":34,"unit_system":"metric","time_zone":"Europe/Berlin","currency":"EUR","country":"DE"}}' --no-progress >/dev/null 2>&1 \
-    && log "  location set (Berlin, DE)" \
-    || warn "  ha core options failed (may need owner account first — non-fatal)"
+# ---- 3e. Weather/location — DROPPED 2026-05-28 -----------------------------
+# Removed: `ha core options --raw-json '{"location":…}'` ALWAYS failed here
+# (it needs the HA owner account, which doesn't exist at boot+85s — the owner
+# is created later by ga_manager converge step 3). It was a guaranteed WARN
+# no-op. We do NOT migrate it: the customer sets their real location in the
+# greenautarky_onboarding wizard, so a generic Berlin fleet-default is
+# low-value and a direct core.config write is schema-fragile. If a default is
+# ever wanted, add it to converge AFTER step 3 (owner exists). See
+# todo_v12_bake_followups_2026_05_27.md #3.
 
 # ---- 3f. Mark complete -----------------------------------------------------
 mkdir -p "$(dirname "$MARKER")"
