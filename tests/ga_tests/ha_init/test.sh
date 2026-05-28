@@ -44,9 +44,24 @@ run_test "HA-INIT-D-06" "dns.json has both 1.1.1.1 and 1.0.0.1" \
 run_test "HA-INIT-D-07" "supervisor auto_update=false (via API)" \
   "test \"\$(ha supervisor info --raw-json --no-progress 2>/dev/null | jq -r '.data.auto_update')\" = 'false'"
 
-# HA-INIT-D-08: timezone Europe/Berlin.
-run_test "HA-INIT-D-08" "system timezone Europe/Berlin" \
-  "readlink /etc/localtime 2>/dev/null | grep -q 'Europe/Berlin$' || timedatectl status 2>/dev/null | grep -qE 'Time zone:[[:space:]]+Europe/Berlin'"
+# HA-INIT-D-08: timezone Europe/Berlin (END state).
+# ga-ha-init sets this at t~85s but Supervisor's host.control sync reverts
+# to UTC at ~t=120s; the ga-ha-init-tz-reapply.timer re-applies at t=240s.
+# So this is only reliably true AFTER boot+240s. If we're earlier than that
+# and the timer hasn't fired yet, SKIP rather than FAIL (transient window).
+uptime_s=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+tz_ok() { readlink /etc/localtime 2>/dev/null | grep -q 'Europe/Berlin$' || timedatectl status 2>/dev/null | grep -qE 'Time zone:[[:space:]]+Europe/Berlin'; }
+if tz_ok; then
+  run_test "HA-INIT-D-08" "system timezone Europe/Berlin" "true"
+elif [ "${uptime_s:-9999}" -lt 270 ]; then
+  skip_test "HA-INIT-D-08" "system timezone Europe/Berlin" "uptime ${uptime_s}s < 270s — tz-reapply timer (boot+240s) not fired yet"
+else
+  run_test "HA-INIT-D-08" "system timezone Europe/Berlin" "false"
+fi
+
+# HA-INIT-D-08b: the late-reapply timer is installed + scheduled/active.
+run_test "HA-INIT-D-08b" "ga-ha-init-tz-reapply.timer loaded" \
+  "systemctl list-timers --all 2>/dev/null | grep -q ga-ha-init-tz-reapply || systemctl is-enabled ga-ha-init-tz-reapply.timer >/dev/null 2>&1"
 
 # HA-INIT-D-09: at least one addon has watchdog enabled (proves the loop touched something).
 # Note: ga-ha-init runs at t~80s post-boot — BEFORE ga_manager (step 5) installs

@@ -2051,6 +2051,41 @@ else
   _fail "HA-INIT-06: ga-ha-init.service NOT enabled"
 fi
 
+# HA-INIT-07..09: late tz re-apply timer (beats Supervisor host.control
+# revert at boot+~120s). ga-ha-init can't fork a sleeper — it's Type=oneshot
+# KillMode=control-group, so a child dies when the main script exits.
+# A dedicated timer in its own cgroup is the fix.
+TZ_REAPPLY_SCRIPT="${TARGET}/usr/libexec/ga-ha-init-tz-reapply"
+TZ_REAPPLY_SVC="${TARGET}/usr/lib/systemd/system/ga-ha-init-tz-reapply.service"
+TZ_REAPPLY_TIMER="${TARGET}/usr/lib/systemd/system/ga-ha-init-tz-reapply.timer"
+
+if [[ -x "$TZ_REAPPLY_SCRIPT" ]]; then
+  _pass "HA-INIT-07: ga-ha-init-tz-reapply script present + executable"
+else
+  _fail "HA-INIT-07: ga-ha-init-tz-reapply script missing or not executable"
+fi
+
+# HA-INIT-08: timer fires AFTER Supervisor's host-sync (boot+~120s). We need
+# OnBootSec strictly greater than that; assert >= 180s to be safe.
+if [[ -f "$TZ_REAPPLY_TIMER" ]]; then
+  ob=$(grep -oE 'OnBootSec=[0-9]+' "$TZ_REAPPLY_TIMER" | grep -oE '[0-9]+' | head -1)
+  if [[ -n "$ob" && "$ob" -ge 180 ]]; then
+    _pass "HA-INIT-08: tz-reapply timer OnBootSec=${ob}s (>=180s, past Supervisor host-sync)"
+  else
+    _fail "HA-INIT-08: tz-reapply timer OnBootSec=${ob:-unset} too early — Supervisor reverts at ~120s"
+  fi
+else
+  _fail "HA-INIT-08: ga-ha-init-tz-reapply.timer unit missing"
+fi
+
+# HA-INIT-09: timer enabled at boot (timers.target.wants symlink) + service present.
+if [[ -L "${TARGET}/etc/systemd/system/timers.target.wants/ga-ha-init-tz-reapply.timer" \
+      && -f "$TZ_REAPPLY_SVC" ]]; then
+  _pass "HA-INIT-09: tz-reapply timer enabled (timers.target.wants symlink) + service present"
+else
+  _fail "HA-INIT-09: tz-reapply timer NOT enabled or service unit missing"
+fi
+
 # =========================================================================
 # EMMC-ERASE-01..04: ga-emmc-erase first-boot wipe (= ga-flasher-py stage 35)
 # =========================================================================

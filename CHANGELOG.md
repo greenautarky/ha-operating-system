@@ -12,6 +12,50 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## 16.3.1.2 (V1.2-clean) — in flight, 2026-05-28 sixth update
+
+Build #7 reflash KIB-SON-31 (checked next morning, device up overnight)
+still showed `Time zone: UTC` — and `journalctl -t ga-ha-init-late` had
+NO entries. The update-5 forked-child workaround never ran.
+
+### Fixed — late tz re-apply via dedicated timer (real fix, take 3)
+
+Root cause of the update-5 failure: `ga-ha-init.service` is
+`Type=oneshot` with the default `KillMode=control-group`. When the main
+script exits, systemd tears down the unit's entire cgroup — killing the
+backgrounded `sleep 180` child before it could re-apply. The parent
+logged "forked late-tz-reapply…" at boot but the child was reaped
+immediately. A forked sleeper can NEVER survive a oneshot unit.
+
+**Fix**: move the late re-apply into its OWN unit so it gets its own
+cgroup:
+- `/usr/libexec/ga-ha-init-tz-reapply` — idempotent script: if host tz
+  != Europe/Berlin, run `timedatectl set-timezone Europe/Berlin` and
+  confirm. No-op if already correct.
+- `ga-ha-init-tz-reapply.service` (Type=oneshot) — runs that script.
+- `ga-ha-init-tz-reapply.timer` (`OnBootSec=240s`, `AccuracySec=10s`) —
+  fires once per boot, comfortably past Supervisor's host-sync revert
+  at ~boot+120s. Enabled via `timers.target.wants` symlink.
+
+ga-ha-init itself keeps its early dual-call (Supervisor API +
+timedatectl) for the t~85s baseline; the timer is the safety net that
+wins the final write. Verified live KIB-SON-31: tz was stuck UTC
+overnight, manual `timedatectl set-timezone Europe/Berlin` set CEST and
+held — which is exactly what the timer service runs.
+
+New tests:
+- Build: HA-INIT-07 (script present), HA-INIT-08 (timer OnBootSec>=180s),
+  HA-INIT-09 (timer enabled + service present).
+- Device: HA-INIT-D-08 now skip-aware (SKIP if uptime<270s, since the
+  timer fires at 240s), HA-INIT-D-08b (timer loaded/scheduled).
+
+**Long-term fix still tracked** (todo_v12_bake_followups item #7):
+pre-seed `/mnt/overlay/etc/localtime → Berlin` so Supervisor's cached
+startup snapshot is Berlin and the revert no-ops — would let us drop
+the timer entirely.
+
+---
+
 ## 16.3.1.2 (V1.2-clean) — in flight, 2026-05-27 fifth update
 
 Build #6 reflash KIB-SON-31 still failed HA-INIT-D-08 despite the dual-call

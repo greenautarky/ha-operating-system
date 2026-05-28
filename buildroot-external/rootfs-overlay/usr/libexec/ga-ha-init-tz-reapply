@@ -1,0 +1,49 @@
+#!/bin/sh
+# ga-ha-init-tz-reapply — late timezone re-apply.
+#
+# WHY THIS EXISTS
+# ---------------
+# ga-ha-init sets the host timezone to Europe/Berlin at ~t=85s (both via
+# the Supervisor API and timedatectl). But Supervisor's own host.control
+# startup sync fires at ~t=120s and reverts the host tz to UTC, using a
+# stale snapshot it cached at its dbus-init time (t~80s, before ga-ha-init
+# ran). config.json already records Europe/Berlin by then, but Supervisor
+# doesn't re-read it for that sync.
+#
+# ga-ha-init can't fix this from its own process: it's a Type=oneshot
+# unit with KillMode=control-group, so any child it forks is killed when
+# the main script exits. This script runs in its OWN unit
+# (ga-ha-init-tz-reapply.service, fired by .timer at OnBootSec=240s), well
+# past Supervisor's host-sync, so a plain timedatectl re-apply sticks.
+#
+# IDEMPOTENT: if the host tz is already Europe/Berlin (Supervisor didn't
+# revert, or a prior run already fixed it), this is a no-op. Safe to run
+# on every boot — the timer fires once per boot.
+set -e
+
+LOG_TAG="ga-ha-init-tz-reapply"
+log() { echo "${LOG_TAG}: $*"; }
+
+current_tz=$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')
+if [ "$current_tz" = "Europe/Berlin" ]; then
+    log "host timezone already Europe/Berlin — no re-apply needed"
+    exit 0
+fi
+
+log "host timezone is ${current_tz:-unset} (Supervisor host-sync likely reverted it) — re-applying Europe/Berlin"
+if /usr/bin/timedatectl set-timezone Europe/Berlin 2>/dev/null; then
+    log "timedatectl set-timezone Europe/Berlin → OK"
+else
+    log "WARNING: timedatectl set-timezone failed"
+    exit 1
+fi
+
+# Confirm it took.
+final_tz=$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')
+if [ "$final_tz" = "Europe/Berlin" ]; then
+    log "confirmed host timezone now Europe/Berlin"
+else
+    log "WARNING: host timezone is ${final_tz:-unset} after re-apply — Supervisor may still be syncing"
+    exit 1
+fi
+exit 0
