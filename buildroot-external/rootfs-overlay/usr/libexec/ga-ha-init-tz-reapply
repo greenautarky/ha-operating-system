@@ -24,7 +24,15 @@ set -e
 LOG_TAG="ga-ha-init-tz-reapply"
 log() { echo "${LOG_TAG}: $*"; }
 
-current_tz=$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')
+# Resolving the host tz from /etc/localtime needs care (caught Build #8):
+#  (a) it's a 2-hop symlink: /etc/localtime → /mnt/overlay/etc/localtime
+#      → /usr/share/zoneinfo/<TZ>. A single `readlink` stops at the
+#      intermediate overlay path (no "zoneinfo"), so use `readlink -f`.
+#  (b) the canonical target lands under .../zoneinfo/POSIX/Europe/Berlin
+#      (note the `posix/` subdir), so strip an optional posix/|right/
+#      prefix too — else the string compare against "Europe/Berlin" fails.
+tz_now() { readlink -f /etc/localtime 2>/dev/null | sed -E 's#.*/zoneinfo/(posix/|right/)?##'; }
+current_tz=$(tz_now)
 if [ "$current_tz" = "Europe/Berlin" ]; then
     log "host timezone already Europe/Berlin — no re-apply needed"
     exit 0
@@ -38,8 +46,8 @@ else
     exit 1
 fi
 
-# Confirm it took.
-final_tz=$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')
+# Confirm it took (tz_now resolves the 2-hop symlink + posix/ prefix).
+final_tz=$(tz_now)
 if [ "$final_tz" = "Europe/Berlin" ]; then
     log "confirmed host timezone now Europe/Berlin"
 else

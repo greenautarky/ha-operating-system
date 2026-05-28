@@ -12,6 +12,38 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## 16.3.1.2 (V1.2-clean) — in flight, 2026-05-28 seventh update
+
+Build #8 reflash: the timer-based fix WORKS — host tz auto-corrected to
+`Europe/Berlin (CEST)` unattended at boot+240s, no manual intervention.
+But the `ga-ha-init-tz-reapply.service` reported `failed` because its
+own self-confirmation mis-read the tz. Functional success, cosmetic
+failure-state. Fixed.
+
+### Fixed — tz self-check readlink resolution (2-hop symlink + posix subdir)
+
+`/etc/localtime` is a 2-hop symlink on this image:
+`/etc/localtime → /mnt/overlay/etc/localtime → /usr/share/zoneinfo/posix/<TZ>`.
+The scripts used `readlink /etc/localtime | sed 's|.*/zoneinfo/||'` which:
+1. stopped at the intermediate `/mnt/overlay/etc/localtime` (no
+   "zoneinfo" substring) — so the value never matched, and
+2. even with `readlink -f`, the canonical path goes through a `posix/`
+   subdir (`…/zoneinfo/posix/Europe/Berlin`), so a plain zoneinfo-strip
+   yields `posix/Europe/Berlin` ≠ `Europe/Berlin`.
+
+Result: ga-ha-init-tz-reapply applied the tz correctly (`timedatectl`
+confirmed CEST) but its confirmation step read `/mnt/overlay/etc/
+localtime`, logged a WARNING and `exit 1` → systemd marked the unit
+`failed`.
+
+Fix: both ga-ha-init and ga-ha-init-tz-reapply now resolve with
+`readlink -f … | sed -E 's#.*/zoneinfo/(posix/|right/)?##'`, handling
+the 2-hop chain AND the optional `posix/`/`right/` zoneinfo subdir.
+Verified live: all three path forms (`posix/Europe/Berlin`,
+`Europe/Berlin`, `UTC`) extract correctly.
+
+---
+
 ## 16.3.1.2 (V1.2-clean) — in flight, 2026-05-28 sixth update
 
 Build #7 reflash KIB-SON-31 (checked next morning, device up overnight)

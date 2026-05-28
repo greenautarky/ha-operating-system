@@ -125,7 +125,12 @@ if [ "$current_sup_tz" != "Europe/Berlin" ]; then
 else
     log "supervisor timezone already Europe/Berlin"
 fi
-current_host_tz=$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')
+# readlink -f: /etc/localtime is a 2-hop symlink (→ /mnt/overlay/etc/
+# localtime → /usr/share/zoneinfo/<TZ>); a single readlink returns the
+# intermediate overlay path so the zoneinfo-strip never matches. The
+# canonical target lands under .../zoneinfo/posix/<TZ>, so strip an
+# optional posix/|right/ prefix too (see ga-ha-init-tz-reapply).
+current_host_tz=$(readlink -f /etc/localtime 2>/dev/null | sed -E 's#.*/zoneinfo/(posix/|right/)?##')
 if [ "$current_host_tz" != "Europe/Berlin" ]; then
     log "host: setting timezone Europe/Berlin (was: ${current_host_tz:-unset}) via timedatectl"
     if /usr/bin/timedatectl set-timezone Europe/Berlin 2>/dev/null; then
