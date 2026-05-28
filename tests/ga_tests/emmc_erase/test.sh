@@ -1,7 +1,8 @@
 #!/bin/sh
 # eMMC erase test suite — runs ON the device.
-# Verifies that ga-emmc-erase ran on first boot and wiped /dev/mmcblk0
-# (forcing SD-only boot). Replaces ga-flasher-py stage 35.
+# Verifies the eMMC wipe ran on first boot (forcing SD-only boot).
+# Owned by ga-bootstrap-disk (the standalone ga-emmc-erase unit was deleted
+# 2026-05-28 as a redundant duplicate). Replaces ga-flasher-py stage 35.
 #
 # Counterpart build tests: EMMC-ERASE-01..05 in run_build_tests.sh.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -11,28 +12,26 @@ suite_start "eMMC erase"
 MARKER="/mnt/data/.ga_emmc_erased"
 
 # EMMC-ERASE-D-01: script + unit baked.
-run_test "EMMC-ERASE-D-01" "ga-emmc-erase script present + executable" \
-  "test -x /usr/libexec/ga-emmc-erase"
+run_test "EMMC-ERASE-D-01" "ga-bootstrap-disk script present + executable" \
+  "test -x /usr/libexec/ga-bootstrap-disk"
 
-run_test "EMMC-ERASE-D-02" "ga-emmc-erase.service unit present" \
-  "test -f /usr/lib/systemd/system/ga-emmc-erase.service"
+run_test "EMMC-ERASE-D-02" "ga-bootstrap-disk.service unit present" \
+  "test -f /usr/lib/systemd/system/ga-bootstrap-disk.service"
 
-# EMMC-ERASE-D-03: service active (RemainAfterExit=yes after oneshot success).
-run_test "EMMC-ERASE-D-03" "ga-emmc-erase.service is active" \
-  "systemctl is-active ga-emmc-erase.service >/dev/null"
+# EMMC-ERASE-D-03: service ran successfully (oneshot, sysinit — pre-Supervisor).
+run_test "EMMC-ERASE-D-03" "ga-bootstrap-disk.service ran (active/exited)" \
+  "systemctl is-active ga-bootstrap-disk.service >/dev/null || systemctl show ga-bootstrap-disk.service -p Result --value 2>/dev/null | grep -q success"
 
 # EMMC-ERASE-D-04: marker file present + has the expected method= field.
 run_test "EMMC-ERASE-D-04" "marker /mnt/data/.ga_emmc_erased present" \
   "test -f $MARKER && test -s $MARKER"
 
-# EMMC-ERASE-D-05: marker SHAPE — accept either our format (method=...)
-# OR ga-bootstrap-disk's format ("erased by ga-bootstrap-disk"). On a stock
-# V1.2-clean image, ga-bootstrap-disk fires ~1s BEFORE ga-emmc-erase and
-# wins the marker; our service then detects the marker and idempotent-exits.
-# Both producers leave the eMMC genuinely zeroed (D-06 is the wipe-truth
-# test). See: todo_v12_bake_followups_2026_05_27.md item #2.
-run_test "EMMC-ERASE-D-05" "marker SHAPE (method= or ga-bootstrap-disk)" \
-  "grep -qE 'method=(blkdiscard|dd-zero|no-emmc)|erased by ga-bootstrap-disk' $MARKER"
+# EMMC-ERASE-D-05: marker SHAPE — ga-bootstrap-disk writes
+# "erased by ga-bootstrap-disk". (The legacy method=... form is still
+# accepted for devices imaged before the 2026-05-28 ga-emmc-erase deletion.)
+# D-06 is the wipe-truth test. See: todo_v12_bake_followups_2026_05_27.md #2.
+run_test "EMMC-ERASE-D-05" "marker SHAPE (ga-bootstrap-disk or legacy method=)" \
+  "grep -qE 'erased by ga-bootstrap-disk|method=(blkdiscard|dd-zero|no-emmc)' $MARKER"
 
 # EMMC-ERASE-D-06: actual wipe verification. Read first 64 KiB of /dev/mmcblk0
 # and verify it's zero — `fcd6bcb56c1689fcef28b57c22475bad` is the canonical

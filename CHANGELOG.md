@@ -12,7 +12,30 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
-## 16.3.1.2 (V1.2-clean) — in flight, 2026-05-28 seventh update
+## 16.3.1.2 (V1.2-clean) — in flight, 2026-05-28 eighth update
+
+Provisioning-gap cleanup, following a full survey of ga-flasher-py stages
+vs. what the V1.2-clean OS + ga_manager actually do
+(`ga-ihost-docs/PROVISIONING-SELF-MIGRATION.md`).
+
+### Removed — redundant `ga-emmc-erase` (single-source-of-truth)
+
+`ga-emmc-erase{,.service}` + its `multi-user.target.wants` symlink deleted.
+It duplicated `ga-bootstrap-disk`, which already does the eMMC wipe ~1s
+earlier (sysinit, pre-Supervisor) with **3 guards** (iHost device-tree +
+`mmcblk0boot0` present + root-on-`mmcblk2`) vs the duplicate's 1, and writes
+the same `/mnt/data/.ga_emmc_erased` marker. Live evidence (KIB-SON-31,
+2026-05-27): ga-bootstrap-disk won the marker every boot; ga-emmc-erase
+detected it and idempotent-exited — harmless but pure redundancy.
+
+### Changed — eMMC tests now cover ga-bootstrap-disk's erase LOGIC (closes a gap)
+
+- Build EMMC-ERASE-01..05 repointed at `ga-bootstrap-disk`: script present,
+  **all 3 erase guards**, marker, **blkdiscard + dd zero-fill fallback**,
+  sysinit enablement. Previously only GAOS-05/06 (unit exists/enabled) —
+  the erase *logic* (guards/wipe method) had no build test at all.
+- Device `emmc_erase/` D-01..03 repointed at ga-bootstrap-disk; the wipe-truth
+  tests (marker + 64 KiB-zeros md5) unchanged. Verified live KIB-SON-31: 7/7.
 
 Build #8 reflash: the timer-based fix WORKS — host tz auto-corrected to
 `Europe/Berlin (CEST)` unattended at boot+240s, no manual intervention.

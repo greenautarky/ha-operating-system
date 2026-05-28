@@ -2087,43 +2087,57 @@ else
 fi
 
 # =========================================================================
-# EMMC-ERASE-01..04: ga-emmc-erase first-boot wipe (= ga-flasher-py stage 35)
+# EMMC-ERASE-01..05: eMMC first-boot wipe (= ga-flasher-py stage 35).
+# Owned by ga-bootstrap-disk (NOT a separate ga-emmc-erase unit — that was
+# deleted 2026-05-28 as a redundant duplicate; ga-bootstrap-disk does the
+# wipe ~1s earlier with 3 guards vs the duplicate's 1). GAOS-05/06 cover the
+# unit's existence+enablement; these tests cover the erase LOGIC, which had
+# no build-test before (closing the WP-B gap).
 # =========================================================================
-EMMC_SCRIPT="${TARGET}/usr/libexec/ga-emmc-erase"
-EMMC_UNIT="${TARGET}/usr/lib/systemd/system/ga-emmc-erase.service"
+EMMC_SCRIPT="${TARGET}/usr/libexec/ga-bootstrap-disk"
 
 if [[ -x "$EMMC_SCRIPT" ]]; then
-  _pass "EMMC-ERASE-01: ga-emmc-erase script present + executable"
+  _pass "EMMC-ERASE-01: ga-bootstrap-disk script present + executable"
 else
-  _fail "EMMC-ERASE-01: ga-emmc-erase script missing or not executable"
+  _fail "EMMC-ERASE-01: ga-bootstrap-disk script missing or not executable"
 fi
 
-# EMMC-ERASE-02: safety check (refuse if root NOT on SD).
+# EMMC-ERASE-02: all THREE fail-closed guards present (the whole safety model).
+#   A: iHost device-tree compatible   B: mmcblk0boot0 (proves eMMC, not SD)
+#   C: root must be on mmcblk2 (SD) — never wipe the running system.
 if [[ -f "$EMMC_SCRIPT" ]]; then
-  grep -qE 'mmcblk2|SD_ROOT_PATTERN' "$EMMC_SCRIPT" \
-    && _pass "EMMC-ERASE-02: ga-emmc-erase has safety check (root-must-be-on-SD)" \
-    || _fail "EMMC-ERASE-02: ga-emmc-erase missing safety check — would brick a non-SD-booted device!"
+  _g=0
+  grep -q 'itead,sonoff-ihost' "$EMMC_SCRIPT" && _g=$((_g+1))
+  grep -q 'mmcblk0boot0' "$EMMC_SCRIPT" && _g=$((_g+1))
+  grep -q 'mmcblk2' "$EMMC_SCRIPT" && _g=$((_g+1))
+  if [[ "$_g" -eq 3 ]]; then
+    _pass "EMMC-ERASE-02: ga-bootstrap-disk has all 3 erase guards (iHost + boot0 + root-on-SD)"
+  else
+    _fail "EMMC-ERASE-02: ga-bootstrap-disk missing erase guard(s) (found ${_g}/3) — could brick a device!"
+  fi
 fi
 
-# EMMC-ERASE-03: idempotency marker.
+# EMMC-ERASE-03: idempotency marker (one wipe per device, ever).
 if [[ -f "$EMMC_SCRIPT" ]]; then
   grep -q '.ga_emmc_erased' "$EMMC_SCRIPT" \
-    && _pass "EMMC-ERASE-03: ga-emmc-erase marker-guarded (one-shot per device)" \
-    || _fail "EMMC-ERASE-03: ga-emmc-erase missing marker — would re-erase every boot"
+    && _pass "EMMC-ERASE-03: ga-bootstrap-disk marker-guarded (.ga_emmc_erased, one-shot)" \
+    || _fail "EMMC-ERASE-03: ga-bootstrap-disk missing marker — would re-erase every boot"
 fi
 
-# EMMC-ERASE-04: unit runs BEFORE hassos-supervisor (avoid I/O contention).
-if [[ -f "$EMMC_UNIT" ]]; then
-  grep -q 'Before=hassos-supervisor.service' "$EMMC_UNIT" \
-    && _pass "EMMC-ERASE-04: ga-emmc-erase.service ordered Before=hassos-supervisor.service" \
-    || _fail "EMMC-ERASE-04: ga-emmc-erase.service missing Before=hassos-supervisor ordering"
+# EMMC-ERASE-04: wipe method — blkdiscard (fast TRIM) with a dd zero-fill fallback.
+if [[ -f "$EMMC_SCRIPT" ]]; then
+  if grep -q 'blkdiscard' "$EMMC_SCRIPT" && grep -qE 'dd if=/dev/zero' "$EMMC_SCRIPT"; then
+    _pass "EMMC-ERASE-04: ga-bootstrap-disk wipes via blkdiscard + dd zero-fill fallback"
+  else
+    _fail "EMMC-ERASE-04: ga-bootstrap-disk missing blkdiscard or dd zero-fill fallback"
+  fi
 fi
 
-# EMMC-ERASE-05: enabled at boot.
-if [[ -L "${TARGET}/etc/systemd/system/multi-user.target.wants/ga-emmc-erase.service" ]]; then
-  _pass "EMMC-ERASE-05: ga-emmc-erase.service enabled (multi-user.target.wants symlink)"
+# EMMC-ERASE-05: runs early, before Supervisor (sysinit.target.wants).
+if [[ -L "${TARGET}/etc/systemd/system/sysinit.target.wants/ga-bootstrap-disk.service" ]]; then
+  _pass "EMMC-ERASE-05: ga-bootstrap-disk.service enabled early (sysinit.target.wants symlink)"
 else
-  _fail "EMMC-ERASE-05: ga-emmc-erase.service NOT enabled"
+  _fail "EMMC-ERASE-05: ga-bootstrap-disk.service NOT enabled in sysinit.target.wants"
 fi
 
 # =========================================================================
