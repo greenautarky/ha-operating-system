@@ -1,7 +1,8 @@
 #!/bin/sh
-# Custom core image & onboarding verification - runs ON the device
-# Verifies the device runs the greenautarky custom HA Core image
-# (German onboarding, GDPR consent, telemetry preferences).
+# Core image & onboarding verification - runs ON the device.
+# V1.2-clean model: STOCK HA Core image + the greenautarky_onboarding
+# custom_component (German onboarding, GDPR consent, telemetry preferences).
+# The Supervisor stays a greenautarky fork; Core + frontend are stock upstream.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
 
@@ -10,11 +11,12 @@ suite_start "Onboarding"
 # --- Core image checks ---
 CORE_IMAGE=$(docker inspect homeassistant --format '{{.Config.Image}}' 2>/dev/null)
 
-run_test "OB-01" "Core image is greenautarky (not upstream)" \
-  "echo '$CORE_IMAGE' | grep -q 'greenautarky'"
+# V1.2-clean: Core fork retired — the device must run STOCK upstream Core.
+run_test "OB-01" "Core image is stock upstream (Core fork retired)" \
+  "echo '$CORE_IMAGE' | grep -q 'ghcr.io/home-assistant/'"
 
-run_test "OB-02" "Core image tag is HA version (not upstream)" \
-  "echo '$CORE_IMAGE' | grep -qE ':(2025\.[0-9]+\.[0-9]+|latest)'"
+run_test "OB-02" "Core image tag is a pinned HA version" \
+  "echo '$CORE_IMAGE' | grep -qE ':2025\.[0-9]+\.[0-9]+'"
 
 run_test_show "OB-02b" "Core image" \
   "echo '$CORE_IMAGE'"
@@ -40,11 +42,17 @@ run_test_show "OB-08" "Core image is latest (not stale)" \
   "LOCAL_DIGEST=\$(docker inspect homeassistant --format '{{.Image}}' 2>/dev/null | cut -d: -f2 | head -c12) && [ -n \"\$LOCAL_DIGEST\" ] && echo \"local digest: \$LOCAL_DIGEST\""
 
 # --- Custom onboarding content ---
-run_test "OB-09" "Custom onboarding: GDPR step present" \
-  "docker exec homeassistant grep -q 'gdpr' /usr/src/homeassistant/homeassistant/components/onboarding/strings.json 2>/dev/null"
+# V1.2-clean: the onboarding customization moved OUT of the Core fork's
+# strings.json INTO the greenautarky_onboarding custom_component, which
+# ga_manager's converge worker places into /config/custom_components
+# (= the data partition's homeassistant/custom_components/). The component's
+# runtime registration is additionally proven by OB-13 / PW-* (its HTTP views).
+GA_COMP="/mnt/data/supervisor/homeassistant/custom_components/greenautarky_onboarding"
+run_test "OB-09" "greenautarky_onboarding custom_component placed (converge step 2)" \
+  "[ -f '$GA_COMP/manifest.json' ]"
 
-run_test "OB-10" "Custom onboarding: custom_pages step present" \
-  "docker exec homeassistant grep -q 'custom_pages' /usr/src/homeassistant/homeassistant/components/onboarding/strings.json 2>/dev/null"
+run_test "OB-10" "greenautarky_onboarding manifest declares its domain" \
+  "grep -q 'greenautarky_onboarding' '$GA_COMP/manifest.json' 2>/dev/null"
 
 # --- Frontend ---
 run_test "OB-11" "Frontend wheel installed" \
