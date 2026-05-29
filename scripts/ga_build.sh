@@ -1762,23 +1762,37 @@ DEFCONFIG="ga_ihost_full_defconfig"
 # Ensure dev-ca.pem exists for post-build script (link/copy from rel-ca.pem)
 ensure_dev_ca_from_rel_ca
 
-# Pre-flight: verify all container images exist in registries before building
-# (skip in update mode since the images haven't changed and network may be slow)
-if [[ "$MODE" == "full" || "$MODE" == "partial" ]]; then
-  echo ""
-  echo "=== Pre-flight: checking container image availability ==="
-  if [[ -f "${SCRIPT_DIR}/check-images.sh" ]]; then
-    if "${SCRIPT_DIR}/check-images.sh"; then
-      echo "Pre-flight passed."
-    else
-      echo "ERROR: Pre-flight image check failed. Fix missing images before building." >&2
-      echo "  Run: ./scripts/check-images.sh   (for details)" >&2
-      exit 1
-    fi
+# Pre-flight: verify all container images exist in registries AND that the
+# vibe_addons store versions are in lock-step with addon-images.json before
+# building. Runs on full/partial AND on `update prod` (release builds): the
+# addon-images.json pins DO change on incremental release builds, and a
+# version mismatch there ships a device onto the wrong addon version silently
+# (the 0.23.0 converge no-op and the 0.23.2 near-miss both slipped through
+# precisely because `update prod` skipped this). `update dev` still skips it so
+# fast dev iteration isn't gated on network. Set GA_SKIP_IMAGE_CHECK=1 to
+# bypass when you KNOW the registry is fine but transiently unreachable.
+if [[ "$MODE" == "full" || "$MODE" == "partial" || ( "$MODE" == "update" && "$GA_ENV" == "prod" ) ]]; then
+  if [[ "${GA_SKIP_IMAGE_CHECK:-0}" == "1" ]]; then
+    echo ""
+    echo "=== Pre-flight image check SKIPPED (GA_SKIP_IMAGE_CHECK=1) ==="
+    echo ""
   else
-    echo "WARNING: check-images.sh not found, skipping pre-flight image check."
+    echo ""
+    echo "=== Pre-flight: checking container image availability + vibe_addons lock-step ==="
+    if [[ -f "${SCRIPT_DIR}/check-images.sh" ]]; then
+      if "${SCRIPT_DIR}/check-images.sh"; then
+        echo "Pre-flight passed."
+      else
+        echo "ERROR: Pre-flight image check failed. Fix missing images / version drift before building." >&2
+        echo "  Run: ./scripts/check-images.sh   (for details)" >&2
+        echo "  Or set GA_SKIP_IMAGE_CHECK=1 if the registry is only transiently unreachable." >&2
+        exit 1
+      fi
+    else
+      echo "WARNING: check-images.sh not found, skipping pre-flight image check."
+    fi
+    echo ""
   fi
-  echo ""
 fi
 
 # 1) Configure
