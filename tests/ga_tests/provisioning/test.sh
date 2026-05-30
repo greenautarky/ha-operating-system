@@ -15,8 +15,10 @@ Z2M_CFG="$HA_CFG/zigbee2mqtt/configuration.yaml"
 ENTRIES="$HA_CFG/.storage/core.config_entries"
 
 # --- converge completion (step 10) ---
-run_test "PROV-01" "converged marker present (/share/.ga_converged)" \
-  "[ -f /share/.ga_converged ]"
+# ga_manager (addon) writes /share/.ga_converged; the addon's /share is the
+# host path /mnt/data/supervisor/share (NOT the host's own /share).
+run_test "PROV-01" "converged marker present (/mnt/data/supervisor/share/.ga_converged)" \
+  "[ -f /mnt/data/supervisor/share/.ga_converged ]"
 
 # --- Zigbee2MQTT serial + channel (= flasher stage 64 / 0.23.2) ---
 if [ -f "$Z2M_CFG" ]; then
