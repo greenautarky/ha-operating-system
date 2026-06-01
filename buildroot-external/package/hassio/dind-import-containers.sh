@@ -324,37 +324,12 @@ fi
 log "Tagging supervisor image $supervisor_id as ghcr.io/greenautarky/${arch}-hassio-supervisor:latest"
 docker tag "$supervisor_id" "ghcr.io/greenautarky/${arch}-hassio-supervisor:latest"
 
-# Tag Core image with the greenautarky alias.
-#
-# Why: our Supervisor fork patches ``default_image`` in
-# ``supervisor/homeassistant/module.py`` to return
-# ``ghcr.io/greenautarky/{machine}-homeassistant``. V1.2-clean reverted Core
-# to stock upstream (``ghcr.io/home-assistant/{machine}-homeassistant``),
-# so on first boot Supervisor looks for the greenautarky-prefixed name,
-# doesn't find it, falls back to landingpage. We alias-tag the baked
-# upstream image with the greenautarky URL so Supervisor adopts it.
-#
-# Found 2026-06-01 on the bench reflash: a freshly-flashed V1.2-clean OS
-# could not start Core. Workaround verified with manual ``docker tag``;
-# this codifies the fix at bake time. Proper Supervisor-side fix
-# (revert the default_image patch) is a future cleanup.
-core_image="$(docker images --format '{{.Repository}}:{{.Tag}}' \
-  | awk '/^ghcr\.io\/home-assistant\/.*-homeassistant:/ {print; exit}')"
-if [ -n "$core_image" ]; then
-  # Extract machine identifier ("tinker" for iHost) and version
-  core_repo="${core_image%:*}"
-  core_tag="${core_image##*:}"
-  core_machine="$(echo "$core_repo" | sed -E 's|^ghcr\.io/home-assistant/(.+)-homeassistant$|\1|')"
-  if [ "$core_machine" != "$core_repo" ] && [ -n "$core_tag" ]; then
-    ga_core_tagged="ghcr.io/greenautarky/${core_machine}-homeassistant:${core_tag}"
-    log "Tagging Core image $core_image as $ga_core_tagged (Supervisor default_image alias)"
-    docker tag "$core_image" "$ga_core_tagged"
-  else
-    log "WARN: couldn't parse machine/tag from Core image $core_image — skipping greenautarky alias"
-  fi
-else
-  log "NOTE: no ghcr.io/home-assistant/*-homeassistant Core image found — skipping greenautarky alias"
-fi
+# (2026-06-01: a "tag Core image with greenautarky alias" block lived here
+# briefly to work around Supervisor 2025.11.4.4's stale default_image
+# patch. The proper fix was to revert the Supervisor patch in 2025.11.4.5
+# — Supervisor now looks for the upstream-namespaced image directly,
+# matching what the bake ships. No alias needed. See
+# ga-ihost-docs/FLEET-AUTO-UPDATE-AUDIT-2026-06-01.md for the saga.)
 
 # AppArmor + updater metadata
 mkdir -p /data/supervisor/apparmor /data/supervisor
