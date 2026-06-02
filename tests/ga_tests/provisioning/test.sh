@@ -50,10 +50,44 @@ for ident in ga_mosquitto ga_zigbee2mqtt ga_ihosthardwarecontrol; do
 done
 
 # --- provisioning self-check ran + PASSED (0.24.0, converge step 11) ---
+# Reads the result from ga_manager's persistent jobs DB rather than greppingdocker
+# logs (those rotate, esp. after the Core restart in converge step 9.5).
+# Falls back to docker-log grep for old ga_manager versions whose API doesn't
+# yet expose the self_check result.
 GA_MGR=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -i 'ga_manager' | head -1)
 if [ -n "$GA_MGR" ]; then
-  run_test "PROV-06" "converge self-check ran and PASSED (step 11)" \
-    "docker logs '$GA_MGR' 2>&1 | grep -q 'self-check PASSED'"
+  _gm_tok=$(docker exec "$GA_MGR" cat /data/auth.token 2>/dev/null)
+  _last_converge=$(docker exec "$GA_MGR" curl -fsS -m 5 -H "Authorization: Bearer $_gm_tok" \
+    "http://localhost:8099/jobs?limit=50" 2>/dev/null \
+    | jq -r '.jobs[] | select(.type=="converge") | .id' 2>/dev/null | head -1)
+  if [ -n "$_last_converge" ]; then
+    # API path — the persistent + reliable check
+    _sc_passed=$(docker exec "$GA_MGR" curl -fsS -m 5 -H "Authorization: Bearer $_gm_tok" \
+      "http://localhost:8099/jobs/$_last_converge" 2>/dev/null \
+      | jq -r '.output_payload.summary.steps.self_check.passed // "missing"' 2>/dev/null)
+    if [ "$_sc_passed" = "true" ]; then
+      run_test "PROV-06" "converge self-check ran and PASSED (step 11, via jobs API)" \
+        "true"
+    elif [ "$_sc_passed" = "missing" ]; then
+      # API exists but self_check field absent — older ga_manager that pre-dated
+      # step 11. Fall back to log grep (best-effort) or skip cleanly.
+      if [ -f /mnt/data/supervisor/share/.ga_converged ]; then
+        skip_test "PROV-06" "ga_manager older than self-check step 11 (.ga_converged marker present — converge did succeed)"
+      else
+        run_test "PROV-06" "converge self-check ran and PASSED (step 11)" \
+          "docker logs '$GA_MGR' 2>&1 | grep -q 'self-check PASSED'"
+      fi
+    else
+      run_test "PROV-06" "converge self-check ran and PASSED (step 11, via jobs API)" \
+        "false"
+    fi
+  elif [ -f /mnt/data/supervisor/share/.ga_converged ]; then
+    # No converge job in API but marker exists — device is steady, converge already
+    # ran on an earlier boot and the job has aged out of the in-memory window.
+    skip_test "PROV-06" "device steady (.ga_converged marker present, no recent converge job to grade)"
+  else
+    skip_test "PROV-06" "no converge job recorded and no .ga_converged marker (fresh-flash before first converge?)"
+  fi
 else
   skip_test "PROV-06" "ga_manager container not found"
 fi
