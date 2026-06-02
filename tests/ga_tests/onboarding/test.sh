@@ -25,6 +25,15 @@ run_test_show "OB-02b" "Core image" \
 run_test_show "OB-03" "HA version" \
   "cat /mnt/data/supervisor/homeassistant/.HA_VERSION 2>/dev/null"
 
+# --- GA-side release identifier ---
+# /etc/ga-release is written at bake time by buildroot-external/scripts/post-build.sh
+# from the GA_RELEASE env var. Operator-facing version distinct from the
+# HAOS-internal OS_VERSION. Fails if absent (= build didn't set GA_RELEASE) or empty.
+run_test "OB-04a" "/etc/ga-release present + non-empty" \
+  "[ -s /etc/ga-release ]"
+run_test_show "OB-04b" "GA release identifier" \
+  "cat /etc/ga-release 2>/dev/null"
+
 # --- Version repo / supervisor ---
 # Supervisor only logs this after an update check — may not appear on fresh boot
 warn_test "OB-05" "Supervisor fetches from greenautarky version repo" \
