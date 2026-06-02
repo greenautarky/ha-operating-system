@@ -34,6 +34,40 @@ run_test "OB-04a" "/etc/ga-release present + non-empty" \
 run_test_show "OB-04b" "GA release identifier" \
   "cat /etc/ga-release 2>/dev/null"
 
+# --- Wizard redirect (Finding 20 follow-up: BOSv1.2.0 bench regression) ---
+# Customer's first browser hit on a fresh GA-provisioned device is
+# `http://<device>:8123/`. With GA wizard NOT YET completed, this MUST
+# redirect server-side to `/greenautarky-setup.html` — otherwise the
+# customer lands on the stock HA login (because ga_manager already
+# created the admin user) and never finds the GA wizard. The
+# `_patch_index_view_for_wizard_redirect` server-side hook in
+# greenautarky_onboarding owns this behaviour; the add_extra_js_url
+# client-side fallback alone can't fix it because HA Core injects
+# extra_module_url tags only into the authenticated dashboard HTML.
+#
+# Two opposite gates:
+#   OB-WR-01: when the wizard is incomplete, `/` returns 302 to /greenautarky-setup.html
+#   OB-WR-02: when the wizard is complete, `/` does NOT redirect to the wizard
+# Both run unauthenticated (curl with no token). The wizard URL is
+# `/greenautarky-setup.html` (the actual page) — NOT `/greenautarky-setup`
+# (which is the view that itself 302s).
+_wizard_completed=$(jq -r '.data.completed // false' /mnt/data/supervisor/homeassistant/.storage/greenautarky_onboarding 2>/dev/null || echo "false")
+_root_redirect=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --connect-timeout 5 'http://localhost:8123/' 2>/dev/null)
+
+if [ "$_wizard_completed" = "false" ]; then
+  run_test "OB-WR-01" "/ redirects to /greenautarky-setup.html (wizard incomplete)" \
+    "echo '$_root_redirect' | grep -qE '^302 .*greenautarky-setup\.html'"
+else
+  skip_test "OB-WR-01" "wizard already completed — incomplete-state gate doesn't apply"
+fi
+
+if [ "$_wizard_completed" = "true" ]; then
+  run_test "OB-WR-02" "/ does NOT redirect to wizard once wizard is complete" \
+    "! echo '$_root_redirect' | grep -qE 'greenautarky-setup\.html'"
+else
+  skip_test "OB-WR-02" "wizard not yet completed — complete-state gate doesn't apply"
+fi
+
 # --- Version repo / supervisor ---
 # Supervisor only logs this after an update check — may not appear on fresh boot
 warn_test "OB-05" "Supervisor fetches from greenautarky version repo" \
