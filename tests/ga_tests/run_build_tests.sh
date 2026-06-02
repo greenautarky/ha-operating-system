@@ -876,6 +876,65 @@ else
   _skip "BLD-FE-02: onboarding component in OS overlay" "source tree (buildroot-external) not found"
 fi
 
+# BLD-FB-01..04: ga_frontend_bundle (de-HACS Lovelace cards) also ships inside
+# the OS rootfs-overlay (see ga-frontend-bundle + VENDORED.md). Stateless
+# integration: converge places it and activates it via the configuration.yaml
+# enable-list — a config_flow here would deadlock (it can't self-bootstrap), so
+# the manifest MUST NOT set config_flow. The vendored card .js files are baked
+# in; assert cards.json and the files agree so an incomplete vendor.py run can't
+# silently ship an empty/partial bundle. Reuses $BLD_FE_SRC resolved above.
+if [[ -n "$BLD_FE_SRC" ]]; then
+  GA_FB_DIR="${BLD_FE_SRC}/buildroot-external/rootfs-overlay/usr/share/ga/custom_components/ga_frontend_bundle"
+  GA_FB_MANIFEST="${GA_FB_DIR}/manifest.json"
+  if [[ -f "${GA_FB_DIR}/__init__.py" ]] && [[ -f "$GA_FB_MANIFEST" ]]; then
+    if jq -e '.domain == "ga_frontend_bundle"' "$GA_FB_MANIFEST" >/dev/null 2>&1; then
+      _pass "BLD-FB-01: ga_frontend_bundle custom_component present in OS rootfs-overlay"
+    else
+      _fail "BLD-FB-01: ga_frontend_bundle manifest.json present but domain wrong/missing"
+    fi
+
+    # BLD-FB-02: must be a stateless yaml integration (no config_flow).
+    if jq -e '.config_flow == true' "$GA_FB_MANIFEST" >/dev/null 2>&1; then
+      _fail "BLD-FB-02: ga_frontend_bundle manifest sets config_flow:true — must be a stateless yaml integration (would deadlock activation)"
+    else
+      _pass "BLD-FB-02: ga_frontend_bundle is a stateless yaml integration (no config_flow)"
+    fi
+
+    # BLD-FB-03/04: cards.json and the vendored files must agree.
+    GA_FB_CARDS="${GA_FB_DIR}/community/cards.json"
+    if [[ -f "$GA_FB_CARDS" ]]; then
+      fb_n="$(jq '.cards | length' "$GA_FB_CARDS" 2>/dev/null || echo 0)"
+      fb_missing=0
+      while IFS= read -r rel; do
+        [[ -n "$rel" ]] || continue
+        [[ -f "${GA_FB_DIR}/community/${rel}" ]] || { fb_missing=$((fb_missing+1)); echo "         missing: community/${rel}"; }
+      done < <(jq -r '.cards[] | .id + "/" + .file' "$GA_FB_CARDS" 2>/dev/null)
+      if [[ "$fb_n" -gt 0 ]] && [[ "$fb_missing" -eq 0 ]]; then
+        _pass "BLD-FB-03: all ${fb_n} ga_frontend_bundle card files present on disk"
+      else
+        _fail "BLD-FB-03: ga_frontend_bundle has ${fb_missing} missing card file(s) (cards.json lists ${fb_n}) — incomplete vendor?"
+      fi
+
+      fb_orphans=0
+      for d in "${GA_FB_DIR}/community/"*/; do
+        [[ -d "$d" ]] || continue
+        id="$(basename "$d")"
+        jq -e --arg id "$id" 'any(.cards[]; .id == $id)' "$GA_FB_CARDS" >/dev/null 2>&1 \
+          || { fb_orphans=$((fb_orphans+1)); echo "         orphan dir not in cards.json: community/${id}"; }
+      done
+      [[ "$fb_orphans" -eq 0 ]] \
+        && _pass "BLD-FB-04: no orphan ga_frontend_bundle card dirs (cards.json matches disk)" \
+        || _fail "BLD-FB-04: ${fb_orphans} orphan card dir(s) not listed in cards.json"
+    else
+      _fail "BLD-FB-03/04: ga_frontend_bundle community/cards.json MISSING (run scripts/vendor.py)"
+    fi
+  else
+    _fail "BLD-FB-01: ga_frontend_bundle custom_component MISSING from OS rootfs-overlay (expected __init__.py + manifest.json under ${GA_FB_DIR})"
+  fi
+else
+  _skip "BLD-FB-01..04: ga_frontend_bundle in OS overlay" "source tree (buildroot-external) not found"
+fi
+
 # =========================================================================
 # Device tree verification
 # Compares the patched device tree against a known-good reference to catch

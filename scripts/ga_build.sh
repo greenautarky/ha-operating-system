@@ -264,7 +264,14 @@ ensure_dev_ca_from_rel_ca() {
 
 # Global build timestamp (compact format for filenames, set once at script start)
 GA_BUILD_TIMESTAMP="${GA_BUILD_TIMESTAMP:-$(date '+%Y%m%d%H%M%S')}"
-export GA_BUILD_TIMESTAMP GA_ENV
+
+# GA-side release identifier (e.g. "v1.2.0"). Optional — when set, lands in
+# /etc/ga-release and /etc/os-release at post-build time so devices have a
+# clean operator-facing version distinct from the HAOS-internal OS_VERSION
+# (16.3.1.x). Override per build with: GA_RELEASE=v1.2.0 ./scripts/ga_build.sh …
+GA_RELEASE="${GA_RELEASE:-}"
+
+export GA_BUILD_TIMESTAMP GA_ENV GA_RELEASE
 
 write_build_id_into_target() {
   local ts_human

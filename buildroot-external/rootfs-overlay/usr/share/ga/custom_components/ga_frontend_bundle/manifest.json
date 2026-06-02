@@ -1,0 +1,10 @@
+{
+  "domain": "ga_frontend_bundle",
+  "name": "GA Frontend Bundle",
+  "version": "1.0.0",
+  "codeowners": ["@greenautarky"],
+  "dependencies": ["http", "frontend"],
+  "documentation": "https://github.com/greenautarky/ga-frontend-bundle",
+  "integration_type": "service",
+  "iot_class": "local_polling"
+}

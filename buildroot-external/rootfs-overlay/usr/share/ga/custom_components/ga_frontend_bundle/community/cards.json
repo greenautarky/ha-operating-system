@@ -1,0 +1,61 @@
+{
+  "bundle_version": "1.0.0",
+  "cards": [
+    {
+      "id": "card-mod",
+      "file": "card-mod.js"
+    },
+    {
+      "id": "mushroom",
+      "file": "mushroom.js"
+    },
+    {
+      "id": "button-card",
+      "file": "button-card.js"
+    },
+    {
+      "id": "mini-graph-card",
+      "file": "mini-graph-card-bundle.js"
+    },
+    {
+      "id": "apexcharts-card",
+      "file": "apexcharts-card.js"
+    },
+    {
+      "id": "auto-entities",
+      "file": "auto-entities.js"
+    },
+    {
+      "id": "layout-card",
+      "file": "layout-card.js"
+    },
+    {
+      "id": "vertical-stack-in-card",
+      "file": "vertical-stack-in-card.js"
+    },
+    {
+      "id": "slider-entity-row",
+      "file": "slider-entity-row.js"
+    },
+    {
+      "id": "plotly-graph-card",
+      "file": "plotly-graph-card.js"
+    },
+    {
+      "id": "state-switch",
+      "file": "state-switch.js"
+    },
+    {
+      "id": "template-entity-row",
+      "file": "template-entity-row.js"
+    },
+    {
+      "id": "kiosk-mode",
+      "file": "kiosk-mode.js"
+    },
+    {
+      "id": "simple-thermostat",
+      "file": "simple-thermostat.js"
+    }
+  ]
+}
