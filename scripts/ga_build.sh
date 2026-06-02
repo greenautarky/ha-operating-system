@@ -302,41 +302,26 @@ ENVEOF
 
 }
 
-# Stamp GA build info into /etc/os-release (called after target-finalize which regenerates it).
-# Buildroot's BR2_ROOTFS_POST_BUILD_SCRIPT runs in a clean env that doesn't see GA_RELEASE,
-# so the GA-side identifier is stamped HERE (post-buildroot) instead of in
-# buildroot-external/scripts/post-build.sh. Same mechanism that already works for
-# GA_BUILD_TIMESTAMP + GA_ENV.
+# Stamp GA build info into /etc/os-release (DEFINED but NEVER CALLED — kept
+# for reference; the actual stamping happens in
+# buildroot-external/scripts/post-build.sh via BR2_ROOTFS_POST_BUILD_SCRIPT,
+# which DOES see the exported GA_BUILD_TIMESTAMP / GA_ENV / GA_RELEASE env vars).
 stamp_os_release() {
   local os_release="${OUT}/target/etc/os-release"
-  local ga_release_path="${OUT}/target/etc/ga-release"
   local ts_human
   ts_human="$(date '+%F %T')"
   local env_val="${GA_ENV:-dev}"
 
   if [[ -f "$os_release" ]]; then
     # Remove any previous GA entries to avoid duplicates on rebuilds
-    sed -i '/^GA_BUILD_ID=/d; /^GA_BUILD_TIMESTAMP=/d; /^GA_ENV=/d; /^GA_RELEASE=/d' "$os_release"
+    sed -i '/^GA_BUILD_ID=/d; /^GA_BUILD_TIMESTAMP=/d; /^GA_ENV=/d' "$os_release"
     # Append new build info
     printf 'GA_BUILD_ID="%s (%s)"\n' "$ts_human" "$env_val" >> "$os_release"
     printf 'GA_BUILD_TIMESTAMP="%s"\n' "$GA_BUILD_TIMESTAMP" >> "$os_release"
     printf 'GA_ENV="%s"\n' "$env_val" >> "$os_release"
-    if [[ -n "${GA_RELEASE:-}" ]]; then
-      printf 'GA_RELEASE="%s"\n' "$GA_RELEASE" >> "$os_release"
-    fi
     echo "Stamped GA build info into: $os_release"
   else
     echo "WARN: $os_release not found, skipping os-release stamp"
-  fi
-
-  # GA-side release identifier also lives at /etc/ga-release for cheap
-  # `cat /etc/ga-release` use by tests, ga_manager, telegraf tags, etc.
-  if [[ -n "${GA_RELEASE:-}" ]]; then
-    printf '%s\n' "$GA_RELEASE" > "$ga_release_path"
-    chmod 0644 "$ga_release_path"
-    echo "Stamped GA release identifier into: $ga_release_path (=$GA_RELEASE)"
-  else
-    echo "WARN: GA_RELEASE not set — skipping /etc/ga-release write"
   fi
 }
 
