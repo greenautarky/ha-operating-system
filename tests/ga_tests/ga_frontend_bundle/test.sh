@@ -81,8 +81,26 @@ run_test "FB-07" "integration loaded — static path serves a card 200 ($FIRST)"
 run_test "FB-08" "all $NCARDS cards serve via $STATIC (HTTP 200)" "_all_cards_serve"
 
 # --- Runtime: cards actually wired into the frontend ---
-run_test "FB-09" "all $NCARDS card modules injected into frontend index (add_extra_js_url)" \
-  "_all_modules_injected"
+# add_extra_js_url only injects script tags into the AUTHENTICATED dashboard
+# HTML — not into HA's stock onboarding page nor the /auth/authorize page.
+# So the index-grep below is only meaningful once HA's own onboarding flow
+# has completed (= all four standard steps user/core_config/analytics/integration
+# marked done). Until then, FB-09 would fail not because of an integration
+# bug but because the page served at `/` has no extra_module_url slot at all.
+# Confirmed BOSv1.2.0 build #10 bench, 2026-06-02.
+_ha_stock_onboarded() {
+  local body
+  body=$(curl -sL --connect-timeout 5 "$HA/api/onboarding" 2>/dev/null) || return 1
+  [ -z "$body" ] && return 1
+  # 4 steps required; jq returns true only when every .done is true.
+  echo "$body" | jq -e 'length==4 and all(.[]; .done==true)' >/dev/null 2>&1
+}
+if _ha_stock_onboarded; then
+  run_test "FB-09" "all $NCARDS card modules injected into frontend index (add_extra_js_url)" \
+    "_all_modules_injected"
+else
+  skip_test "FB-09" "HA stock onboarding not complete (extra_module_url tags only land on the authenticated dashboard)"
+fi
 
 # --- Health (informational) ---
 warn_test "FB-10" "no setup failure for ga_frontend_bundle in Core log" "_no_setup_failure"
