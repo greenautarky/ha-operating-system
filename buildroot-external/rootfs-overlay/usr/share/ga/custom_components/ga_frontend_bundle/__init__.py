@@ -26,12 +26,22 @@ from pathlib import Path
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .bundle import card_url, load_cards
 from .const import COMMUNITY_DIRNAME, DOMAIN, STATIC_URL_BASE
 
 _LOGGER = logging.getLogger(__name__)
+
+# Required for HA Core 2025.11.x to call async_setup() on a yaml-only
+# integration whose configuration.yaml entry is the bare `ga_frontend_bundle:`.
+# Without this, HA discovers the integration (loader logs the "custom
+# integration … not been tested" warning) but never invokes async_setup, so
+# `add_extra_js_url` never runs and the card script tags never land in the
+# frontend index (= device test FB-09 fails). `cv.empty_config_schema` is the
+# HA-canonical helper for "accept the bare `<domain>:` form, no other keys."
+CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
