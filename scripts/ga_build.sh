@@ -280,6 +280,32 @@ write_build_id_into_target() {
   printf '%s\n' "$ts_human" > "${OUT}/target/etc/ga-build-id"
   echo "Wrote build id: $ts_human -> ${OUT}/target/etc/ga-build-id"
 
+  # Stamp GA-side release identifier (e.g. "BOSv1.2.0") into /etc/ga-release
+  # AND append GA_RELEASE="…" to /etc/os-release. Done here (post-buildroot,
+  # in the parent ga_build.sh shell) rather than in
+  # buildroot-external/scripts/post-build.sh because Buildroot's
+  # BR2_ROOTFS_POST_BUILD_SCRIPT invocation drops the GA_RELEASE env var
+  # while preserving GA_BUILD_TIMESTAMP (observed BOSv1.2.0 build #8 — the
+  # post-build.sh code IS the same shape; only GA_RELEASE goes missing).
+  # write_build_id_into_target() runs at line ~1855 with the full env, so
+  # /etc/ga-release reliably lands here.
+  if [[ -n "${GA_RELEASE:-}" ]]; then
+    printf '%s\n' "$GA_RELEASE" > "${OUT}/target/etc/ga-release"
+    chmod 0644 "${OUT}/target/etc/ga-release"
+    echo "Wrote GA release: $GA_RELEASE -> ${OUT}/target/etc/ga-release"
+    local os_release="${OUT}/target/etc/os-release"
+    local usr_os_release="${OUT}/target/usr/lib/os-release"
+    for f in "$os_release" "$usr_os_release"; do
+      if [[ -f "$f" ]]; then
+        sed -i '/^GA_RELEASE=/d' "$f"
+        printf 'GA_RELEASE="%s"\n' "$GA_RELEASE" >> "$f"
+      fi
+    done
+    echo "Appended GA_RELEASE=\"$GA_RELEASE\" to /etc/os-release + /usr/lib/os-release"
+  else
+    echo "GA_RELEASE not set — skipping /etc/ga-release write (set GA_RELEASE env to enable)"
+  fi
+
   # Stamp environment config into /etc/ga-env.conf
   local ga_env_conf="${OUT}/target/etc/ga-env.conf"
   local env_val="${GA_ENV:-dev}"
