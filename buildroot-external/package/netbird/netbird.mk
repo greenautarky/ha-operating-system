@@ -1,9 +1,9 @@
 ################################################################################
-# netbird (v0.66.2) — ARMv7 build for Buildroot with systemd service
+# netbird (v0.71.4) — ARMv7 build for Buildroot with systemd service
 ################################################################################
 
 # Use fully-qualified tag ref to avoid "ambiguous refname" in cached git repos
-NETBIRD_VERSION       = refs/tags/v0.66.2
+NETBIRD_VERSION       = refs/tags/v0.71.4
 NETBIRD_SITE          = https://github.com/netbirdio/netbird.git
 NETBIRD_SITE_METHOD   = git
 
@@ -22,7 +22,7 @@ NETBIRD_GO_ENV       += GOPROXY=https://proxy.golang.org,direct
 
 # Small binary (CGO disabled => effectively static)
 # Embed version so "netbird version" shows the release tag, not "development"
-NETBIRD_LDFLAGS       = -s -w -X github.com/netbirdio/netbird/version.version=0.66.2
+NETBIRD_LDFLAGS       = -s -w -X github.com/netbirdio/netbird/version.version=0.71.4
 
 # --------------- Configure ----------------------
 define NETBIRD_CONFIGURE_CMDS

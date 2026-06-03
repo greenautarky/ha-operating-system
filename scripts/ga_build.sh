@@ -96,7 +96,7 @@ fi
 #   BR2EXT_IHOST     - Path to buildroot-ihost external tree (default: /build/buildroot-ihost)
 #   BR2EXT_NETBIRD   - Path to buildroot-external tree (default: /build/buildroot-external)
 #   OUT              - Output directory (default: /build/ga_output)
-#   NETBIRD_TAG      - NetBird version tag (default: v0.66.2)
+#   NETBIRD_TAG      - NetBird version tag (default: v0.71.4)
 #   GA_BUILD_TIMESTAMP - Override build timestamp (default: auto-generated)
 #   GA_ENV           - Environment stamp (default: from 2nd argument, or "dev")
 #   GA_PROVISIONING  - Set to "true" to create provisioning image (default: false)
@@ -163,7 +163,7 @@ OUT="${OUT:-/build/ga_output}"
 if [[ "$OUT" != /* ]]; then OUT="/build/${OUT}"; fi
 
 # ---- NetBird version (built via Buildroot golang-package) ----
-NETBIRD_TAG="${NETBIRD_TAG:-v0.66.2}"
+NETBIRD_TAG="${NETBIRD_TAG:-v0.71.4}"
 
 # ---- CA files expected by post-build script ----
 OTA_DIR="${OTA_DIR:-${BR2EXT_NETBIRD}/ota}"
@@ -207,6 +207,13 @@ PREFLIGHT_FAIL=0
 }
 [[ -f "/build/secrets/openstick-wifi.key" ]] || [[ -f "secrets/openstick-wifi.key" ]] || {
   echo "WARN: secrets/openstick-wifi.key not found — OpenStick WiFi will not work" >&2;
+}
+# NetBird auto-register on first boot needs a reusable setup key from the
+# NetBird admin panel. If absent, the OS builds fine but freshly-flashed
+# devices stay in `Daemon status: NeedsLogin` and don't auto-tunnel —
+# operator must register them via `netbird up` or ga-flasher-py stage 40.
+[[ -f "/build/secrets/netbird-setup-key.txt" ]] || [[ -f "secrets/netbird-setup-key.txt" ]] || {
+  echo "WARN: secrets/netbird-setup-key.txt not found — fresh-flash devices will NOT auto-register with NetBird" >&2;
 }
 
 # Version suffix set (not empty for release builds)
@@ -257,7 +264,14 @@ ensure_dev_ca_from_rel_ca() {
 
 # Global build timestamp (compact format for filenames, set once at script start)
 GA_BUILD_TIMESTAMP="${GA_BUILD_TIMESTAMP:-$(date '+%Y%m%d%H%M%S')}"
-export GA_BUILD_TIMESTAMP GA_ENV
+
+# GA-side release identifier (e.g. "v1.2.0"). Optional — when set, lands in
+# /etc/ga-release and /etc/os-release at post-build time so devices have a
+# clean operator-facing version distinct from the HAOS-internal OS_VERSION
+# (16.3.1.x). Override per build with: GA_RELEASE=v1.2.0 ./scripts/ga_build.sh …
+GA_RELEASE="${GA_RELEASE:-}"
+
+export GA_BUILD_TIMESTAMP GA_ENV GA_RELEASE
 
 write_build_id_into_target() {
   local ts_human
@@ -265,6 +279,32 @@ write_build_id_into_target() {
   mkdir -p "${OUT}/target/etc"
   printf '%s\n' "$ts_human" > "${OUT}/target/etc/ga-build-id"
   echo "Wrote build id: $ts_human -> ${OUT}/target/etc/ga-build-id"
+
+  # Stamp GA-side release identifier (e.g. "BOSv1.2.0") into /etc/ga-release
+  # AND append GA_RELEASE="…" to /etc/os-release. Done here (post-buildroot,
+  # in the parent ga_build.sh shell) rather than in
+  # buildroot-external/scripts/post-build.sh because Buildroot's
+  # BR2_ROOTFS_POST_BUILD_SCRIPT invocation drops the GA_RELEASE env var
+  # while preserving GA_BUILD_TIMESTAMP (observed BOSv1.2.0 build #8 — the
+  # post-build.sh code IS the same shape; only GA_RELEASE goes missing).
+  # write_build_id_into_target() runs at line ~1855 with the full env, so
+  # /etc/ga-release reliably lands here.
+  if [[ -n "${GA_RELEASE:-}" ]]; then
+    printf '%s\n' "$GA_RELEASE" > "${OUT}/target/etc/ga-release"
+    chmod 0644 "${OUT}/target/etc/ga-release"
+    echo "Wrote GA release: $GA_RELEASE -> ${OUT}/target/etc/ga-release"
+    local os_release="${OUT}/target/etc/os-release"
+    local usr_os_release="${OUT}/target/usr/lib/os-release"
+    for f in "$os_release" "$usr_os_release"; do
+      if [[ -f "$f" ]]; then
+        sed -i '/^GA_RELEASE=/d' "$f"
+        printf 'GA_RELEASE="%s"\n' "$GA_RELEASE" >> "$f"
+      fi
+    done
+    echo "Appended GA_RELEASE=\"$GA_RELEASE\" to /etc/os-release + /usr/lib/os-release"
+  else
+    echo "GA_RELEASE not set — skipping /etc/ga-release write (set GA_RELEASE env to enable)"
+  fi
 
   # Stamp environment config into /etc/ga-env.conf
   local ga_env_conf="${OUT}/target/etc/ga-env.conf"
@@ -288,7 +328,10 @@ ENVEOF
 
 }
 
-# Stamp GA build info into /etc/os-release (called after target-finalize which regenerates it)
+# Stamp GA build info into /etc/os-release (DEFINED but NEVER CALLED — kept
+# for reference; the actual stamping happens in
+# buildroot-external/scripts/post-build.sh via BR2_ROOTFS_POST_BUILD_SCRIPT,
+# which DOES see the exported GA_BUILD_TIMESTAMP / GA_ENV / GA_RELEASE env vars).
 stamp_os_release() {
   local os_release="${OUT}/target/etc/os-release"
   local ts_human
@@ -1755,23 +1798,37 @@ DEFCONFIG="ga_ihost_full_defconfig"
 # Ensure dev-ca.pem exists for post-build script (link/copy from rel-ca.pem)
 ensure_dev_ca_from_rel_ca
 
-# Pre-flight: verify all container images exist in registries before building
-# (skip in update mode since the images haven't changed and network may be slow)
-if [[ "$MODE" == "full" || "$MODE" == "partial" ]]; then
-  echo ""
-  echo "=== Pre-flight: checking container image availability ==="
-  if [[ -f "${SCRIPT_DIR}/check-images.sh" ]]; then
-    if "${SCRIPT_DIR}/check-images.sh"; then
-      echo "Pre-flight passed."
-    else
-      echo "ERROR: Pre-flight image check failed. Fix missing images before building." >&2
-      echo "  Run: ./scripts/check-images.sh   (for details)" >&2
-      exit 1
-    fi
+# Pre-flight: verify all container images exist in registries AND that the
+# vibe_addons store versions are in lock-step with addon-images.json before
+# building. Runs on full/partial AND on `update prod` (release builds): the
+# addon-images.json pins DO change on incremental release builds, and a
+# version mismatch there ships a device onto the wrong addon version silently
+# (the 0.23.0 converge no-op and the 0.23.2 near-miss both slipped through
+# precisely because `update prod` skipped this). `update dev` still skips it so
+# fast dev iteration isn't gated on network. Set GA_SKIP_IMAGE_CHECK=1 to
+# bypass when you KNOW the registry is fine but transiently unreachable.
+if [[ "$MODE" == "full" || "$MODE" == "partial" || ( "$MODE" == "update" && "$GA_ENV" == "prod" ) ]]; then
+  if [[ "${GA_SKIP_IMAGE_CHECK:-0}" == "1" ]]; then
+    echo ""
+    echo "=== Pre-flight image check SKIPPED (GA_SKIP_IMAGE_CHECK=1) ==="
+    echo ""
   else
-    echo "WARNING: check-images.sh not found, skipping pre-flight image check."
+    echo ""
+    echo "=== Pre-flight: checking container image availability + vibe_addons lock-step ==="
+    if [[ -f "${SCRIPT_DIR}/check-images.sh" ]]; then
+      if "${SCRIPT_DIR}/check-images.sh"; then
+        echo "Pre-flight passed."
+      else
+        echo "ERROR: Pre-flight image check failed. Fix missing images / version drift before building." >&2
+        echo "  Run: ./scripts/check-images.sh   (for details)" >&2
+        echo "  Or set GA_SKIP_IMAGE_CHECK=1 if the registry is only transiently unreachable." >&2
+        exit 1
+      fi
+    else
+      echo "WARNING: check-images.sh not found, skipping pre-flight image check."
+    fi
+    echo ""
   fi
-  echo ""
 fi
 
 # 1) Configure

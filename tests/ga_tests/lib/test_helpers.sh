@@ -25,7 +25,7 @@ run_test() {
   _desc="$2"
   _cmd="$3"
 
-  if eval "$_cmd" >/dev/null 2>&1; then
+  if ( eval "$_cmd" ) >/dev/null 2>&1; then
     printf "${_GREEN}  PASS${_RESET}  %s: %s\n" "$_id" "$_desc"
     _PASS=$((_PASS+1))
   else
@@ -59,7 +59,7 @@ warn_test() {
   _desc="$2"
   _cmd="$3"
 
-  if eval "$_cmd" >/dev/null 2>&1; then
+  if ( eval "$_cmd" ) >/dev/null 2>&1; then
     printf "${_GREEN}  PASS${_RESET}  %s: %s\n" "$_id" "$_desc"
     _PASS=$((_PASS+1))
   else

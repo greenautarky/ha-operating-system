@@ -1,0 +1,23 @@
+[Unit]
+Description=GA Supervisor persistent-state migration (heal Core image URL after OTA)
+Documentation=https://github.com/greenautarky/ha-operating-system
+# Runs BEFORE Supervisor reads /mnt/data/supervisor/homeassistant.json on
+# every boot. Heals the stale `ghcr.io/greenautarky/tinker-homeassistant`
+# image left over from PATCH B on field devices upgraded to BOSv1.2.0
+# via OTA. See script header for full rationale.
+RequiresMountsFor=/mnt/data
+Before=hassio-supervisor.service
+After=local-fs.target
+Wants=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/ga-supervisor-state-migrate
+# Migration failure is not a boot blocker — if the json is unreadable
+# Supervisor will surface a clearer error than we can, and converge
+# step 6 will still try later.
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=multi-user.target

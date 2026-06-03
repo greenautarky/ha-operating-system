@@ -876,6 +876,65 @@ else
   _skip "BLD-FE-02: onboarding component in OS overlay" "source tree (buildroot-external) not found"
 fi
 
+# BLD-FB-01..04: ga_frontend_bundle (de-HACS Lovelace cards) also ships inside
+# the OS rootfs-overlay (see ga-frontend-bundle + VENDORED.md). Stateless
+# integration: converge places it and activates it via the configuration.yaml
+# enable-list — a config_flow here would deadlock (it can't self-bootstrap), so
+# the manifest MUST NOT set config_flow. The vendored card .js files are baked
+# in; assert cards.json and the files agree so an incomplete vendor.py run can't
+# silently ship an empty/partial bundle. Reuses $BLD_FE_SRC resolved above.
+if [[ -n "$BLD_FE_SRC" ]]; then
+  GA_FB_DIR="${BLD_FE_SRC}/buildroot-external/rootfs-overlay/usr/share/ga/custom_components/ga_frontend_bundle"
+  GA_FB_MANIFEST="${GA_FB_DIR}/manifest.json"
+  if [[ -f "${GA_FB_DIR}/__init__.py" ]] && [[ -f "$GA_FB_MANIFEST" ]]; then
+    if jq -e '.domain == "ga_frontend_bundle"' "$GA_FB_MANIFEST" >/dev/null 2>&1; then
+      _pass "BLD-FB-01: ga_frontend_bundle custom_component present in OS rootfs-overlay"
+    else
+      _fail "BLD-FB-01: ga_frontend_bundle manifest.json present but domain wrong/missing"
+    fi
+
+    # BLD-FB-02: must be a stateless yaml integration (no config_flow).
+    if jq -e '.config_flow == true' "$GA_FB_MANIFEST" >/dev/null 2>&1; then
+      _fail "BLD-FB-02: ga_frontend_bundle manifest sets config_flow:true — must be a stateless yaml integration (would deadlock activation)"
+    else
+      _pass "BLD-FB-02: ga_frontend_bundle is a stateless yaml integration (no config_flow)"
+    fi
+
+    # BLD-FB-03/04: cards.json and the vendored files must agree.
+    GA_FB_CARDS="${GA_FB_DIR}/community/cards.json"
+    if [[ -f "$GA_FB_CARDS" ]]; then
+      fb_n="$(jq '.cards | length' "$GA_FB_CARDS" 2>/dev/null || echo 0)"
+      fb_missing=0
+      while IFS= read -r rel; do
+        [[ -n "$rel" ]] || continue
+        [[ -f "${GA_FB_DIR}/community/${rel}" ]] || { fb_missing=$((fb_missing+1)); echo "         missing: community/${rel}"; }
+      done < <(jq -r '.cards[] | .id + "/" + .file' "$GA_FB_CARDS" 2>/dev/null)
+      if [[ "$fb_n" -gt 0 ]] && [[ "$fb_missing" -eq 0 ]]; then
+        _pass "BLD-FB-03: all ${fb_n} ga_frontend_bundle card files present on disk"
+      else
+        _fail "BLD-FB-03: ga_frontend_bundle has ${fb_missing} missing card file(s) (cards.json lists ${fb_n}) — incomplete vendor?"
+      fi
+
+      fb_orphans=0
+      for d in "${GA_FB_DIR}/community/"*/; do
+        [[ -d "$d" ]] || continue
+        id="$(basename "$d")"
+        jq -e --arg id "$id" 'any(.cards[]; .id == $id)' "$GA_FB_CARDS" >/dev/null 2>&1 \
+          || { fb_orphans=$((fb_orphans+1)); echo "         orphan dir not in cards.json: community/${id}"; }
+      done
+      [[ "$fb_orphans" -eq 0 ]] \
+        && _pass "BLD-FB-04: no orphan ga_frontend_bundle card dirs (cards.json matches disk)" \
+        || _fail "BLD-FB-04: ${fb_orphans} orphan card dir(s) not listed in cards.json"
+    else
+      _fail "BLD-FB-03/04: ga_frontend_bundle community/cards.json MISSING (run scripts/vendor.py)"
+    fi
+  else
+    _fail "BLD-FB-01: ga_frontend_bundle custom_component MISSING from OS rootfs-overlay (expected __init__.py + manifest.json under ${GA_FB_DIR})"
+  fi
+else
+  _skip "BLD-FB-01..04: ga_frontend_bundle in OS overlay" "source tree (buildroot-external) not found"
+fi
+
 # =========================================================================
 # Device tree verification
 # Compares the patched device tree against a known-good reference to catch
@@ -1737,6 +1796,411 @@ PY
 else
   _skip "SRC-01..09" "source tree not found (expected /build or parent of output)"
   _skip "XVER-01..08" "source tree not found"
+fi
+
+# =========================================================================
+# SSH-01..05: operator SSH key baked into image + seeded on first boot
+# =========================================================================
+# Why: HAOS dropbear has `ConditionFileNotEmpty=/root/.ssh/authorized_keys`.
+# /root/.ssh is bind-mounted from /mnt/overlay/root/.ssh (sdc7 overlay
+# partition), which is EMPTY on a freshly-flashed device. Without an
+# authorized_keys seed the bind mount shadows the rootfs default → dropbear
+# never starts → port 22222 closed → device unreachable except via serial.
+# Discovered live on KIB-SON-31 on 2026-05-27 — root cause of "device is up
+# but SSH doesn't work after fresh flash".
+#
+# Source of truth: buildroot-external/rootfs-overlay/usr/share/ga-ssh/authorized_keys
+# Seeded to:       /mnt/overlay/root/.ssh/authorized_keys (by hassos-overlay)
+# Bind-mounted to: /root/.ssh/authorized_keys (by root-.ssh.mount)
+
+GA_SSH_AK="${TARGET}/usr/share/ga-ssh/authorized_keys"
+HASSOS_OVERLAY_SH="${TARGET}/usr/libexec/hassos-overlay"
+
+# SSH-01: baked authorized_keys file present on rootfs.
+if [[ -f "$GA_SSH_AK" ]]; then
+  _pass "SSH-01: /usr/share/ga-ssh/authorized_keys baked on rootfs"
+else
+  _fail "SSH-01: /usr/share/ga-ssh/authorized_keys missing (fresh-flash devices will have NO SSH access)"
+fi
+
+# SSH-02: file is non-empty and contains at least one valid OpenSSH pubkey.
+# Lines starting with # or blank are ignored (the file uses # for comments).
+if [[ -f "$GA_SSH_AK" ]]; then
+  PUBKEY_COUNT=$(grep -cE '^(ssh-rsa|ssh-ed25519|ssh-dss|ecdsa-sha2-) ' "$GA_SSH_AK" 2>/dev/null || echo 0)
+  if [[ "${PUBKEY_COUNT}" -ge 1 ]]; then
+    _pass "SSH-02: ${PUBKEY_COUNT} valid OpenSSH pubkey(s) in authorized_keys"
+  else
+    _fail "SSH-02: no valid OpenSSH pubkey lines found in $GA_SSH_AK"
+  fi
+fi
+
+# SSH-03: file world-readable + root-owned (it gets copied to a 0600 file
+# at runtime; the source itself only needs to be readable by the script).
+if [[ -f "$GA_SSH_AK" ]]; then
+  PERMS=$(stat -c '%a' "$GA_SSH_AK" 2>/dev/null)
+  # 644 (or 444 read-only) is fine; anything more permissive is fine for a public key
+  # but we want to flag if it's writable by group/world (security hygiene).
+  case "$PERMS" in
+    644|640|444|440|600|400) _pass "SSH-03: authorized_keys perms $PERMS (safe)" ;;
+    *)                       _fail "SSH-03: authorized_keys perms $PERMS (unexpected — check umask)" ;;
+  esac
+fi
+
+# SSH-04: hassos-overlay copies the file into /mnt/overlay/root/.ssh on first boot.
+# Guarded by `[ ! -f ... ]` (idempotent — preserves operator edits).
+if [[ -f "$HASSOS_OVERLAY_SH" ]]; then
+  if grep -q '/usr/share/ga-ssh/authorized_keys' "$HASSOS_OVERLAY_SH" 2>/dev/null \
+     && grep -q '/mnt/overlay/root/.ssh/authorized_keys' "$HASSOS_OVERLAY_SH" 2>/dev/null; then
+    _pass "SSH-04: hassos-overlay seeds /mnt/overlay/root/.ssh/authorized_keys"
+  else
+    _fail "SSH-04: hassos-overlay missing the SSH-key seed block"
+  fi
+  # SSH-04b: the copy is guarded (idempotent) — never clobbers operator additions.
+  if grep -B1 '/mnt/overlay/root/.ssh/authorized_keys' "$HASSOS_OVERLAY_SH" 2>/dev/null \
+       | grep -q '!\s*-f' ; then
+    _pass "SSH-04b: hassos-overlay seed is guarded (never overwrites existing)"
+  else
+    _fail "SSH-04b: hassos-overlay seed missing the [ ! -f ] guard (will overwrite operator edits on every boot)"
+  fi
+else
+  _fail "SSH-04: hassos-overlay script missing at $HASSOS_OVERLAY_SH"
+fi
+
+# SSH-05: dropbear unit unchanged invariant — ConditionFileNotEmpty must
+# still require /root/.ssh/authorized_keys. If someone weakens this we
+# risk shipping an SSH-listening device with no key authorization.
+DROPBEAR_UNIT="${TARGET}/usr/lib/systemd/system/dropbear.service.d/hassos.conf"
+if [[ -f "$DROPBEAR_UNIT" ]]; then
+  grep -qE 'ConditionFileNotEmpty=/root/\.ssh/authorized_keys' "$DROPBEAR_UNIT" \
+    && _pass "SSH-05: dropbear unit still gates on authorized_keys (no orphan-listener risk)" \
+    || _fail "SSH-05: dropbear ConditionFileNotEmpty=/root/.ssh/authorized_keys removed — SSH could listen with no keys!"
+fi
+
+# =========================================================================
+# BS-RETRY-01..02: ga-bootstrap exponential-backoff retry for `ha store add`
+# =========================================================================
+# Commit 9b6c28198. First-boot `ha store add` is racy because the
+# Supervisor's git clone can fail post-API-success ("invalid HEAD",
+# exit 128) within the first 1-2 minutes. Retry sequence: 0 / 10 / 30 / 60 /
+# 120 / 240 = ~8 min budget. Regression-guard so a later edit doesn't
+# silently drop the retry.
+
+if [[ -f "$GA_BOOTSTRAP" ]]; then
+  # BS-RETRY-01: the exact backoff sequence is present.
+  if grep -qE 'for[[:space:]]+pre_sleep[[:space:]]+in[[:space:]]+0[[:space:]]+10[[:space:]]+30[[:space:]]+60[[:space:]]+120[[:space:]]+240' "$GA_BOOTSTRAP"; then
+    _pass "BS-RETRY-01: ga-bootstrap has exponential-backoff retry (0 10 30 60 120 240)"
+  else
+    _fail "BS-RETRY-01: ga-bootstrap exponential-backoff sequence missing/changed"
+  fi
+  # BS-RETRY-02: success requires BOTH 'ha store add' OK AND the repo
+  # actually appearing in the store. The Supervisor clones asynchronously
+  # so a 0 exit-code is not trust-worthy on its own (memory note in the
+  # script's comment + commit body).
+  if grep -qE 'addon_repo_present' "$GA_BOOTSTRAP" \
+     && grep -qE 'ha[[:space:]]+store[[:space:]]+add' "$GA_BOOTSTRAP"; then
+    _pass "BS-RETRY-02: ga-bootstrap verifies addon_repo_present after ha store add"
+  else
+    _fail "BS-RETRY-02: ga-bootstrap missing addon_repo_present verification"
+  fi
+fi
+
+# =========================================================================
+# BS-JQ-01: ga-bootstrap addon_installed tests version VALUE, not key
+# =========================================================================
+# Commit feba8fa12. Old code `grep -q '"version"'` matched the JSON key
+# (always present, value can be null on uninstalled addons) → addon_installed
+# always returned true → ga_manager appeared "installed" pre-install and the
+# install step was skipped. Fixed to jq with `.data.version // .version //
+# empty`. Regression-guard so we don't slide back into the trap.
+
+if [[ -f "$GA_BOOTSTRAP" ]]; then
+  # The fix uses a `jq -r` extracting `.data.version // .version // empty`
+  # (with a -e exit check) inside addon_installed. Match the pattern flexibly.
+  if grep -qE 'addon_installed' "$GA_BOOTSTRAP"; then
+    if grep -qE '\.data\.version[[:space:]]*//[[:space:]]*\.version' "$GA_BOOTSTRAP" \
+       || grep -qE 'jq[[:space:]]+-[er]+[^|]+\.data\.version' "$GA_BOOTSTRAP"; then
+      _pass "BS-JQ-01: ga-bootstrap addon_installed checks version VALUE via jq (.data.version // .version)"
+    else
+      _fail "BS-JQ-01: ga-bootstrap addon_installed missing the version-value jq pattern (regression to key-only check?)"
+    fi
+    # BS-JQ-02: must NOT be the buggy `grep -q '\"version\"'` pattern alone
+    # for addon_installed determination.
+    if grep -B2 'addon_installed' "$GA_BOOTSTRAP" 2>/dev/null | grep -qE "grep -q '\"version\"'" ; then
+      _fail "BS-JQ-02: ga-bootstrap addon_installed still uses old grep -q '\"version\"' (matches the KEY, not the value)"
+    else
+      _pass "BS-JQ-02: ga-bootstrap addon_installed does not use the broken grep -q '\"version\"' pattern"
+    fi
+  fi
+fi
+
+# =========================================================================
+# NB-INT-01: NetBird binary on rootfs embeds expected version
+# =========================================================================
+# Commit 11038a1ef. Build-side `verify_build_integrity` used to pipe netbird
+# through `strings` before grep — strings can skip non-loadable ELF sections
+# and silently miss the Go `-X version.version=` constant, causing a false
+# FAIL that aborts the build. Fixed to `grep -qaF` (raw whole-file). This
+# test additionally asserts the version IS embedded in the rootfs binary,
+# so a regression to the broken pattern OR a missing version-injection
+# surfaces here too.
+
+NB_BIN="${TARGET}/usr/bin/netbird"
+if [[ -x "$NB_BIN" ]]; then
+  # Pull the expected NETBIRD_TAG from scripts/ga_build.sh and let bash
+  # do parameter-expansion. ga_build.sh's line is the defensive form
+  # `NETBIRD_TAG="${NETBIRD_TAG:-v0.66.2}"`, so awk-and-strip-quotes leaves
+  # the literal `${...}` text in the buffer and grep then never matches.
+  # Sourcing the line into a subshell gives us the real value regardless
+  # of which of {literal, defensive-default, quoted, unquoted} form is used.
+  NB_EXPECTED=""
+  if [[ -n "${SRC:-}" && -f "${SRC}/scripts/ga_build.sh" ]]; then
+    NB_EXPECTED=$(
+      unset NETBIRD_TAG
+      # shellcheck source=/dev/null
+      eval "$(grep -E '^NETBIRD_TAG=' "${SRC}/scripts/ga_build.sh" | head -1)" 2>/dev/null
+      printf '%s' "${NETBIRD_TAG#v}"
+    )
+  fi
+  if [[ -n "$NB_EXPECTED" ]]; then
+    if grep -qaF "$NB_EXPECTED" "$NB_BIN" 2>/dev/null; then
+      _pass "NB-INT-01: NetBird rootfs binary embeds version $NB_EXPECTED (via grep -qaF, not strings)"
+    else
+      _fail "NB-INT-01: NetBird rootfs binary does NOT embed expected version $NB_EXPECTED"
+    fi
+  else
+    _skip "NB-INT-01" "could not determine NETBIRD_TAG from scripts/ga_build.sh"
+  fi
+else
+  _skip "NB-INT-01" "NetBird binary not present on rootfs (build incomplete?)"
+fi
+
+# NB-INT-02: scripts/ga_build.sh must NOT regress to `strings | grep` for
+# the version check (the gotcha that caused the false-FAIL in commit 11038a1).
+if [[ -n "${SRC:-}" && -f "${SRC}/scripts/ga_build.sh" ]]; then
+  # Look in the verify_build_integrity function area for the BAD pattern.
+  if grep -qE 'strings[[:space:]]+"\$nb"[[:space:]]*\|[[:space:]]*grep' "${SRC}/scripts/ga_build.sh"; then
+    _fail "NB-INT-02: scripts/ga_build.sh regressed to 'strings | grep' for NetBird version (silently misses sections — re-fix per 11038a1ef)"
+  else
+    _pass "NB-INT-02: scripts/ga_build.sh uses grep -a directly for NetBird version (no strings-pipe regression)"
+  fi
+fi
+
+# =========================================================================
+# NB-REG-01..05: NetBird auto-register on first boot
+# =========================================================================
+# Source-of-truth + machinery for the OS-baked NetBird registration.
+# Replaces ga-flasher-py stage 40 for the fleet-default registration path.
+NB_REG_SCRIPT="${TARGET}/usr/libexec/ga-netbird-register"
+NB_REG_UNIT="${TARGET}/usr/lib/systemd/system/ga-netbird-register.service"
+NB_REG_KEY="${TARGET}/usr/share/ga-netbird/setup-key"
+
+if [[ -x "$NB_REG_SCRIPT" ]]; then
+  _pass "NB-REG-01: ga-netbird-register script present + executable"
+else
+  _fail "NB-REG-01: ga-netbird-register script missing or not executable at $NB_REG_SCRIPT"
+fi
+
+if [[ -f "$NB_REG_UNIT" ]]; then
+  grep -q '^ConditionPathExists=/usr/share/ga-netbird/setup-key' "$NB_REG_UNIT" \
+    && _pass "NB-REG-02: ga-netbird-register.service has ConditionPathExists guard (skips when no key baked)" \
+    || _fail "NB-REG-02: ga-netbird-register.service missing ConditionPathExists guard"
+  grep -qE '^Restart=on-failure' "$NB_REG_UNIT" \
+    && _pass "NB-REG-03: ga-netbird-register.service has Restart=on-failure (handles slow-network first boot)" \
+    || _fail "NB-REG-03: ga-netbird-register.service missing Restart=on-failure"
+else
+  _fail "NB-REG-02..03: ga-netbird-register.service unit not present at $NB_REG_UNIT"
+fi
+
+if [[ -L "${TARGET}/etc/systemd/system/multi-user.target.wants/ga-netbird-register.service" ]]; then
+  _pass "NB-REG-04: ga-netbird-register.service enabled (multi-user.target.wants symlink)"
+else
+  _fail "NB-REG-04: ga-netbird-register.service NOT enabled (no multi-user.target.wants symlink)"
+fi
+
+# NB-REG-05: setup key file is present iff secret was provided at build.
+# Build tolerates missing key (warn-only); on a build WITH the key, the
+# file must exist + be 0600 + non-empty.
+if [[ -f "$NB_REG_KEY" ]]; then
+  PERMS=$(stat -c '%a' "$NB_REG_KEY" 2>/dev/null)
+  SIZE=$(stat -c '%s' "$NB_REG_KEY" 2>/dev/null)
+  if [[ "$PERMS" == "600" && "$SIZE" -gt 5 ]]; then
+    _pass "NB-REG-05: setup-key file baked (mode 600, $SIZE bytes)"
+  else
+    _fail "NB-REG-05: setup-key baked but wrong perms ($PERMS) or empty ($SIZE bytes)"
+  fi
+else
+  _skip "NB-REG-05" "no setup-key baked (secret missing at build time — fresh-flash devices won't auto-register)"
+fi
+
+# =========================================================================
+# HA-INIT-01..06: ga-ha-init first-boot HA configuration
+# =========================================================================
+# DNS off / watchdog on / weather Met.no Berlin / timezone Europe/Berlin /
+# write GA_ENV / set updater.json auto_update=false. Replaces fleet-wide
+# parts of ga-flasher-py stage 69 + all of stage 92.
+HA_INIT_SCRIPT="${TARGET}/usr/libexec/ga-ha-init"
+HA_INIT_UNIT="${TARGET}/usr/lib/systemd/system/ga-ha-init.service"
+
+if [[ -x "$HA_INIT_SCRIPT" ]]; then
+  _pass "HA-INIT-01: ga-ha-init script present + executable"
+else
+  _fail "HA-INIT-01: ga-ha-init script missing or not executable at $HA_INIT_SCRIPT"
+fi
+
+# HA-INIT-02: script handles the fleet-wide settings it OWNS. Watchdog and
+# weather/location were removed 2026-05-28 (watchdog → ga_manager converge
+# step 8 since ga-ha-init runs before addons install; weather dropped — needs
+# the owner account that doesn't exist at boot+85s). ga-ha-init now owns: DNS,
+# timezone, auto_update.
+if [[ -f "$HA_INIT_SCRIPT" ]]; then
+  for needle in 'ha dns options' 'fallback=false' 'Europe/Berlin' 'auto_update'; do
+    if grep -qF "$needle" "$HA_INIT_SCRIPT"; then
+      _pass "HA-INIT-02: ga-ha-init touches '$needle'"
+    else
+      _fail "HA-INIT-02: ga-ha-init missing handling of '$needle'"
+    fi
+  done
+fi
+
+# HA-INIT-02b: timezone DUAL-CALL — script MUST call both the Supervisor
+# API AND timedatectl. Either alone is insufficient:
+#   - API alone: Supervisor accepts but doesn't propagate to systemd-timedated
+#     for several minutes on fresh boot (info-API fields read null in that
+#     window). Host stays UTC.
+#   - timedatectl alone: Supervisor periodically re-syncs host tz from its
+#     own in-memory state. If Supervisor's intent != Berlin, ~90s later
+#     Supervisor reverts host to Luxembourg/UTC.
+# Caught live KIB-SON-31 Build #5 reflash 2026-05-27.
+if [[ -f "$HA_INIT_SCRIPT" ]]; then
+  # Strip comments first so we only check executable code.
+  HA_INIT_CODE=$(grep -vE '^[[:space:]]*#' "$HA_INIT_SCRIPT")
+  if grep -qE 'supervisor options.*--timezone' <<<"$HA_INIT_CODE"; then
+    _pass "HA-INIT-02b: tz uses 'ha supervisor options --timezone' (Supervisor intent)"
+  else
+    _fail "HA-INIT-02b: tz missing Supervisor API call — Supervisor would revert any timedatectl set"
+  fi
+  if grep -qE 'timedatectl set-timezone' <<<"$HA_INIT_CODE"; then
+    _pass "HA-INIT-02b: tz uses 'timedatectl set-timezone' (host immediate)"
+  else
+    _fail "HA-INIT-02b: tz missing timedatectl call — host tz would stay UTC for several minutes"
+  fi
+fi
+
+# HA-INIT-03: idempotency marker logic.
+if [[ -f "$HA_INIT_SCRIPT" ]]; then
+  grep -q 'ga-ha-init-applied' "$HA_INIT_SCRIPT" \
+    && _pass "HA-INIT-03: ga-ha-init marker-guarded (idempotent across reboots)" \
+    || _fail "HA-INIT-03: ga-ha-init missing marker guard — would re-run on every boot"
+fi
+
+# HA-INIT-04: unit ordering — after hassos-supervisor (we hit its API).
+if [[ -f "$HA_INIT_UNIT" ]]; then
+  grep -q 'After=hassos-supervisor.service' "$HA_INIT_UNIT" \
+    && _pass "HA-INIT-04: ga-ha-init.service ordered After=hassos-supervisor.service" \
+    || _fail "HA-INIT-04: ga-ha-init.service missing After=hassos-supervisor.service ordering"
+fi
+
+# HA-INIT-05: Restart=on-failure (handles slow first boot).
+if [[ -f "$HA_INIT_UNIT" ]]; then
+  grep -qE '^Restart=on-failure' "$HA_INIT_UNIT" \
+    && _pass "HA-INIT-05: ga-ha-init.service has Restart=on-failure" \
+    || _fail "HA-INIT-05: ga-ha-init.service missing Restart=on-failure"
+fi
+
+# HA-INIT-06: enabled at boot.
+if [[ -L "${TARGET}/etc/systemd/system/multi-user.target.wants/ga-ha-init.service" ]]; then
+  _pass "HA-INIT-06: ga-ha-init.service enabled (multi-user.target.wants symlink)"
+else
+  _fail "HA-INIT-06: ga-ha-init.service NOT enabled"
+fi
+
+# HA-INIT-07..09: late tz re-apply timer (beats Supervisor host.control
+# revert at boot+~120s). ga-ha-init can't fork a sleeper — it's Type=oneshot
+# KillMode=control-group, so a child dies when the main script exits.
+# A dedicated timer in its own cgroup is the fix.
+TZ_REAPPLY_SCRIPT="${TARGET}/usr/libexec/ga-ha-init-tz-reapply"
+TZ_REAPPLY_SVC="${TARGET}/usr/lib/systemd/system/ga-ha-init-tz-reapply.service"
+TZ_REAPPLY_TIMER="${TARGET}/usr/lib/systemd/system/ga-ha-init-tz-reapply.timer"
+
+if [[ -x "$TZ_REAPPLY_SCRIPT" ]]; then
+  _pass "HA-INIT-07: ga-ha-init-tz-reapply script present + executable"
+else
+  _fail "HA-INIT-07: ga-ha-init-tz-reapply script missing or not executable"
+fi
+
+# HA-INIT-08: timer fires AFTER Supervisor's host-sync (boot+~120s). We need
+# OnBootSec strictly greater than that; assert >= 180s to be safe.
+if [[ -f "$TZ_REAPPLY_TIMER" ]]; then
+  ob=$(grep -oE 'OnBootSec=[0-9]+' "$TZ_REAPPLY_TIMER" | grep -oE '[0-9]+' | head -1)
+  if [[ -n "$ob" && "$ob" -ge 180 ]]; then
+    _pass "HA-INIT-08: tz-reapply timer OnBootSec=${ob}s (>=180s, past Supervisor host-sync)"
+  else
+    _fail "HA-INIT-08: tz-reapply timer OnBootSec=${ob:-unset} too early — Supervisor reverts at ~120s"
+  fi
+else
+  _fail "HA-INIT-08: ga-ha-init-tz-reapply.timer unit missing"
+fi
+
+# HA-INIT-09: timer enabled at boot (timers.target.wants symlink) + service present.
+if [[ -L "${TARGET}/etc/systemd/system/timers.target.wants/ga-ha-init-tz-reapply.timer" \
+      && -f "$TZ_REAPPLY_SVC" ]]; then
+  _pass "HA-INIT-09: tz-reapply timer enabled (timers.target.wants symlink) + service present"
+else
+  _fail "HA-INIT-09: tz-reapply timer NOT enabled or service unit missing"
+fi
+
+# =========================================================================
+# EMMC-ERASE-01..05: eMMC first-boot wipe (= ga-flasher-py stage 35).
+# Owned by ga-bootstrap-disk (NOT a separate ga-emmc-erase unit — that was
+# deleted 2026-05-28 as a redundant duplicate; ga-bootstrap-disk does the
+# wipe ~1s earlier with 3 guards vs the duplicate's 1). GAOS-05/06 cover the
+# unit's existence+enablement; these tests cover the erase LOGIC, which had
+# no build-test before (closing the WP-B gap).
+# =========================================================================
+EMMC_SCRIPT="${TARGET}/usr/libexec/ga-bootstrap-disk"
+
+if [[ -x "$EMMC_SCRIPT" ]]; then
+  _pass "EMMC-ERASE-01: ga-bootstrap-disk script present + executable"
+else
+  _fail "EMMC-ERASE-01: ga-bootstrap-disk script missing or not executable"
+fi
+
+# EMMC-ERASE-02: all THREE fail-closed guards present (the whole safety model).
+#   A: iHost device-tree compatible   B: mmcblk0boot0 (proves eMMC, not SD)
+#   C: root must be on mmcblk2 (SD) — never wipe the running system.
+if [[ -f "$EMMC_SCRIPT" ]]; then
+  _g=0
+  grep -q 'itead,sonoff-ihost' "$EMMC_SCRIPT" && _g=$((_g+1))
+  grep -q 'mmcblk0boot0' "$EMMC_SCRIPT" && _g=$((_g+1))
+  grep -q 'mmcblk2' "$EMMC_SCRIPT" && _g=$((_g+1))
+  if [[ "$_g" -eq 3 ]]; then
+    _pass "EMMC-ERASE-02: ga-bootstrap-disk has all 3 erase guards (iHost + boot0 + root-on-SD)"
+  else
+    _fail "EMMC-ERASE-02: ga-bootstrap-disk missing erase guard(s) (found ${_g}/3) — could brick a device!"
+  fi
+fi
+
+# EMMC-ERASE-03: idempotency marker (one wipe per device, ever).
+if [[ -f "$EMMC_SCRIPT" ]]; then
+  grep -q '.ga_emmc_erased' "$EMMC_SCRIPT" \
+    && _pass "EMMC-ERASE-03: ga-bootstrap-disk marker-guarded (.ga_emmc_erased, one-shot)" \
+    || _fail "EMMC-ERASE-03: ga-bootstrap-disk missing marker — would re-erase every boot"
+fi
+
+# EMMC-ERASE-04: wipe method — blkdiscard (fast TRIM) with a dd zero-fill fallback.
+if [[ -f "$EMMC_SCRIPT" ]]; then
+  if grep -q 'blkdiscard' "$EMMC_SCRIPT" && grep -qE 'dd if=/dev/zero' "$EMMC_SCRIPT"; then
+    _pass "EMMC-ERASE-04: ga-bootstrap-disk wipes via blkdiscard + dd zero-fill fallback"
+  else
+    _fail "EMMC-ERASE-04: ga-bootstrap-disk missing blkdiscard or dd zero-fill fallback"
+  fi
+fi
+
+# EMMC-ERASE-05: runs early, before Supervisor (sysinit.target.wants).
+if [[ -L "${TARGET}/etc/systemd/system/sysinit.target.wants/ga-bootstrap-disk.service" ]]; then
+  _pass "EMMC-ERASE-05: ga-bootstrap-disk.service enabled early (sysinit.target.wants symlink)"
+else
+  _fail "EMMC-ERASE-05: ga-bootstrap-disk.service NOT enabled in sysinit.target.wants"
 fi
 
 # =========================================================================

@@ -97,8 +97,8 @@ No device or emulator needed — checks the build output tree directly.
 - BLD-04: Key systemd services enabled
 - BLD-05: GA build ID stamped
 - BLD-06: GA env config stamped
-- BLD-07: version.json references greenautarky core image
-- BLD-08: Core image tag is 'latest'
+- BLD-07: version.json references STOCK upstream core image (V1.2-clean: Core fork retired; see REG-02 / VER-05)
+- BLD-08: Core image tag is a pinned HA version, never 'latest' (see VER-11)
 - BLD-09: Data partition generated
 - BLD-10: os-release has GA fields
 

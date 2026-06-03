@@ -38,7 +38,21 @@ setup_localtime
         echo "GA_BUILD_TIMESTAMP=\"${GA_BUILD_TIMESTAMP}\""
         echo "GA_ENV=\"${GA_ENV:-dev}\""
     fi
+    # GA-side release identifier (e.g. "BOSv1.2.0") alongside the cryptic
+    # HAOS-internal VERSION_ID. Operators + fleet-manager read this; nothing
+    # in the supervisor cares about it. Set via GA_RELEASE env var on the
+    # build invocation (`GA_RELEASE=BOSv1.2.0 ./scripts/ga_build.sh update prod`).
+    if [ -n "${GA_RELEASE:-}" ]; then
+        echo "GA_RELEASE=\"${GA_RELEASE}\""
+    fi
 ) > "${TARGET_DIR}/usr/lib/os-release"
+
+# GA-side release identifier also lives at /etc/ga-release for cheap
+# `cat /etc/ga-release` use by tests, ga_manager, telegraf tags, etc.
+if [ -n "${GA_RELEASE:-}" ]; then
+    printf '%s\n' "${GA_RELEASE}" > "${TARGET_DIR}/etc/ga-release"
+    chmod 0644 "${TARGET_DIR}/etc/ga-release"
+fi
 
 # Write machine-info
 (

@@ -1,0 +1,204 @@
+#!/bin/sh
+# ga-ha-init — first-boot Home Assistant configuration baked into V1.2-clean.
+#
+# Replaces the fleet-wide deterministic parts of ga-flasher-py stage 69
+# (DNS fallback off, addon watchdog on, weather Met.no Berlin, timezone
+# Europe/Berlin, GA_ENV stamp) and stage 92 (disable auto-update). The
+# per-device parts of stage 69 (admin password) stay in the provisioner.
+#
+# WHY
+# ---
+# These settings are the same on every V1.2-clean fleet device. Doing
+# them in the OS at first boot instead of out-of-band via SSH means:
+#   - A fresh-flashed device that never goes through ga-flasher-py
+#     still has correct DNS, watchdog, weather, tz, auto-update policy.
+#   - One bug-fix path (this script) instead of N (each stage script
+#     for each iteration).
+#   - Settings survive a RAUC slot swap because they live on /mnt/data
+#     (supervisor state) — the OS-side script just re-asserts on each
+#     boot, guarded by `[ ! -f ]`-style markers so it's idempotent.
+#
+# CONTRACT
+# --------
+# - Runs after hassos-supervisor is up (Wants/After=hassos-supervisor.service).
+# - Probes supervisor API readiness up to 5 min (`ha supervisor info`).
+# - For each setting: check current state, write only if drifted from desired.
+# - Exits 0 on success or "nothing to do". Exits non-zero on hard failure
+#   (supervisor never responsive, ha CLI missing) — unit will Restart=on-failure.
+# - Writes a single marker `/share/.ga-ha-init-applied` with epoch timestamp;
+#   absence of marker means "run me again next boot" so a partial-success
+#   on slow first boot is retried.
+#
+# RELATED STAGES (ga-flasher-py replaced/redundant)
+# - 69-ha-configuration: DNS off, watchdog on, weather, tz, write GA_ENV
+# - 92-disable-auto-update: updater.json auto_update=false
+# - 91-reset-onboarding: redundant — ga_manager converge step 9 already arms.
+#
+# IDEMPOTENT: safe to re-run. Each setting is self-checking.
+set -e
+
+MARKER="/mnt/data/supervisor/share/.ga-ha-init-applied"
+UPDATER_JSON="/mnt/data/supervisor/updater.json"
+HA="/usr/bin/ha"
+SUPERVISOR_WAIT_S=300
+
+log()  { echo "ga-ha-init: $*"; }
+warn() { echo "ga-ha-init: WARNING: $*" >&2; }
+die()  { echo "ga-ha-init: ERROR: $*" >&2; exit 1; }
+
+# 1. Marker short-circuit (idempotent across reboots).
+if [ -f "$MARKER" ]; then
+    log "marker present ($MARKER) — already applied; exit 0"
+    exit 0
+fi
+
+# 2. Wait for supervisor API to be responsive.
+log "waiting for Supervisor API (up to ${SUPERVISOR_WAIT_S}s)..."
+i=0
+while [ "$i" -lt "$SUPERVISOR_WAIT_S" ]; do
+    if "$HA" supervisor info --no-progress >/dev/null 2>&1; then
+        log "Supervisor responsive after ${i}s"
+        break
+    fi
+    sleep 5
+    i=$((i + 5))
+done
+if [ "$i" -ge "$SUPERVISOR_WAIT_S" ]; then
+    die "Supervisor not responsive after ${SUPERVISOR_WAIT_S}s — retry next boot via unit Restart="
+fi
+
+# ---- 3a. DNS fallback OFF + Cloudflare servers explicit ---------------------
+# Why: with upstream `fallback=true` and an empty servers list, HA Core's
+# PTR sweeps for RFC1918 escalate to DoT (1.1.1.1:853). Captive WiFi /
+# hotspot DNS that doesn't answer RFC1918 PTRs causes a 75-95s TLS-handshake
+# hang per query → hassio_dns spikes to 180% CPU.
+# See memory: dns_fallback_drift_2026_05_07.md
+log "configuring DNS: servers=[1.1.1.1, 1.0.0.1], fallback=false"
+if ! "$HA" dns options --servers "dns://1.1.1.1" --servers "dns://1.0.0.1" --fallback=false --no-progress >/dev/null 2>&1; then
+    warn "ha dns options failed — will retry next boot"
+    exit 1
+fi
+
+# ---- 3b. Addon watchdog — MOVED to ga_manager converge step 8 --------------
+# This loop used to enable watchdog on the GA addons, but it ALWAYS no-op'd:
+# ga-ha-init runs at ~boot+85s, BEFORE ga_manager's converge installs the
+# addons, so there was nothing to set the flag on (the long-standing
+# HA-INIT-D-09 device-test skip). Ownership now lives in ga_manager converge
+# step 8 (addon_set_flags, driven by addon_expectations) which runs AFTER the
+# addons are installed and is verified by the addon.options_drift healthcheck.
+# Removed here 2026-05-28 to avoid a misleading no-op.
+
+# ---- 3c. Timezone default Europe/Berlin ------------------------------------
+# DUAL-CALL required, learned the hard way on KIB-SON-31 reflashes 2026-05-27:
+#
+# 1. `ha supervisor options --timezone Europe/Berlin` sets SUPERVISOR's intent.
+#    Required because Supervisor periodically re-syncs the host tz from its
+#    own in-memory state. If Supervisor's intent is Luxembourg/UTC and we
+#    only set the host via timedatectl, Supervisor reverts ~90s later.
+#    (Observed: 18:28:55 timedatectl set → 18:30:19 supervisor reverted.)
+#
+# 2. `timedatectl set-timezone Europe/Berlin` sets the HOST immediately.
+#    Required because Supervisor's API call returns 200 OK but does NOT
+#    propagate to systemd-timedated for several minutes on a fresh-boot
+#    device — its info-API fields read as `null` during this window.
+#    (Observed Build #5 KIB-SON-31: API succeeded at t=80s, host still UTC
+#    at t=5min and t=20min.)
+#
+# Result of doing both: Supervisor's intent == host state, so the eventual
+# Supervisor sync is a no-op. Order matters: API first so Supervisor's
+# intent is correct BEFORE we set the host, otherwise the next sync wins.
+current_sup_tz=$("$HA" supervisor info --no-progress --raw-json 2>/dev/null \
+    | "/usr/bin/jq" -r '.data.timezone // "missing"')
+if [ "$current_sup_tz" != "Europe/Berlin" ]; then
+    log "supervisor: setting timezone Europe/Berlin (was: $current_sup_tz) via API"
+    if "$HA" supervisor options --timezone Europe/Berlin --no-progress >/dev/null 2>&1; then
+        log "  ha supervisor options --timezone=Europe/Berlin → OK"
+    else
+        warn "ha supervisor options --timezone failed — will retry next boot"
+        exit 1
+    fi
+else
+    log "supervisor timezone already Europe/Berlin"
+fi
+# readlink -f: /etc/localtime is a 2-hop symlink (→ /mnt/overlay/etc/
+# localtime → /usr/share/zoneinfo/<TZ>); a single readlink returns the
+# intermediate overlay path so the zoneinfo-strip never matches. The
+# canonical target lands under .../zoneinfo/posix/<TZ>, so strip an
+# optional posix/|right/ prefix too (see ga-ha-init-tz-reapply).
+current_host_tz=$(readlink -f /etc/localtime 2>/dev/null | sed -E 's#.*/zoneinfo/(posix/|right/)?##')
+if [ "$current_host_tz" != "Europe/Berlin" ]; then
+    log "host: setting timezone Europe/Berlin (was: ${current_host_tz:-unset}) via timedatectl"
+    if /usr/bin/timedatectl set-timezone Europe/Berlin 2>/dev/null; then
+        log "  timedatectl set-timezone Europe/Berlin → OK"
+    else
+        warn "timedatectl set-timezone failed — Supervisor's API setting will eventually sync"
+    fi
+else
+    log "host timezone already Europe/Berlin"
+fi
+
+# ---- 3c'. Defensive late-reapply against Supervisor's startup revert -------
+# Live KIB-SON-31 Build #6 reflash 2026-05-27: Supervisor calls
+# `[supervisor.host.control] Setting host timezone: UTC` at boot+~120s
+# even though config.json already has Europe/Berlin. The cause appears to
+# be Supervisor caching the host's tz snapshot at its own dbus init time
+# (t~80s, BEFORE ga-ha-init runs) and then "applying" that cached UTC at
+# t~120s during its host.control sync. ga-ha-init's tz set at t~85s gets
+# silently overwritten ~35s later.
+#
+# We do NOT fork a sleeper here — ga-ha-init.service is Type=oneshot with
+# KillMode=control-group (the default), so when this script exits systemd
+# tears down the whole cgroup and kills any backgrounded child before it
+# can re-apply. (Verified Build #7 2026-05-27: parent logged "forked…" but
+# the child never ran, tz stayed UTC.) Instead a SEPARATE systemd timer
+# `ga-ha-init-tz-reapply.timer` (OnBootSec=240s) runs the re-apply in its
+# own unit/cgroup, safely past Supervisor's host-sync. See
+# /usr/libexec/ga-ha-init-tz-reapply.
+#
+# Long-term fix (deferred — see todo_v12_bake_followups_2026_05_27.md
+# item #7): pre-seed /mnt/overlay/etc/localtime → Berlin in the rootfs
+# build so Supervisor's cached snapshot IS Berlin and the revert no-ops.
+
+# ---- 3d. auto_update=false (= ga-flasher-py stage 92) -----------------------
+# Why: fleet devices must NOT auto-update Supervisor — the OTA rollout is
+# operator-controlled via push-ota.sh + RAUC bundle promotion. Auto-update
+# bypasses that, can introduce surprise downtime during Supervisor restarts.
+# See memory: incident_ga1_hang_2026_05_06.md (supervisor auto-update of
+# hassio_cli triggered eMMC stall).
+#
+# IMPORTANT — go via the Supervisor API, not direct jq on updater.json.
+# Observed on KIB-SON-31 first boot 2026-05-27: editing updater.json with
+# jq successfully writes the file, but Supervisor's in-memory state still
+# holds auto_update=true and Supervisor REWRITES the file on the next
+# refresh cycle (typically within seconds). The `ha supervisor options`
+# CLI uses the API which mutates Supervisor's in-memory state too, so the
+# change actually sticks.
+current_auto=$("$HA" supervisor info --no-progress --raw-json 2>/dev/null \
+    | "/usr/bin/jq" -r '.data.auto_update // "missing"')
+if [ "$current_auto" = "false" ]; then
+    log "supervisor auto_update=false (already set)"
+else
+    log "supervisor: setting auto_update=false (was: $current_auto) via API"
+    if "$HA" supervisor options --auto-update=false --no-progress >/dev/null 2>&1; then
+        log "  ha supervisor options --auto-update=false → OK"
+    else
+        warn "ha supervisor options --auto-update=false failed — will retry next boot"
+        exit 1
+    fi
+fi
+
+# ---- 3e. Weather/location — DROPPED 2026-05-28 -----------------------------
+# Removed: `ha core options --raw-json '{"location":…}'` ALWAYS failed here
+# (it needs the HA owner account, which doesn't exist at boot+85s — the owner
+# is created later by ga_manager converge step 3). It was a guaranteed WARN
+# no-op. We do NOT migrate it: the customer sets their real location in the
+# greenautarky_onboarding wizard, so a generic Berlin fleet-default is
+# low-value and a direct core.config write is schema-fragile. If a default is
+# ever wanted, add it to converge AFTER step 3 (owner exists). See
+# todo_v12_bake_followups_2026_05_27.md #3.
+
+# ---- 3f. Mark complete -----------------------------------------------------
+mkdir -p "$(dirname "$MARKER")"
+date +%s > "$MARKER"
+log "all settings applied; marker written to $MARKER"
+exit 0

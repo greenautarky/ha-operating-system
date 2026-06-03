@@ -324,6 +324,13 @@ fi
 log "Tagging supervisor image $supervisor_id as ghcr.io/greenautarky/${arch}-hassio-supervisor:latest"
 docker tag "$supervisor_id" "ghcr.io/greenautarky/${arch}-hassio-supervisor:latest"
 
+# (2026-06-01: a "tag Core image with greenautarky alias" block lived here
+# briefly to work around Supervisor 2025.11.4.4's stale default_image
+# patch. The proper fix was to revert the Supervisor patch in 2025.11.4.5
+# — Supervisor now looks for the upstream-namespaced image directly,
+# matching what the bake ships. No alias needed. See
+# ga-ihost-docs/FLEET-AUTO-UPDATE-AUDIT-2026-06-01.md for the saga.)
+
 # AppArmor + updater metadata
 mkdir -p /data/supervisor/apparmor /data/supervisor
 wget -O /data/supervisor/apparmor/hassio-supervisor "$APPARMOR_URL" >/dev/null || true

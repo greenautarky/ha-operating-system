@@ -293,6 +293,28 @@ install_addon() {
 	fi
 }
 
+# Apply a small set of GA-fleet Supervisor-level defaults that we want
+# in place BEFORE ga_manager converge runs — so a freshly-flashed device
+# never sits even briefly on the upstream defaults that disagree with the
+# fleet policy. Idempotent: the API merges with current state. Currently:
+#
+#   - auto_update=false:
+#       Upstream defaults to true. Memory `fleet_auto_update_audit_2026_06_01`
+#       found 25/31 production iHosts on the wrong value. ga_manager converge
+#       step 8 already enforces this every converge cycle — this is a backstop
+#       so even devices that haven't converged yet are on the right value.
+#
+# Non-fatal on failure: a transient Supervisor hiccup must not break first
+# boot. Converge will re-enforce shortly anyway.
+apply_supervisor_defaults() {
+	log "applying GA-fleet Supervisor defaults (auto_update=false)..."
+	if "$HA" --no-progress supervisor options --auto-update false >/dev/null 2>&1; then
+		log "supervisor auto_update=false applied"
+	else
+		warn "could not apply supervisor defaults (non-fatal; converge step 8 will re-enforce)"
+	fi
+}
+
 main() {
 	if [ ! -x "$HA" ]; then
 		die "$HA not found — cannot reach the Supervisor"
@@ -303,6 +325,7 @@ main() {
 		die "Supervisor did not become responsive within ${SUPERVISOR_WAIT_S}s"
 	fi
 
+	apply_supervisor_defaults
 	stage_custom_components
 	add_addon_repo
 

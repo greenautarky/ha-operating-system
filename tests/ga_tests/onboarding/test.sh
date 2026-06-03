@@ -1,7 +1,8 @@
 #!/bin/sh
-# Custom core image & onboarding verification - runs ON the device
-# Verifies the device runs the greenautarky custom HA Core image
-# (German onboarding, GDPR consent, telemetry preferences).
+# Core image & onboarding verification - runs ON the device.
+# V1.2-clean model: STOCK HA Core image + the greenautarky_onboarding
+# custom_component (German onboarding, GDPR consent, telemetry preferences).
+# The Supervisor stays a greenautarky fork; Core + frontend are stock upstream.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
 
@@ -10,11 +11,12 @@ suite_start "Onboarding"
 # --- Core image checks ---
 CORE_IMAGE=$(docker inspect homeassistant --format '{{.Config.Image}}' 2>/dev/null)
 
-run_test "OB-01" "Core image is greenautarky (not upstream)" \
-  "echo '$CORE_IMAGE' | grep -q 'greenautarky'"
+# V1.2-clean: Core fork retired — the device must run STOCK upstream Core.
+run_test "OB-01" "Core image is stock upstream (Core fork retired)" \
+  "echo '$CORE_IMAGE' | grep -q 'ghcr.io/home-assistant/'"
 
-run_test "OB-02" "Core image tag is HA version (not upstream)" \
-  "echo '$CORE_IMAGE' | grep -qE ':(2025\.[0-9]+\.[0-9]+|latest)'"
+run_test "OB-02" "Core image tag is a pinned HA version" \
+  "echo '$CORE_IMAGE' | grep -qE ':2025\.[0-9]+\.[0-9]+'"
 
 run_test_show "OB-02b" "Core image" \
   "echo '$CORE_IMAGE'"
@@ -22,6 +24,49 @@ run_test_show "OB-02b" "Core image" \
 # --- HA version ---
 run_test_show "OB-03" "HA version" \
   "cat /mnt/data/supervisor/homeassistant/.HA_VERSION 2>/dev/null"
+
+# --- GA-side release identifier ---
+# /etc/ga-release is written at bake time by buildroot-external/scripts/post-build.sh
+# from the GA_RELEASE env var. Operator-facing version distinct from the
+# HAOS-internal OS_VERSION. Fails if absent (= build didn't set GA_RELEASE) or empty.
+run_test "OB-04a" "/etc/ga-release present + non-empty" \
+  "[ -s /etc/ga-release ]"
+run_test_show "OB-04b" "GA release identifier" \
+  "cat /etc/ga-release 2>/dev/null"
+
+# --- Wizard redirect (Finding 20 follow-up: BOSv1.2.0 bench regression) ---
+# Customer's first browser hit on a fresh GA-provisioned device is
+# `http://<device>:8123/`. With GA wizard NOT YET completed, this MUST
+# redirect server-side to `/greenautarky-setup.html` — otherwise the
+# customer lands on the stock HA login (because ga_manager already
+# created the admin user) and never finds the GA wizard. The
+# `_patch_index_view_for_wizard_redirect` server-side hook in
+# greenautarky_onboarding owns this behaviour; the add_extra_js_url
+# client-side fallback alone can't fix it because HA Core injects
+# extra_module_url tags only into the authenticated dashboard HTML.
+#
+# Two opposite gates:
+#   OB-WR-01: when the wizard is incomplete, `/` returns 302 to /greenautarky-setup.html
+#   OB-WR-02: when the wizard is complete, `/` does NOT redirect to the wizard
+# Both run unauthenticated (curl with no token). The wizard URL is
+# `/greenautarky-setup.html` (the actual page) — NOT `/greenautarky-setup`
+# (which is the view that itself 302s).
+_wizard_completed=$(jq -r '.data.completed // false' /mnt/data/supervisor/homeassistant/.storage/greenautarky_onboarding 2>/dev/null || echo "false")
+_root_redirect=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --connect-timeout 5 'http://localhost:8123/' 2>/dev/null)
+
+if [ "$_wizard_completed" = "false" ]; then
+  run_test "OB-WR-01" "/ redirects to /greenautarky-setup.html (wizard incomplete)" \
+    "echo '$_root_redirect' | grep -qE '^302 .*greenautarky-setup\.html'"
+else
+  skip_test "OB-WR-01" "wizard already completed — incomplete-state gate doesn't apply"
+fi
+
+if [ "$_wizard_completed" = "true" ]; then
+  run_test "OB-WR-02" "/ does NOT redirect to wizard once wizard is complete" \
+    "! echo '$_root_redirect' | grep -qE 'greenautarky-setup\.html'"
+else
+  skip_test "OB-WR-02" "wizard not yet completed — complete-state gate doesn't apply"
+fi
 
 # --- Version repo / supervisor ---
 # Supervisor only logs this after an update check — may not appear on fresh boot
@@ -40,11 +85,17 @@ run_test_show "OB-08" "Core image is latest (not stale)" \
   "LOCAL_DIGEST=\$(docker inspect homeassistant --format '{{.Image}}' 2>/dev/null | cut -d: -f2 | head -c12) && [ -n \"\$LOCAL_DIGEST\" ] && echo \"local digest: \$LOCAL_DIGEST\""
 
 # --- Custom onboarding content ---
-run_test "OB-09" "Custom onboarding: GDPR step present" \
-  "docker exec homeassistant grep -q 'gdpr' /usr/src/homeassistant/homeassistant/components/onboarding/strings.json 2>/dev/null"
+# V1.2-clean: the onboarding customization moved OUT of the Core fork's
+# strings.json INTO the greenautarky_onboarding custom_component, which
+# ga_manager's converge worker places into /config/custom_components
+# (= the data partition's homeassistant/custom_components/). The component's
+# runtime registration is additionally proven by OB-13 / PW-* (its HTTP views).
+GA_COMP="/mnt/data/supervisor/homeassistant/custom_components/greenautarky_onboarding"
+run_test "OB-09" "greenautarky_onboarding custom_component placed (converge step 2)" \
+  "[ -f '$GA_COMP/manifest.json' ]"
 
-run_test "OB-10" "Custom onboarding: custom_pages step present" \
-  "docker exec homeassistant grep -q 'custom_pages' /usr/src/homeassistant/homeassistant/components/onboarding/strings.json 2>/dev/null"
+run_test "OB-10" "greenautarky_onboarding manifest declares its domain" \
+  "grep -q 'greenautarky_onboarding' '$GA_COMP/manifest.json' 2>/dev/null"
 
 # --- Frontend ---
 run_test "OB-11" "Frontend wheel installed" \

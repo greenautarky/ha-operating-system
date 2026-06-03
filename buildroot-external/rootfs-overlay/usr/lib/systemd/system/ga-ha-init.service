@@ -1,0 +1,22 @@
+[Unit]
+Description=GA — Home Assistant first-boot fleet-wide config (DNS, watchdog, weather, timezone, auto-update off)
+# hassos-supervisor must be up — we hit the supervisor API.
+Requires=hassos-supervisor.service
+After=hassos-supervisor.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/ga-ha-init
+RemainAfterExit=yes
+# Retry once a minute on early-boot failures (supervisor not yet
+# responsive, network not yet up, updater.json not yet created).
+# Script's marker-check short-circuits subsequent runs once successful.
+Restart=on-failure
+RestartSec=60s
+# Don't hammer on persistent failures — give up after ~30 min of trying.
+StartLimitBurst=30
+StartLimitIntervalSec=1800
+
+[Install]
+WantedBy=multi-user.target

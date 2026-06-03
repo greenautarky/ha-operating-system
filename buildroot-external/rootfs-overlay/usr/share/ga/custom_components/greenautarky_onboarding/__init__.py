@@ -30,6 +30,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from aiohttp import web
+
 from homeassistant.components import panel_custom
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
@@ -57,6 +59,7 @@ from .http import (
     GAPasswordResetUsersView,
     GAPasswordResetView,
     GAPinVerifyView,
+    _get_state,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -180,6 +183,13 @@ async def _async_setup_common(hass: HomeAssistant) -> bool:
     # approach, which cannot work from a custom_component — Finding 20).
     if not state.get("completed"):
         _register_redirect_js(hass)
+        # ALSO install a server-side patch on IndexView.get so the redirect
+        # works for the FIRST visit, before any HA JS bundle loads. Without
+        # this the customer sees the HA stock onboarding/login on a fresh
+        # device because add_extra_js_url only injects into the
+        # authenticated dashboard HTML (never into /onboarding.html nor
+        # /auth/authorize) — confirmed in HA Core 2025.11.x source.
+        _patch_index_view_for_wizard_redirect(hass)
 
     # Check for outdated consents and create repair issues if needed.
     # Only for devices with a REAL stored onboarding state — an old device
@@ -304,6 +314,72 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
         module_url=f"{URL_BASE}/entrypoint.js",
         embed_iframe=False,
         require_admin=False,
+    )
+
+
+def _patch_index_view_for_wizard_redirect(hass: HomeAssistant) -> None:
+    """Monkey-patch HA's IndexView.get to redirect `/` → /greenautarky-setup.html
+    while the GA wizard is incomplete.
+
+    Why we have to monkey-patch instead of registering our own `/` view:
+    `frontend` is a hard dependency of this integration, so by the time
+    we call `_async_setup_common` the frontend integration has already
+    registered IndexView at `/` and aiohttp resolves that route first.
+
+    Why the existing `add_extra_js_url`-based redirect isn't enough:
+    HA Core injects extra_module_url tags ONLY into the authenticated
+    dashboard HTML (see homeassistant.components.frontend.IndexView.get).
+    On a fresh device the first hit lands on `/onboarding.html` or
+    `/auth/authorize` — neither carries our redirect script, so the
+    customer never lands on the GA wizard automatically. Confirmed
+    live on KIB-SON-31 bench on BOSv1.2.0 build #6.
+
+    Behavior of the patch:
+    - GA wizard incomplete → 302 to /greenautarky-setup.html
+    - GA wizard complete → fall through to HA's original IndexView.get
+      (which then handles HA-stock onboarding state + dashboard
+       authentication as usual)
+
+    Idempotent: marks `IndexView._ga_wizard_patched = True` on the
+    class object so re-entry (e.g. an integration reload) doesn't
+    re-wrap the already-wrapped method.
+
+    Fleet safety:
+    - Already-deployed devices that completed the wizard before this
+      code shipped have `completed=True` in storage → patch is a no-op
+      (falls through to original IndexView.get).
+    - Old devices that never had a stored onboarding state have
+      `completed=True` written by default in `_async_setup_common`
+      (see the `state is None` branch) → also no-op.
+    - The only behavioural change is on devices with
+      `completed=False` in storage — which is precisely the "wizard
+      pending" state where we WANT the redirect.
+    """
+    from functools import wraps
+
+    from homeassistant.components.frontend import IndexView
+
+    if getattr(IndexView, "_ga_wizard_patched", False):
+        return
+
+    original_get = IndexView.get
+
+    @wraps(original_get)
+    async def patched_get(self, request: web.Request) -> web.Response:
+        state = _get_state(hass) or {}
+        if not state.get("completed", False):
+            return web.Response(
+                status=302,
+                headers={"location": "/greenautarky-setup.html"},
+            )
+        return await original_get(self, request)
+
+    IndexView.get = patched_get  # type: ignore[method-assign]
+    IndexView._ga_wizard_patched = True  # type: ignore[attr-defined]
+    _LOGGER.info(
+        "greenautarky_onboarding: patched IndexView.get to redirect `/` → "
+        "/greenautarky-setup.html while wizard is incomplete (server-side, "
+        "fires before any HA JS bundle loads)"
     )
 
 

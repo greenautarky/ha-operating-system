@@ -1,24 +1,118 @@
 #!/bin/sh
+# hassos-overlay — seed the persistent overlay partition with rootfs defaults.
+#
+# WHY THIS SCRIPT EXISTS
+# ----------------------
+# HAOS / GA OS splits the filesystem into three tiers:
+#
+#   /  (rootfs.0 / rootfs.1)   read-only squashfs / erofs   atomic A/B for OTA
+#   /var                       ZRAM tmpfs                    volatile, wiped on reboot
+#   /mnt/data                  ext4 (sdc8)                   bulk user data
+#   /mnt/overlay               ext4 (sdc7)                   per-device system state
+#
+# A handful of paths that must (a) survive a reboot, (b) survive a slot swap,
+# and (c) be writable at runtime are bind-mounted from /mnt/overlay onto
+# their rootfs locations by systemd `*.mount` units:
+#
+#   /root/.ssh                 ← /mnt/overlay/root/.ssh        (root-.ssh.mount)
+#   /etc/hostname              ← /mnt/overlay/etc/hostname     (etc-hostname.mount)
+#   /etc/hosts                 ← /mnt/overlay/etc/hosts        (etc-hosts.mount)
+#   /etc/systemd/timesyncd.conf ← /mnt/overlay/etc/systemd/... (etc-systemd-timesyncd.conf.mount)
+#   /etc/localtime             ← /mnt/overlay/etc/localtime    (etc-localtime.mount)
+#   /etc/NetworkManager/system-connections ← /mnt/overlay/...  (etc-NM-...mount)
+#   /etc/udev/rules.d, /etc/sysctl.d, /etc/default, ...
+#
+# On a FRESHLY-FLASHED device the overlay partition is empty. The bind mounts
+# would then shadow rootfs files with nothing — dropbear can't start (empty
+# authorized_keys), NM has no connections, /etc/hostname is empty, etc.
+#
+# This script runs BEFORE the bind mounts (hassos-overlay.service is ordered
+# `Before=hassos-bind.target`) and seeds `/mnt/overlay/...` with copies of
+# the rootfs defaults. After it runs, the bind mounts attach real files.
+#
+# IDEMPOTENCY INVARIANT
+# ---------------------
+# The script runs on EVERY boot, not just first boot. Every copy is guarded
+# by `if [ ! -f ... ]` so an operator's later edits to e.g. /etc/hostname
+# (which writes through the bind mount to /mnt/overlay/etc/hostname) are
+# NEVER overwritten on a subsequent boot. The script's job is purely to
+# initialize what's missing.
+#
+# RELATED FILES
+# -------------
+# - /usr/lib/systemd/system/hassos-overlay.service   — the unit
+# - /usr/lib/systemd/system/mnt-overlay.mount        — mounts /mnt/overlay
+# - /usr/lib/systemd/system/hassos-bind.target       — sequencing target
+# - /usr/lib/systemd/system/*.mount                  — the bind units
+# - /usr/sbin/hassos-config                          — separate; reads CONFIG_DIR
+#                                                      (USB / boot partition) and may
+#                                                      overwrite /root/.ssh/authorized_keys
+#                                                      with one supplied via that channel
+#
+# CONVENTIONS
+# -----------
+# - Source files live under the rootfs (read-only at runtime) and are baked
+#   into the image by buildroot-external/rootfs-overlay/.
+# - For SSH keys the source path is /usr/share/ga-ssh/authorized_keys (committed
+#   in source) — never put authorized_keys directly under /root/.ssh in the
+#   rootfs overlay, that location is bind-shadowed at runtime.
+# - Permissions matter for SSH: /root/.ssh must be 0700 and authorized_keys 0600,
+#   otherwise dropbear silently rejects them.
+# ===========================================================================
 
 mkdir -p /mnt/overlay/etc/
 
-# Network
+# --- Network ----------------------------------------------------------------
+# NM stores per-connection .nmconnection files here. Empty on first boot;
+# ga-overlay-init drops the GreenAutarky-Install WiFi profile into this dir
+# right after we run.
 mkdir -p /mnt/overlay/etc/NetworkManager/system-connections
 
+# --- Hostname ---------------------------------------------------------------
+# Build-time hostname is "KiBu" (Buildroot's default). Operator-set hostname
+# (via `hostnamectl` or HA UI) writes through the bind mount and persists.
 if [ ! -f /mnt/overlay/etc/hostname ]; then
     cp -fp /etc/hostname /mnt/overlay/etc/hostname
 fi
 
+# --- /etc/hosts -------------------------------------------------------------
+# Build-time /etc/hosts already has the GA-services fallback entries
+# (influx, loki, mqtt). Persisted so a runtime edit (e.g. adding a static
+# entry for a sibling addon) survives.
 if [ ! -f /mnt/overlay/etc/hosts ]; then
     cp -fp /etc/hosts /mnt/overlay/etc/hosts
 fi
 
-# TimeSync
+# --- Time sync --------------------------------------------------------------
+# Lets a sysadmin point timesyncd at a private NTP pool persistently without
+# having to remember to do it on every slot swap.
 if [ ! -f /mnt/overlay/etc/systemd/timesyncd.conf ]; then
     mkdir -p /mnt/overlay/etc/systemd
     cp -fp /etc/systemd/timesyncd.conf /mnt/overlay/etc/systemd/timesyncd.conf
 fi
 
+# --- Local time -------------------------------------------------------------
+# Default to UTC; `timedatectl set-timezone` writes through the bind mount.
 if [ ! -L /mnt/overlay/etc/localtime ]; then
     ln -sf /usr/share/zoneinfo/Etc/UTC /mnt/overlay/etc/localtime
+fi
+
+# --- SSH operator keys (GA-specific) ----------------------------------------
+# Seeds /mnt/overlay/root/.ssh/authorized_keys so dropbear (port 22222) can
+# start on first boot with the operator's pubkey already authorized. Without
+# this, dropbear's `ConditionFileNotEmpty=/root/.ssh/authorized_keys` fails
+# and SSH never comes up — the device is unreachable except via serial.
+#
+# Source: /usr/share/ga-ssh/authorized_keys (baked into the rootfs from
+# buildroot-external/rootfs-overlay/usr/share/ga-ssh/).
+#
+# Operator's later additions (e.g. another colleague's key) persist because
+# the `if [ ! -f ]` guard means we never overwrite. To rotate the baked
+# default for the whole fleet, edit the rootfs file in source + reflash —
+# already-deployed devices keep their existing authorized_keys.
+if [ ! -f /mnt/overlay/root/.ssh/authorized_keys ] && [ -f /usr/share/ga-ssh/authorized_keys ]; then
+    mkdir -p /mnt/overlay/root/.ssh
+    chmod 700 /mnt/overlay/root/.ssh
+    cp -fp /usr/share/ga-ssh/authorized_keys /mnt/overlay/root/.ssh/authorized_keys
+    chmod 600 /mnt/overlay/root/.ssh/authorized_keys
 fi

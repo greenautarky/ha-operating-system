@@ -10,8 +10,9 @@ HASSIO_LICENSE = Apache License 2.0
 HASSIO_SITE = $(BR2_EXTERNAL_HASSOS_PATH)/package/hassio
 HASSIO_SITE_METHOD = local
 # V1.2-clean WIP: point at the release/v1.2-rebuild branch's stable.json
-# (stock Core image + minimal supervisor 2025.11.5.1). Revert to main/ when
-# release/v1.2-rebuild is merged at the V1.2 promote.
+# (stock Core image + supervisor 2025.11.4.4 with cherry-picked upstream
+# #6355 aiodocker auth fix). Revert to main/ when release/v1.2-rebuild is
+# merged at the V1.2 promote.
 HASSIO_VERSION_URL ?= "https://raw.githubusercontent.com/greenautarky/haos-version/release/v1.2-rebuild/"
 ifeq ($(BR2_PACKAGE_HASSIO_CHANNEL_STABLE),y)
 HASSIO_VERSION_CHANNEL = "stable"

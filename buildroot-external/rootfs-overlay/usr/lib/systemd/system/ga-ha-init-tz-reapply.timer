@@ -1,0 +1,16 @@
+[Unit]
+Description=GA — late timezone re-apply timer (fires once at boot+240s)
+Documentation=file:/usr/libexec/ga-ha-init-tz-reapply
+
+[Timer]
+# Supervisor's host.control sync reverts the host tz at ~boot+120s.
+# Fire at boot+240s — comfortably past that, so our re-apply is the last
+# writer. AccuracySec tightens the default 1min slack so we don't drift
+# too far past the target.
+OnBootSec=240s
+AccuracySec=10s
+# Persistent=false (default) — this is boot-relative, not wall-clock; we
+# want it every boot, not a catch-up if the system was off.
+
+[Install]
+WantedBy=timers.target

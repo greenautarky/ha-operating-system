@@ -1,35 +1,37 @@
-# Custom Core Image & Onboarding Tests
+# Core Image & Onboarding Tests
 
 ## Purpose
-Verify that the device runs the greenautarky custom HA Core image (not upstream)
-and that the version repo configuration is correctly applied. The custom core
-image provides German-language onboarding, GDPR consent, and greenautarky
-telemetry preferences.
+Verify the **V1.2-clean model**: the device runs **stock upstream HA Core**
+(the Core fork is retired) plus the `greenautarky_onboarding`
+**custom_component**, which provides German-language onboarding, GDPR consent,
+and greenautarky telemetry preferences. The **Supervisor** stays a greenautarky
+fork (iHost hardware + GA version-URL); Core and the frontend are stock.
 
 ## Prerequisites
-- Device booted with current build (post PR #1 merge)
-- HA Supervisor running and homeassistant container started
+- Device booted on the V1.2-clean OS and converged (`/share/.ga_converged`)
+- HA Supervisor running and the `homeassistant` container started
 - Network connectivity (for version.json fetch verification)
 
 ## Tests
 
-### OB-01: Core image is greenautarky (not upstream)
-- **Command**: `docker inspect homeassistant --format '{{.Config.Image}}' | grep -q 'greenautarky'`
-- **Expected**: Container image is `ghcr.io/greenautarky/tinker-homeassistant:*`
-- **Catches**: Build still using upstream `ghcr.io/home-assistant/tinker-homeassistant`
+### OB-01: Core image is stock upstream (Core fork retired)
+- **Command**: `docker inspect homeassistant --format '{{.Config.Image}}' | grep -q 'ghcr.io/home-assistant/'`
+- **Expected**: Container image is `ghcr.io/home-assistant/tinker-homeassistant:*`
+- **Catches**: Device still on a `ghcr.io/greenautarky/*` Core fork image (un-fork incomplete)
 
-### OB-02: Core image tag matches HA version
-- **Command**: `docker inspect homeassistant --format '{{.Config.Image}}' | grep -qE ':(2025\.[0-9]+\.[0-9]+|latest)'`
-- **Expected**: Image tag is HA version (e.g., `2025.11.3`) or `latest`
-- **Catches**: Upstream version tag or missing tag
+### OB-02: Core image tag is a pinned HA version
+- **Command**: `docker inspect homeassistant --format '{{.Config.Image}}' | grep -qE ':2025\.[0-9]+\.[0-9]+'`
+- **Expected**: Image tag is a pinned HA version (e.g., `2025.11.3.2`)
+- **Catches**: `latest` tag or a missing/upstream version tag
 
 ### OB-03: HA version is displayed
 - **Command**: `cat /mnt/data/supervisor/homeassistant/.HA_VERSION`
 - **Expected**: Version string is present (informational)
 
-### OB-04: Supervisor version.json references greenautarky image registry
-- **Command**: Check version.json on data partition for greenautarky core image
-- **Expected**: `images.core` field contains `greenautarky`
+### OB-04: Supervisor version.json references a STOCK core image
+- **Command**: Check version.json on the data partition for the core image
+- **Expected**: `images.core` field contains `home-assistant` (stock), NOT `greenautarky`
+- **Catches**: Release manifest still pinning a Core fork image (T2b incomplete)
 
 ### OB-05: Version repo URL points to greenautarky
 - **Command**: Verify supervisor fetches from `greenautarky/haos-version`
@@ -37,34 +39,34 @@ telemetry preferences.
 
 ### OB-06: Supervisor is greenautarky fork
 - **Command**: `docker inspect hassio_supervisor --format '{{.Config.Image}}' | grep -q 'greenautarky'`
-- **Expected**: Supervisor image is from `ghcr.io/greenautarky`
+- **Expected**: Supervisor image is from `ghcr.io/greenautarky` (the one permanent GA fork)
 
 ### OB-07: All non-core components use upstream registries
-- **Command**: Verify dns, audio, cli, multicast, observer containers use `home-assistant` or `homeassistant` registry
-- **Expected**: Only the core image should be greenautarky; everything else stays upstream
-- **Catches**: Accidental override of non-core components in version repo
+- **Command**: Verify dns, audio, cli, multicast, observer containers use `home-assistant`/`homeassistant`
+- **Expected**: In V1.2-clean **only the Supervisor** is greenautarky; Core, frontend and all plugins are upstream
+- **Catches**: Accidental override of a non-supervisor component in the version repo
 
-### OB-08: Core image is latest (not stale pinned version)
-- **Command**: Compare running image digest with `latest` tag digest on GHCR
-- **Expected**: Digests match — the OS build picked up the most recent core image
-- **Catches**: Stale cached image, version pinning not using `latest`
+### OB-08: Core image is not stale
+- **Command**: Show the running core image digest (informational freshness check)
+- **Expected**: A digest is present — the OS build picked up the pinned core image
+- **Catches**: Stale cached image
 
-### OB-09: Custom onboarding strings present (GDPR step)
-- **Command**: `docker exec homeassistant find /usr/src/homeassistant -path '*/onboarding/strings.json' -exec grep -l 'gdpr' {} \;`
-- **Expected**: strings.json contains `gdpr` step definition
-- **Catches**: Upstream core image used instead of custom fork, or custom strings missing
+### OB-09: greenautarky_onboarding custom_component placed
+- **Command**: `[ -f /mnt/data/supervisor/homeassistant/custom_components/greenautarky_onboarding/manifest.json ]`
+- **Expected**: The custom_component is present (placed by ga_manager converge step 2)
+- **Catches**: Converge didn't place the component → no GA onboarding/GDPR/telemetry UI
 
-### OB-10: Custom onboarding strings present (custom_pages step)
-- **Command**: `docker exec homeassistant grep -q 'custom_pages' /usr/src/homeassistant/homeassistant/components/onboarding/strings.json`
-- **Expected**: strings.json contains `custom_pages` step definition
-- **Catches**: Custom onboarding content not included in core build
+### OB-10: greenautarky_onboarding manifest declares its domain
+- **Command**: `grep -q 'greenautarky_onboarding' /mnt/data/supervisor/homeassistant/custom_components/greenautarky_onboarding/manifest.json`
+- **Expected**: manifest.json declares `domain: greenautarky_onboarding`
+- **Catches**: A stray/empty component directory. Runtime registration is further proven by OB-13/PW-* (the component's HTTP views).
 
-### OB-11: Frontend wheel is custom build (not upstream)
-- **Command**: `docker exec homeassistant pip show home-assistant-frontend 2>/dev/null | grep -i location`
-- **Expected**: Frontend package is installed (built from greenautarky/frontend fork)
+### OB-11: Stock frontend wheel installed
+- **Command**: `docker exec homeassistant pip show home-assistant-frontend`
+- **Expected**: The stock `home-assistant-frontend` package is installed (ships inside the stock Core image)
 - **Catches**: Frontend wheel missing or not installed
 
 ### OB-12: No frontend-build bloat in core image
 - **Command**: `docker exec homeassistant test ! -d /usr/src/homeassistant/frontend-build`
 - **Expected**: `frontend-build/` directory does NOT exist inside the container
-- **Catches**: .dockerignore fix not applied, 537MB bloat still present
+- **Catches**: Frontend source-build bloat leaking into the image

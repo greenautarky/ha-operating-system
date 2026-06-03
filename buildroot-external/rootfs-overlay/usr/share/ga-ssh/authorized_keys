@@ -1,0 +1,11 @@
+# GA operator SSH keys — baked into the V1.2-clean OS image.
+# Copied to /mnt/overlay/root/.ssh/authorized_keys on first boot by
+# /usr/libexec/hassos-overlay (only if the overlay doesn't already
+# have one — operator-managed keys are never overwritten).
+#
+# This file is the SINGLE SOURCE OF TRUTH for keys that should reach
+# every freshly-flashed device. Add a pubkey per line; lines starting
+# with # are ignored on copy.
+#
+# Operator's main key — corresponds to security_store/HomeassistantGreen0.pem
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDQmjeBtmQRluySGQRSrKJQXDyvy0dMGl2ZK65U3lH1b5SJpFYu3ChY1hi8jyf2EdxiKb87ENhM6qXyLQgb7Te4mV2qG4XZOIjiPulyN8AUZoxqWq35J3jJKNHU2tLXNiHlSAMnS68FhRwroIuEzwaN4kQE4MjQ6N3RaBmLOdDQYEBeG0dbw0xxBM9PyhqkrpFhlvf+iz0KkjVytcDAw9BZhGkb5VpBUIci8565lPNt0aJaXzGJXUHnnyyyUesNPPAKVck3f0nLirooiqTpFI5RNfy/6sjEk8Q5rqDlcKb2RR+DKmnPFslAp8xSBJFb3Lps6U83F9ij+aSW++tq2/T1 rsa-key-20240404

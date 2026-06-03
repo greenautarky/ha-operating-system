@@ -1,0 +1,131 @@
+#!/bin/sh
+# ga-netbird-register — first-boot NetBird peer registration.
+#
+# WHY THIS EXISTS
+# ---------------
+# `netbird.service` only starts the DAEMON. It does NOT register the
+# device with the management plane — that requires a separate
+# `netbird up --setup-key <KEY>` invocation. Without it, the daemon
+# sits in `Daemon status: NeedsLogin`, the laptop's NetBird mgmt sees
+# only the OLD peer (if any) with a stale public key, and the tunnel
+# is permanently "Connecting".
+#
+# Previously this registration was done out-of-band by
+# ga-flasher-py stage 40 (over SSH) during provisioning. That left
+# any freshly-flashed-but-not-yet-provisioned device unreachable.
+# This service bakes the step in so devices come up registered on
+# first boot.
+#
+# The "kibu-<UUID>" temporary hostname assigned by NetBird at this
+# point is later renamed to "KIB-SON-XXXXXXXX" via the NetBird Mgmt
+# API by ga-flasher-py stage 71 (or, longer-term, ga_manager).
+#
+# IDEMPOTENT
+# ----------
+# Safe to run on every boot. Exits 0 early if the daemon already
+# reports a non-NeedsLogin state. Won't re-register, won't rotate
+# the peer key.
+#
+# RETRY BEHAVIOR
+# --------------
+# On failure (no internet, expired key, mgmt unreachable) we exit 1.
+# The unit has Restart=on-failure RestartSec=60s so the next attempt
+# happens 60 s later — devices that come up without internet (boot
+# before WiFi associates) will register as soon as the network is up.
+set -e
+
+KEY_FILE="/usr/share/ga-netbird/setup-key"
+MGMT_URL="${NB_MGMT_URL:-https://api.netbird.io:443}"
+NB_BIN="/usr/bin/netbird"
+NB_SOCK="unix:///var/run/netbird.sock"
+LOG_TAG="ga-netbird-register"
+
+log()  { echo "${LOG_TAG}: $*"; }
+warn() { echo "${LOG_TAG}: WARNING: $*" >&2; }
+die()  { echo "${LOG_TAG}: ERROR: $*" >&2; exit 1; }
+
+[ -x "$NB_BIN" ] || die "netbird binary not present at $NB_BIN — install netbird package"
+
+# 1. Idempotency check — already registered?
+#    `netbird status` returns "Daemon status: NeedsLogin" when no `up`
+#    has run, and otherwise emits Management/Signal/NetBird IP lines.
+#    A simple "NeedsLogin" grep handles both 0.66 and 0.71 output.
+status_out=$("$NB_BIN" --daemon-addr "$NB_SOCK" status 2>&1 || true)
+case "$status_out" in
+    *NeedsLogin*)
+        log "daemon in NeedsLogin — attempting registration"
+        ;;
+    *)
+        log "daemon already registered (status not NeedsLogin) — nothing to do"
+        log "$(printf '%s' "$status_out" | head -3 | sed 's/^/  /')"
+        exit 0
+        ;;
+esac
+
+# 2. Setup key present?
+if [ ! -f "$KEY_FILE" ]; then
+    warn "setup key not baked into image at $KEY_FILE — cannot register."
+    warn "Devices need a key for first-boot registration; see"
+    warn "secrets/netbird-setup-key.txt.example in the ha-operating-system repo."
+    exit 0   # Not a failure — operator chose not to bake; just leave daemon in NeedsLogin.
+fi
+
+KEY=$(tr -d '[:space:]' < "$KEY_FILE")
+if [ -z "$KEY" ]; then
+    die "setup key file $KEY_FILE is empty"
+fi
+
+# 3. Wait for api.netbird.io to be REACHABLE — not just DNS-resolvable.
+#    network-online.target fires when NetworkManager reports a default
+#    route, but the bench WiFi's DHCP-supplied DNS sometimes takes 30+
+#    seconds to start answering on first boot (observed on KIB-SON-31
+#    2026-05-27: getent failed for ~3 min, then succeeded). We now combine
+#    DNS resolution + an HTTP HEAD probe so we catch both "DNS not ready"
+#    and "DNS works but mgmt-plane unreachable" cases.
+#
+#    180 s budget × Restart=on-failure (60 s gap) = 3 retries in ~13 min.
+log "waiting up to 180s for api.netbird.io to be reachable..."
+DEADLINE=180
+INTERVAL=5
+i=0
+while [ "$i" -lt "$DEADLINE" ]; do
+    # curl -sI tests both DNS resolution AND HTTPS reachability in one
+    # shot — ANY HTTP response (200/401/404/etc.) means the mgmt plane
+    # is reachable. We used to wrap this in a `getent hosts` pre-check
+    # for speed, but iHost's BusyBox OS lacks /usr/bin/getent — the gate
+    # always failed, the inner curl never ran, and the pre-flight burned
+    # the full 180 s budget on every retry. curl handles DNS itself, so
+    # the extra layer was pure liability. (Observed live KIB-SON-31
+    # 2026-05-27 — 4 consecutive retries all hit the 180 s timeout.)
+    if /usr/bin/curl -sI --max-time 5 -o /dev/null https://api.netbird.io/ 2>/dev/null; then
+        log "api.netbird.io reachable after ${i}s"
+        break
+    fi
+    sleep "$INTERVAL"
+    i=$((i + INTERVAL))
+done
+if [ "$i" -ge "$DEADLINE" ]; then
+    die "api.netbird.io unreachable after ${DEADLINE}s (DNS + HTTPS HEAD both failed) — retry next boot via Restart=on-failure"
+fi
+
+# 4. Register. The --setup-key flag does the actual auth + peer create.
+log "running netbird up against $MGMT_URL"
+if "$NB_BIN" --daemon-addr "$NB_SOCK" up \
+        --management-url "$MGMT_URL" \
+        --setup-key "$KEY" >/dev/null 2>&1; then
+    log "netbird up succeeded"
+else
+    rc=$?
+    die "netbird up failed (exit $rc) — key valid? mgmt reachable? Will retry per unit Restart=."
+fi
+
+# 5. Confirm tunnel is up (or at least the daemon advanced past NeedsLogin).
+status_out=$("$NB_BIN" --daemon-addr "$NB_SOCK" status 2>&1 || true)
+case "$status_out" in
+    *NeedsLogin*)
+        die "registration apparently failed — still NeedsLogin"
+        ;;
+esac
+log "registration complete:"
+printf '%s' "$status_out" | head -10 | sed 's/^/  /'
+exit 0

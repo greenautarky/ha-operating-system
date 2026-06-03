@@ -1,0 +1,13 @@
+[Unit]
+Description=GA — late timezone re-apply (beat Supervisor host-sync revert)
+# Only meaningful once the host is up; no hard dep on supervisor since we
+# only touch systemd-timedated. Fired by the matching .timer at boot+240s.
+After=ga-ha-init.service
+Documentation=file:/usr/libexec/ga-ha-init-tz-reapply
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/ga-ha-init-tz-reapply
+# Separate unit + cgroup from ga-ha-init.service (Type=oneshot,
+# KillMode=control-group) — that's the whole point: a child forked from
+# ga-ha-init gets killed when it exits, this does not.
