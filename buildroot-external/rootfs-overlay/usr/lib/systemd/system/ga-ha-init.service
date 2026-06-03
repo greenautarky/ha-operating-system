@@ -9,6 +9,8 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=/usr/libexec/ga-ha-init
 RemainAfterExit=yes
+# Script's inner SUPERVISOR_WAIT_S poll runs up to 1200s; add a buffer.
+TimeoutStartSec=1500
 # Retry once a minute on early-boot failures (supervisor not yet
 # responsive, network not yet up, updater.json not yet created).
 # Script's marker-check short-circuits subsequent runs once successful.

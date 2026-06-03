@@ -40,7 +40,9 @@ set -e
 MARKER="/mnt/data/supervisor/share/.ga-ha-init-applied"
 UPDATER_JSON="/mnt/data/supervisor/updater.json"
 HA="/usr/bin/ha"
-SUPERVISOR_WAIT_S=300
+# 1200s (20m) — see ga-bootstrap for the rationale; Supervisor can be busy
+# pulling Core after an OTA-from-fork and 300s was too tight in practice.
+SUPERVISOR_WAIT_S=1200
 
 log()  { echo "ga-ha-init: $*"; }
 warn() { echo "ga-ha-init: WARNING: $*" >&2; }
