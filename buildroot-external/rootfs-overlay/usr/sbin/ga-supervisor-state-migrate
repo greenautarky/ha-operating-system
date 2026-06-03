@@ -1,0 +1,108 @@
+#!/bin/sh
+# ga-supervisor-state-migrate - heal Supervisor persistent state on first OTA boot
+#
+# The problem this fixes (BOSv1.2.0 + later)
+#
+# Before BOSv1.2.0 we ran a GA-forked Core image, pulled from
+# `ghcr.io/greenautarky/tinker-homeassistant`. Supervisor's persistent
+# `/mnt/data/supervisor/homeassistant.json` was written with that image
+# URL in the `image` field. The Core un-fork happened in Supervisor
+# via PATCH B (default_image returned the greenautarky URL too).
+#
+# BOSv1.2.0 reverted PATCH B (Supervisor's default_image returns the
+# upstream `ghcr.io/home-assistant/tinker-homeassistant`). Fresh-flash
+# devices are fine — they start with no `homeassistant.json` and
+# Supervisor writes the default upstream URL on first run.
+#
+# BUT field devices upgraded via OTA still have the OLD stale
+# `image` value in `homeassistant.json` left over from PATCH B. The
+# greenautarky-namespaced Core tags have been retired from GHCR, so
+# Supervisor fails to pull the image it has on file and falls back
+# to serving the landingpage. ga_manager would normally fix this in
+# converge step 6 ("un-fork Core") — but the device already has
+# `/share/.ga_converged` set from a previous run, so converge is
+# skipped and step 6 never fires.
+#
+# What this service does
+#
+# Runs as a systemd oneshot Before=hassio-supervisor.service. On
+# every boot:
+#
+# 1. If `/mnt/data/supervisor/homeassistant.json` exists AND its
+#    `image` field still contains `greenautarky/tinker-homeassistant`,
+#    rewrite the field to `ghcr.io/home-assistant/tinker-homeassistant`
+#    (the upstream URL Supervisor would write itself on a fresh flash)
+#    AND wipe `/mnt/data/supervisor/share/.ga_converged` so ga_manager
+#    re-runs converge (step 6 + step 8 specifically — bundle expectation
+#    + addon flag enforcement).
+#
+# 2. If the file is absent (fresh flash) or already points at the
+#    upstream URL (fresh BOSv1.2.0 install or this migrator already
+#    ran on a previous boot), this is a no-op.
+#
+# Idempotent + self-healing on every boot.
+#
+# Verification:
+#
+#   grep '"image"' /mnt/data/supervisor/homeassistant.json
+#   ls /mnt/data/supervisor/share/.ga_converged
+#
+# After the fix the image line is the upstream URL and the marker
+# is absent; ga_manager will then re-converge on its next start.
+
+set -eu
+
+JSON=/mnt/data/supervisor/homeassistant.json
+MARKER=/mnt/data/supervisor/share/.ga_converged
+STALE_PATTERN='greenautarky/tinker-homeassistant'
+UPSTREAM_URL='ghcr.io/home-assistant/tinker-homeassistant'
+
+log()  { echo "ga-supervisor-state-migrate: $*"; }
+warn() { log "WARNING: $*" >&2; }
+
+if [ ! -f "$JSON" ]; then
+    log "$JSON not found (fresh flash?) — nothing to migrate"
+    exit 0
+fi
+
+# Read the current image value. The JSON is hand-rolled by Supervisor —
+# always one field per line, double-quoted values. Simple grep is fine
+# (jq is not part of the OS base; we avoid pulling it in for one read).
+CURRENT_IMAGE=$(grep -oE '"image"[[:space:]]*:[[:space:]]*"[^"]*"' "$JSON" \
+                | sed -E 's/.*"image"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' \
+                | head -1)
+
+if [ -z "$CURRENT_IMAGE" ]; then
+    log "no \"image\" field in $JSON — nothing to migrate"
+    exit 0
+fi
+
+if ! echo "$CURRENT_IMAGE" | grep -q "$STALE_PATTERN"; then
+    # already on upstream (or unfamiliar non-greenautarky URL); no-op
+    log "image already at $CURRENT_IMAGE — no migration needed"
+    exit 0
+fi
+
+log "stale Core image in $JSON: $CURRENT_IMAGE"
+log "rewriting to $UPSTREAM_URL"
+
+# Atomic in-place rewrite. sed -i with a tmp+rename is safest because
+# Supervisor may briefly read the file mid-write otherwise (this
+# service runs Before=hassio-supervisor.service so there's no race
+# in practice, but defensive coding is cheap here).
+TMP="${JSON}.migrate.$$"
+sed -E "s|\"image\"[[:space:]]*:[[:space:]]*\"[^\"]*$STALE_PATTERN[^\"]*\"|\"image\": \"$UPSTREAM_URL\"|" \
+    "$JSON" > "$TMP"
+chmod 0600 "$TMP"
+mv -f "$TMP" "$JSON"
+log "image field migrated"
+
+# Wipe the converged marker so ga_manager re-runs converge on next
+# start — step 6 (Core un-fork) needs to re-verify, step 8 needs to
+# re-stamp addon flags, and the bundle drift check needs to re-grade.
+if [ -f "$MARKER" ]; then
+    rm -f "$MARKER"
+    log "removed $MARKER to force a re-converge"
+else
+    log "$MARKER not present (already absent) — converge will run on next ga_manager start"
+fi
