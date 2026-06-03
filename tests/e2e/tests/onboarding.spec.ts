@@ -27,6 +27,32 @@ function requiresReset() {
   }
 }
 
+/**
+ * Click through the initial Welcome page ("greenautarky KI-Butler" →
+ * "Mein KI-Butler einrichten" button) which precedes the GDPR step.
+ * Idempotent: returns immediately if the welcome panel isn't shown
+ * (e.g. wizard rendered straight into GDPR for some future variant).
+ *
+ * Implementation note: the wizard panel mounts almost immediately but
+ * the welcome content streams in over ~1-2s. Race condition between
+ * "panel attached" and "welcome button rendered" was making a shorter
+ * wait return false before the button appeared. Use getByRole which
+ * pierces shadow DOM and matches the accessible name.
+ */
+async function dismissWelcomePage(page: import('@playwright/test').Page) {
+  const welcomeBtn = page.getByRole('button', { name: /einrichten|start|begin/i }).first();
+  // Race the welcome button against the GDPR step rendering directly. Either
+  // resolves and we move on; if neither shows up in 15s we fail explicitly.
+  const gdpr = page.locator('ga-setup-gdpr').first();
+  const winner = await Promise.race([
+    welcomeBtn.waitFor({ state: 'visible', timeout: 15_000 }).then(() => 'welcome' as const),
+    gdpr.waitFor({ state: 'visible', timeout: 15_000 }).then(() => 'gdpr' as const),
+  ]);
+  if (winner === 'welcome') {
+    await welcomeBtn.click();
+  }
+}
+
 test.describe('GA Onboarding — wizard', () => {
   test.beforeEach(async ({ resetOnboarding }) => {
     requiresReset();
@@ -50,6 +76,7 @@ test.describe('GA Onboarding — wizard', () => {
     await waitForHA(deviceUrl, 60_000);
     await page.goto(`${deviceUrl}/greenautarky-setup`);
     await page.waitForSelector('ha-panel-greenautarky-setup', { timeout: 20_000 });
+    await dismissWelcomePage(page);
 
     // ga-setup-gdpr.ts renders a checkbox for Datenschutz/GDPR consent
     const checkbox = page.locator('ga-setup-gdpr input[type="checkbox"]').first();
@@ -60,13 +87,15 @@ test.describe('GA Onboarding — wizard', () => {
   test('GDPR: accepting consent enables the continue button', async ({ page, deviceUrl }) => {
     await waitForHA(deviceUrl, 60_000);
     await page.goto(`${deviceUrl}/greenautarky-setup`);
+    await page.waitForSelector('ha-panel-greenautarky-setup', { timeout: 20_000 });
+    await dismissWelcomePage(page);
     await page.waitForSelector('ga-setup-gdpr', { timeout: 20_000 });
 
     const checkbox = page.locator('ga-setup-gdpr input[type="checkbox"]').first();
     await checkbox.check();
 
     const continueBtn = page
-      .locator('mwc-button')
+      .locator('button, mwc-button')
       .filter({ hasText: /continue|weiter/i })
       .first();
     await expect(continueBtn).toBeEnabled({ timeout: 5_000 });
@@ -75,12 +104,14 @@ test.describe('GA Onboarding — wizard', () => {
   test('user creation step is reachable after GDPR', async ({ page, deviceUrl }) => {
     await waitForHA(deviceUrl, 60_000);
     await page.goto(`${deviceUrl}/greenautarky-setup`);
+    await page.waitForSelector('ha-panel-greenautarky-setup', { timeout: 20_000 });
+    await dismissWelcomePage(page);
     await page.waitForSelector('ga-setup-gdpr', { timeout: 20_000 });
 
     // Accept GDPR and advance
     await page.locator('ga-setup-gdpr input[type="checkbox"]').first().check();
     await page
-      .locator('mwc-button')
+      .locator('button, mwc-button')
       .filter({ hasText: /continue|weiter/i })
       .first()
       .click();
@@ -93,11 +124,13 @@ test.describe('GA Onboarding — wizard', () => {
     await waitForHA(deviceUrl, 60_000);
     await page.goto(`${deviceUrl}/greenautarky-setup`);
 
+    await page.waitForSelector('ha-panel-greenautarky-setup', { timeout: 20_000 });
+    await dismissWelcomePage(page);
     // Navigate to user creation step
     await page.waitForSelector('ga-setup-gdpr', { timeout: 20_000 });
     await page.locator('ga-setup-gdpr input[type="checkbox"]').first().check();
     await page
-      .locator('mwc-button')
+      .locator('button, mwc-button')
       .filter({ hasText: /continue|weiter/i })
       .first()
       .click();
@@ -110,7 +143,7 @@ test.describe('GA Onboarding — wizard', () => {
     await passwordInput.fill('abc');
 
     const submitBtn = page
-      .locator('mwc-button')
+      .locator('button, mwc-button')
       .filter({ hasText: /continue|create|weiter/i })
       .first();
     await expect(submitBtn).toBeDisabled({ timeout: 3_000 });
