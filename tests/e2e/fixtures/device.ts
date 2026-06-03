@@ -36,8 +36,24 @@ export const test = base.extend<DeviceFixtures>({
 
   resetOnboarding: async ({ deviceUrl }, use) => {
     await use(() => {
-      // Delete state file and restart HA Core
-      sshCmd('rm -f /mnt/data/supervisor/homeassistant/.storage/greenautarky_onboarding && docker restart homeassistant');
+      // Overwrite state with fresh wizard-ready content, not delete.
+      // Deleting the file makes _async_setup_common default to
+      // `completed: true` (its "this is an old, pre-GA device, do not drag
+      // it into the wizard" branch) and the wizard panel never registers.
+      // Schema must match STORAGE_VERSION=2 (custom_components/greenautarky_onboarding/const.py).
+      const fresh = JSON.stringify({
+        version: 2,
+        minor_version: 1,
+        key: 'greenautarky_onboarding',
+        data: {
+          completed: false,
+          tenant_mode: true,
+          gdpr_accepted: false,
+          steps_done: [],
+          consents: {},
+        },
+      });
+      sshCmd(`cat > /mnt/data/supervisor/homeassistant/.storage/greenautarky_onboarding <<'EOF'\n${fresh}\nEOF\nchmod 600 /mnt/data/supervisor/homeassistant/.storage/greenautarky_onboarding && docker restart homeassistant`);
 
       // Wait for HA to come back up (poll status endpoint).
       // iHost cold-start is ~90-120s after `docker restart homeassistant`;
