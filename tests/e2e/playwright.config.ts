@@ -29,7 +29,10 @@ export default defineConfig({
   workers: 1,
 
   retries: 1,
-  timeout: 60_000,
+  // 300s per test: resetOnboarding waits up to 240s for HA Core to come back
+  // after `docker restart homeassistant` (iHost cold-start ~90-120s, sometimes
+  // worse under load). Leaves 60s headroom for the actual assertions.
+  timeout: 300_000,
 
   reporter: [
     ['list'],
