@@ -60,7 +60,11 @@ CUSTOM_COMPONENTS_SRC="/usr/share/ga/custom_components"
 CUSTOM_COMPONENTS_DST="/mnt/data/supervisor/share/ga-custom-components"
 
 HA="/usr/bin/ha"
-SUPERVISOR_WAIT_S=300
+# 1200s (20m) — Supervisor on KIB-SON-0 (2026-06-03 OTA-from-fork) needed
+# ~10m to settle while it pulled + swapped Core away from the greenautarky
+# fork; 300s was timing out and forcing a manual `systemctl restart
+# ga-bootstrap`. Generous headroom is cheap (oneshot, marker-guarded).
+SUPERVISOR_WAIT_S=1200
 INSTALL_WAIT_S=300
 # After `ha store add` the Supervisor clones the repo asynchronously — the
 # addons in it do not appear in the store the instant the command returns.
