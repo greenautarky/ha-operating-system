@@ -39,8 +39,12 @@ export const test = base.extend<DeviceFixtures>({
       // Delete state file and restart HA Core
       sshCmd('rm -f /mnt/data/supervisor/homeassistant/.storage/greenautarky_onboarding && docker restart homeassistant');
 
-      // Wait for HA to come back up (poll status endpoint)
-      const maxWait = 60_000;
+      // Wait for HA to come back up (poll status endpoint).
+      // iHost cold-start is ~90-120s after `docker restart homeassistant`;
+      // 60s was too tight and made every onboarding test fail at this gate
+      // (2026-06-03 e2e suite run). Bump well past the worst-case to
+      // 240s so the test exits on a real failure, not a timing flake.
+      const maxWait = 240_000;
       const start = Date.now();
       while (Date.now() - start < maxWait) {
         try {
