@@ -198,12 +198,27 @@ push_to_device() {
 
   # Install
   echo "  Installing via RAUC..."
-  if $SSH_CMD root@$ip 'rauc install /mnt/data/ota_update.raucb 2>&1 | tail -2; rm -f /mnt/data/ota_update.raucb'; then
-    echo "  Install succeeded."
-  else
-    echo "  INSTALL FAILED"
+  # The 2026-06-04 KIB-SON-6 attempt exposed a false-positive: the
+  # previous form `rauc install ... | tail -2` made the pipeline exit
+  # status track `tail`, which is always 0, so signature-verification
+  # failures ("LastError: signature verification failed") were swallowed
+  # and the script printed "Install succeeded" before silently rebooting
+  # the device onto its old slot. Capture the full output and check both
+  # the exit code AND the conventional rauc error markers.
+  install_output=$($SSH_CMD root@$ip '
+      rauc install /mnt/data/ota_update.raucb 2>&1
+      ec=$?
+      rm -f /mnt/data/ota_update.raucb
+      exit $ec
+  ')
+  install_rc=$?
+  echo "$install_output" | tail -5
+  if [[ $install_rc -ne 0 ]] \
+     || echo "$install_output" | grep -qE "LastError:|Installing .* failed|signature verification failed|Verify error"; then
+    echo "  INSTALL FAILED (exit=$install_rc)"
     return 1
   fi
+  echo "  Install succeeded."
 
   # Reboot
   if $NO_REBOOT; then
