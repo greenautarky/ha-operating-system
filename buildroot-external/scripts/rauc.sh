@@ -45,6 +45,22 @@ function install_rauc_certs() {
         echo "Adding self-signed certificate to keyring."
         openssl x509 -in "${cert}" -text >> "${TARGET_DIR}/etc/rauc/keyring.pem"
     fi
+
+    # F13 fix (2026-06-05): also bake the LEGACY signing cert (used by
+    # KIB-SONs provisioned before 2026-03-27 ga-builder cert rotation).
+    # Without this, any device upgraded from the legacy stack would need
+    # an explicit CA-bridge bind-mount (see RUNBOOK-LEGACY-CA-BRIDGE-MIGRATION.md
+    # in ga-ihost-docs) on every future OTA, because the build's signing cert
+    # and the device's baked-in keyring don't share a key (only a CN).
+    # The legacy cert was extracted from K6's pre-migration keyring snapshot
+    # (2026-06-05); SHA-256 fingerprint
+    # 01:E7:CE:81:49:6B:75:43:22:3C:8B:31:29:4C:78:AB:D3:02:7F:FE:62:7A:B5:B6:28:AF:73:83:E1:21:BC:F7
+    # valid 2025-09 to 2035-09. Drop this branch once the last legacy
+    # device is decommissioned (track via fleet-manager devices.yaml).
+    if [ -f "${BR2_EXTERNAL_HASSOS_PATH}/ota/legacy-signing-cert.pem" ]; then
+        echo "Adding legacy (pre-2026-03-27) signing cert to keyring (F13 fix)."
+        openssl x509 -in "${BR2_EXTERNAL_HASSOS_PATH}/ota/legacy-signing-cert.pem" -text >> "${TARGET_DIR}/etc/rauc/keyring.pem"
+    fi
 }
 
 
