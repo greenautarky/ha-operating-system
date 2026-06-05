@@ -1,22 +1,38 @@
 #!/bin/bash
 # release.sh — Bump versions for a new release, commit, and push.
 #
-# Updates three places that MUST stay in sync:
+# Updates four places that MUST stay in sync:
 #   1. ha-supervisor/supervisor/const.py        SUPERVISOR_VERSION
 #   2. haos-version/stable.json                  "supervisor" key
 #   3. haos-version/stable.json                  "ihost" key (under hassos)
+#   4. haos-version/stable.json                  "ga_release" key  (new since v1.2)
 #
 # After this runs, the next steps are MANUAL (intentionally):
-#   a. SSH ga-builder, run: ./scripts/ga_build.sh prod
+#   a. SSH ga-builder, run: GA_RELEASE=<ga-release> ./scripts/ga_build.sh prod
 #   b. Locally:    ./scripts/push-ota.sh --server --raucb <bundle>.raucb
 #   c. Verify on a canary device, then push-ota --fleet (or wait for auto-pull)
 #
 # Usage:
-#   ./scripts/release.sh <os-version> <supervisor-version> [--dry-run] [--no-push]
+#   ./scripts/release.sh <os-version> <supervisor-version> [--ga-release VAR] [--dry-run] [--no-push]
 #
-# Example:
+# Examples:
+#   # Plain HAOS-version bump (legacy form — keeps current ga_release):
 #   ./scripts/release.sh 16.3.1.2 2025.11.4.2
-#   ./scripts/release.sh 16.3.1.2 2025.11.4.2 --dry-run
+#
+#   # Full BOSv1.x.y release (preferred since v1.2):
+#   ./scripts/release.sh 16.3.1.2 2025.11.4.5 --ga-release BOSv1.2.1
+#
+#   # Dry-run preview:
+#   ./scripts/release.sh 16.3.1.2 2025.11.4.5 --ga-release BOSv1.2.1 --dry-run
+#
+# Why --ga-release: BOSv1.2.0 and BOSv1.2.1 share the same internal HAOS
+# version (16.3.1.2) but differ in the OS rootfs overlay. The ga_release
+# label is the operator-facing identifier (the one stamped into
+# /etc/ga-release on the device); without bumping it here, every BOSv1.x.y
+# point-release silently overwrites the previous release's manifest with
+# the same hassos.ihost — fleet-manager OTA jobs then no-op because
+# Supervisor's no-op-check matches the running HAOS version.
+# See [[session_2026_06_04_fleet_ota_findings]] finding #3.
 
 set -euo pipefail
 
@@ -35,11 +51,13 @@ DRY_RUN=false
 NO_PUSH=false
 OS_VERSION=""
 SUP_VERSION=""
+GA_RELEASE=""  # optional; if unset we preserve whatever is in stable.json
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --dry-run)  DRY_RUN=true; shift ;;
-        --no-push)  NO_PUSH=true; shift ;;
+        --dry-run)     DRY_RUN=true; shift ;;
+        --no-push)     NO_PUSH=true; shift ;;
+        --ga-release)  GA_RELEASE="$2"; shift 2 ;;
         -h|--help)
             sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
             exit 0
@@ -56,6 +74,13 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Sanity-check the ga_release label format if supplied. The convention
+# (since 2026-06-02) is BOSvMAJOR.MINOR.PATCH (e.g. BOSv1.2.1).
+if [[ -n "$GA_RELEASE" ]] && ! [[ "$GA_RELEASE" =~ ^BOSv[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "ERROR: ga_release '$GA_RELEASE' looks malformed (expected BOSvMAJOR.MINOR.PATCH)"
+    exit 1
+fi
 
 if [[ -z "$OS_VERSION" || -z "$SUP_VERSION" ]]; then
     echo "ERROR: missing version arguments"
@@ -78,6 +103,7 @@ echo "  GA Release Bump"
 echo "============================================="
 echo "  OS / hassos.ihost:      $OS_VERSION"
 echo "  Supervisor:             $SUP_VERSION"
+[[ -n "$GA_RELEASE" ]] && echo "  GA Release label:       $GA_RELEASE"
 echo "  ha-supervisor branch:   $SUPERVISOR_BRANCH"
 echo "  haos-version branch:    $HAOS_VERSION_BRANCH"
 $DRY_RUN  && echo "  Mode:                   DRY-RUN"
@@ -115,6 +141,7 @@ CUR_SUP=$(grep -E '^SUPERVISOR_VERSION' "$SUPERVISOR_REPO/supervisor/const.py" \
     | sed -E 's/.*"([^"]+)".*/\1/')
 CUR_OS=$(python3 -c "import json; print(json.load(open('$HAOS_VERSION_REPO/stable.json'))['hassos']['ihost'])")
 CUR_SUP_JSON=$(python3 -c "import json; print(json.load(open('$HAOS_VERSION_REPO/stable.json'))['supervisor'])")
+CUR_GA_REL=$(python3 -c "import json; print(json.load(open('$HAOS_VERSION_REPO/stable.json')).get('ga_release',''))")
 # Reconstruct OS version from meta (VERSION_MAJOR + VERSION_MINOR + VERSION_SUFFIX)
 META_MAJOR=$(grep '^VERSION_MAJOR=' "$META_FILE" | cut -d'"' -f2)
 META_MINOR=$(grep '^VERSION_MINOR=' "$META_FILE" | cut -d'"' -f2)
@@ -130,18 +157,26 @@ echo "Current values:"
 echo "  ha-supervisor const.py SUPERVISOR_VERSION = $CUR_SUP"
 echo "  haos-version stable.json supervisor       = $CUR_SUP_JSON"
 echo "  haos-version stable.json hassos.ihost     = $CUR_OS"
+echo "  haos-version stable.json ga_release       = $CUR_GA_REL"
 echo "  buildroot-external/meta OS-version        = $CUR_META_OS"
 echo ""
 echo "Will change to:"
 echo "  ha-supervisor const.py SUPERVISOR_VERSION = $SUP_VERSION"
 echo "  haos-version stable.json supervisor       = $SUP_VERSION"
 echo "  haos-version stable.json hassos.ihost     = $OS_VERSION"
+if [[ -n "$GA_RELEASE" ]]; then
+    echo "  haos-version stable.json ga_release       = $GA_RELEASE"
+else
+    echo "  haos-version stable.json ga_release       = (unchanged: $CUR_GA_REL)"
+fi
 echo "  buildroot-external/meta OS-version        = $OS_VERSION (MAJOR=$NEW_MAJOR MINOR=$NEW_MINOR SUFFIX=$NEW_SUFFIX)"
 echo ""
 
 # Skip-checks: bail if nothing changed
+EFFECTIVE_GA_REL="${GA_RELEASE:-$CUR_GA_REL}"
 if [[ "$CUR_SUP" == "$SUP_VERSION" && "$CUR_OS" == "$OS_VERSION" \
-      && "$CUR_SUP_JSON" == "$SUP_VERSION" && "$CUR_META_OS" == "$OS_VERSION" ]]; then
+      && "$CUR_SUP_JSON" == "$SUP_VERSION" && "$CUR_META_OS" == "$OS_VERSION" \
+      && "$CUR_GA_REL" == "$EFFECTIVE_GA_REL" ]]; then
     echo "All values already match the requested versions — nothing to do."
     exit 0
 fi
@@ -162,20 +197,27 @@ NEW_SUP=$(grep -E '^SUPERVISOR_VERSION' "$SUPERVISOR_REPO/supervisor/const.py" \
 echo "  → $NEW_SUP ✓"
 
 echo "Applying haos-version stable.json..."
-python3 - <<PY
-import json
+GA_RELEASE_ARG="$GA_RELEASE" python3 - <<PY
+import json, os
 from collections import OrderedDict
 path = "$HAOS_VERSION_REPO/stable.json"
 with open(path) as f:
     data = json.load(f, object_pairs_hook=OrderedDict)
 data['supervisor'] = "$SUP_VERSION"
 data['hassos']['ihost'] = "$OS_VERSION"
+ga_release = os.environ.get("GA_RELEASE_ARG", "")
+if ga_release:
+    data['ga_release'] = ga_release
 # Preserve the 2-space indent style on main (avoids whitespace churn in commit)
 with open(path, 'w') as f:
     json.dump(data, f, indent=2)
     f.write('\n')
 PY
-echo "  → supervisor=$SUP_VERSION, hassos.ihost=$OS_VERSION ✓"
+if [[ -n "$GA_RELEASE" ]]; then
+    echo "  → supervisor=$SUP_VERSION, hassos.ihost=$OS_VERSION, ga_release=$GA_RELEASE ✓"
+else
+    echo "  → supervisor=$SUP_VERSION, hassos.ihost=$OS_VERSION (ga_release unchanged) ✓"
+fi
 
 echo "Applying buildroot-external/meta..."
 sed -i.bak -E "s|^VERSION_MAJOR=.*|VERSION_MAJOR=\"$NEW_MAJOR\"|" "$META_FILE"
@@ -209,8 +251,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 echo "Committing + pushing..."
 commit_repo "$SUPERVISOR_REPO"   "supervisor/const.py" \
     "chore: bump SUPERVISOR_VERSION to $SUP_VERSION"   "$SUPERVISOR_BRANCH"
+if [[ -n "$GA_RELEASE" ]]; then
+    HAOS_COMMIT_SUBJECT="release: $GA_RELEASE (ihost $OS_VERSION + supervisor $SUP_VERSION)"
+else
+    HAOS_COMMIT_SUBJECT="release: ihost $OS_VERSION + supervisor $SUP_VERSION"
+fi
 commit_repo "$HAOS_VERSION_REPO" "stable.json" \
-    "release: ihost $OS_VERSION + supervisor $SUP_VERSION" "$HAOS_VERSION_BRANCH"
+    "$HAOS_COMMIT_SUBJECT" "$HAOS_VERSION_BRANCH"
 commit_repo "$HA_OS_REPO" "buildroot-external/meta" \
     "chore: bump OS version to $OS_VERSION (buildroot-external/meta)" "master"
 
