@@ -11,7 +11,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.2.4   # marker baked into /etc/ga-release at build
+gaos_release: BOSv1.2.5   # marker baked into /etc/ga-release at build
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
@@ -34,7 +34,7 @@ rootfs_overlays:
 addons:
   # Built by their own repos' CI; pinned for visibility. The actual
   # pin consumed at OS build is in buildroot-external/package/hassio/addon-images.json.
-  ga_manager:               "0.26.8"  # current ship; 0.26.9 PR #42 pending
+  ga_manager:               "0.27.0"  # tz baseline in converge step 8
   ga_default_addon:         "1.1.2"
   ga_hmvapp_addon:          "1.1.7"
 
