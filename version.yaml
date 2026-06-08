@@ -13,6 +13,17 @@
 
 gaos_release: BOSv1.2.5   # marker baked into /etc/ga-release at build
 
+# Branch of the greenautarky/haos-version repo whose stable.json this OS
+# build follows. Consumed by buildroot-external/package/hassio/hassio.mk to
+# resolve HASSIO_VERSION_URL — single bump pattern, no hardcoded branch in
+# the makefile. Also consumed by the qemu-CI lane for consistency.
+#
+# Default fallback if missing: "main" (set in hassio.mk).
+#
+# When promoting v1.2-clean to main, flip this to "main" and merge the
+# release branch.
+haos_version_branch: release/v1.2-rebuild
+
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
   # ghcr.io/greenautarky/<name>:<version> that contains a single top-

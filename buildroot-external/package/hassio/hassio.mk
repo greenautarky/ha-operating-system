@@ -9,11 +9,24 @@ HASSIO_LICENSE = Apache License 2.0
 # HASSIO_LICENSE_FILES = $(BR2_EXTERNAL_HASSOS_PATH)/../LICENSE
 HASSIO_SITE = $(BR2_EXTERNAL_HASSOS_PATH)/package/hassio
 HASSIO_SITE_METHOD = local
-# V1.2-clean WIP: point at the release/v1.2-rebuild branch's stable.json
-# (stock Core image + supervisor 2025.11.4.4 with cherry-picked upstream
-# #6355 aiodocker auth fix). Revert to main/ when release/v1.2-rebuild is
-# merged at the V1.2 promote.
-HASSIO_VERSION_URL ?= "https://raw.githubusercontent.com/greenautarky/haos-version/release/v1.2-rebuild/"
+# The branch of greenautarky/haos-version this build follows. Read from
+# version.yaml's `haos_version_branch:` key — single bump pattern, no
+# hardcoded branch here. Fallback to `main` if the key is missing or
+# version.yaml can't be read (e.g. out-of-tree builds).
+#
+# Build-time override still works via the command-line (`make
+# HASSIO_VERSION_URL=…`) — that path is used by ga_build.sh's MAKE_OVERRIDES
+# for staged rollouts (see scripts/ga_build.sh comment on MAKE_OVERRIDES).
+#
+# Why read at parse-time (`:=`, not `=`): `HASSIO_CORE_VERSION` below uses
+# `$(shell curl … $(HASSIO_VERSION_URL))` and Buildroot dereferences it
+# during top-level config — a recursive `=` would re-shell out per `$@`
+# evaluation. Once-and-cached is what we want.
+HASSIO_VERSION_BRANCH := $(shell sed -nE 's/^haos_version_branch:[[:space:]]*"?([^"#[:space:]]+)"?.*$$/\1/p' $(BR2_EXTERNAL_HASSOS_PATH)/../version.yaml 2>/dev/null | head -1)
+ifeq ($(HASSIO_VERSION_BRANCH),)
+HASSIO_VERSION_BRANCH := main
+endif
+HASSIO_VERSION_URL ?= "https://raw.githubusercontent.com/greenautarky/haos-version/$(HASSIO_VERSION_BRANCH)/"
 ifeq ($(BR2_PACKAGE_HASSIO_CHANNEL_STABLE),y)
 HASSIO_VERSION_CHANNEL = "stable"
 else ifeq ($(BR2_PACKAGE_HASSIO_CHANNEL_BETA),y)
