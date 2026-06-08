@@ -179,15 +179,22 @@ echo "Using OTA_DIR=$OTA_DIR"
 echo "Using REL_CA_PEM=$REL_CA_PEM"
 echo "Using DEV_CA_PEM=$DEV_CA_PEM"
 
-# Pull Tier-2 components from GHCR into the rootfs-overlay before Buildroot
-# packages the rootfs. The pulled trees are gitignored, so each build picks
-# up a fresh copy at the pinned version in version.yaml. Idempotent — if a
-# component is already at the pinned version on disk, the script skips it.
-if [ -x "${REPO_ROOT:-$(pwd)}/scripts/sync-components.sh" ]; then
-  echo
-  echo "===== Syncing Tier-2 components from GHCR ====="
-  "${REPO_ROOT:-$(pwd)}/scripts/sync-components.sh"
-  echo
+# Sanity: if scripts/sync-components.sh exists, the host (= the LXC / VM
+# that runs the docker build invocation) must have run it BEFORE entering
+# the build container. We don't run it from here — the build container's
+# minimal hassos:local image doesn't carry oras/yq, and adding them just
+# for this would bloat the image. The wrapper that invokes ga_build.sh
+# is expected to run sync first; we just verify the synced files are
+# present.
+if [ -f "${REPO_ROOT:-$(pwd)}/version.yaml" ]; then
+  for comp in $(grep -E "^  [a-z][-a-z]+: " "${REPO_ROOT:-$(pwd)}/version.yaml" | grep -v 'null' | awk '{print $1}' | tr -d ':'); do
+    domain="${comp//-/_}"
+    dest="${REPO_ROOT:-$(pwd)}/buildroot-external/rootfs-overlay/usr/share/ga/custom_components/${domain}"
+    if [ -d "${dest}" ] && [ -f "${dest}/manifest.json" ]; then
+      ver=$(grep -oE '"version":[[:space:]]*"[^"]*"' "${dest}/manifest.json" | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+      echo "Component check: ${comp} present (manifest version ${ver:-?})"
+    fi
+  done
 fi
 
 # ---- Sanity checks (fail fast) ----
