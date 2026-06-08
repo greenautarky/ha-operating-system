@@ -1499,9 +1499,21 @@ PY
     else
       _pass "GAOS-03: ga-bootstrap does not hardcode a 'local_ga_manager' slug in code"
     fi
-    grep -qE 'resolve_ga_manager_slug|store addons' "$GA_BOOTSTRAP" 2>/dev/null \
-      && _pass "GAOS-03b: ga-bootstrap resolves the repo-prefixed slug from the store listing" \
-      || _fail "GAOS-03b: ga-bootstrap does NOT resolve the repo-prefixed slug dynamically"
+    # Either the slug is resolved dynamically (= old rootfs ga-bootstrap
+    # pattern: `resolve_ga_manager_slug` / `ha store addons` lookup) OR
+    # it's a pinned constant + env-overridable (= Tier-2 v1.1.0+ pattern:
+    # `GA_MANAGER_SLUG="${GA_MANAGER_SLUG:-99f1cad4_ga_manager}"`).
+    # Both are valid — the constant works because vibe_addons' repo-id
+    # hash is fleet-stable (= `99f1cad4_`) and the env override makes
+    # field-overrides + tests trivial. Failing means we have NEITHER
+    # discipline, i.e. a real `local_*` or unresolved slug.
+    if grep -qE 'resolve_ga_manager_slug|store addons' "$GA_BOOTSTRAP" 2>/dev/null; then
+      _pass "GAOS-03b: ga-bootstrap resolves the repo-prefixed slug from the store listing"
+    elif grep -qE '^\s*GA_MANAGER_SLUG="\$\{GA_MANAGER_SLUG:-[a-f0-9]+_[a-z_]+\}"' "$GA_BOOTSTRAP" 2>/dev/null; then
+      _pass "GAOS-03b: ga-bootstrap uses a pinned-constant slug with env override (Tier-2 pattern)"
+    else
+      _fail "GAOS-03b: ga-bootstrap does NOT resolve the slug dynamically AND has no pinned-constant pattern — verify the install path"
+    fi
   else
     _skip "GAOS-03" "ga-bootstrap script not found"
   fi
