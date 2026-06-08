@@ -1,0 +1,174 @@
+name: QEMU CI
+
+# Boots a qemu OS image and runs the EMU-category test subset against it.
+#
+# Phase 1: catches the bench bugs that were pure misconfig (no real hardware
+# needed) — Bug #2 (env-stripping), Bug #3 (version chain), auto_update drift.
+# See ga-ihost-docs/QEMU-CI.md for the full coverage matrix.
+#
+# OBSERVATION PERIOD (2 weeks from 2026-06-08): `continue-on-error: true` on
+# the job below — flakes do NOT block PRs. After 2 weeks of stable runs, drop
+# that line so this becomes a required check. The flip is a one-line edit;
+# the issue tracker holds the calendar reminder.
+#
+# Trigger logic:
+#   - pull_request — every PR, so a broken version chain or rootfs-overlay
+#     mistake shows up at PR time, not at bench-flash time.
+#   - push to master + ga/* — gives long-lived branches a green-build badge
+#     and pre-warms the cache before the next PR.
+#   - workflow_dispatch — manual re-run with a custom suite list.
+
+on:
+  pull_request:
+    paths:
+      - 'buildroot-external/**'
+      - 'buildroot-ihost/**'
+      - 'scripts/ga_build.sh'
+      - 'scripts/qemu-ci.sh'
+      - 'tests/ga_tests/**'
+      - 'tests/qemu-ci/**'
+      - 'version.yaml'
+      - 'Dockerfile'
+      - 'Makefile'
+      - '.github/workflows/qemu-ci.yml'
+  push:
+    branches:
+      - master
+      - 'ga/v*'
+    paths:
+      - 'buildroot-external/**'
+      - 'buildroot-ihost/**'
+      - 'scripts/ga_build.sh'
+      - 'scripts/qemu-ci.sh'
+      - 'tests/ga_tests/**'
+      - 'tests/qemu-ci/**'
+      - 'version.yaml'
+  workflow_dispatch:
+    inputs:
+      suites:
+        description: 'Suites to run inside the VM (space-separated)'
+        default: 'environment crash_detection boot_timing disk_guard supervisor_health'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  qemu-ci:
+    # GitHub-hosted ubuntu-latest exposes /dev/kvm since Jan 2023, so this
+    # runs at near-native speed without touching the self-hosted iHost
+    # build runner. Keeps the iHost build queue free.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # NON-BLOCKING for the 2-week observation period (2026-06-08 .. 2026-06-22).
+    # Remove this line to make the job a required check.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install host prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils ovmf \
+            python3-pexpect xz-utils \
+            build-essential bc cpio file rsync unzip wget jq \
+            libssl-dev libelf-dev openssl
+
+      # Buildroot's dl-cache + ccache dominate wall-clock on incremental
+      # runs. Even a partial cache hit cuts the build from ~25min to ~5min,
+      # which is what gets us under the 8-min budget after the first run.
+      - name: Restore Buildroot cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/hassos-cache/dl
+            ~/hassos-cache/cc
+          # Cache key is sensitive to the Buildroot submodule SHA and the
+          # qemu defconfig — bumping either invalidates the cache, which is
+          # what we want to avoid silent stale-toolchain failures.
+          key: qemu-ci-${{ runner.os }}-${{ hashFiles('.gitmodules', 'buildroot-external/configs/ga_qemu_defconfig', 'buildroot-external/board/pc/qemu/**') }}
+          restore-keys: |
+            qemu-ci-${{ runner.os }}-
+
+      - name: Build hassos build image
+        run: |
+          docker build -t hassos:local .
+
+      - name: Prepare stub secrets
+        env:
+          # Real secrets are not exposed to qemu — these stubs satisfy
+          # ga_build.sh's preflight without leaking anything.
+          WIFI_INSTALL_PSK: ${{ secrets.WIFI_INSTALL_PSK || 'qemu-ci-stub' }}
+          OPENSTICK_WIFI_KEY: ${{ secrets.OPENSTICK_WIFI_KEY || 'qemu-ci-stub' }}
+          INFLUX_PASSWORD: ${{ secrets.INFLUX_PASSWORD || 'qemu-ci-stub' }}
+        run: |
+          mkdir -p secrets
+          printf '%s' "$WIFI_INSTALL_PSK"   > secrets/wifi-install.psk
+          printf '%s' "$OPENSTICK_WIFI_KEY" > secrets/openstick-wifi.key
+          printf '%s' "$INFLUX_PASSWORD"    > secrets/influx-password
+          # Stub RAUC signing material — qemu boot doesn't verify a bundle,
+          # but post-build.sh wants the files present.
+          if [ ! -f cert.pem ]; then
+            openssl req -newkey rsa:2048 -nodes -keyout key.pem -x509 \
+              -days 7 -out cert.pem -subj "/CN=qemu-ci/" 2>/dev/null
+          fi
+          # Stub OTA CA file (post-build.sh expects dev-ca.pem present).
+          mkdir -p buildroot-external/ota
+          if [ ! -f buildroot-external/ota/rel-ca.pem ]; then
+            cp cert.pem buildroot-external/ota/rel-ca.pem
+          fi
+          mkdir -p "${HOME}/hassos-cache"
+
+      - name: Run qemu-ci (build + boot + test)
+        env:
+          SUITES_INPUT: ${{ github.event.inputs.suites }}
+        run: |
+          SUITES="${SUITES_INPUT:-environment crash_detection boot_timing disk_guard supervisor_health}"
+          ./scripts/qemu-ci.sh \
+            --build yes \
+            --suites "$SUITES" \
+            --workdir "${GITHUB_WORKSPACE}/qemu-ci-out"
+
+      - name: Upload serial log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-serial-log
+          path: qemu-ci-out/qemu-serial.log
+          if-no-files-found: ignore
+
+      - name: Upload results JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-results
+          path: qemu-ci-out/qemu-results.json
+          if-no-files-found: ignore
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## QEMU CI"
+            if [ -f qemu-ci-out/qemu-results.json ]; then
+              jq -r '
+                "- booted: \(.booted)",
+                "- multi_user_reached: \(.multi_user_reached)",
+                "- supervisor_ready: \(.supervisor_ready)",
+                "- suites: \(.suites_run | join(", "))",
+                "- pass: \(.pass_count)",
+                "- fail: \(.fail_count)",
+                "- skip: \(.skip_count)",
+                "- elapsed_s: \(.elapsed_s)",
+                "- fail_reason: \(.fail_reason)"
+              ' qemu-ci-out/qemu-results.json
+            else
+              echo "_no results JSON — VM likely failed to boot, see qemu-serial-log artifact_"
+            fi
+            echo ""
+            echo "> This job is currently NON-BLOCKING (observation period through 2026-06-22)."
+          } >> "$GITHUB_STEP_SUMMARY"
