@@ -11,7 +11,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.2.3   # marker baked into /etc/ga-release at build
+gaos_release: BOSv1.2.4   # marker baked into /etc/ga-release at build
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
