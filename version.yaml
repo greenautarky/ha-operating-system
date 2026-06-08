@@ -18,7 +18,7 @@ components:
   # ghcr.io/greenautarky/<name>:<version> that contains a single top-
   # level dir matching the component's HA-integration domain name.
   greenautarky-onboarding: "1.0.1"   # https://github.com/greenautarky/greenautarky-onboarding
-  ga-frontend-bundle:       null     # not yet pulled via OCI — still embedded in rootfs-overlay (TODO: migrate next)
+  ga-frontend-bundle:       "1.0.0"  # https://github.com/greenautarky/ga-frontend-bundle (14 vendored Lovelace cards, ~6 MB; was embedded)
 
 addons:
   # Built by their own repos' CI; pinned for visibility. The actual

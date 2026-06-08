@@ -52,5 +52,4 @@ releases/
 # not a stale copy in this repo). To re-pull manually, run
 # `./scripts/sync-components.sh`.
 buildroot-external/rootfs-overlay/usr/share/ga/custom_components/greenautarky_onboarding/
-# (ga_frontend_bundle stays committed for now — migration to OCI pull
-#  is the next step after greenautarky-onboarding's path is verified.)
+buildroot-external/rootfs-overlay/usr/share/ga/custom_components/ga_frontend_bundle/
