@@ -67,3 +67,19 @@ help:
 	@echo "Supported targets: $(TARGETS)"
 	@echo ""
 	@echo "Unknown Makefile targets fall back to Buildroot make - for details run 'make buildroot-help'"
+	@echo ""
+	@echo "QEMU CI lane (boots haos_qemu image, runs EMU-category suites):"
+	@echo "  qemu-test            Build (if needed) + boot + test the qemu OS image"
+	@echo "  qemu-test-no-build   Same, but reuse a previously-built qemu image"
+	@echo "  See ga-ihost-docs/QEMU-CI.md for what's covered + how to debug failures."
+
+# The QEMU CI lane has its own output dir (ga_output_qemu) so it never
+# conflicts with the iHost build cache in ga_output. Both targets delegate
+# to scripts/qemu-ci.sh which handles preflight, build, boot, and result
+# parsing — see that script's --help for the full option surface.
+.PHONY: qemu-test qemu-test-no-build
+qemu-test:
+	$(BUILDDIR)/scripts/qemu-ci.sh --build auto
+
+qemu-test-no-build:
+	$(BUILDDIR)/scripts/qemu-ci.sh --build no
