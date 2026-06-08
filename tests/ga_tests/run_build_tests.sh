@@ -1568,11 +1568,15 @@ PY
 
   # GAOS-07: ga-bootstrap.service is ordered after the Supervisor — it
   # registers the vibe_addons repo and installs the ga_manager addon
-  # through the Supervisor API.
-  if [[ -f "${OVL_SYSTEMD}/ga-bootstrap.service" ]]; then
-    grep -qE '(After|Requires)=.*hassos-supervisor' "${OVL_SYSTEMD}/ga-bootstrap.service" 2>/dev/null \
-      && _pass "GAOS-07: ga-bootstrap.service ordered after hassos-supervisor" \
-      || _fail "GAOS-07: ga-bootstrap.service NOT ordered after hassos-supervisor — addon install will race the Supervisor"
+  # through the Supervisor API. The unit name is `hassio-supervisor`
+  # (the HAOS convention), not `hassos-supervisor`. Accept both spellings
+  # for backward-compat with the old rootfs-baked unit, which used the
+  # `hassos-` typo in some checkouts.
+  _bootstrap_svc_path="$(_find_unit ga-bootstrap.service)"
+  if [[ -n "${_bootstrap_svc_path}" ]]; then
+    grep -qE '(After|Requires)=.*(hassio|hassos)-supervisor' "${_bootstrap_svc_path}" 2>/dev/null \
+      && _pass "GAOS-07: ga-bootstrap.service ordered after hassio-supervisor (${_bootstrap_svc_path#${SRC}/})" \
+      || _fail "GAOS-07: ga-bootstrap.service NOT ordered after hassio-supervisor — addon install will race the Supervisor"
   else
     _skip "GAOS-07" "ga-bootstrap.service not found in overlay"
   fi
