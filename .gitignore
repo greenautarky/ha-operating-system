@@ -45,3 +45,12 @@ releases/
 
 # Local-only backups (z2m state, device snapshots etc) — never commit
 .local-backups/
+
+# Tier-2 components pulled at OS build time by scripts/sync-components.sh.
+# The pinned version lives in version.yaml; the pulled trees themselves
+# are NOT committed (= single source of truth is the component repo,
+# not a stale copy in this repo). To re-pull manually, run
+# `./scripts/sync-components.sh`.
+buildroot-external/rootfs-overlay/usr/share/ga/custom_components/greenautarky_onboarding/
+# (ga_frontend_bundle stays committed for now — migration to OCI pull
+#  is the next step after greenautarky-onboarding's path is verified.)
