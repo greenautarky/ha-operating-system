@@ -24,6 +24,14 @@
 
 set -euo pipefail
 
+# Ensure /usr/local/bin is on PATH — oras + Go-yq are typically installed
+# there but minimal LXC / container environments often don't include it
+# in the default PATH for non-login shells. Idempotent.
+case ":${PATH}:" in
+  *:/usr/local/bin:*) ;;
+  *) export PATH="/usr/local/bin:${PATH}" ;;
+esac
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION_YAML="${REPO_ROOT}/version.yaml"
 DEST_BASE="${REPO_ROOT}/buildroot-external/rootfs-overlay/usr/share/ga/custom_components"
