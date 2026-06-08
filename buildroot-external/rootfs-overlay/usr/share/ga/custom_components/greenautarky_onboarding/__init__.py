@@ -32,7 +32,7 @@ from typing import Any
 
 from aiohttp import web
 
-from homeassistant.components import panel_custom
+from homeassistant.components import frontend, panel_custom
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
@@ -178,6 +178,19 @@ async def _async_setup_common(hass: HomeAssistant) -> bool:
     # so we don't need a forked frontend at all.
     await _async_register_frontend_bundle(hass)
 
+    # Hide HA's stock sidebar panels that the GA tenant flow doesn't use.
+    # Keeps the sidebar focused on the GA-relevant surface (Übersicht +
+    # the addons + settings only). The panels are still defined in HA Core
+    # — they just don't appear in the sidebar (and the routes 404 from
+    # the operator's perspective). Reversible without a redeploy: set
+    # `greenautarky_onboarding: hide_default_panels: false` (or unset) in
+    # configuration.yaml + restart Core to bring them back.
+    #
+    # Why here, not via a Lovelace strategy: panel visibility is a
+    # frontend-config concern that exists outside of dashboard rendering.
+    # frontend.async_remove_panel is the canonical HA API.
+    _hide_default_ha_panels(hass)
+
     # Sidebar panel (mobile app), only shown while onboarding incomplete
     if not state.get("completed"):
         await _async_register_panel(hass)
@@ -300,6 +313,72 @@ def _scan_frontend_bundle() -> list[StaticPathConfig] | None:
                     StaticPathConfig(f"/{sub}/{file.name}", str(file), True)
                 )
     return configs
+
+
+# Stock HA panels that the GA tenant flow does not surface in the sidebar.
+# Listed by panel name (= frontend route segment, i.e. what appears after
+# the slash). If HA Core renames one of these in a future release, the
+# matching call below silently no-ops (frontend.async_remove_panel doesn't
+# raise on unknown names) — the others continue to work.
+#
+# The list is conservative — we keep:
+#   - "lovelace"          (Übersicht — primary GA dashboard)
+#   - "config"            (Einstellungen — admin-only, already gated)
+#   - "developer-tools"   (Entwicklerwerkzeuge — admin-only, already gated)
+#   - "profile"           (User profile)
+#   - panel_custom        (anything our custom_components register)
+#
+# Drop:
+#   - "energy"            (energy dashboard — GA has its own analytics)
+#   - "logbook"           (Verlauf log)
+#   - "history"           (Verlauf graphs)
+#   - "media-browser"     (Medien)
+#   - "todo"              (To-do-Listen)
+#   - "map"               (Karte — not relevant for indoor iHost devices)
+GA_HIDDEN_DEFAULT_PANELS: tuple[str, ...] = (
+    "energy",
+    "logbook",
+    "history",
+    "media-browser",
+    "todo",
+    "map",
+)
+
+
+def _hide_default_ha_panels(hass: HomeAssistant) -> None:
+    """Remove HA's stock sidebar panels that don't fit the GA tenant flow.
+
+    Idempotent: ``frontend.async_remove_panel`` is a no-op on a panel that
+    has already been removed (or was never registered for this HA build).
+    Catches per-panel exceptions so one missing entry can't block the others.
+
+    Run twice:
+      1. Immediately at setup — covers panels registered before us (most stock
+         ones do).
+      2. Again on ``EVENT_HOMEASSISTANT_STARTED`` — covers stock integrations
+         that register their panel later in startup (e.g. ``todo`` lands
+         alphabetically after ``greenautarky_onboarding`` and is registered
+         in its own ``async_setup_entry``, so our early call would miss it).
+    """
+    def _remove_all() -> None:
+        for panel in GA_HIDDEN_DEFAULT_PANELS:
+            try:
+                frontend.async_remove_panel(hass, panel)
+                _LOGGER.debug("removed default HA panel: %s", panel)
+            except Exception as e:  # noqa: BLE001
+                # Don't let a single rename/refactor in HA Core take down setup.
+                _LOGGER.warning("failed to remove panel %s: %s", panel, e)
+
+    _remove_all()
+
+    # `todo` (and any future late-registered stock panel) lands after our
+    # async_setup completes. Listen once for HA-fully-started to sweep again.
+    from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+
+    async def _on_started(_event) -> None:  # noqa: ANN001
+        _remove_all()
+
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_started)
 
 
 async def _async_register_panel(hass: HomeAssistant) -> None:
