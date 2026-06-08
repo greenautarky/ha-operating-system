@@ -11,7 +11,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.2.5   # marker baked into /etc/ga-release at build
+gaos_release: BOSv1.2.6   # marker baked into /etc/ga-release at build
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
@@ -28,7 +28,7 @@ rootfs_overlays:
   # buildroot-external/rootfs-overlay/. Use this for first-boot / boot-
   # critical system services and config bundles that need to live in
   # their canonical rootfs locations to be picked up by systemd.
-  ga-bootstrap:         "1.1.0"  # https://github.com/greenautarky/ga-bootstrap — first-boot orchestrator (Supervisor wait → auto_update=false → vibe_addons → install ga_manager → wait HA Core → marker). Replaces /usr/libexec/ga-bootstrap + the auto_update step of /usr/libexec/ga-ha-init.
+  ga-bootstrap:         "1.2.0"  # https://github.com/greenautarky/ga-bootstrap — first-boot orchestrator (Supervisor wait → auto_update=false → vibe_addons → install ga_manager → wait HA Core → marker). Replaces /usr/libexec/ga-bootstrap + the auto_update step of /usr/libexec/ga-ha-init.
   ga-telemetry-config:  "1.0.0"  # https://github.com/greenautarky/ga-telemetry-config — Tier-0 telemetry (boot-timing exporter + fluent-bit boot-log capture)
 
 addons:
