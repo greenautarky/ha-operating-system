@@ -1,0 +1,15 @@
+BOARD_ID=qemu
+BOARD_NAME="GreenAutarky QEMU CI"
+CHASSIS=vm
+BOOTLOADER=grub
+KERNEL_FILE=bzImage
+PARTITION_TABLE_TYPE=gpt
+BOOT_SIZE=32M
+BOOT_SPL=false
+# 8G is plenty for a non-persistent CI VM (no addons installed, no
+# bench-scale logs, snapshot=on means writes are discarded). Smaller
+# disks also mean shorter qcow2 conversion + xz compress in post-image,
+# trimming ~30-60s off each build.
+DISK_SIZE=8G
+SUPERVISOR_MACHINE=qemux86-64
+SUPERVISOR_ARCH=amd64
