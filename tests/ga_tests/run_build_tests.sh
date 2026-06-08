@@ -1918,11 +1918,20 @@ fi
 # silently drop the retry.
 
 if [[ -f "$GA_BOOTSTRAP" ]]; then
-  # BS-RETRY-01: the exact backoff sequence is present.
+  # BS-RETRY-01: exponential-backoff retry sequence is present. Accept
+  # EITHER the literal `for pre_sleep in 0 10 30 60 120 240` (= old
+  # rootfs ga-bootstrap pattern) OR the v1.2.0+ Tier-2 pattern of
+  # `BACKOFF_SEQUENCE="${BACKOFF_SEQUENCE:-0 10 30 60 120 240}"` with
+  # the loop using `$BACKOFF_SEQUENCE`. The env-overridable form is
+  # the preferred shape — it keeps the production budget identical AND
+  # lets tests run in seconds by overriding the env var.
   if grep -qE 'for[[:space:]]+pre_sleep[[:space:]]+in[[:space:]]+0[[:space:]]+10[[:space:]]+30[[:space:]]+60[[:space:]]+120[[:space:]]+240' "$GA_BOOTSTRAP"; then
-    _pass "BS-RETRY-01: ga-bootstrap has exponential-backoff retry (0 10 30 60 120 240)"
+    _pass "BS-RETRY-01: ga-bootstrap has literal exponential-backoff retry (0 10 30 60 120 240)"
+  elif grep -qE 'BACKOFF_SEQUENCE=.*0[[:space:]]+10[[:space:]]+30[[:space:]]+60[[:space:]]+120[[:space:]]+240' "$GA_BOOTSTRAP" \
+       && grep -qE 'for[[:space:]]+pre_sleep[[:space:]]+in[[:space:]]+\$BACKOFF_SEQUENCE' "$GA_BOOTSTRAP"; then
+    _pass "BS-RETRY-01: ga-bootstrap has env-overridable exponential-backoff retry (BACKOFF_SEQUENCE default 0 10 30 60 120 240)"
   else
-    _fail "BS-RETRY-01: ga-bootstrap exponential-backoff sequence missing/changed"
+    _fail "BS-RETRY-01: ga-bootstrap exponential-backoff sequence missing/changed (neither literal nor BACKOFF_SEQUENCE env-var pattern)"
   fi
   # BS-RETRY-02: success requires BOTH 'ha store add' OK AND the repo
   # actually appearing in the store. The Supervisor clones asynchronously
