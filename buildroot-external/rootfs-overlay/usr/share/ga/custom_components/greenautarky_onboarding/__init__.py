@@ -47,6 +47,7 @@ from .http import (
     GAConsentAcceptView,
     GAConsentPageView,
     GAConsentStatusView,
+    GAConsoleLoginView,
     GAOnboardingCompleteView,
     GAOnboardingCreateUserView,
     GAOnboardingEthernetView,
@@ -157,6 +158,10 @@ async def _async_setup_common(hass: HomeAssistant) -> bool:
     hass.http.register_view(GAOnboardingCreateUserView())
     hass.http.register_view(GAOnboardingResetView())
     hass.http.register_view(GAPinVerifyView())
+
+    # Signed-token auto-login from the fleet-manager UI's "Launch admin
+    # console" button. See GAConsoleLoginView for the token contract.
+    hass.http.register_view(GAConsoleLoginView())
 
     # Password reset views (unauthenticated, PIN-gated)
     hass.http.register_view(GAPasswordResetPageView())
