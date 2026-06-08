@@ -22,13 +22,14 @@ components:
   ga-frontend-bundle:       "1.0.0"  # https://github.com/greenautarky/ga-frontend-bundle (14 vendored Lovelace cards, ~6 MB; was embedded)
 
 rootfs_overlays:
-  # Same OCI mechanism, different tarball shape — the tarball ships rootfs-
-  # relative paths (usr/sbin/foo, etc/systemd/system/foo.service + its
-  # multi-user.target.wants/ symlink) and extracts straight into
+  # Same OCI mechanism as `components:` above, different tarball shape —
+  # the tarball ships rootfs-relative paths (usr/sbin/foo + etc/systemd/…
+  # + their multi-user.target.wants/ symlinks) and extracts straight into
   # buildroot-external/rootfs-overlay/. Use this for first-boot / boot-
-  # critical system services that need to be in their canonical rootfs
-  # locations to be picked up by systemd.
-  ga-bootstrap: "1.1.0"   # https://github.com/greenautarky/ga-bootstrap — first-boot orchestrator (Supervisor wait → auto_update=false → vibe_addons → install ga_manager → wait HA Core → marker). Replaces /usr/libexec/ga-bootstrap + the auto_update step of /usr/libexec/ga-ha-init.
+  # critical system services and config bundles that need to live in
+  # their canonical rootfs locations to be picked up by systemd.
+  ga-bootstrap:         "1.1.0"  # https://github.com/greenautarky/ga-bootstrap — first-boot orchestrator (Supervisor wait → auto_update=false → vibe_addons → install ga_manager → wait HA Core → marker). Replaces /usr/libexec/ga-bootstrap + the auto_update step of /usr/libexec/ga-ha-init.
+  ga-telemetry-config:  "1.0.0"  # https://github.com/greenautarky/ga-telemetry-config — Tier-0 telemetry (boot-timing exporter + fluent-bit boot-log capture)
 
 addons:
   # Built by their own repos' CI; pinned for visibility. The actual
