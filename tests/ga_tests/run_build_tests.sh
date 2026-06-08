@@ -1434,9 +1434,24 @@ PY
   echo "--- GAOS: V1.2-clean OS bake (vibe_addons repo + image bake + bootstrap) ---"
 
   ADDON_IMAGES_JSON="${SRC}/buildroot-external/package/hassio/addon-images.json"
-  GA_BOOTSTRAP="${SRC}/buildroot-external/rootfs-overlay/usr/libexec/ga-bootstrap"
-  OVL_SYSTEMD="${SRC}/buildroot-external/rootfs-overlay/usr/lib/systemd/system"
+  # ga-bootstrap migrated to a Tier-2 OCI component (PR #33). sync-components.sh
+  # extracts the script into usr/sbin/ and the systemd unit into etc/systemd/system/.
+  # ga-bootstrap-disk is NOT a Tier-2 component (pre-Supervisor, bound to the OS
+  # image lifecycle) — it stays at the rootfs-baked path under usr/lib/systemd/system/.
+  GA_BOOTSTRAP="${SRC}/buildroot-external/rootfs-overlay/usr/sbin/ga-bootstrap"
+  OVL_USRLIB_SYSTEMD="${SRC}/buildroot-external/rootfs-overlay/usr/lib/systemd/system"
   OVL_ETC_SYSTEMD="${SRC}/buildroot-external/rootfs-overlay/etc/systemd/system"
+  # Resolve which dir holds each unit — ga-bootstrap (Tier-2) lives in etc/,
+  # ga-bootstrap-disk (rootfs-baked) lives in usr/lib/. A single helper that
+  # finds either keeps the test future-proof if a unit moves later.
+  _find_unit() {
+    local svc="$1"
+    if [[ -f "${OVL_ETC_SYSTEMD}/${svc}" ]]; then
+      printf '%s' "${OVL_ETC_SYSTEMD}/${svc}"
+    elif [[ -f "${OVL_USRLIB_SYSTEMD}/${svc}" ]]; then
+      printf '%s' "${OVL_USRLIB_SYSTEMD}/${svc}"
+    fi
+  }
 
   # GAOS-01: addon-images.json includes a ga_manager entry (so the addon
   # container image is baked into the data partition's docker store and the
@@ -1520,9 +1535,10 @@ PY
   # the ga_manager addon from it every boot; ga-bootstrap-disk does the
   # early eMMC erase + OS marker.
   for _svc in ga-bootstrap.service ga-bootstrap-disk.service; do
-    [[ -f "${OVL_SYSTEMD}/${_svc}" ]] \
-      && _pass "GAOS-05: ${_svc} unit present in overlay" \
-      || _fail "GAOS-05: ${_svc} NOT present in overlay (${OVL_SYSTEMD})"
+    _svc_path="$(_find_unit "${_svc}")"
+    [[ -n "${_svc_path}" ]] \
+      && _pass "GAOS-05: ${_svc} unit present in overlay (${_svc_path#${SRC}/})" \
+      || _fail "GAOS-05: ${_svc} NOT present in overlay (neither ${OVL_ETC_SYSTEMD} nor ${OVL_USRLIB_SYSTEMD})"
   done
 
   # GAOS-06: both bootstrap services are ENABLED via .wants/ symlinks.
