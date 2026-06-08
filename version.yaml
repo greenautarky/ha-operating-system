@@ -17,8 +17,18 @@ components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
   # ghcr.io/greenautarky/<name>:<version> that contains a single top-
   # level dir matching the component's HA-integration domain name.
+  # Extracted into buildroot-external/rootfs-overlay/usr/share/ga/custom_components/.
   greenautarky-onboarding: "1.0.1"   # https://github.com/greenautarky/greenautarky-onboarding
   ga-frontend-bundle:       null     # not yet pulled via OCI — still embedded in rootfs-overlay (TODO: migrate next)
+
+rootfs_overlays:
+  # Same OCI mechanism, different tarball shape — the tarball ships rootfs-
+  # relative paths (usr/sbin/foo, etc/systemd/system/foo.service + its
+  # multi-user.target.wants/ symlink) and extracts straight into
+  # buildroot-external/rootfs-overlay/. Use this for first-boot / boot-
+  # critical system services that need to be in their canonical rootfs
+  # locations to be picked up by systemd.
+  ga-bootstrap: "1.1.0"   # https://github.com/greenautarky/ga-bootstrap — first-boot orchestrator (Supervisor wait → auto_update=false → vibe_addons → install ga_manager → wait HA Core → marker). Replaces /usr/libexec/ga-bootstrap + the auto_update step of /usr/libexec/ga-ha-init.
 
 addons:
   # Built by their own repos' CI; pinned for visibility. The actual

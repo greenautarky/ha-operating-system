@@ -128,5 +128,81 @@ if [ "${any_failed}" -ne 0 ]; then
   exit 3
 fi
 
+# --- rootfs_overlays ---------------------------------------------------
+#
+# A second class of Tier-2 component: its tarball doesn't follow the
+# HA-integration "<domain>/manifest.json" layout. Instead it ships
+# rootfs-shaped paths (usr/sbin/foo, etc/systemd/system/foo.service,
+# etc/systemd/system/multi-user.target.wants/foo.service symlink) and
+# should extract straight into `buildroot-external/rootfs-overlay/`.
+#
+# Example: ga-bootstrap (the first-boot orchestrator).
+#
+# Detection is explicit via a separate `rootfs_overlays:` map in
+# version.yaml — easier to read than auto-detecting the tarball shape,
+# and lets a single component repo declare which kind it is.
+
+OVERLAY_BASE="${REPO_ROOT}/buildroot-external/rootfs-overlay"
+overlay_list=$(yq -r '.rootfs_overlays // {} | to_entries[] | select(.value != null) | "\(.key) \(.value)"' "${VERSION_YAML}")
+
+if [ -n "${overlay_list}" ]; then
+  echo
+  echo "Syncing rootfs_overlays:"
+  any_overlay_failed=0
+  while IFS= read -r line; do
+    [ -z "${line}" ] && continue
+    pkg_name=$(echo "${line}" | awk '{print $1}')
+    pkg_version=$(echo "${line}" | awk '{print $2}')
+
+    # Marker file lives OUTSIDE the rootfs-overlay (= gitignored
+    # `ga_output/.sync-markers/`). Putting it inside the overlay
+    # would bake it into the device rootfs, where it'd then be hidden
+    # by the tmpfs that the kernel mounts over `/tmp/` at boot — and
+    # the rootfs is read-only anyway, so we couldn't update markers
+    # in place. Keep them on the builder side; first build after a
+    # fresh clone re-pulls (cheap, oras pull is ~1 s).
+    marker_dir="${REPO_ROOT}/ga_output/.sync-markers"
+    mkdir -p "${marker_dir}"
+    marker="${marker_dir}/${pkg_name}.synced-version"
+
+    if [ -f "${marker}" ] && [ "$(cat "${marker}")" = "${pkg_version}" ]; then
+      echo "  ${pkg_name}@${pkg_version} — already synced (skip)"
+      continue
+    fi
+
+    echo "  ${pkg_name}@${pkg_version} — pulling…"
+    tmpdir=$(mktemp -d)
+    (
+      cd "${tmpdir}"
+      if ! oras pull "${GHCR_NAMESPACE}/${pkg_name}:${pkg_version}" >/dev/null 2>&1; then
+        echo "::error::oras pull failed for ${pkg_name}:${pkg_version}" >&2
+        exit 1
+      fi
+    ) || { any_overlay_failed=1; rm -rf "${tmpdir}"; continue; }
+
+    tarball=$(find "${tmpdir}" -name "*.tar.gz" | head -1)
+    if [ -z "${tarball}" ]; then
+      echo "::error::no tarball in OCI artifact for ${pkg_name}:${pkg_version}" >&2
+      any_overlay_failed=1
+      rm -rf "${tmpdir}"
+      continue
+    fi
+
+    # NB: do NOT `rm -rf` the overlay base before extracting — other
+    # components / hand-curated rootfs content live there. The tarball
+    # is trusted to ship only the paths it owns; collisions overwrite,
+    # which is the desired behaviour for a deliberate version bump.
+    tar -xzf "${tarball}" -C "${OVERLAY_BASE}"
+    rm -rf "${tmpdir}"
+
+    echo "${pkg_version}" > "${marker}"
+    echo "  ${pkg_name}@${pkg_version} — extracted into ${OVERLAY_BASE}"
+  done <<< "${overlay_list}"
+
+  if [ "${any_overlay_failed}" -ne 0 ]; then
+    exit 3
+  fi
+fi
+
 echo
 echo "All pinned components synced."
