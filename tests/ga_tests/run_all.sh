@@ -19,9 +19,14 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Test suites by category
-SUITES_EMU="environment crash_detection boot_timing disk_guard"
+# - emu    = safe to run in QEMU / emulation (no real hardware needed).
+#            qemu CI lane (.github/workflows/qemu-ci.yml) runs exactly these
+#            via tests/qemu-ci/runner.py.
+# - device = needs real iHost hardware, network, Docker, HA running.
+# - all    = union; used when no category is specified.
+SUITES_EMU="environment crash_detection boot_timing disk_guard supervisor_health"
 SUITES_DEVICE="health telemetry network ping config_verify dns_config onboarding ga_frontend_bundle provisioning tailscale watchdog stress idle_perf hardware openstick ota_update"
-SUITES_ALL="crash_detection health telemetry environment network ping boot_timing disk_guard watchdog config_verify dns_config stress idle_perf onboarding ga_frontend_bundle provisioning tailscale hardware openstick ota_update"
+SUITES_ALL="crash_detection health telemetry environment network ping boot_timing disk_guard watchdog config_verify dns_config stress idle_perf onboarding ga_frontend_bundle provisioning tailscale hardware openstick ota_update supervisor_health"
 
 # Parse arguments
 CATEGORY=""
