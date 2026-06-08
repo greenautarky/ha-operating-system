@@ -283,11 +283,28 @@ ensure_dev_ca_from_rel_ca() {
 # Global build timestamp (compact format for filenames, set once at script start)
 GA_BUILD_TIMESTAMP="${GA_BUILD_TIMESTAMP:-$(date '+%Y%m%d%H%M%S')}"
 
-# GA-side release identifier (e.g. "v1.2.0"). Optional — when set, lands in
-# /etc/ga-release and /etc/os-release at post-build time so devices have a
-# clean operator-facing version distinct from the HAOS-internal OS_VERSION
-# (16.3.1.x). Override per build with: GA_RELEASE=v1.2.0 ./scripts/ga_build.sh …
-GA_RELEASE="${GA_RELEASE:-}"
+# GA-side release identifier (e.g. "BOSv1.2.3"). Lands in /etc/ga-release
+# and /etc/os-release at post-build time so devices have a clean operator-
+# facing version distinct from the HAOS-internal OS_VERSION (16.3.1.x).
+#
+# Resolution order (first non-empty wins):
+#   1. The GA_RELEASE env var, if explicitly set (CI overrides etc.).
+#   2. The `gaos_release:` key in version.yaml at the repo root.
+#   3. Empty — skips the /etc/ga-release write entirely.
+#
+# The version.yaml fallback exists because `docker run -e GA_RELEASE=…`
+# is silently stripped by `sudo -H` in hassos:local's entrypoint. The
+# env-var-only path lost the value (BOSv1.2.0 build #15 shipped without
+# the stamp); reading from version.yaml inside the container removes the
+# env-propagation fragility. Tracked in fleet_auto_update_audit_2026_06_01
+# follow-up.
+if [[ -z "${GA_RELEASE:-}" ]]; then
+  GA_RELEASE="$(sed -nE 's/^gaos_release:[[:space:]]*"?([^"#[:space:]]+)"?.*$/\1/p' \
+                  "${SCRIPT_DIR}/../version.yaml" 2>/dev/null | head -1)"
+  if [[ -n "${GA_RELEASE}" ]]; then
+    echo "GA_RELEASE not set in env — resolved to '${GA_RELEASE}' from version.yaml"
+  fi
+fi
 
 export GA_BUILD_TIMESTAMP GA_ENV GA_RELEASE
 

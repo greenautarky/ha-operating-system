@@ -1,11 +1,13 @@
 #!/bin/bash
 # release.sh — Bump versions for a new release, commit, and push.
 #
-# Updates four places that MUST stay in sync:
-#   1. ha-supervisor/supervisor/const.py        SUPERVISOR_VERSION
-#   2. haos-version/stable.json                  "supervisor" key
-#   3. haos-version/stable.json                  "ihost" key (under hassos)
-#   4. haos-version/stable.json                  "ga_release" key  (new since v1.2)
+# Updates five places that MUST stay in sync:
+#   1. ha-supervisor/supervisor/const.py            SUPERVISOR_VERSION
+#   2. haos-version/stable.json                      "supervisor" key
+#   3. haos-version/stable.json                      "ihost" key (under hassos)
+#   4. haos-version/stable.json                      "ga_release" key   (since v1.2)
+#   5. ha-operating-system/version.yaml              "gaos_release:" key (since BOSv1.2.4 — read by ga_build.sh)
+#   6. ha-operating-system/buildroot-external/meta   VERSION_{MAJOR,MINOR,SUFFIX}
 #
 # After this runs, the next steps are MANUAL (intentionally):
 #   a. SSH ga-builder, run: GA_RELEASE=<ga-release> ./scripts/ga_build.sh prod
@@ -227,13 +229,40 @@ rm "$META_FILE.bak"
 NEW_META=$(grep '^VERSION_MAJOR=' "$META_FILE" | cut -d'"' -f2).$(grep '^VERSION_MINOR=' "$META_FILE" | cut -d'"' -f2).$(grep '^VERSION_SUFFIX=' "$META_FILE" | cut -d'"' -f2)
 [[ "$NEW_META" == "$OS_VERSION" ]] || { echo "  FAIL: meta edit didn't take ($NEW_META)"; exit 1; }
 echo "  → $NEW_META ✓"
+
+# version.yaml `gaos_release:` is the build-time source of truth for the
+# /etc/ga-release stamp (read by scripts/ga_build.sh — see GA_RELEASE
+# resolution there). When --ga-release is given, keep it in sync with
+# stable.json so a single `release.sh` invocation covers all knobs.
+if [[ -n "$GA_RELEASE" ]]; then
+    VERSION_YAML="$HA_OS_REPO/version.yaml"
+    if [[ -f "$VERSION_YAML" ]]; then
+        echo "Applying version.yaml gaos_release..."
+        # Match the canonical "gaos_release: BOSv… # comment" shape — preserve
+        # the inline comment if present, replace only the value token.
+        sed -i.bak -E "s|^(gaos_release:[[:space:]]*)\"?[^\"#[:space:]]+\"?([[:space:]]*#.*)?\$|\1$GA_RELEASE\2|" "$VERSION_YAML"
+        rm "$VERSION_YAML.bak"
+        NEW_YAML_REL=$(sed -nE 's/^gaos_release:[[:space:]]*"?([^"#[:space:]]+)"?.*$/\1/p' "$VERSION_YAML" | head -1)
+        [[ "$NEW_YAML_REL" == "$GA_RELEASE" ]] || {
+            echo "  FAIL: version.yaml edit didn't take ($NEW_YAML_REL)"; exit 1;
+        }
+        echo "  → $NEW_YAML_REL ✓"
+    else
+        echo "  (skip) version.yaml not present at $VERSION_YAML"
+    fi
+fi
 echo ""
 
 # Commit + push
+#
+# $2 (file) may be a single path OR a space-separated list. Word-splitting is
+# intentional here so callers can stage e.g. "buildroot-external/meta version.yaml"
+# in a single commit. shellcheck-disable=SC2086 lives below for that reason.
 commit_repo() {
     local repo="$1" file="$2" subject="$3" branch="$4"
     cd "$repo"
-    git add "$file"
+    # shellcheck disable=SC2086 # word-split intentionally; see comment above
+    git add $file
     if git diff --cached --quiet; then
         echo "  ($repo): no diff to commit — skipping"
         return 0
@@ -258,8 +287,16 @@ else
 fi
 commit_repo "$HAOS_VERSION_REPO" "stable.json" \
     "$HAOS_COMMIT_SUBJECT" "$HAOS_VERSION_BRANCH"
-commit_repo "$HA_OS_REPO" "buildroot-external/meta" \
-    "chore: bump OS version to $OS_VERSION (buildroot-external/meta)" "master"
+# Stage version.yaml alongside meta in the ha-operating-system commit when
+# we touched it above (i.e. --ga-release was supplied). Single commit, single
+# push — the meta + gaos_release pair must always land together.
+HA_OS_FILES="buildroot-external/meta"
+HA_OS_SUBJECT="chore: bump OS version to $OS_VERSION (buildroot-external/meta)"
+if [[ -n "$GA_RELEASE" && -f "$HA_OS_REPO/version.yaml" ]]; then
+    HA_OS_FILES="$HA_OS_FILES version.yaml"
+    HA_OS_SUBJECT="chore: bump OS to $OS_VERSION + gaos_release=$GA_RELEASE"
+fi
+commit_repo "$HA_OS_REPO" "$HA_OS_FILES" "$HA_OS_SUBJECT" "master"
 
 echo ""
 echo "============================================="
