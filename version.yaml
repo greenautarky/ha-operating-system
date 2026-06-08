@@ -1,0 +1,33 @@
+# Single source of truth for component + addon version pins.
+#
+# Components are pulled from GHCR as OCI artifacts at OS build time by
+# scripts/sync-components.sh, which lays them out under
+# buildroot-external/rootfs-overlay/usr/share/ga/custom_components/.
+#
+# Addons are built separately (see ga_manager etc.) and pinned via
+# buildroot-external/package/hassio/addon-images.json — they are listed
+# here for visibility, not consumed at OS build time.
+#
+# Bumping a version here + running scripts/sync-components.sh is the
+# only OS-side change needed to ship a new component release.
+
+gaos_release: BOSv1.2.3   # marker baked into /etc/ga-release at build
+
+components:
+  # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
+  # ghcr.io/greenautarky/<name>:<version> that contains a single top-
+  # level dir matching the component's HA-integration domain name.
+  greenautarky-onboarding: "1.0.0"   # https://github.com/greenautarky/greenautarky-onboarding
+  ga-frontend-bundle:       null     # not yet pulled via OCI — still embedded in rootfs-overlay (TODO: migrate next)
+
+addons:
+  # Built by their own repos' CI; pinned for visibility. The actual
+  # pin consumed at OS build is in buildroot-external/package/hassio/addon-images.json.
+  ga_manager:               "0.26.8"  # current ship; 0.26.9 PR #42 pending
+  ga_default_addon:         "1.1.2"
+  ga_hmvapp_addon:          "1.1.7"
+
+# Upstream base images — referenced by version.json + Supervisor config.
+base_images:
+  homeassistant_core:        "2025.11.3"
+  homeassistant_supervisor:  "2025.11.4.5"

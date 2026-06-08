@@ -179,6 +179,17 @@ echo "Using OTA_DIR=$OTA_DIR"
 echo "Using REL_CA_PEM=$REL_CA_PEM"
 echo "Using DEV_CA_PEM=$DEV_CA_PEM"
 
+# Pull Tier-2 components from GHCR into the rootfs-overlay before Buildroot
+# packages the rootfs. The pulled trees are gitignored, so each build picks
+# up a fresh copy at the pinned version in version.yaml. Idempotent — if a
+# component is already at the pinned version on disk, the script skips it.
+if [ -x "${REPO_ROOT:-$(pwd)}/scripts/sync-components.sh" ]; then
+  echo
+  echo "===== Syncing Tier-2 components from GHCR ====="
+  "${REPO_ROOT:-$(pwd)}/scripts/sync-components.sh"
+  echo
+fi
+
 # ---- Sanity checks (fail fast) ----
 echo "=== Pre-build validation ==="
 PREFLIGHT_FAIL=0
