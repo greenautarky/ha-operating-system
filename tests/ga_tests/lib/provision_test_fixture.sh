@@ -160,6 +160,19 @@ EOF
   log "wrote ${BOOTSTRAP_ENV} → GHCR_CREDS_FILE=${MNT_CREDS}"
 fi
 
+# 7. If ga-bootstrap.service is in 'failed' state (= typical on first boot
+# of a non-provisioned device — Step 3 fails when creds aren't there yet),
+# reset it and try once more now that the env file points at the right
+# place. Requires ga-bootstrap ≥ v1.2.2 for EnvironmentFile to work.
+# Idempotent: a no-op if the service is already active or inactive-clean.
+BOOTSTRAP_STATE=$(systemctl is-failed ga-bootstrap.service 2>/dev/null || echo unknown)
+if [ "${BOOTSTRAP_STATE}" = "failed" ]; then
+  log "ga-bootstrap.service is in 'failed' state — resetting + restarting"
+  systemctl reset-failed ga-bootstrap.service 2>/dev/null || true
+  systemctl start ga-bootstrap.service 2>/dev/null || true
+  log "ga-bootstrap.service restart issued — converge will pick up from where it stopped"
+fi
+
 log "fixture complete. files written:"
 ls -la "${SHARE_CREDS}" "${MNT_CREDS}" "${BUNDLE_FILE}" "${DEVICE_ID_FILE}" \
        "${DEVICE_LABEL_FILE}" "${OS_MARKER}" "${BOOTSTRAP_ENV}" 2>&1 | awk '/^-/ {print "  " $9}'
