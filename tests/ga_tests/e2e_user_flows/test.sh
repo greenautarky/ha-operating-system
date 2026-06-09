@@ -41,7 +41,12 @@ STORAGE_DIR="${CFG_DIR}/.storage"
 STATE_FILE="${STORAGE_DIR}/greenautarky_onboarding"
 GA_SECRETS_DIR="${STORAGE_DIR}/greenautarky_secrets"
 BUNDLE_COMMUNITY="${CFG_DIR}/custom_components/ga_frontend_bundle/community"
-PIN_FILE="${CFG_DIR}/ga-onboarding-pin"
+# greenautarky_onboarding v1.0.3 moved the PIN file from /config/ga-onboarding-pin
+# to /config/.storage/greenautarky_secrets/onboarding_pin (= same .storage/
+# dir already used since v1.0.1 for the console-login secret). Test writes
+# the new path; integration's _migrate_legacy_pin handles devices upgrading
+# from older versions.
+PIN_FILE="${GA_SECRETS_DIR}/onboarding_pin"
 CONSOLE_LOGIN_SECRET_FILE="${GA_SECRETS_DIR}/console_login_secret"
 TEST_USER_NAME="e2etestadmin"
 # Deterministic so re-runs can re-login (= no $$ randomness)
@@ -59,9 +64,10 @@ mkdir -p "$STORAGE_DIR"
 # restore to after DASH-02 (which flips completed=true).
 printf '%s' '{"version":2,"key":"greenautarky_onboarding","data":{"completed":false,"tenant_mode":true,"steps_done":[],"consents":{}}}' \
   > "$STATE_FILE"
-[ -f "$PIN_FILE" ] || printf '%s' "$TEST_PIN" > "$PIN_FILE"
 mkdir -p "$GA_SECRETS_DIR"
 chmod 0700 "$GA_SECRETS_DIR"
+# PIN now under $GA_SECRETS_DIR (v1.0.3+). $GA_SECRETS_DIR was mkdir'd above.
+[ -f "$PIN_FILE" ] || { printf '%s' "$TEST_PIN" > "$PIN_FILE"; chmod 0600 "$PIN_FILE"; }
 if [ ! -f "$CONSOLE_LOGIN_SECRET_FILE" ]; then
   head -c 32 /dev/urandom | base64 | tr -d '\n=' > "$CONSOLE_LOGIN_SECRET_FILE"
   chmod 0600 "$CONSOLE_LOGIN_SECRET_FILE"
@@ -315,9 +321,9 @@ else
 fi
 
 # WIZ-02: PIN file present (gates password reset)
-[ -f "$PIN_FILE" ] || printf '%s' "$TEST_PIN" > "$PIN_FILE"
+[ -f "$PIN_FILE" ] || { printf '%s' "$TEST_PIN" > "$PIN_FILE"; chmod 0600 "$PIN_FILE"; }
 if [ -f "$PIN_FILE" ]; then
-  _pass "WIZ-02: ga-onboarding-pin file present (= $(wc -c < $PIN_FILE) bytes)"
+  _pass "WIZ-02: onboarding_pin file present at $PIN_FILE (= $(wc -c < $PIN_FILE) bytes)"
 else
   _fail "WIZ-02: could not write PIN file"
 fi
