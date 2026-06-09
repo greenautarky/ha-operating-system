@@ -103,4 +103,42 @@ run_test "SUP-08" "Supervisor reports healthy" \
 skip_test "SUP-10" "Real addon install probe (Bug #4 coverage)" \
   "deferred to qemu-ci phase 2 (needs local GHCR mirror)"
 
+# SUP-11 — ga-bootstrap.service ran. Catches the class of bug where systemd
+# silently drops a service because a `Requires=` unit does not exist (=
+# what happened on K31 BOSv1.2.6 when ga-bootstrap.service had
+# Requires=hassio-supervisor.service but the real unit is named
+# hassos-supervisor.service). The accept patterns mirror the two valid
+# states:
+#   - Active: active                         (currently running)
+#   - Active: inactive (dead) ... Result: success  (oneshot completed)
+# Anything else (Result: dependency / Result: protocol / no journal at
+# all) means the start path failed silently.
+#
+# See memory/incident_hassio_vs_hassos_systemd_unit for the originating
+# bench-test incident.
+run_test "SUP-11" "ga-bootstrap.service ran successfully (not silently dropped)" \
+  "systemctl status ga-bootstrap.service --no-pager 2>/dev/null \
+    | grep -qE 'Active: active|Active: inactive.*Result: success'"
+
+# SUP-12 — ga-bootstrap.service journal has entries. A `Requires=` on a
+# missing unit can also produce 'inactive (dead)' if the unit was never
+# triggered at all. This is a tighter assertion: at LEAST one journal line.
+run_test "SUP-12" "ga-bootstrap.service has journal entries (≥ 1 line)" \
+  "[ \"\$(journalctl -u ga-bootstrap.service --no-pager 2>/dev/null | wc -l)\" -ge 1 ]"
+
+# SUP-13 — Reverse check: the systemd unit declares After=/Requires= on
+# the CORRECT supervisor unit name. Reads the unit file directly so this
+# catches the hassio/hassos typo even on an offline / un-converged device.
+# Accept either spelling for backward compat with old rootfs ga-bootstrap.
+run_test "SUP-13" "ga-bootstrap.service Requires= the real supervisor unit" \
+  "systemctl cat ga-bootstrap.service 2>/dev/null \
+    | grep -qE '^(After|Requires)=.*hass(io|os)-supervisor\\.service'"
+
+# SUP-14 — Reverse-reverse: confirm the named supervisor unit ACTUALLY
+# exists on disk. systemd does not warn about a missing Requires= target
+# until something tries to depend on it; this test screams early if a
+# future HAOS upstream rename strands all our Tier-2 services.
+run_test "SUP-14" "Supervisor systemd unit (hassos-supervisor.service) exists" \
+  "systemctl list-unit-files hassos-supervisor.service 2>/dev/null | grep -q hassos-supervisor"
+
 suite_end
