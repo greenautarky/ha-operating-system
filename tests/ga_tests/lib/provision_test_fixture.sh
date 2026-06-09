@@ -142,21 +142,25 @@ else
   log "WARN: ${ROOTFS_COMPONENTS} not present — custom_components not staged"
 fi
 
-# 6. /etc/ga-bootstrap.conf — would override GHCR_CREDS_FILE, but /etc is
-# RO on HAOS. We can't write it directly. The override has to come via
-# the .service file's Environment= directive, which is also RO without
-# a drop-in under /mnt/overlay/etc/systemd/.... For the fixture path
-# we just print a friendly hint.
-if [ ! -f /etc/ga/ghcr-creds.json ]; then
-  log "NOTE: /etc/ga/ghcr-creds.json is RO and absent. The OS image MUST"
-  log "      bake it at build time OR ga-bootstrap.service needs a drop-in"
-  log "      Environment=GHCR_CREDS_FILE=${MNT_CREDS}. See memory:"
-  log "      todo_ga_bootstrap_creds_path. For now ${MNT_CREDS} is in place;"
-  log "      ga-bootstrap will fail Step 3 unless an operator invokes it"
-  log "      manually with GHCR_CREDS_FILE=${MNT_CREDS}."
+# 6. /mnt/data/ga-bootstrap.env — picked up by ga-bootstrap.service ≥ v1.2.2
+# via `EnvironmentFile=-/mnt/data/ga-bootstrap.env`. Lets ga-bootstrap find
+# the creds file at the writable /mnt/data path even though its compiled-in
+# default points at /etc (= RO squashfs on HAOS).
+BOOTSTRAP_ENV="${MNT_DATA}/ga-bootstrap.env"
+if [ -f "${BOOTSTRAP_ENV}" ] && grep -q "^GHCR_CREDS_FILE=${MNT_CREDS}$" "${BOOTSTRAP_ENV}"; then
+  log "${BOOTSTRAP_ENV} already wired for ${MNT_CREDS} — skip"
+else
+  cat > "${BOOTSTRAP_ENV}" <<EOF
+# Written by tests/ga_tests/lib/provision_test_fixture.sh.
+# Sourced by ga-bootstrap.service ≥ v1.2.2 (EnvironmentFile=-…).
+# /etc is RO squashfs on HAOS; this is the override path for the bench.
+GHCR_CREDS_FILE=${MNT_CREDS}
+EOF
+  chmod 0644 "${BOOTSTRAP_ENV}"
+  log "wrote ${BOOTSTRAP_ENV} → GHCR_CREDS_FILE=${MNT_CREDS}"
 fi
 
 log "fixture complete. files written:"
 ls -la "${SHARE_CREDS}" "${MNT_CREDS}" "${BUNDLE_FILE}" "${DEVICE_ID_FILE}" \
-       "${DEVICE_LABEL_FILE}" "${OS_MARKER}" 2>&1 | awk '/^-/ {print "  " $9}'
+       "${DEVICE_LABEL_FILE}" "${OS_MARKER}" "${BOOTSTRAP_ENV}" 2>&1 | awk '/^-/ {print "  " $9}'
 ls -la "${STAGED_COMPONENTS}" 2>&1 | awk '/^d/ && $9 != "." && $9 != ".." {print "  " "${STAGED_COMPONENTS}/" $9}'

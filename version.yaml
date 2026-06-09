@@ -28,7 +28,7 @@ rootfs_overlays:
   # buildroot-external/rootfs-overlay/. Use this for first-boot / boot-
   # critical system services and config bundles that need to live in
   # their canonical rootfs locations to be picked up by systemd.
-  ga-bootstrap:         "1.2.1"  # https://github.com/greenautarky/ga-bootstrap — first-boot orchestrator (Supervisor wait → auto_update=false → vibe_addons → install ga_manager → wait HA Core → marker). Replaces /usr/libexec/ga-bootstrap + the auto_update step of /usr/libexec/ga-ha-init.
+  ga-bootstrap:         "1.2.2"  # https://github.com/greenautarky/ga-bootstrap — first-boot orchestrator. v1.2.2 adds EnvironmentFile=-/mnt/data/ga-bootstrap.env so on-device tests + operators can override GHCR_CREDS_FILE / BACKOFF_SEQUENCE without rebuilding (/etc is RO squashfs).
   ga-telemetry-config:  "1.0.0"  # https://github.com/greenautarky/ga-telemetry-config — Tier-0 telemetry (boot-timing exporter + fluent-bit boot-log capture)
 
 addons:
