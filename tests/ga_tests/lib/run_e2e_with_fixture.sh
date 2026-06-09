@@ -98,24 +98,20 @@ ssh $ssh_opts "$target" "
     /tmp/provision_test_fixture.sh
 " || { echo "ERROR: fixture exited non-zero" >&2; exit 68; }
 
-# 4. Push + run the E2E suite
-log "4/5  uploading + running e2e_user_flows/test.sh ..."
+# 4. Push the E2E suite. Intentionally do NOT ship lib/test_helpers.sh —
+# e2e_user_flows/test.sh has a fallback path that defines _pass/_fail/_skip
+# inline when ../lib/test_helpers.sh is absent. The shipped helpers file
+# uses different function names (run_test, run_test_show) that the e2e
+# test wouldn't find anyway, so a missing helpers file is the working path.
+log "4/5  uploading e2e_user_flows/test.sh ..."
 # shellcheck disable=SC2086
 scp $scp_opts "$E2E" "$target:/tmp/e2e_user_flows_test.sh" >/dev/null
-# Helpers if the test sources them — fall through to in-script minimal helpers otherwise
-HELPERS="${SCRIPT_DIR}/test_helpers.sh"
-if [ -f "$HELPERS" ]; then
-  # shellcheck disable=SC2086
-  ssh $ssh_opts "$target" 'mkdir -p /tmp/ga_tests_lib' >/dev/null
-  # shellcheck disable=SC2086
-  scp $scp_opts "$HELPERS" "$target:/tmp/ga_tests_lib/test_helpers.sh" >/dev/null
-fi
-# Stage the test under /tmp/e2e_user_flows/ so its `../lib/test_helpers.sh` resolves
+# Stage so /tmp/../lib/test_helpers.sh resolves to "absent" (= inline path)
 # shellcheck disable=SC2086
 ssh $ssh_opts "$target" '
+  rm -rf /tmp/e2e_user_flows /tmp/lib 2>/dev/null
   mkdir -p /tmp/e2e_user_flows
   mv /tmp/e2e_user_flows_test.sh /tmp/e2e_user_flows/test.sh
-  ln -sf /tmp/ga_tests_lib /tmp/lib
   chmod +x /tmp/e2e_user_flows/test.sh
 ' >/dev/null
 
