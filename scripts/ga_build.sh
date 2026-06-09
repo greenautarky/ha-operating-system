@@ -195,6 +195,47 @@ if [ -f "${REPO_ROOT:-$(pwd)}/version.yaml" ]; then
       echo "Component check: ${comp} present (manifest version ${ver:-?})"
     fi
   done
+
+  # rootfs_overlays staleness check — fail fast if the on-disk synced
+  # version doesn't match version.yaml. Without this, a forgotten
+  # `sync-components.sh` ships an image with stale Tier-2 service files
+  # but the build still exits 0 (see memory/feedback_ga_build_sync_first).
+  marker_dir="${REPO_ROOT:-$(pwd)}/ga_output/.sync-markers"
+  in_overlay_block=0
+  while IFS= read -r line; do
+    case "$line" in
+      "rootfs_overlays:"*) in_overlay_block=1; continue;;
+      [a-z]*":"*) in_overlay_block=0;;
+    esac
+    [ "$in_overlay_block" -eq 1 ] || continue
+    case "$line" in
+      "  "[a-z]*":"*)
+        pkg=$(echo "$line" | awk '{print $1}' | tr -d ':')
+        pinned=$(echo "$line" | awk '{print $2}' | tr -d '"' | sed 's/[#].*//' | tr -d '[:space:]')
+        [ -z "$pinned" ] || [ "$pinned" = "null" ] && continue
+        marker="${marker_dir}/${pkg}.synced-version"
+        if [ ! -f "$marker" ]; then
+          echo "FAIL: rootfs_overlay '${pkg}' pinned to ${pinned} but no sync marker — run scripts/sync-components.sh first" >&2
+          PREFLIGHT_FAIL_OVERLAY=1
+        else
+          on_disk=$(cat "$marker")
+          if [ "$on_disk" != "$pinned" ]; then
+            echo "FAIL: rootfs_overlay '${pkg}' marker says ${on_disk} but version.yaml pins ${pinned} — run scripts/sync-components.sh" >&2
+            PREFLIGHT_FAIL_OVERLAY=1
+          else
+            echo "Overlay check: ${pkg}@${pinned} ✓"
+          fi
+        fi
+        ;;
+    esac
+  done < "${REPO_ROOT:-$(pwd)}/version.yaml"
+  if [ "${PREFLIGHT_FAIL_OVERLAY:-0}" -eq 1 ]; then
+    echo "" >&2
+    echo "ABORT: rootfs_overlays out of sync. Fix:" >&2
+    echo "  (host)  cd ${REPO_ROOT:-$(pwd)} && ./scripts/sync-components.sh" >&2
+    echo "  then re-run ga_build.sh inside the container." >&2
+    exit 1
+  fi
 fi
 
 # ---- Sanity checks (fail fast) ----
