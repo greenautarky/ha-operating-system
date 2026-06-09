@@ -19,7 +19,7 @@ components:
   # level dir matching the component's HA-integration domain name.
   # Extracted into buildroot-external/rootfs-overlay/usr/share/ga/custom_components/.
   greenautarky-onboarding: "1.0.2"   # https://github.com/greenautarky/greenautarky-onboarding
-  ga-frontend-bundle:       "1.0.0"  # https://github.com/greenautarky/ga-frontend-bundle (14 vendored Lovelace cards, ~6 MB; was embedded)
+  ga-frontend-bundle:       "1.0.1"  # https://github.com/greenautarky/ga-frontend-bundle (14 vendored Lovelace cards, ~6 MB; was embedded)
 
 rootfs_overlays:
   # Same OCI mechanism as `components:` above, different tarball shape —
