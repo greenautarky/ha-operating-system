@@ -38,6 +38,7 @@ suite_start "User flows (onboarding + login + dashboard + wizard + password-rese
 HA="http://localhost:8123"
 CFG_DIR="/mnt/data/supervisor/homeassistant"
 STORAGE_DIR="${CFG_DIR}/.storage"
+STATE_FILE="${STORAGE_DIR}/greenautarky_onboarding"
 GA_SECRETS_DIR="${STORAGE_DIR}/greenautarky_secrets"
 BUNDLE_COMMUNITY="${CFG_DIR}/custom_components/ga_frontend_bundle/community"
 PIN_FILE="${CFG_DIR}/ga-onboarding-pin"
@@ -49,6 +50,24 @@ TEST_PIN="123456"
 TOKEN=""
 
 # ===========================================================================
+# 0. Test fixtures — write all required state files BEFORE any test runs so
+#    DASH-02 (which toggles `completed`) and WIZ-* can both read/write them.
+# ===========================================================================
+mkdir -p "$STORAGE_DIR"
+# ALWAYS reset to a clean wizard-pending state at the start of each run —
+# tests assert completed=false (PWRST, WIZ) AND need a known baseline to
+# restore to after DASH-02 (which flips completed=true).
+printf '%s' '{"version":2,"key":"greenautarky_onboarding","data":{"completed":false,"tenant_mode":true,"steps_done":[],"consents":{}}}' \
+  > "$STATE_FILE"
+[ -f "$PIN_FILE" ] || printf '%s' "$TEST_PIN" > "$PIN_FILE"
+mkdir -p "$GA_SECRETS_DIR"
+chmod 0700 "$GA_SECRETS_DIR"
+if [ ! -f "$CONSOLE_LOGIN_SECRET_FILE" ]; then
+  head -c 32 /dev/urandom | base64 | tr -d '\n=' > "$CONSOLE_LOGIN_SECRET_FILE"
+  chmod 0600 "$CONSOLE_LOGIN_SECRET_FILE"
+fi
+
+# ===========================================================================
 # 1. HA stock onboarding
 # ===========================================================================
 
@@ -56,14 +75,15 @@ ha_onboarding_status() {
   curl -s "$HA/api/onboarding" 2>/dev/null
 }
 
-# ONBOARD-01 — also detect re-run case (= user step already done).
+# ONBOARD-01 — also detect re-run case (= user step already done OR all
+# stock onboarding done so /api/onboarding 404s).
 status=$(ha_onboarding_status)
 user_done=$(echo "$status" | jq -r '.[] | select(.step=="user") | .done' 2>/dev/null)
 if [ "$user_done" = "false" ]; then
   _pass "ONBOARD-01: HA onboarding 'user' step pending"
   ONBOARDING_FRESH=1
-elif [ "$user_done" = "true" ]; then
-  _pass "ONBOARD-01: HA onboarding already completed (re-run mode — will reuse fixed creds)"
+elif [ "$user_done" = "true" ] || echo "$status" | grep -q "404"; then
+  _pass "ONBOARD-01: HA onboarding already completed (re-run mode — fixed-creds login path)"
   ONBOARDING_FRESH=0
 else
   _fail "ONBOARD-01: cannot determine onboarding state — response: $status"
@@ -176,14 +196,97 @@ else
   fi
 fi
 
-# DASH-02: card JS module URLs appear in served HTML (authenticated)
-N_HTML=$(curl -sL -H "Authorization: Bearer $TOKEN" "$HA/" 2>/dev/null \
+# DASH-02: card JS module URLs appear in served HTML. Two layers of
+# "are we through onboarding?" must be cleared first:
+#   1. HA stock onboarding has THREE steps after `user` (core_config,
+#      analytics, integration) — until ALL are done the served index is
+#      the onboarding shell, NO custom-integration extra-module URLs.
+#   2. greenautarky_onboarding monkey-patches HA's IndexView.get to
+#      redirect to /greenautarky-setup until `state.completed == true`.
+#
+# Mark BOTH as complete, then probe. SAVE_STATE restores the greenautarky
+# state at the end so subsequent WIZ-/PWRST- tests still see the
+# wizard-incomplete state they expect.
+SAVE_STATE=$(cat "$STATE_FILE" 2>/dev/null)
+jq '.data.completed=true' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+
+# Complete the remaining HA stock onboarding steps (idempotent). The
+# integration step requires redirect_uri AND client_id; the others ignore
+# extra keys so we pass {} where empty would be parsed.
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{}' "$HA/api/onboarding/core_config" >/dev/null 2>&1
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{}' "$HA/api/onboarding/analytics" >/dev/null 2>&1
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"client_id\":\"$HA/\",\"redirect_uri\":\"$HA/?auth_callback=1\"}" \
+  "$HA/api/onboarding/integration" >/dev/null 2>&1
+
+ha core restart --no-progress >/dev/null 2>&1
+# Wait until ga_frontend_bundle is loaded — /api/states 200 is not enough,
+# it can return before custom_components finish their async_setup. Poll
+# /api/config until DOMAIN appears in components, up to 180 s.
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18; do
+  sleep 10
+  comp=$(curl -s -H "Authorization: Bearer $TOKEN" "$HA/api/config" 2>/dev/null \
+         | jq -r '.components // [] | join(",")' 2>/dev/null)
+  echo "$comp" | tr ',' '\n' | grep -qx ga_frontend_bundle && break
+done
+
+# Re-acquire token because Core restart invalidates the previous one.
+flow_id=$(curl -s -X POST -H "Content-Type: application/json" \
+  -d "{\"client_id\":\"$HA/\",\"handler\":[\"homeassistant\",null],\"redirect_uri\":\"$HA/?auth_callback=1\"}" \
+  "$HA/auth/login_flow" 2>/dev/null | jq -r '.flow_id // empty')
+if [ -n "$flow_id" ]; then
+  ac=$(curl -s -X POST -H "Content-Type: application/json" \
+    -d "{\"client_id\":\"$HA/\",\"username\":\"$TEST_USER_NAME\",\"password\":\"$TEST_USER_PASS\"}" \
+    "$HA/auth/login_flow/$flow_id" 2>/dev/null | jq -r '.result // empty')
+  if [ -n "$ac" ]; then
+    DASH_TOK=$(curl -s -X POST -d "grant_type=authorization_code&code=$ac&client_id=$HA/" \
+      "$HA/auth/token" 2>/dev/null | jq -r '.access_token // empty')
+  fi
+fi
+[ -z "${DASH_TOK:-}" ] && DASH_TOK="$TOKEN"
+N_HTML=$(curl -sL -H "Authorization: Bearer $DASH_TOK" "$HA/" 2>/dev/null \
   | grep -oE '/ga_frontend_bundle_static/[^"]+' | sort -u | wc -l)
 N_CARDS=$(jq '.cards | length' "${BUNDLE_COMMUNITY}/cards.json" 2>/dev/null || echo 0)
 if [ "$N_HTML" -ge "$N_CARDS" ] && [ "$N_CARDS" -gt 0 ]; then
-  _pass "DASH-02: served HTML lists $N_HTML card URLs (≥ $N_CARDS expected)"
+  _pass "DASH-02: served HTML lists $N_HTML card URLs (≥ $N_CARDS expected) after wizard-completed bypass"
 else
-  _fail "DASH-02: served HTML only lists $N_HTML URLs (expected ≥ $N_CARDS)"
+  _fail "DASH-02: only $N_HTML URLs in HTML (expected ≥ $N_CARDS) — ga_frontend_bundle add_extra_js_url not effective"
+fi
+# Restore wizard-incomplete state for subsequent tests (PIN, wizard).
+printf '%s' "$SAVE_STATE" > "$STATE_FILE"
+ha core restart --no-progress >/dev/null 2>&1
+# Same waiting-for-component pattern as DASH-02: /api/states is not enough,
+# the greenautarky_onboarding setup must finish to honor the restored state.
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18; do
+  sleep 10
+  comp=$(curl -s -H "Authorization: Bearer $TOKEN" "$HA/api/config" 2>/dev/null \
+         | jq -r '.components // [] | join(",")' 2>/dev/null)
+  echo "$comp" | tr ',' '\n' | grep -qx greenautarky_onboarding && break
+done
+
+# DASH-03 — ga_frontend_bundle async_setup actually fired. The integration
+# is yaml-only with integration_type="service"; HA Core 2025.11.x silently
+# skips async_setup unless CONFIG_SCHEMA is declared. If async_setup never
+# ran, none of the cards are injected via add_extra_js_url and dashboards
+# using custom:mushroom-card etc. fail with "unknown card type".
+#
+# Check hass.config.components via /api/config — the integration's DOMAIN
+# must appear in the loaded-components list.
+loaded=$(curl -s -H "Authorization: Bearer $TOKEN" "$HA/api/config" 2>/dev/null \
+  | jq -r '.components // [] | join(",")' 2>/dev/null)
+if echo "$loaded" | tr ',' '\n' | grep -qx ga_frontend_bundle; then
+  _pass "DASH-03: ga_frontend_bundle integration loaded (in hass.config.components)"
+else
+  _fail "DASH-03: ga_frontend_bundle NOT in hass.config.components — async_setup did not fire (CONFIG_SCHEMA missing?)"
+fi
+
+# DASH-04 — greenautarky_onboarding integration actually fired.
+if echo "$loaded" | tr ',' '\n' | grep -qx greenautarky_onboarding; then
+  _pass "DASH-04: greenautarky_onboarding integration loaded"
+else
+  _fail "DASH-04: greenautarky_onboarding NOT in hass.config.components"
 fi
 
 # ===========================================================================
@@ -196,7 +299,6 @@ fi
 # raises NotImplementedError (= what we'd see if a v1 file ever existed).
 # Wipe any prior version-mismatched file so the test is self-healing.
 mkdir -p "$STORAGE_DIR"
-STATE_FILE="${STORAGE_DIR}/greenautarky_onboarding"
 NEED_WRITE=1
 if [ -f "$STATE_FILE" ]; then
   cur_ver=$(jq -r '.version // 0' "$STATE_FILE" 2>/dev/null)
