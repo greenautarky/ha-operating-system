@@ -11,7 +11,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.2.11  # marker baked into /etc/ga-release at build (1.2.11 = ga-bootstrap 1.2.4 GHCR creds fallback chain)
+gaos_release: BOSv1.2.11  # marker baked into /etc/ga-release at build (1.2.11 = ga-bootstrap 1.2.5 + ga_manager 0.27.1 — /share/ retired, creds in addon-private /data/ for arbitrary-addon safety)
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
