@@ -11,7 +11,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.2.12  # marker baked into /etc/ga-release at build (1.2.12 = ga-bootstrap 1.2.6 fix: `ha docker registries -f` was invalid CLI flag, replaced by `add --username --password`)
+gaos_release: BOSv1.2.13  # marker baked into /etc/ga-release at build (1.2.13 = Supervisor 2025.11.4.6 dns boot-race fix + ga-resolve-ota.service ordering + ga-update-hosts container-inject)
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
@@ -41,4 +41,4 @@ addons:
 # Upstream base images — referenced by version.json + Supervisor config.
 base_images:
   homeassistant_core:        "2025.11.3"
-  homeassistant_supervisor:  "2025.11.4.5"
+  homeassistant_supervisor:  "2025.11.4.6"
