@@ -11,7 +11,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.2.10  # marker baked into /etc/ga-release at build (1.2.10 = ga-bootstrap 1.2.3 store-add idempotency fix)
+gaos_release: BOSv1.2.11  # marker baked into /etc/ga-release at build (1.2.11 = ga-bootstrap 1.2.4 GHCR creds fallback chain)
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
@@ -28,7 +28,7 @@ rootfs_overlays:
   # buildroot-external/rootfs-overlay/. Use this for first-boot / boot-
   # critical system services and config bundles that need to live in
   # their canonical rootfs locations to be picked up by systemd.
-  ga-bootstrap:         "1.2.3"  # https://github.com/greenautarky/ga-bootstrap — first-boot orchestrator. v1.2.2 adds EnvironmentFile=-/mnt/data/ga-bootstrap.env so on-device tests + operators can override GHCR_CREDS_FILE / BACKOFF_SEQUENCE without rebuilding (/etc is RO squashfs).
+  ga-bootstrap:         "1.2.4"  # https://github.com/greenautarky/ga-bootstrap — first-boot orchestrator. v1.2.2 adds EnvironmentFile=-/mnt/data/ga-bootstrap.env so on-device tests + operators can override GHCR_CREDS_FILE / BACKOFF_SEQUENCE without rebuilding (/etc is RO squashfs).
   ga-telemetry-config:  "1.0.0"  # https://github.com/greenautarky/ga-telemetry-config — Tier-0 telemetry (boot-timing exporter + fluent-bit boot-log capture)
 
 addons:
