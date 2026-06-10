@@ -2,8 +2,14 @@
 Description=Probe GA OTA endpoints and pick best path (NetBird primary, Public fallback)
 # Must run after network is up but BEFORE ga-update-hosts so the latter can
 # consume /run/ga-resolve-ota.active.
+#
+# Also Before=hassos-supervisor (= the Supervisor container's dns.py reads
+# /run/ga-resolve-ota.active on init; if supervisor wins the race + caches
+# negative, ota.greenautarky.com resolves to the bridge IP 172.30.32.1 for
+# the lifetime of the supervisor process). Verified on K7 BOSv1.2.12 OTA
+# 2026-06-10 — see memory/incident_supervisor_dns_boot_race_2026_06_10.
 After=NetworkManager-wait-online.service hassos-overlay.service hassos-config.service
-Before=ga-update-hosts.service
+Before=ga-update-hosts.service hassos-supervisor.service
 Wants=NetworkManager-wait-online.service hassos-overlay.service
 
 [Service]
