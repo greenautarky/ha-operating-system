@@ -28,13 +28,13 @@ rootfs_overlays:
   # buildroot-external/rootfs-overlay/. Use this for first-boot / boot-
   # critical system services and config bundles that need to live in
   # their canonical rootfs locations to be picked up by systemd.
-  ga-bootstrap:         "1.2.4"  # https://github.com/greenautarky/ga-bootstrap — first-boot orchestrator. v1.2.2 adds EnvironmentFile=-/mnt/data/ga-bootstrap.env so on-device tests + operators can override GHCR_CREDS_FILE / BACKOFF_SEQUENCE without rebuilding (/etc is RO squashfs).
+  ga-bootstrap:         "1.2.5"  # https://github.com/greenautarky/ga-bootstrap — first-boot orchestrator. v1.2.2 adds EnvironmentFile=-/mnt/data/ga-bootstrap.env so on-device tests + operators can override GHCR_CREDS_FILE / BACKOFF_SEQUENCE without rebuilding (/etc is RO squashfs).
   ga-telemetry-config:  "1.0.0"  # https://github.com/greenautarky/ga-telemetry-config — Tier-0 telemetry (boot-timing exporter + fluent-bit boot-log capture)
 
 addons:
   # Built by their own repos' CI; pinned for visibility. The actual
   # pin consumed at OS build is in buildroot-external/package/hassio/addon-images.json.
-  ga_manager:               "0.27.0"  # tz baseline in converge step 8
+  ga_manager:               "0.27.1"  # tz baseline in converge step 8
   ga_default_addon:         "1.1.2"
   ga_hmvapp_addon:          "1.1.7"
 
