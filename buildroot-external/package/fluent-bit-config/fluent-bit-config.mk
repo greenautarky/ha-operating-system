@@ -16,6 +16,13 @@ define FLUENT_BIT_CONFIG_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0644 $(FLUENT_BIT_CONFIG_PKGDIR)/fluent-bit-debug.conf \
 		$(TARGET_DIR)/etc/fluent-bit/fluent-bit-debug.conf
 
+	# Phase 7 scaffold — LTE network-details pipeline. Shipped to the
+	# rootfs but NOT included from fluent-bit.conf yet (= no
+	# `@INCLUDE network-details.conf` line in the main config). Activate
+	# by uncommenting that include + populating LTE_DETAILS_TOKEN env.
+	$(INSTALL) -D -m 0644 $(FLUENT_BIT_CONFIG_PKGDIR)/network-details.conf \
+		$(TARGET_DIR)/etc/fluent-bit/network-details.conf
+
 	# Install systemd service (overrides upstream fluent-bit.service with GA version)
 	$(INSTALL) -D -m 0644 $(FLUENT_BIT_CONFIG_PKGDIR)/fluent-bit.service \
 		$(TARGET_DIR)/usr/lib/systemd/system/fluent-bit.service

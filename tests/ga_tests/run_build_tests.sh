@@ -74,6 +74,33 @@ grep -q 'DEVICE_LABEL' "$FB_SVC" 2>/dev/null \
   && _pass "CFG-11: fluent-bit.service has DEVICE_LABEL" \
   || _fail "CFG-11: fluent-bit.service missing DEVICE_LABEL"
 
+# Phase 7 scaffold — network-details config ships to the rootfs (NOT
+# wired into the main fluent-bit.conf yet — that's the activation step
+# when concrete LTE dongle backends ship in Phase 3.x).
+NETDETAILS_CONF="${TARGET}/etc/fluent-bit/network-details.conf"
+
+# CFG-17: file present
+[[ -f "$NETDETAILS_CONF" ]] \
+  && _pass "CFG-17: network-details.conf shipped to rootfs (Phase 7 scaffold)" \
+  || _fail "CFG-17: network-details.conf missing from rootfs"
+
+# CFG-18: scaffold polls ga_manager's /network/details endpoint
+grep -q "network/details" "$NETDETAILS_CONF" 2>/dev/null \
+  && _pass "CFG-18: network-details.conf polls /network/details" \
+  || _fail "CFG-18: network-details.conf has wrong endpoint"
+
+# CFG-19: scaffold filters out available=false (= no Loki noise pre-Phase-3.x)
+grep -q "available true" "$NETDETAILS_CONF" 2>/dev/null \
+  && _pass "CFG-19: network-details.conf filters available=true only" \
+  || _fail "CFG-19: network-details.conf missing 'available true' filter"
+
+# CFG-20: NOT YET included from main config (= scaffold-only until Phase 7 ships)
+if grep -q '@INCLUDE network-details.conf' "${TARGET}/etc/fluent-bit/fluent-bit.conf" 2>/dev/null; then
+    _fail "CFG-20: fluent-bit.conf already includes network-details.conf — Phase 7 activation must be explicit"
+else
+    _pass "CFG-20: fluent-bit.conf does not yet include network-details.conf (= scaffold-only as expected)"
+fi
+
 # CFG-13/14: GA DNS entries in ga-services.conf (single source of truth for endpoint IPs)
 grep -q 'influx.greenautarky.com' "${TARGET}/etc/ga-services.conf" 2>/dev/null \
   && _pass "CFG-13: ga-services.conf has influx host" \
