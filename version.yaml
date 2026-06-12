@@ -11,7 +11,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.2.14  # marker baked into /etc/ga-release at build (1.2.14 = ga-bootstrap 1.2.7 self-heal + Supervisor DNS boot-race triple-fix)
+gaos_release: BOSv1.2.15  # marker baked into /etc/ga-release at build (1.2.15 = ga_manager 0.28.0 network monitor framework + Phase 7 Fluent-bit network-details scaffold + ota-reconcile fix + HAOS 16.3.1.9)
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
@@ -34,7 +34,7 @@ rootfs_overlays:
 addons:
   # Built by their own repos' CI; pinned for visibility. The actual
   # pin consumed at OS build is in buildroot-external/package/hassio/addon-images.json.
-  ga_manager:               "0.27.1"  # tz baseline in converge step 8
+  ga_manager:               "0.28.0"  # network monitor framework (Phase 1-7) + ota-reconcile fix + supervisor_update on /info + ctx.network_monitor refactor + ota-update Supervisor-gate fail-fast precondition
   ga_default_addon:         "1.1.2"
   ga_hmvapp_addon:          "1.1.7"
 
