@@ -11,7 +11,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.2.15  # marker baked into /etc/ga-release at build (1.2.15 = ga_manager 0.28.0 network monitor framework + Phase 7 Fluent-bit network-details scaffold + ota-reconcile fix + HAOS 16.3.1.9)
+gaos_release: BOSv1.2.17  # marker baked into /etc/ga-release at build (1.2.17 = ga_manager 0.40.x LTE-dongle full chain + ga-rauc-install@.service for /os/update 400 bypass + ga_manager 0.41.0 rauc-direct mode; BOSv1.2.16 was skipped — see incident_ota_false_negative_on_reboot_2026_06_12 for the same-HAOS-version /os/update 400 gotcha that the systemd template fixes)
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
@@ -34,7 +34,7 @@ rootfs_overlays:
 addons:
   # Built by their own repos' CI; pinned for visibility. The actual
   # pin consumed at OS build is in buildroot-external/package/hassio/addon-images.json.
-  ga_manager:               "0.28.0"  # network monitor framework (Phase 1-7) + ota-reconcile fix + supervisor_update on /info + ctx.network_monitor refactor + ota-update Supervisor-gate fail-fast precondition
+  ga_manager:               "0.41.0"  # 0.36.0-0.40.x = LTE-dongle full chain (slug plumbing + autodetect robustness + concrete ufi/arrow/openstick backends + persist /share/ bugfix + status-page Identity/Bundle/Network/Zigbee cards). 0.41.0 adds rauc-direct OTA mode via /host/services/ga-rauc-install@VERSION.service for the Supervisor /os/update 400 same-version cascade gotcha.
   ga_default_addon:         "1.1.2"
   ga_hmvapp_addon:          "1.1.7"
 
