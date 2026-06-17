@@ -11,7 +11,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.2.18  # marker baked into /etc/ga-release at build. BOSv1.2.18 = ga_manager 0.42.0 + path-watcher (ga-rauc-install.service + .path) replacing the 0.41.0/BOSv1.2.17 attempt at Supervisor /host/services API (= which is GET-only, no /start endpoint). Path-watcher trampoline: addon writes /share/ga-rauc-install-request, host's .path unit fires .service which downloads bundle + rauc-installs + reboots. Same-HAOS-version cascade (= BOSv1.2.x → BOSv1.2.y) now works fleet-wide via fleet-manager dispatch without operator SSH. BOSv1.2.16 was skipped (= replaced by 1.2.17). BOSv1.2.17 dead-end (= 0.41.0 worker always 404'd).
+gaos_release: BOSv1.2.19-rc1  # marker baked into /etc/ga-release at build. BOSv1.2.18 = ga_manager 0.42.0 + path-watcher (ga-rauc-install.service + .path) replacing the 0.41.0/BOSv1.2.17 attempt at Supervisor /host/services API (= which is GET-only, no /start endpoint). Path-watcher trampoline: addon writes /share/ga-rauc-install-request, host's .path unit fires .service which downloads bundle + rauc-installs + reboots. Same-HAOS-version cascade (= BOSv1.2.x → BOSv1.2.y) now works fleet-wide via fleet-manager dispatch without operator SSH. BOSv1.2.16 was skipped (= replaced by 1.2.17). BOSv1.2.17 dead-end (= 0.41.0 worker always 404'd).
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at

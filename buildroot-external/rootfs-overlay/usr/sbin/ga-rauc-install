@@ -61,7 +61,15 @@ case "$VERSION" in
 esac
 
 URL="https://ota.greenautarky.com/releases/${VERSION}/haos_ihost-${VERSION}.raucb"
-BUNDLE="/tmp/ga-rauc-install-${VERSION}.raucb"
+# Staging directory: /mnt/data/tmp/ — our canonical "scratch space for
+# anything larger than a few MB". /tmp/ on HAOS is a 15 MB zram tmpfs
+# (see device:/etc/fstab) — a 230 MB raucb bundle does not fit there,
+# curl returns error 23 mid-download. /mnt/data/tmp/ is created by
+# /usr/lib/tmpfiles.d/ga-mnt-data-tmp.conf and aged out at 7 days by
+# systemd-tmpfiles-clean.timer.
+STAGING_DIR="/mnt/data/tmp"
+mkdir -p "$STAGING_DIR"
+BUNDLE="$STAGING_DIR/ga-rauc-install-${VERSION}.raucb"
 
 echo "[ga-rauc-install] downloading $URL"
 if ! curl --fail --silent --show-error --location --output "$BUNDLE" "$URL"; then
