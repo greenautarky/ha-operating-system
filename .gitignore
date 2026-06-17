@@ -42,6 +42,12 @@ images/*.tar
 .claude
 scan-results/
 releases/
+.playwright-mcp/
+
+# Session-local screenshots from operator audits (browser captures,
+# diagnostic screenshots, fleet-page snapshots) — these are short-lived
+# artifacts, never check them into the OS repo.
+/*.png
 
 # Local-only backups (z2m state, device snapshots etc) — never commit
 .local-backups/
