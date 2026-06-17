@@ -1,28 +1,58 @@
 #!/bin/sh
 # ga-rauc-install — download + RAUC-install + reboot for an HAOS version.
 #
-# Invoked by the ga-rauc-install@VERSION.service systemd template, which
-# ga_manager 0.41.0+ triggers via Supervisor's /host/services API when
-# Supervisor's own /os/update endpoint refuses an update (= 400 because
-# same-HAOS-version with different GA-overlay; tracked in
-# memory:incident_ota_false_negative_on_reboot_2026_06_12 + the
-# session_2026_06_16 LTE-dongle session notes).
+# Invoked by the ga-rauc-install.service systemd unit (= triggered in
+# turn by ga-rauc-install.path watching the request file), or manually
+# by an operator on the host. The systemd path-watcher fires when
+# /mnt/data/supervisor/share/ga-rauc-install-request is written or
+# updated by ga_manager 0.42.0+ (the addon container sees the same
+# file at /share/ga-rauc-install-request).
 #
-# Argument: VERSION — exact HAOS internal version (e.g. 16.3.1.10).
-# Constructs the OTA URL from a fixed pattern + downloads + rauc-installs
-# + reboots. Runs as root via the systemd unit.
+# Argument modes:
+#   ga-rauc-install              — no arg: read version from request file
+#                                  (delete-first to allow re-trigger).
+#   ga-rauc-install <version>    — explicit arg: skip the request file,
+#                                  use the passed version. For operator
+#                                  debug from the host.
+#
+# Either path then validates the version regex, downloads the OTA
+# bundle from a fixed URL pattern, runs `rauc info` + `rauc install`,
+# and schedules a 5-second-delayed reboot.
+#
+# Background — why the path-watcher pattern instead of the original
+# BOSv1.2.17 systemd template @.service: Supervisor's REST API
+# (verified in 2025.11.4.6 source) exposes /host/services as GET-only;
+# there is no /start. The 0.41.0 worker that called
+# /host/services/ga-rauc-install@VERSION.service/start always 404'd.
+# Files in /share/ are the existing addon-to-host trampoline (already
+# used for ghcr-creds.json + ga-fleet-bundle.yaml) — re-using it for
+# RAUC trigger means no new Supervisor API dependencies + a clear
+# audit trail in /mnt/data/supervisor/share/.
 
 set -eu
 
+REQUEST_FILE="/mnt/data/supervisor/share/ga-rauc-install-request"
 VERSION="${1:-}"
+
 if [ -z "$VERSION" ]; then
-    echo "[ga-rauc-install] FATAL: no VERSION arg passed (usage: ga-rauc-install <version>)" >&2
-    exit 2
+    if [ ! -f "$REQUEST_FILE" ]; then
+        echo "[ga-rauc-install] FATAL: no VERSION arg and $REQUEST_FILE absent" >&2
+        exit 2
+    fi
+    # Read THEN delete — the delete is the dedupe gate. If install fails,
+    # the file is gone and a re-trigger requires a fresh write (which is
+    # the desired behaviour: don't retry a known-bad version on every
+    # path event).
+    VERSION="$(head -c 64 "$REQUEST_FILE" | tr -d '[:space:]')"
+    rm -f "$REQUEST_FILE"
+    echo "[ga-rauc-install] read VERSION='$VERSION' from $REQUEST_FILE (file removed)"
 fi
 
-# Validate version format — refuse anything that isn't N.N.N.N digits-and-dots.
-# This is a small but real safety guard since the value comes via systemd
-# template instance name, which is operator-influencable through /host/services.
+# Validate version format — refuse anything that isn't N.N.N.N digits-
+# and-dots. The systemd template variant was operator-influencable
+# through the Supervisor API; the file-based variant is influencable
+# by anything able to write to /share/, which is every running addon
+# container. Defence in depth: the worker validates too.
 case "$VERSION" in
     *[!0-9.]* | "" | *..* | .* | *. )
         echo "[ga-rauc-install] FATAL: refusing malformed version '$VERSION'" >&2
@@ -58,6 +88,6 @@ echo "[ga-rauc-install] install OK — scheduling reboot in 5s"
 rm -f "$BUNDLE"
 sync
 # Detach so the systemd unit can exit cleanly before reboot — otherwise
-# `host/services/<svc>/start` callers see the service hung until reboot.
+# the path-unit's triggered .service appears hung until reboot fires.
 ( sleep 5 && systemctl reboot ) &
 exit 0
