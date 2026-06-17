@@ -5,15 +5,19 @@
 #   1. Upload to OTA server (for Supervisor pull-based updates)
 #   2. Push directly to device(s) (for manual/canary updates)
 #
-# Since BOSv1.2.17 + ga_manager 0.41.0 the `--device` mode is rarely
+# Since BOSv1.2.18 + ga_manager 0.42.0 the `--device` mode is rarely
 # needed: the fleet-manager `ota-update` job has a `rauc_install_via_host_service`
-# flag that does the equivalent over the Supervisor `/host/services` API,
-# fleet-wide, without operator SSH. Use `--server` to upload the bundle
-# (= prerequisite for both paths) and then dispatch the fleet-manager
-# job. `--device` remains for:
-#   (a) pre-BOSv1.2.17 devices that don't have the ga-rauc-install
-#       @.service systemd template baked in yet (= one-time fallback to
-#       get them ONTO BOSv1.2.17 the first time),
+# flag that writes /share/ga-rauc-install-request from the addon
+# container; the host's systemd path-unit catches the file change and
+# fires the install — fleet-wide, without operator SSH. Use `--server`
+# to upload the bundle (= prerequisite for both paths) and then dispatch
+# the fleet-manager job. `--device` remains for:
+#   (a) pre-BOSv1.2.18 devices that don't have the ga-rauc-install.path
+#       watcher + .service + helper yet (= one-time fallback to get
+#       them ONTO BOSv1.2.18 the first time; note: BOSv1.2.17 also
+#       counts as pre-BOSv1.2.18 because the 0.41.0/1.2.17 attempt at
+#       this mechanism via Supervisor /host/services/<svc>/start hit
+#       a non-existent endpoint and was never functional),
 #   (b) lab / bench iteration where you want to skip the OTA server hop,
 #   (c) emergency recovery when fleet-manager or Supervisor is down.
 #
