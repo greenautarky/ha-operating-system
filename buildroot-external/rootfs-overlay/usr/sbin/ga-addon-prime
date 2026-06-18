@@ -1,0 +1,127 @@
+#!/bin/sh
+# ga-addon-prime — post-OTA one-shot to update baked addons to the
+# versions pinned in the new OS image's addon-images.json.
+#
+# Why: Supervisor preserves the running addon container across an OS
+# slot-swap (= /mnt/data/supervisor persists), so even though the OS
+# image bakes a newer addon image tag, the previous version keeps
+# running until an explicit `ha addons update` fires.
+#
+# Reads `/etc/ga-addon-prime.conf` (one slug per line, '#' comments OK),
+# runs `docker exec hassio_cli ha store reload` once, then `ha addons
+# update <slug>` per entry. On success, writes the marker file
+# `/mnt/data/.ga-addon-primed` so the gating service does not re-run.
+#
+# The `ha` CLI lives in the hassio_cli sibling container, NOT on the
+# host. We could use `docker exec hassio_cli ha …` from the host
+# (= what this script does) or call Supervisor's REST API directly.
+# Docker exec is simpler and matches yesterday's bench-verified pattern.
+
+set -eu
+
+PRIME_CONF="/etc/ga-addon-prime.conf"
+MARKER="/mnt/data/.ga-addon-primed"
+
+log() { echo "[ga-addon-prime] $*"; }
+
+if [ ! -f "$PRIME_CONF" ]; then
+    log "no prime conf at $PRIME_CONF — nothing to do"
+    # Still write the marker so the service doesn't keep firing.
+    touch "$MARKER"
+    exit 0
+fi
+
+# Wait for hassio_cli container to be up (= comes online a few seconds
+# after hassos-supervisor starts).
+for i in $(seq 1 60); do
+    if docker exec hassio_cli /bin/true >/dev/null 2>&1; then
+        break
+    fi
+    log "waiting for hassio_cli (${i}/60)…"
+    sleep 5
+done
+if ! docker exec hassio_cli /bin/true >/dev/null 2>&1; then
+    log "ERROR: hassio_cli not reachable after 5 min — bailing (no marker written)"
+    exit 1
+fi
+
+# Wait for Supervisor to be READY (not still in `setup` / `initialize`).
+# Discovered 2026-06-18 on K0 BOSv1.2.21-rc1: hassio_cli container is up
+# within ~30s of boot, but Supervisor is still finishing its setup phase
+# for another 60-90s. Any `ha addons update` call before then returns:
+#   Error: System is not ready with state: setup
+# and the prime fails, marker not written, retry-loop next boot — but
+# next boot has the same race, so the prime never succeeds.
+#
+# Probe: try `ha store reload` until it returns rc=0. This call returns
+# the same "System is not ready" error pre-setup-complete that addons
+# update does, but it's idempotent + cheap + the operation we're about
+# to do anyway. Once it succeeds, Supervisor is ready for the per-slug
+# updates. Poll up to 10 min total (= plenty of slack for cold-boot
+# supervisor-update racing scenarios).
+log "waiting for Supervisor to be ready (= store reload succeeds)"
+SUP_READY=0
+for i in $(seq 1 120); do
+    # set +e / -e bracket: `OUT=$(failing-cmd)` triggers set -e in dash
+    # (the HAOS /bin/sh), aborting the script before $? can be checked.
+    # POSIX-portable workaround.
+    set +e
+    PROBE_OUT=$(docker exec hassio_cli ha store reload 2>&1)
+    PROBE_RC=$?
+    set -e
+    if [ "$PROBE_RC" -eq 0 ]; then
+        SUP_READY=1
+        log "  → Supervisor ready after $((i * 5))s (store reload OK)"
+        break
+    fi
+    # Surface the actual error so first-boot debugging is easy.
+    ERR_SHORT=$(echo "$PROBE_OUT" | head -1 | cut -c1-80)
+    log "  Supervisor not ready (rc=$PROBE_RC, $ERR_SHORT) — waiting (${i}/120)…"
+    sleep 5
+done
+if [ "$SUP_READY" -ne 1 ]; then
+    log "ERROR: Supervisor did not become ready within 10 min — bailing (no marker written)"
+    exit 1
+fi
+# Store-reload already succeeded as the probe — no need to re-call.
+log "addon store cache refreshed (= /store/reload OK during readiness probe)"
+
+# Iterate prime conf
+FAIL=0
+while IFS= read -r SLUG; do
+    # strip comments + whitespace
+    SLUG="${SLUG%%#*}"
+    SLUG="$(echo "$SLUG" | tr -d '[:space:]')"
+    [ -z "$SLUG" ] && continue
+
+    log "priming addon: $SLUG"
+    # set +e / -e bracket: see Supervisor-readiness probe above for rationale.
+    set +e
+    UPDATE_OUT=$(docker exec hassio_cli ha addons update "$SLUG" 2>&1)
+    UPDATE_RC=$?
+    set -e
+    if [ "$UPDATE_RC" -eq 0 ]; then
+        log "  → $SLUG: primed OK"
+    elif echo "$UPDATE_OUT" | grep -qiE 'no update available|already at version'; then
+        # Discovered 2026-06-18 on K0: `ha addons update` returns rc!=0
+        # with "No update available" when the addon is already at the
+        # bake-pinned version. That's the EXPECTED state on a
+        # reflashed-from-current-image device, not a failure — the
+        # prime semantics are "ensure addon is at pinned version", not
+        # "force an upgrade". Treat as success + log so the operator
+        # has the trail.
+        log "  → $SLUG: already at pinned version (no-op)"
+    else
+        log "  → $SLUG: FAILED — $(echo "$UPDATE_OUT" | head -1 | cut -c1-120)"
+        FAIL=$((FAIL + 1))
+    fi
+done < "$PRIME_CONF"
+
+if [ "$FAIL" -gt 0 ]; then
+    log "ERROR: $FAIL addon(s) failed to prime — marker NOT written, service will retry next boot"
+    exit 1
+fi
+
+log "all addons primed — writing marker $MARKER"
+touch "$MARKER"
+log "done"

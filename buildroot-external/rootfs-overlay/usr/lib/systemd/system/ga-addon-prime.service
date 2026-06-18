@@ -1,0 +1,37 @@
+[Unit]
+# Run once after first boot of BOSv1.2.21+ to pull the new ga_manager
+# addon image baked into addon-images.json. Without this, the existing
+# addon container in /mnt/data/supervisor/... stays on the pre-OTA
+# version forever (= the known "addon not auto-updated post-OTA" gotcha).
+#
+# Specific to BOSv1.2.21-rc1: ga_manager 0.44.0 has a self-update bug
+# (FileNotFoundError on bare `ha` subprocess inside the addon
+# container); 0.44.1 fixes it via `docker exec hassio_cli ha`. This
+# one-shot deploys 0.44.1 from the host without operator SSH and
+# without relying on the broken 0.44.0 self-update path.
+#
+# Generic pattern: runs `docker exec hassio_cli ha addons update`
+# for each slug listed in /etc/ga-addon-prime.conf (one slug per
+# line, '#' comments allowed). The marker /mnt/data/.ga-addon-primed
+# prevents re-running on subsequent boots — to re-prime after a
+# bump, the next OS image deletes the marker via tmpfiles.d.
+Description=GA addon auto-prime (one-shot, runs after first boot post-OTA to update baked addons)
+Documentation=https://github.com/greenautarky/ha-operating-system
+
+# Supervisor + hassio_cli must be up — they run the actual addon update.
+Requires=hassos-supervisor.service
+After=hassos-supervisor.service network-online.target
+Wants=network-online.target
+
+# Don't re-run if marker present (= last successful prime).
+ConditionPathExists=!/mnt/data/.ga-addon-primed
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/ga-addon-prime
+# Allow some time — addon update pulls a few-MB image.
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=multi-user.target
