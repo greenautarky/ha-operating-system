@@ -74,6 +74,33 @@ grep -q 'DEVICE_LABEL' "$FB_SVC" 2>/dev/null \
   && _pass "CFG-11: fluent-bit.service has DEVICE_LABEL" \
   || _fail "CFG-11: fluent-bit.service missing DEVICE_LABEL"
 
+# Phase 7 scaffold — network-details config ships to the rootfs (NOT
+# wired into the main fluent-bit.conf yet — that's the activation step
+# when concrete LTE dongle backends ship in Phase 3.x).
+NETDETAILS_CONF="${TARGET}/etc/fluent-bit/network-details.conf"
+
+# CFG-17: file present
+[[ -f "$NETDETAILS_CONF" ]] \
+  && _pass "CFG-17: network-details.conf shipped to rootfs (Phase 7 scaffold)" \
+  || _fail "CFG-17: network-details.conf missing from rootfs"
+
+# CFG-18: scaffold polls ga_manager's /network/details endpoint
+grep -q "network/details" "$NETDETAILS_CONF" 2>/dev/null \
+  && _pass "CFG-18: network-details.conf polls /network/details" \
+  || _fail "CFG-18: network-details.conf has wrong endpoint"
+
+# CFG-19: scaffold filters out available=false (= no Loki noise pre-Phase-3.x)
+grep -q "available true" "$NETDETAILS_CONF" 2>/dev/null \
+  && _pass "CFG-19: network-details.conf filters available=true only" \
+  || _fail "CFG-19: network-details.conf missing 'available true' filter"
+
+# CFG-20: NOT YET included from main config (= scaffold-only until Phase 7 ships)
+if grep -q '@INCLUDE network-details.conf' "${TARGET}/etc/fluent-bit/fluent-bit.conf" 2>/dev/null; then
+    _fail "CFG-20: fluent-bit.conf already includes network-details.conf — Phase 7 activation must be explicit"
+else
+    _pass "CFG-20: fluent-bit.conf does not yet include network-details.conf (= scaffold-only as expected)"
+fi
+
 # CFG-13/14: GA DNS entries in ga-services.conf (single source of truth for endpoint IPs)
 grep -q 'influx.greenautarky.com' "${TARGET}/etc/ga-services.conf" 2>/dev/null \
   && _pass "CFG-13: ga-services.conf has influx host" \
@@ -1434,9 +1461,24 @@ PY
   echo "--- GAOS: V1.2-clean OS bake (vibe_addons repo + image bake + bootstrap) ---"
 
   ADDON_IMAGES_JSON="${SRC}/buildroot-external/package/hassio/addon-images.json"
-  GA_BOOTSTRAP="${SRC}/buildroot-external/rootfs-overlay/usr/libexec/ga-bootstrap"
-  OVL_SYSTEMD="${SRC}/buildroot-external/rootfs-overlay/usr/lib/systemd/system"
+  # ga-bootstrap migrated to a Tier-2 OCI component (PR #33). sync-components.sh
+  # extracts the script into usr/sbin/ and the systemd unit into etc/systemd/system/.
+  # ga-bootstrap-disk is NOT a Tier-2 component (pre-Supervisor, bound to the OS
+  # image lifecycle) — it stays at the rootfs-baked path under usr/lib/systemd/system/.
+  GA_BOOTSTRAP="${SRC}/buildroot-external/rootfs-overlay/usr/sbin/ga-bootstrap"
+  OVL_USRLIB_SYSTEMD="${SRC}/buildroot-external/rootfs-overlay/usr/lib/systemd/system"
   OVL_ETC_SYSTEMD="${SRC}/buildroot-external/rootfs-overlay/etc/systemd/system"
+  # Resolve which dir holds each unit — ga-bootstrap (Tier-2) lives in etc/,
+  # ga-bootstrap-disk (rootfs-baked) lives in usr/lib/. A single helper that
+  # finds either keeps the test future-proof if a unit moves later.
+  _find_unit() {
+    local svc="$1"
+    if [[ -f "${OVL_ETC_SYSTEMD}/${svc}" ]]; then
+      printf '%s' "${OVL_ETC_SYSTEMD}/${svc}"
+    elif [[ -f "${OVL_USRLIB_SYSTEMD}/${svc}" ]]; then
+      printf '%s' "${OVL_USRLIB_SYSTEMD}/${svc}"
+    fi
+  }
 
   # GAOS-01: addon-images.json includes a ga_manager entry (so the addon
   # container image is baked into the data partition's docker store and the
@@ -1484,9 +1526,21 @@ PY
     else
       _pass "GAOS-03: ga-bootstrap does not hardcode a 'local_ga_manager' slug in code"
     fi
-    grep -qE 'resolve_ga_manager_slug|store addons' "$GA_BOOTSTRAP" 2>/dev/null \
-      && _pass "GAOS-03b: ga-bootstrap resolves the repo-prefixed slug from the store listing" \
-      || _fail "GAOS-03b: ga-bootstrap does NOT resolve the repo-prefixed slug dynamically"
+    # Either the slug is resolved dynamically (= old rootfs ga-bootstrap
+    # pattern: `resolve_ga_manager_slug` / `ha store addons` lookup) OR
+    # it's a pinned constant + env-overridable (= Tier-2 v1.1.0+ pattern:
+    # `GA_MANAGER_SLUG="${GA_MANAGER_SLUG:-99f1cad4_ga_manager}"`).
+    # Both are valid — the constant works because vibe_addons' repo-id
+    # hash is fleet-stable (= `99f1cad4_`) and the env override makes
+    # field-overrides + tests trivial. Failing means we have NEITHER
+    # discipline, i.e. a real `local_*` or unresolved slug.
+    if grep -qE 'resolve_ga_manager_slug|store addons' "$GA_BOOTSTRAP" 2>/dev/null; then
+      _pass "GAOS-03b: ga-bootstrap resolves the repo-prefixed slug from the store listing"
+    elif grep -qE '^\s*GA_MANAGER_SLUG="\$\{GA_MANAGER_SLUG:-[a-f0-9]+_[a-z_]+\}"' "$GA_BOOTSTRAP" 2>/dev/null; then
+      _pass "GAOS-03b: ga-bootstrap uses a pinned-constant slug with env override (Tier-2 pattern)"
+    else
+      _fail "GAOS-03b: ga-bootstrap does NOT resolve the slug dynamically AND has no pinned-constant pattern — verify the install path"
+    fi
   else
     _skip "GAOS-03" "ga-bootstrap script not found"
   fi
@@ -1520,9 +1574,10 @@ PY
   # the ga_manager addon from it every boot; ga-bootstrap-disk does the
   # early eMMC erase + OS marker.
   for _svc in ga-bootstrap.service ga-bootstrap-disk.service; do
-    [[ -f "${OVL_SYSTEMD}/${_svc}" ]] \
-      && _pass "GAOS-05: ${_svc} unit present in overlay" \
-      || _fail "GAOS-05: ${_svc} NOT present in overlay (${OVL_SYSTEMD})"
+    _svc_path="$(_find_unit "${_svc}")"
+    [[ -n "${_svc_path}" ]] \
+      && _pass "GAOS-05: ${_svc} unit present in overlay (${_svc_path#${SRC}/})" \
+      || _fail "GAOS-05: ${_svc} NOT present in overlay (neither ${OVL_ETC_SYSTEMD} nor ${OVL_USRLIB_SYSTEMD})"
   done
 
   # GAOS-06: both bootstrap services are ENABLED via .wants/ symlinks.
@@ -1540,11 +1595,15 @@ PY
 
   # GAOS-07: ga-bootstrap.service is ordered after the Supervisor — it
   # registers the vibe_addons repo and installs the ga_manager addon
-  # through the Supervisor API.
-  if [[ -f "${OVL_SYSTEMD}/ga-bootstrap.service" ]]; then
-    grep -qE '(After|Requires)=.*hassos-supervisor' "${OVL_SYSTEMD}/ga-bootstrap.service" 2>/dev/null \
-      && _pass "GAOS-07: ga-bootstrap.service ordered after hassos-supervisor" \
-      || _fail "GAOS-07: ga-bootstrap.service NOT ordered after hassos-supervisor — addon install will race the Supervisor"
+  # through the Supervisor API. The unit name is `hassio-supervisor`
+  # (the HAOS convention), not `hassos-supervisor`. Accept both spellings
+  # for backward-compat with the old rootfs-baked unit, which used the
+  # `hassos-` typo in some checkouts.
+  _bootstrap_svc_path="$(_find_unit ga-bootstrap.service)"
+  if [[ -n "${_bootstrap_svc_path}" ]]; then
+    grep -qE '(After|Requires)=.*(hassio|hassos)-supervisor' "${_bootstrap_svc_path}" 2>/dev/null \
+      && _pass "GAOS-07: ga-bootstrap.service ordered after hassio-supervisor (${_bootstrap_svc_path#${SRC}/})" \
+      || _fail "GAOS-07: ga-bootstrap.service NOT ordered after hassio-supervisor — addon install will race the Supervisor"
   else
     _skip "GAOS-07" "ga-bootstrap.service not found in overlay"
   fi
@@ -1886,11 +1945,20 @@ fi
 # silently drop the retry.
 
 if [[ -f "$GA_BOOTSTRAP" ]]; then
-  # BS-RETRY-01: the exact backoff sequence is present.
+  # BS-RETRY-01: exponential-backoff retry sequence is present. Accept
+  # EITHER the literal `for pre_sleep in 0 10 30 60 120 240` (= old
+  # rootfs ga-bootstrap pattern) OR the v1.2.0+ Tier-2 pattern of
+  # `BACKOFF_SEQUENCE="${BACKOFF_SEQUENCE:-0 10 30 60 120 240}"` with
+  # the loop using `$BACKOFF_SEQUENCE`. The env-overridable form is
+  # the preferred shape — it keeps the production budget identical AND
+  # lets tests run in seconds by overriding the env var.
   if grep -qE 'for[[:space:]]+pre_sleep[[:space:]]+in[[:space:]]+0[[:space:]]+10[[:space:]]+30[[:space:]]+60[[:space:]]+120[[:space:]]+240' "$GA_BOOTSTRAP"; then
-    _pass "BS-RETRY-01: ga-bootstrap has exponential-backoff retry (0 10 30 60 120 240)"
+    _pass "BS-RETRY-01: ga-bootstrap has literal exponential-backoff retry (0 10 30 60 120 240)"
+  elif grep -qE 'BACKOFF_SEQUENCE=.*0[[:space:]]+10[[:space:]]+30[[:space:]]+60[[:space:]]+120[[:space:]]+240' "$GA_BOOTSTRAP" \
+       && grep -qE 'for[[:space:]]+pre_sleep[[:space:]]+in[[:space:]]+\$BACKOFF_SEQUENCE' "$GA_BOOTSTRAP"; then
+    _pass "BS-RETRY-01: ga-bootstrap has env-overridable exponential-backoff retry (BACKOFF_SEQUENCE default 0 10 30 60 120 240)"
   else
-    _fail "BS-RETRY-01: ga-bootstrap exponential-backoff sequence missing/changed"
+    _fail "BS-RETRY-01: ga-bootstrap exponential-backoff sequence missing/changed (neither literal nor BACKOFF_SEQUENCE env-var pattern)"
   fi
   # BS-RETRY-02: success requires BOTH 'ha store add' OK AND the repo
   # actually appearing in the store. The Supervisor clones asynchronously

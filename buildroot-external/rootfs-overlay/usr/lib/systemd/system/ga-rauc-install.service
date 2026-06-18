@@ -1,0 +1,46 @@
+# ga-rauc-install.service — RAUC install bypass for same-HAOS-version
+#                           GA OS-overlay updates. Triggered by
+#                           ga-rauc-install.path watching the request file.
+#
+# Background: Supervisor's /host/services REST endpoint is GET-only —
+# there is no POST /host/services/<svc>/start. The original BOSv1.2.17
+# attempt at this mechanism (template @.service started via Supervisor
+# API) was based on a wrong assumption and never fired in practice.
+# BOSv1.2.18 fixes the design with an addon-container → host hop via a
+# shared filesystem path (= /share inside the addon is bind-mounted to
+# /mnt/data/supervisor/share on the host), watched by ga-rauc-install.path
+# below.
+#
+# Workflow:
+#   1. ga_manager 0.42.0+ worker validates target version (N.N.N regex),
+#      writes it as the single line content of /share/ga-rauc-install-request.
+#   2. ga-rauc-install.path notices the file changed + triggers this unit.
+#   3. This unit invokes /usr/sbin/ga-rauc-install (no arg → it reads
+#      /mnt/data/supervisor/share/ga-rauc-install-request itself, deletes
+#      the file as the first step, then proceeds with download + rauc
+#      install + scheduled reboot).
+#
+# Why no @template anymore: Supervisor's host-services API is restricted
+# to listing already-running/enabled service instances; template units
+# without a runtime instance are NOT addressable through it. Even if
+# Supervisor opens up a /start endpoint later, a fixed unit + file-passed
+# argument is the more standard systemd pattern and lets `systemctl
+# start ga-rauc-install.service` work for operator debug from the host.
+
+[Unit]
+Description=GA RAUC install (Supervisor /os/update bypass; reads version from /mnt/data/supervisor/share/ga-rauc-install-request)
+DefaultDependencies=no
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=900s
+RemainAfterExit=yes
+# No args: the helper reads /mnt/data/supervisor/share/ga-rauc-install-request.
+ExecStart=/usr/sbin/ga-rauc-install
+
+[Install]
+# Not WantedBy a normal target — we are exclusively driven by the .path
+# unit. Operators may invoke manually via `systemctl start
+# ga-rauc-install.service` AFTER writing the request file by hand.

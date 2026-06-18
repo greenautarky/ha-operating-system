@@ -1,0 +1,36 @@
+# ga-rauc-install.path — file-watcher for ga_manager 0.42.0+'s RAUC
+#                        install bridge.
+#
+# When ga_manager (running inside an HA addon container) needs to
+# trigger an OS-level RAUC install — typically for a same-HAOS-version
+# BOSv1.2.x → BOSv1.2.y swap that Supervisor's /os/update refuses 400
+# — it writes the target version into /share/ga-rauc-install-request
+# (the addon's /share is bind-mounted from /mnt/data/supervisor/share
+# on the host). This unit watches that exact host path and fires
+# ga-rauc-install.service the moment the file changes.
+#
+# The .service unit's helper deletes the request file as its first
+# action so a re-write triggers a fresh run instead of being de-duped
+# by `PathChanged=`.
+
+[Unit]
+Description=Watch /mnt/data/supervisor/share/ga-rauc-install-request for OTA install trigger from ga_manager addon
+DefaultDependencies=no
+# Wait until the /mnt/data partition is mounted; /mnt/data/supervisor
+# is a Supervisor-managed subdir that exists once Supervisor has
+# initialised, but we only need the parent mount for the watch to be
+# valid. Don't pull supervisor itself — this unit must be ready even
+# when Supervisor is down (= for recovery flows).
+After=mnt-data.mount
+Requires=mnt-data.mount
+
+[Path]
+# PathChanged fires on writes (= atomic-renames into the path),
+# matching how ga_manager will write the file (tmpfile + rename).
+PathChanged=/mnt/data/supervisor/share/ga-rauc-install-request
+# Unit to start when the path event fires. Standard systemd naming —
+# defaults to <name>.service if not stated, but make it explicit.
+Unit=ga-rauc-install.service
+
+[Install]
+WantedBy=multi-user.target

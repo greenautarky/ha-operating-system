@@ -1,0 +1,44 @@
+# Single source of truth for component + addon version pins.
+#
+# Components are pulled from GHCR as OCI artifacts at OS build time by
+# scripts/sync-components.sh, which lays them out under
+# buildroot-external/rootfs-overlay/usr/share/ga/custom_components/.
+#
+# Addons are built separately (see ga_manager etc.) and pinned via
+# buildroot-external/package/hassio/addon-images.json — they are listed
+# here for visibility, not consumed at OS build time.
+#
+# Bumping a version here + running scripts/sync-components.sh is the
+# only OS-side change needed to ship a new component release.
+
+gaos_release: BOSv1.2.20-rc1  # marker baked into /etc/ga-release at build. BOSv1.2.18 = ga_manager 0.42.0 + path-watcher (ga-rauc-install.service + .path) replacing the 0.41.0/BOSv1.2.17 attempt at Supervisor /host/services API (= which is GET-only, no /start endpoint). Path-watcher trampoline: addon writes /share/ga-rauc-install-request, host's .path unit fires .service which downloads bundle + rauc-installs + reboots. Same-HAOS-version cascade (= BOSv1.2.x → BOSv1.2.y) now works fleet-wide via fleet-manager dispatch without operator SSH. BOSv1.2.16 was skipped (= replaced by 1.2.17). BOSv1.2.17 dead-end (= 0.41.0 worker always 404'd).
+
+components:
+  # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
+  # ghcr.io/greenautarky/<name>:<version> that contains a single top-
+  # level dir matching the component's HA-integration domain name.
+  # Extracted into buildroot-external/rootfs-overlay/usr/share/ga/custom_components/.
+  greenautarky-onboarding: "1.0.3"   # https://github.com/greenautarky/greenautarky-onboarding
+  ga-frontend-bundle:       "1.0.1"  # https://github.com/greenautarky/ga-frontend-bundle (14 vendored Lovelace cards, ~6 MB; was embedded)
+
+rootfs_overlays:
+  # Same OCI mechanism as `components:` above, different tarball shape —
+  # the tarball ships rootfs-relative paths (usr/sbin/foo + etc/systemd/…
+  # + their multi-user.target.wants/ symlinks) and extracts straight into
+  # buildroot-external/rootfs-overlay/. Use this for first-boot / boot-
+  # critical system services and config bundles that need to live in
+  # their canonical rootfs locations to be picked up by systemd.
+  ga-bootstrap:         "1.2.7"  # https://github.com/greenautarky/ga-bootstrap — first-boot orchestrator. v1.2.2 adds EnvironmentFile=-/mnt/data/ga-bootstrap.env so on-device tests + operators can override GHCR_CREDS_FILE / BACKOFF_SEQUENCE without rebuilding (/etc is RO squashfs).
+  ga-telemetry-config:  "1.0.0"  # https://github.com/greenautarky/ga-telemetry-config — Tier-0 telemetry (boot-timing exporter + fluent-bit boot-log capture)
+
+addons:
+  # Built by their own repos' CI; pinned for visibility. The actual
+  # pin consumed at OS build is in buildroot-external/package/hassio/addon-images.json.
+  ga_manager:               "0.43.0"  # 0.36.0-0.40.x = LTE-dongle full chain (slug plumbing + autodetect robustness + concrete ufi/arrow/openstick backends + persist /share/ bugfix + status-page Identity/Bundle/Network/Zigbee cards). 0.41.0 attempted rauc-direct via Supervisor /host/services/<svc>/start (= 404 always, endpoint doesn't exist). 0.42.0 redesigns: worker writes /share/ga-rauc-install-request, host's path-watcher unit fires the install. Requires BOSv1.2.18+ host (= the path-unit + .service + helper).
+  ga_default_addon:         "1.1.2"
+  ga_hmvapp_addon:          "1.1.7"
+
+# Upstream base images — referenced by version.json + Supervisor config.
+base_images:
+  homeassistant_core:        "2025.11.3"
+  homeassistant_supervisor:  "2025.11.4.6"

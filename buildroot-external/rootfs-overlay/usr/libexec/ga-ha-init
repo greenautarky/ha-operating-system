@@ -161,33 +161,16 @@ fi
 # item #7): pre-seed /mnt/overlay/etc/localtime → Berlin in the rootfs
 # build so Supervisor's cached snapshot IS Berlin and the revert no-ops.
 
-# ---- 3d. auto_update=false (= ga-flasher-py stage 92) -----------------------
-# Why: fleet devices must NOT auto-update Supervisor — the OTA rollout is
-# operator-controlled via push-ota.sh + RAUC bundle promotion. Auto-update
-# bypasses that, can introduce surprise downtime during Supervisor restarts.
-# See memory: incident_ga1_hang_2026_05_06.md (supervisor auto-update of
-# hassio_cli triggered eMMC stall).
+# ---- 3d. auto_update=false — MOVED to greenautarky/ga-bootstrap v1.1.0 ------
+# Owner since BOSv1.2.5: the Tier-2 ga-bootstrap component does Step 1a
+# (read auto_update from the supervisor info response captured in its
+# wait loop, call `ha supervisor options --auto-update=false` via the
+# API when drifted). Same Supervisor-rewrites-updater.json-on-next-
+# refresh dance — the API path is the only one that sticks.
 #
-# IMPORTANT — go via the Supervisor API, not direct jq on updater.json.
-# Observed on KIB-SON-31 first boot 2026-05-27: editing updater.json with
-# jq successfully writes the file, but Supervisor's in-memory state still
-# holds auto_update=true and Supervisor REWRITES the file on the next
-# refresh cycle (typically within seconds). The `ha supervisor options`
-# CLI uses the API which mutates Supervisor's in-memory state too, so the
-# change actually sticks.
-current_auto=$("$HA" supervisor info --no-progress --raw-json 2>/dev/null \
-    | "/usr/bin/jq" -r '.data.auto_update // "missing"')
-if [ "$current_auto" = "false" ]; then
-    log "supervisor auto_update=false (already set)"
-else
-    log "supervisor: setting auto_update=false (was: $current_auto) via API"
-    if "$HA" supervisor options --auto-update=false --no-progress >/dev/null 2>&1; then
-        log "  ha supervisor options --auto-update=false → OK"
-    else
-        warn "ha supervisor options --auto-update=false failed — will retry next boot"
-        exit 1
-    fi
-fi
+# Kept this comment so the next person reading ga-ha-init knows where
+# the step went. The block was removed in PR #<TBD> (feat/ga-bootstrap-
+# tier2-migration). See the ga-bootstrap repo's CHANGELOG 1.1.0 entry.
 
 # ---- 3e. Weather/location — DROPPED 2026-05-28 -----------------------------
 # Removed: `ha core options --raw-json '{"location":…}'` ALWAYS failed here

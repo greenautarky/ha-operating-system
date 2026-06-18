@@ -179,6 +179,65 @@ echo "Using OTA_DIR=$OTA_DIR"
 echo "Using REL_CA_PEM=$REL_CA_PEM"
 echo "Using DEV_CA_PEM=$DEV_CA_PEM"
 
+# Sanity: if scripts/sync-components.sh exists, the host (= the LXC / VM
+# that runs the docker build invocation) must have run it BEFORE entering
+# the build container. We don't run it from here — the build container's
+# minimal hassos:local image doesn't carry oras/yq, and adding them just
+# for this would bloat the image. The wrapper that invokes ga_build.sh
+# is expected to run sync first; we just verify the synced files are
+# present.
+if [ -f "${REPO_ROOT:-$(pwd)}/version.yaml" ]; then
+  for comp in $(grep -E "^  [a-z][-a-z]+: " "${REPO_ROOT:-$(pwd)}/version.yaml" | grep -v 'null' | awk '{print $1}' | tr -d ':'); do
+    domain="${comp//-/_}"
+    dest="${REPO_ROOT:-$(pwd)}/buildroot-external/rootfs-overlay/usr/share/ga/custom_components/${domain}"
+    if [ -d "${dest}" ] && [ -f "${dest}/manifest.json" ]; then
+      ver=$(grep -oE '"version":[[:space:]]*"[^"]*"' "${dest}/manifest.json" | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+      echo "Component check: ${comp} present (manifest version ${ver:-?})"
+    fi
+  done
+
+  # rootfs_overlays staleness check — fail fast if the on-disk synced
+  # version doesn't match version.yaml. Without this, a forgotten
+  # `sync-components.sh` ships an image with stale Tier-2 service files
+  # but the build still exits 0 (see memory/feedback_ga_build_sync_first).
+  marker_dir="${REPO_ROOT:-$(pwd)}/ga_output/.sync-markers"
+  in_overlay_block=0
+  while IFS= read -r line; do
+    case "$line" in
+      "rootfs_overlays:"*) in_overlay_block=1; continue;;
+      [a-z]*":"*) in_overlay_block=0;;
+    esac
+    [ "$in_overlay_block" -eq 1 ] || continue
+    case "$line" in
+      "  "[a-z]*":"*)
+        pkg=$(echo "$line" | awk '{print $1}' | tr -d ':')
+        pinned=$(echo "$line" | awk '{print $2}' | tr -d '"' | sed 's/[#].*//' | tr -d '[:space:]')
+        [ -z "$pinned" ] || [ "$pinned" = "null" ] && continue
+        marker="${marker_dir}/${pkg}.synced-version"
+        if [ ! -f "$marker" ]; then
+          echo "FAIL: rootfs_overlay '${pkg}' pinned to ${pinned} but no sync marker — run scripts/sync-components.sh first" >&2
+          PREFLIGHT_FAIL_OVERLAY=1
+        else
+          on_disk=$(cat "$marker")
+          if [ "$on_disk" != "$pinned" ]; then
+            echo "FAIL: rootfs_overlay '${pkg}' marker says ${on_disk} but version.yaml pins ${pinned} — run scripts/sync-components.sh" >&2
+            PREFLIGHT_FAIL_OVERLAY=1
+          else
+            echo "Overlay check: ${pkg}@${pinned} ✓"
+          fi
+        fi
+        ;;
+    esac
+  done < "${REPO_ROOT:-$(pwd)}/version.yaml"
+  if [ "${PREFLIGHT_FAIL_OVERLAY:-0}" -eq 1 ]; then
+    echo "" >&2
+    echo "ABORT: rootfs_overlays out of sync. Fix:" >&2
+    echo "  (host)  cd ${REPO_ROOT:-$(pwd)} && ./scripts/sync-components.sh" >&2
+    echo "  then re-run ga_build.sh inside the container." >&2
+    exit 1
+  fi
+fi
+
 # ---- Sanity checks (fail fast) ----
 echo "=== Pre-build validation ==="
 PREFLIGHT_FAIL=0
@@ -265,11 +324,28 @@ ensure_dev_ca_from_rel_ca() {
 # Global build timestamp (compact format for filenames, set once at script start)
 GA_BUILD_TIMESTAMP="${GA_BUILD_TIMESTAMP:-$(date '+%Y%m%d%H%M%S')}"
 
-# GA-side release identifier (e.g. "v1.2.0"). Optional — when set, lands in
-# /etc/ga-release and /etc/os-release at post-build time so devices have a
-# clean operator-facing version distinct from the HAOS-internal OS_VERSION
-# (16.3.1.x). Override per build with: GA_RELEASE=v1.2.0 ./scripts/ga_build.sh …
-GA_RELEASE="${GA_RELEASE:-}"
+# GA-side release identifier (e.g. "BOSv1.2.3"). Lands in /etc/ga-release
+# and /etc/os-release at post-build time so devices have a clean operator-
+# facing version distinct from the HAOS-internal OS_VERSION (16.3.1.x).
+#
+# Resolution order (first non-empty wins):
+#   1. The GA_RELEASE env var, if explicitly set (CI overrides etc.).
+#   2. The `gaos_release:` key in version.yaml at the repo root.
+#   3. Empty — skips the /etc/ga-release write entirely.
+#
+# The version.yaml fallback exists because `docker run -e GA_RELEASE=…`
+# is silently stripped by `sudo -H` in hassos:local's entrypoint. The
+# env-var-only path lost the value (BOSv1.2.0 build #15 shipped without
+# the stamp); reading from version.yaml inside the container removes the
+# env-propagation fragility. Tracked in fleet_auto_update_audit_2026_06_01
+# follow-up.
+if [[ -z "${GA_RELEASE:-}" ]]; then
+  GA_RELEASE="$(sed -nE 's/^gaos_release:[[:space:]]*"?([^"#[:space:]]+)"?.*$/\1/p' \
+                  "${SCRIPT_DIR}/../version.yaml" 2>/dev/null | head -1)"
+  if [[ -n "${GA_RELEASE}" ]]; then
+    echo "GA_RELEASE not set in env — resolved to '${GA_RELEASE}' from version.yaml"
+  fi
+fi
 
 export GA_BUILD_TIMESTAMP GA_ENV GA_RELEASE
 

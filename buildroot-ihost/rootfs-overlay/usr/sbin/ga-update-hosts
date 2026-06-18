@@ -113,3 +113,34 @@ if getent hosts "${GA_INFLUX_HOST:-influx.greenautarky.com}" >/dev/null 2>&1; th
 else
     echo "ga-update-hosts: WARNING — ${GA_INFLUX_HOST} does not resolve yet (may need overlay mount)"
 fi
+
+# Also inject into Supervisor container's /etc/hosts. Supervisor's dns.py
+# reads /run/ga-resolve-ota.active at init but can lose the race with
+# ga-resolve-ota.service on first boot, then cache the negative (= bridge
+# IP 172.30.32.1) for the lifetime of the container. K7 BOSv1.2.12 OTA
+# 2026-06-10 hit this — see memory/incident_supervisor_dns_boot_race.
+#
+# Container's /etc/hosts is a per-container overlay layer. Writes via
+# `docker exec` survive systemctl restart of hassio_supervisor and even
+# host reboot (= the overlay layer is persistent), so this only needs to
+# run on each ga-services.conf change, not every boot.
+#
+# Silently no-op if Supervisor container isn't running (= e.g. very early
+# in boot or on a device that never had Supervisor). Will catch up at
+# the next ga-update-hosts trigger.
+if docker inspect hassio_supervisor >/dev/null 2>&1; then
+    # Build list of entries to inject. grep -qF before appending so we don't
+    # duplicate on repeated ga-update-hosts invocations.
+    inject() {
+        # $1 = full host-line content (= "IP host1 host2 ...")
+        local line="$1"
+        docker exec hassio_supervisor sh -c \
+            "grep -qF '$line' /etc/hosts 2>/dev/null || echo '$line' >> /etc/hosts" \
+            >/dev/null 2>&1 || true
+    }
+    inject "$GA_HOSTS_LINE"
+    if [ -n "${GA_OTA_HOST:-}" ] && [ -n "$OTA_IP" ]; then
+        inject "$OTA_IP $GA_OTA_HOST"
+    fi
+    echo "ga-update-hosts: injected entries into hassio_supervisor /etc/hosts"
+fi

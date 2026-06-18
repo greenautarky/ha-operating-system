@@ -1,0 +1,101 @@
+#!/bin/sh
+# ga-rauc-install — download + RAUC-install + reboot for an HAOS version.
+#
+# Invoked by the ga-rauc-install.service systemd unit (= triggered in
+# turn by ga-rauc-install.path watching the request file), or manually
+# by an operator on the host. The systemd path-watcher fires when
+# /mnt/data/supervisor/share/ga-rauc-install-request is written or
+# updated by ga_manager 0.42.0+ (the addon container sees the same
+# file at /share/ga-rauc-install-request).
+#
+# Argument modes:
+#   ga-rauc-install              — no arg: read version from request file
+#                                  (delete-first to allow re-trigger).
+#   ga-rauc-install <version>    — explicit arg: skip the request file,
+#                                  use the passed version. For operator
+#                                  debug from the host.
+#
+# Either path then validates the version regex, downloads the OTA
+# bundle from a fixed URL pattern, runs `rauc info` + `rauc install`,
+# and schedules a 5-second-delayed reboot.
+#
+# Background — why the path-watcher pattern instead of the original
+# BOSv1.2.17 systemd template @.service: Supervisor's REST API
+# (verified in 2025.11.4.6 source) exposes /host/services as GET-only;
+# there is no /start. The 0.41.0 worker that called
+# /host/services/ga-rauc-install@VERSION.service/start always 404'd.
+# Files in /share/ are the existing addon-to-host trampoline (already
+# used for ghcr-creds.json + ga-fleet-bundle.yaml) — re-using it for
+# RAUC trigger means no new Supervisor API dependencies + a clear
+# audit trail in /mnt/data/supervisor/share/.
+
+set -eu
+
+REQUEST_FILE="/mnt/data/supervisor/share/ga-rauc-install-request"
+VERSION="${1:-}"
+
+if [ -z "$VERSION" ]; then
+    if [ ! -f "$REQUEST_FILE" ]; then
+        echo "[ga-rauc-install] FATAL: no VERSION arg and $REQUEST_FILE absent" >&2
+        exit 2
+    fi
+    # Read THEN delete — the delete is the dedupe gate. If install fails,
+    # the file is gone and a re-trigger requires a fresh write (which is
+    # the desired behaviour: don't retry a known-bad version on every
+    # path event).
+    VERSION="$(head -c 64 "$REQUEST_FILE" | tr -d '[:space:]')"
+    rm -f "$REQUEST_FILE"
+    echo "[ga-rauc-install] read VERSION='$VERSION' from $REQUEST_FILE (file removed)"
+fi
+
+# Validate version format — refuse anything that isn't N.N.N.N digits-
+# and-dots. The systemd template variant was operator-influencable
+# through the Supervisor API; the file-based variant is influencable
+# by anything able to write to /share/, which is every running addon
+# container. Defence in depth: the worker validates too.
+case "$VERSION" in
+    *[!0-9.]* | "" | *..* | .* | *. )
+        echo "[ga-rauc-install] FATAL: refusing malformed version '$VERSION'" >&2
+        exit 2
+        ;;
+esac
+
+URL="https://ota.greenautarky.com/releases/${VERSION}/haos_ihost-${VERSION}.raucb"
+# Staging directory: /mnt/data/tmp/ — our canonical "scratch space for
+# anything larger than a few MB". /tmp/ on HAOS is a 15 MB zram tmpfs
+# (see device:/etc/fstab) — a 230 MB raucb bundle does not fit there,
+# curl returns error 23 mid-download. /mnt/data/tmp/ is created by
+# /usr/lib/tmpfiles.d/ga-mnt-data-tmp.conf and aged out at 7 days by
+# systemd-tmpfiles-clean.timer.
+STAGING_DIR="/mnt/data/tmp"
+mkdir -p "$STAGING_DIR"
+BUNDLE="$STAGING_DIR/ga-rauc-install-${VERSION}.raucb"
+
+echo "[ga-rauc-install] downloading $URL"
+if ! curl --fail --silent --show-error --location --output "$BUNDLE" "$URL"; then
+    echo "[ga-rauc-install] FATAL: download failed for $URL" >&2
+    exit 3
+fi
+echo "[ga-rauc-install] downloaded $(stat -c %s "$BUNDLE" 2>/dev/null || wc -c < "$BUNDLE") bytes"
+
+echo "[ga-rauc-install] verifying RAUC bundle"
+if ! rauc info "$BUNDLE" >/dev/null 2>&1; then
+    echo "[ga-rauc-install] FATAL: rauc info refuses the bundle (truncated? wrong signature?)" >&2
+    rm -f "$BUNDLE"
+    exit 4
+fi
+
+echo "[ga-rauc-install] installing $BUNDLE"
+if ! rauc install "$BUNDLE"; then
+    echo "[ga-rauc-install] FATAL: rauc install failed" >&2
+    rm -f "$BUNDLE"
+    exit 5
+fi
+
+echo "[ga-rauc-install] install OK — scheduling reboot in 5s"
+rm -f "$BUNDLE"
+sync
+# Detach so the systemd unit can exit cleanly before reboot — otherwise
+# the path-unit's triggered .service appears hung until reboot fires.
+( sleep 5 && systemctl reboot ) &
+exit 0
