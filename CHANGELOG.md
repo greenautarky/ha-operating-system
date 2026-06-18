@@ -12,6 +12,72 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## 16.3.1.2 (BOSv1.2.21-rc1) — 2026-06-18, Phase 1 MQTT monitoring bake
+
+OS bake pins `ga_manager` 0.43.0 → **0.45.0** in
+`buildroot-external/package/hassio/addon-images.json` (PR #64). The
+addon source (`ga_manager` 0.45.0), `vibe_addons` config, and
+`ga-fleet-manager` 0.23.0 are in lockstep — the version-mismatch guard in
+`scripts/check-images.sh` passes.
+
+All other addons in `addon-images.json` are unchanged: Mosquitto 6.5.2,
+`ga_tailscale` 0.27.1, `ga_ihosthardwarecontrol` 1.1.3, `ga_influxdbv1`
+0.0.3, `ga_zigbee2mqtt` 2.6.3-1, `sonoff_dongle_flasher` 1.2.3.
+
+### Added — two-client MQTT facade in ga_manager (LOCAL + REMOTE brokers)
+
+`ga_manager` 0.45.0 introduces a Phase 1 MQTT facade that talks to two
+brokers with no transport bridge between them. The split is a
+privacy-by-topology lock: scrubbed state ships off-device, raw Z2M and
+legacy device-local traffic stays on-device.
+
+- **LOCAL broker** = the `ga_mosquitto` addon on the device itself
+  (`127.0.0.1:1883`). Carries Zigbee2MQTT, the legacy
+  `ga/manager/<id>/*` topics, and the command channel — same as before.
+- **REMOTE broker** = central Mosquitto on `ga-tools` (plain TCP 1884
+  over the NetBird mesh). Receives only the scrubbed
+  `ga/v1/devices/<id>/...` publishes from the addon. No subscribe-back,
+  no bridge, no Z2M payloads.
+- The two clients run in the same addon process but never share a
+  session, so a misconfigured topic cannot leak from LOCAL to REMOTE.
+
+### Added — per-device MQTT credential autopush (fleet-manager → addon)
+
+Credentials for the REMOTE broker are delivered by a new
+`mqtt_creds_autopush` poller hook in `ga-fleet-manager` 0.23.0 →
+ga_manager's new `mqtt-creds-write` worker, which writes two files on
+the device:
+
+- `/share/ga-fleet-mqtt.yaml` — broker host/port + topic-prefix,
+  `0644`, contains no secrets, readable from any addon for diagnostics.
+- `/data/ga-fleet-mqtt.token` — bearer token, `0600`, addon-private
+  (only ga_manager itself can read it).
+
+The split keeps with the existing `/share/` vs `/data/` convention
+(see `feedback_share_path_for_addon_host_bridge` in the OS memory):
+non-secret config bridges via `/share/`, the actual secret never
+leaves `/data/`.
+
+### Notes — Supervisor self-update workaround still required
+
+Devices on a ga_manager pre-0.44.0 image will hit the Supervisor
+"addon can't update itself" 403 guard when the fleet-manager
+`addon-update` job tries to dispatch the 0.45.0 bump. The 0.44.0+
+fallback (subprocess `ha addons update`) is what unblocks the cascade.
+For devices stuck at 0.43.0 or earlier, the one-time recovery is still
+SSH + `ha addons update 99f1cad4_ga_manager` per device.
+
+### Notes — no consent / privacy-tier change in this bake
+
+The two-broker split is a transport-topology change. It does NOT
+introduce a new Tier-0 always-on data category; the addon still
+respects `greenautarky_telemetry` consent before publishing on the
+REMOTE side. See `docs/privacy/PRIVACY_TIERS_PLAN.md` for the tier
+model — Phase 1 MQTT operates within the existing Tier 0 + Tier 1
+envelopes.
+
+---
+
 ## 16.3.1.2 (V1.2-clean) — in flight, 2026-05-28 ninth update
 
 ### Changed — ga-ha-init sheds watchdog + weather (ownership moved/dropped)
