@@ -1,0 +1,75 @@
+#!/bin/sh
+# ga-addon-prime — post-OTA one-shot to update baked addons to the
+# versions pinned in the new OS image's addon-images.json.
+#
+# Why: Supervisor preserves the running addon container across an OS
+# slot-swap (= /mnt/data/supervisor persists), so even though the OS
+# image bakes a newer addon image tag, the previous version keeps
+# running until an explicit `ha addons update` fires.
+#
+# Reads `/etc/ga-addon-prime.conf` (one slug per line, '#' comments OK),
+# runs `docker exec hassio_cli ha store reload` once, then `ha addons
+# update <slug>` per entry. On success, writes the marker file
+# `/mnt/data/.ga-addon-primed` so the gating service does not re-run.
+#
+# The `ha` CLI lives in the hassio_cli sibling container, NOT on the
+# host. We could use `docker exec hassio_cli ha …` from the host
+# (= what this script does) or call Supervisor's REST API directly.
+# Docker exec is simpler and matches yesterday's bench-verified pattern.
+
+set -eu
+
+PRIME_CONF="/etc/ga-addon-prime.conf"
+MARKER="/mnt/data/.ga-addon-primed"
+
+log() { echo "[ga-addon-prime] $*"; }
+
+if [ ! -f "$PRIME_CONF" ]; then
+    log "no prime conf at $PRIME_CONF — nothing to do"
+    # Still write the marker so the service doesn't keep firing.
+    touch "$MARKER"
+    exit 0
+fi
+
+# Wait for hassio_cli container to be up (= comes online a few seconds
+# after hassos-supervisor starts).
+for i in $(seq 1 60); do
+    if docker exec hassio_cli /bin/true >/dev/null 2>&1; then
+        break
+    fi
+    log "waiting for hassio_cli (${i}/60)…"
+    sleep 5
+done
+if ! docker exec hassio_cli /bin/true >/dev/null 2>&1; then
+    log "ERROR: hassio_cli not reachable after 5 min — bailing (no marker written)"
+    exit 1
+fi
+
+log "refreshing addon store cache (= /store/reload)"
+docker exec hassio_cli ha store reload || log "WARN: store reload failed, continuing"
+
+# Iterate prime conf
+FAIL=0
+while IFS= read -r SLUG; do
+    # strip comments + whitespace
+    SLUG="${SLUG%%#*}"
+    SLUG="$(echo "$SLUG" | tr -d '[:space:]')"
+    [ -z "$SLUG" ] && continue
+
+    log "priming addon: $SLUG"
+    if docker exec hassio_cli ha addons update "$SLUG"; then
+        log "  → $SLUG: primed OK"
+    else
+        log "  → $SLUG: FAILED"
+        FAIL=$((FAIL + 1))
+    fi
+done < "$PRIME_CONF"
+
+if [ "$FAIL" -gt 0 ]; then
+    log "ERROR: $FAIL addon(s) failed to prime — marker NOT written, service will retry next boot"
+    exit 1
+fi
+
+log "all addons primed — writing marker $MARKER"
+touch "$MARKER"
+log "done"
