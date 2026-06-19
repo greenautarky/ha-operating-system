@@ -339,15 +339,104 @@ GA_BUILD_TIMESTAMP="${GA_BUILD_TIMESTAMP:-$(date '+%Y%m%d%H%M%S')}"
 # the stamp); reading from version.yaml inside the container removes the
 # env-propagation fragility. Tracked in fleet_auto_update_audit_2026_06_01
 # follow-up.
-if [[ -z "${GA_RELEASE:-}" ]]; then
-  GA_RELEASE="$(sed -nE 's/^gaos_release:[[:space:]]*"?([^"#[:space:]]+)"?.*$/\1/p' \
-                  "${SCRIPT_DIR}/../version.yaml" 2>/dev/null | head -1)"
-  if [[ -n "${GA_RELEASE}" ]]; then
-    echo "GA_RELEASE not set in env — resolved to '${GA_RELEASE}' from version.yaml"
+GA_RELEASE_SOURCE=""
+GA_RELEASE_FROM_YAML="$(sed -nE 's/^gaos_release:[[:space:]]*"?([^"#[:space:]]+)"?.*$/\1/p' \
+                       "${SCRIPT_DIR}/../version.yaml" 2>/dev/null | head -1)"
+if [[ -n "${GA_RELEASE:-}" ]]; then
+  GA_RELEASE_SOURCE="env"
+  # Mismatch detection: if BOTH env and version.yaml are set but differ,
+  # the operator likely forgot to bump version.yaml. We pick env (= explicit
+  # operator intent) but warn loudly so a stale yaml doesn't go unnoticed.
+  if [[ -n "${GA_RELEASE_FROM_YAML}" && "${GA_RELEASE}" != "${GA_RELEASE_FROM_YAML}" ]]; then
+    echo ""
+    echo "===================================================="
+    echo "  WARN: GA_RELEASE env ($GA_RELEASE) differs from"
+    echo "        version.yaml's gaos_release ($GA_RELEASE_FROM_YAML)."
+    echo ""
+    echo "        Using env value. Bump version.yaml to match"
+    echo "        if this is a real release (= avoid drift on"
+    echo "        future builds that don't pass env)."
+    echo "===================================================="
+    echo ""
   fi
+else
+  GA_RELEASE="$GA_RELEASE_FROM_YAML"
+  GA_RELEASE_SOURCE="version.yaml"
 fi
 
+# Fail-fast: empty GA_RELEASE means /etc/ga-release will be silently absent
+# on the produced image — which then poisons the release-aware OTA cascade.
+# Bake-time abort > runtime mystery.
+if [[ -z "${GA_RELEASE}" ]]; then
+  echo ""
+  echo "===================================================="
+  echo "  ERROR: GA_RELEASE could not be resolved."
+  echo ""
+  echo "    - env var GA_RELEASE: unset (or stripped by sudo -H"
+  echo "      in hassos:local entrypoint — known limitation)"
+  echo "    - version.yaml gaos_release: empty or missing"
+  echo ""
+  echo "    Fix: bump version.yaml's gaos_release: line to the"
+  echo "    target release label (e.g. BOSv1.2.21-rc2), commit,"
+  echo "    then re-run the build. See scripts/release.sh."
+  echo "===================================================="
+  exit 1
+fi
+
+# Loud resolution banner — operator MUST see what's about to land in
+# /etc/ga-release before waiting 50 min for the build to finish.
+echo ""
+echo "===================================================="
+echo "  GA_RELEASE resolution:"
+echo "    value:  $GA_RELEASE"
+echo "    source: $GA_RELEASE_SOURCE"
+echo "===================================================="
+echo ""
+
 export GA_BUILD_TIMESTAMP GA_ENV GA_RELEASE
+
+assert_ga_release_stamped() {
+  # Post-bake guard: confirm /etc/ga-release in the produced rootfs matches
+  # the resolved GA_RELEASE. Catches:
+  #   - silent env-var stripping (= would have caught the BOSv1.2.21-rc2
+  #     bake1 incident where env passed `BOSv1.2.21-rc2` but version.yaml
+  #     still said `BOSv1.2.20-rc1` → image went out with the older label
+  #     stamped, requiring a full rebake)
+  #   - any future codepath that writes /etc/ga-release from a different
+  #     variable than $GA_RELEASE without updating both spots
+  # Runs after rebuild_artifacts so the build is "done" and we have the
+  # final rootfs in target/. If this fails we abort before producing the
+  # provisioning image / SBOM / archives (= those are mid-stream cost only).
+  local stamped
+  stamped="$(cat "${OUT}/target/etc/ga-release" 2>/dev/null || true)"
+  if [[ -z "$stamped" ]]; then
+    echo ""
+    echo "===================================================="
+    echo "  ERROR: post-bake assertion failed."
+    echo "    /etc/ga-release is empty/missing in built rootfs."
+    echo "    Expected: ${GA_RELEASE:-<unset>}"
+    echo "===================================================="
+    exit 1
+  fi
+  if [[ "$stamped" != "$GA_RELEASE" ]]; then
+    echo ""
+    echo "===================================================="
+    echo "  ERROR: post-bake assertion failed."
+    echo "    /etc/ga-release in built rootfs differs from resolved GA_RELEASE."
+    echo "    In rootfs:  '$stamped'"
+    echo "    Resolved:   '$GA_RELEASE'"
+    echo ""
+    echo "    Stop NOW — do not ship this image. The on-device"
+    echo "    release-aware OTA cascade compares /etc/ga-release"
+    echo "    to target_ga_release; a mismatch breaks the no-op"
+    echo "    detection on subsequent updates."
+    echo "===================================================="
+    exit 1
+  fi
+  echo ""
+  echo "  ✓ Post-bake assertion: /etc/ga-release = '$stamped' (matches resolved GA_RELEASE)"
+  echo ""
+}
 
 write_build_id_into_target() {
   local ts_human
@@ -1969,6 +2058,10 @@ rebuild_artifacts
 # 6) Rename images with ga-build-id timestamp suffix
 log_build_step "Rename images"
 rename_images_with_build_id
+
+# 6a) Verify /etc/ga-release was actually stamped with what we resolved
+log_build_step "Post-bake assertion: /etc/ga-release stamped"
+assert_ga_release_stamped
 
 # --- Post-build artifacts (prod only for faster dev builds) ---
 if [[ "$GA_ENV" == "prod" ]]; then
