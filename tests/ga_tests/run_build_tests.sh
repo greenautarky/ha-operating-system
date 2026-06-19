@@ -2272,6 +2272,66 @@ else
 fi
 
 # =========================================================================
+# GA Release identifier — defense in depth around the BOSv1.2.21-rc2 bake1
+# incident (2026-06-19). ga_build.sh's post-bake assert_ga_release_stamped
+# also catches this; the test-suite-level check here protects against any
+# future codepath that bypasses ga_build.sh.
+# =========================================================================
+echo ""
+echo "--- GA Release identifier ---"
+
+GA_REL_FILE="${TARGET}/etc/ga-release"
+VERSION_YAML="${OUT}/../version.yaml"
+
+# GA-REL-01: /etc/ga-release exists + non-empty
+if [[ -s "$GA_REL_FILE" ]]; then
+  GA_REL_STAMPED="$(cat "$GA_REL_FILE" | head -1 | tr -d '[:space:]')"
+  _pass "GA-REL-01: /etc/ga-release present + non-empty: '$GA_REL_STAMPED'"
+else
+  _fail "GA-REL-01: /etc/ga-release missing or empty (post-bake stamping broke)"
+  GA_REL_STAMPED=""
+fi
+
+# GA-REL-02: format matches BOSvMAJOR.MINOR.PATCH[-{rc,dev}N]
+if [[ -n "$GA_REL_STAMPED" ]]; then
+  if [[ "$GA_REL_STAMPED" =~ ^BOSv[0-9]+\.[0-9]+\.[0-9]+(-(rc|dev)[0-9]+)?$ ]]; then
+    _pass "GA-REL-02: /etc/ga-release format matches BOSvMAJOR.MINOR.PATCH[-{rc,dev}N]"
+  else
+    _fail "GA-REL-02: /etc/ga-release format malformed: '$GA_REL_STAMPED'"
+  fi
+fi
+
+# GA-REL-03: /etc/ga-release matches version.yaml's gaos_release (= what
+# ga_build.sh's resolution should have produced). Catches the case where
+# the source-of-truth diverged from the stamp (= the bake1 incident shape).
+if [[ -n "$GA_REL_STAMPED" && -f "$VERSION_YAML" ]]; then
+  GAOS_YAML="$(sed -nE 's/^gaos_release:[[:space:]]*"?([^"#[:space:]]+)"?.*$/\1/p' \
+               "$VERSION_YAML" 2>/dev/null | head -1)"
+  if [[ -n "$GAOS_YAML" && "$GAOS_YAML" == "$GA_REL_STAMPED" ]]; then
+    _pass "GA-REL-03: /etc/ga-release matches version.yaml gaos_release"
+  elif [[ -z "$GAOS_YAML" ]]; then
+    _skip "GA-REL-03: version.yaml gaos_release" "empty (env-var-only build path)"
+  else
+    _fail "GA-REL-03: /etc/ga-release '$GA_REL_STAMPED' != version.yaml '$GAOS_YAML' (= bake1 incident shape, rebake needed)"
+  fi
+else
+  _skip "GA-REL-03: version.yaml comparison" "version.yaml not at ${VERSION_YAML}"
+fi
+
+# GA-REL-04: /etc/os-release also contains GA_RELEASE= line matching
+OS_REL_FILE="${TARGET}/etc/os-release"
+if [[ -n "$GA_REL_STAMPED" && -f "$OS_REL_FILE" ]]; then
+  OS_REL_VAL="$(grep '^GA_RELEASE=' "$OS_REL_FILE" 2>/dev/null | sed -E 's/^GA_RELEASE="?([^"]*)"?$/\1/' | head -1)"
+  if [[ "$OS_REL_VAL" == "$GA_REL_STAMPED" ]]; then
+    _pass "GA-REL-04: /etc/os-release GA_RELEASE matches /etc/ga-release"
+  else
+    _fail "GA-REL-04: /etc/os-release GA_RELEASE='$OS_REL_VAL' differs from /etc/ga-release='$GA_REL_STAMPED'"
+  fi
+else
+  _skip "GA-REL-04: os-release GA_RELEASE" "/etc/os-release not at ${OS_REL_FILE}"
+fi
+
+# =========================================================================
 # Summary
 # =========================================================================
 echo ""
