@@ -78,9 +78,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Sanity-check the ga_release label format if supplied. The convention
-# (since 2026-06-02) is BOSvMAJOR.MINOR.PATCH (e.g. BOSv1.2.1).
-if [[ -n "$GA_RELEASE" ]] && ! [[ "$GA_RELEASE" =~ ^BOSv[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "ERROR: ga_release '$GA_RELEASE' looks malformed (expected BOSvMAJOR.MINOR.PATCH)"
+# (since 2026-06-02) is BOSvMAJOR.MINOR.PATCH (e.g. BOSv1.2.1). Since
+# Option C went live 2026-06-17, optional -rcN / -devN pre-release
+# suffixes are also accepted (e.g. BOSv1.2.21-rc2, BOSv1.2.22-dev3).
+if [[ -n "$GA_RELEASE" ]] && ! [[ "$GA_RELEASE" =~ ^BOSv[0-9]+\.[0-9]+\.[0-9]+(-(rc|dev)[0-9]+)?$ ]]; then
+    echo "ERROR: ga_release '$GA_RELEASE' looks malformed (expected BOSvMAJOR.MINOR.PATCH[-{rc,dev}N])"
     exit 1
 fi
 
