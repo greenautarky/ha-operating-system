@@ -11,7 +11,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.2.20-rc1  # marker baked into /etc/ga-release at build. BOSv1.2.18 = ga_manager 0.42.0 + path-watcher (ga-rauc-install.service + .path) replacing the 0.41.0/BOSv1.2.17 attempt at Supervisor /host/services API (= which is GET-only, no /start endpoint). Path-watcher trampoline: addon writes /share/ga-rauc-install-request, host's .path unit fires .service which downloads bundle + rauc-installs + reboots. Same-HAOS-version cascade (= BOSv1.2.x → BOSv1.2.y) now works fleet-wide via fleet-manager dispatch without operator SSH. BOSv1.2.16 was skipped (= replaced by 1.2.17). BOSv1.2.17 dead-end (= 0.41.0 worker always 404'd).
+gaos_release: BOSv1.2.21-rc2  # marker baked into /etc/ga-release at build. BOSv1.2.21-rc2 = Phase 1 MQTT monitoring fleet-wide (ga_manager 0.45.2 baked: 2-client MQTT facade, privacy filter Layer-1/2/3 incl. SSID-redact with GA-prefix whitelist + nested-dict gate, ga-addon-prime Supervisor-ready probe + no-op-success). rc1 = same code minus ga-addon-prime fix + privacy Layer-3 nested fix. BOSv1.2.18+ = ga_manager 0.42.0 + path-watcher trampoline (= /share/ga-rauc-install-request → host .path/.service) for fleet-wide cascade without operator SSH.
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
@@ -34,7 +34,7 @@ rootfs_overlays:
 addons:
   # Built by their own repos' CI; pinned for visibility. The actual
   # pin consumed at OS build is in buildroot-external/package/hassio/addon-images.json.
-  ga_manager:               "0.43.0"  # 0.36.0-0.40.x = LTE-dongle full chain (slug plumbing + autodetect robustness + concrete ufi/arrow/openstick backends + persist /share/ bugfix + status-page Identity/Bundle/Network/Zigbee cards). 0.41.0 attempted rauc-direct via Supervisor /host/services/<svc>/start (= 404 always, endpoint doesn't exist). 0.42.0 redesigns: worker writes /share/ga-rauc-install-request, host's path-watcher unit fires the install. Requires BOSv1.2.18+ host (= the path-unit + .service + helper).
+  ga_manager:               "0.45.2"  # 0.45.x = Phase 1 MQTT facade (2-client: local broker for Z2M/legacy + remote broker on ga-tools:1884 for ga/v1/* publishes). 0.45.1 fixed K0 canary bugs (creds-write HTTP route, identity fallback, SSID privacy redact, list recursion). 0.45.2 fixed Layer-3 whitelist nested-dict regression. 0.44.0 added self-update CLI fallback (= `docker exec hassio_cli ha addons update <self>` for the Supervisor 403 guard). 0.44.1 fixed `ha` CLI not in addon container. 0.43.0 = z2m/ui badges + cleanup. 0.42.0 path-watcher trampoline.
   ga_default_addon:         "1.1.2"
   ga_hmvapp_addon:          "1.1.7"
 
