@@ -10,7 +10,9 @@
 #   6. ha-operating-system/buildroot-external/meta   VERSION_{MAJOR,MINOR,SUFFIX}
 #
 # After this runs, the next steps are MANUAL (intentionally):
-#   a. SSH ga-builder, run: GA_RELEASE=<ga-release> ./scripts/ga_build.sh prod
+#   a. SSH ga-builder, run: ./scripts/ga_build.sh update prod
+#      (GA_RELEASE env is no longer needed — ga_build.sh reads version.yaml.
+#       Or use --bake-async on this script to kick the bake automatically.)
 #   b. Locally:    ./scripts/push-ota.sh --server --raucb <bundle>.raucb
 #   c. Verify on a canary device, then push-ota --fleet (or wait for auto-pull)
 #
@@ -51,14 +53,22 @@ SUPERVISOR_BRANCH="${SUPERVISOR_BRANCH:-ga/custom-version-url}"
 
 DRY_RUN=false
 NO_PUSH=false
+BAKE_ASYNC=false
 OS_VERSION=""
 SUP_VERSION=""
 GA_RELEASE=""  # optional; if unset we preserve whatever is in stable.json
+
+# --bake-async support: ga-builder LXC on the Proxmox host runs the actual
+# build. Override these if your topology differs.
+GA_BUILDER_HOST="${GA_BUILDER_HOST:-root@192.168.1.33}"
+GA_BUILDER_CTID="${GA_BUILDER_CTID:-107}"
+GA_BUILDER_REPO_PATH="${GA_BUILDER_REPO_PATH:-/home/builder/ha-operating-system}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run)     DRY_RUN=true; shift ;;
         --no-push)     NO_PUSH=true; shift ;;
+        --bake-async)  BAKE_ASYNC=true; shift ;;
         --ga-release)  GA_RELEASE="$2"; shift 2 ;;
         -h|--help)
             sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
@@ -305,11 +315,53 @@ echo "============================================="
 echo "  Versions bumped + pushed ✓"
 echo "============================================="
 echo ""
+
+# Optional: kick the bake immediately on ga-builder so the operator
+# doesn't have to wait + remember to do it manually. The bake runs
+# detached (= release.sh returns); operator monitors via
+#   ssh root@<ga-builder> 'pct exec <CTID> -- docker logs ga-build'
+# Robust against the GA_RELEASE-stripping bug because we just bumped
+# version.yaml + pushed; the bake will pick up the right value via
+# ga_build.sh's yaml fallback (see fix/ga-build-ga-release-robustness).
+if [[ "$BAKE_ASYNC" == "true" ]]; then
+    echo "Kicking bake on ga-builder ($GA_BUILDER_HOST CTID=$GA_BUILDER_CTID)..."
+    REMOTE_CMD=$(cat <<REMOTE
+set -e
+cd $GA_BUILDER_REPO_PATH
+git pull --ff-only
+echo "On commit: \$(git log --oneline -1)"
+echo "Version.yaml gaos_release: \$(grep '^gaos_release:' version.yaml | head -1)"
+docker rm -f ga-build 2>/dev/null || true
+rm -f ga_output/build/hassio-1.0.0/.stamp_target_installed 2>/dev/null || true
+rm -f ga_output/build/hassio-1.0.0/.stamp_installed 2>/dev/null || true
+docker run -d --privileged \\
+    -v \\\$(pwd):/build -v /home/builder/hassos-cache:/cache -v /dev:/dev \\
+    --name ga-build \\
+    hassos:local bash -c "export FORCE_UNSAFE_CONFIGURE=1 && cd /build && ./scripts/ga_build.sh update prod"
+echo "Bake kicked. Container: ga-build"
+REMOTE
+)
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "(DRY-RUN) Would run on $GA_BUILDER_HOST:"
+        echo "$REMOTE_CMD" | sed 's/^/  | /'
+    else
+        ssh -o ConnectTimeout=15 "$GA_BUILDER_HOST" "pct exec $GA_BUILDER_CTID -- bash -c \"$REMOTE_CMD\""
+        echo ""
+        echo "  Bake running detached. Monitor with:"
+        echo "    ssh $GA_BUILDER_HOST 'pct exec $GA_BUILDER_CTID -- docker logs -f ga-build'"
+        echo "  Or poll for the final artifact:"
+        echo "    ssh $GA_BUILDER_HOST 'pct exec $GA_BUILDER_CTID -- ls -lht $GA_BUILDER_REPO_PATH/ga_output/images/bos_ihost-${OS_VERSION}_prod_*.img.xz'"
+    fi
+    echo ""
+fi
+
 echo "Next steps (manual):"
-echo "  1. Build on ga-builder:"
-echo "       ssh ga-builder 'cd /home/lxc/ha-operating-system && git pull && ./scripts/ga_build.sh prod'"
-echo "  2. Copy bundle back, then upload to ga-tools:"
-echo "       ./scripts/push-ota.sh --server --raucb releases/.../haos_ihost-$OS_VERSION.raucb"
-echo "  3. Canary verify (single device):"
-echo "       ssh -p 22222 root@<one-device> 'ha core update --version $SUP_VERSION'"
+if [[ "$BAKE_ASYNC" != "true" ]]; then
+    echo "  1. Build on ga-builder:"
+    echo "       ssh ga-builder 'cd /home/builder/ha-operating-system && git pull && ./scripts/ga_build.sh update prod'"
+    echo "     (or re-run with --bake-async to kick it from here)"
+fi
+echo "  2. Once .img.xz + .raucb are produced, copy to laptop + upload:"
+echo "       ./scripts/push-ota.sh --server --raucb /path/to/bos_ihost-${OS_VERSION}_prod_<TS>.raucb"
+echo "  3. Canary verify on K0 via fleet-manager ota-update job before fleet cascade"
 echo ""
