@@ -11,7 +11,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.2.21-rc2  # marker baked into /etc/ga-release at build. BOSv1.2.21-rc2 = Phase 1 MQTT monitoring fleet-wide (ga_manager 0.45.2 baked: 2-client MQTT facade, privacy filter Layer-1/2/3 incl. SSID-redact with GA-prefix whitelist + nested-dict gate, ga-addon-prime Supervisor-ready probe + no-op-success). rc1 = same code minus ga-addon-prime fix + privacy Layer-3 nested fix. BOSv1.2.18+ = ga_manager 0.42.0 + path-watcher trampoline (= /share/ga-rauc-install-request → host .path/.service) for fleet-wide cascade without operator SSH.
+gaos_release: BOSv1.2.21-rc3  # marker baked into /etc/ga-release at build. BOSv1.2.21-rc3 = ga_manager 0.45.5 baked (device-id self-heal from /share/ga-fleet-mqtt.yaml username, kills the K6/K7/K10/K17/K49 cascade flap loop where all 5 devices collided on client_id="ga_manager_remote_<unknown>"). rc2 = ga_manager 0.45.4 baked (MQTT v5 + clean_start, didn't actually fix the bug; rc3 supersedes). rc1 = ga_manager 0.45.2 baked (2-client MQTT facade + privacy Layer-1/2/3 incl. SSID-redact with GA-prefix whitelist + nested-dict gate, ga-addon-prime Supervisor-ready probe + no-op-success). BOSv1.2.18+ = ga_manager 0.42.0 + path-watcher trampoline (= /share/ga-rauc-install-request → host .path/.service) for fleet-wide cascade without operator SSH.
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
