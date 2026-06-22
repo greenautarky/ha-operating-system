@@ -1,0 +1,75 @@
+# Phase 1g (= 0.2.0) hardened deployment snippet.
+#
+# Two services: the watcher + a docker-socket-proxy sidecar.
+# The watcher no longer mounts /var/run/docker.sock directly. Instead,
+# it talks to the proxy over a private network, and the proxy is
+# configured to ONLY allow listing containers + the kill endpoint.
+#
+# Drop into ga-tools' ~/mosquitto/docker-compose.yml under `services:`.
+
+services:
+  mosquitto-hup-watcher:
+    image: ghcr.io/greenautarky/ga-mosquitto-hup-watcher:0.2.0
+    container_name: mosquitto-hup-watcher
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+      - mosquitto-hup-watcher-proxy
+    volumes:
+      - ./config:/mosquitto/config:ro
+      # NOTE: NO /var/run/docker.sock mount anymore. Watcher talks to
+      # the proxy over the private network below.
+    environment:
+      - WATCH_DIR=/mosquitto/config
+      - TARGET_CONTAINER=mosquitto
+      - DEBOUNCE_SECS=2
+      # DOCKER_HOST tells the `docker` CLI inside the watcher to use the
+      # proxy's TCP endpoint instead of the default /var/run/docker.sock.
+      - DOCKER_HOST=tcp://mosquitto-hup-watcher-proxy:2375
+    networks:
+      - hup-watcher-private
+
+  # docker-socket-proxy from tecnativa restricts which Docker API calls
+  # the watcher can make. The minimum set we need:
+  #   - GET /containers/json     → for our `docker ps` sanity check
+  #   - POST /containers/{id}/kill → for SIGHUP'ing mosquitto
+  #
+  # All other endpoints (start/stop/restart/exec/build/pull/push/volumes/
+  # networks/swarm/etc.) return 403 from the proxy.
+  mosquitto-hup-watcher-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    container_name: mosquitto-hup-watcher-proxy
+    restart: unless-stopped
+    privileged: true  # required for the proxy to bind /var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      # READ-ONLY enables. GET /containers/json works.
+      - CONTAINERS=1
+      # ALLOW POST methods (= specifically /containers/{id}/kill).
+      # The proxy's regex ACL by default ONLY allows POST on the
+      # ./kill endpoint of containers; broader endpoints (start, stop,
+      # restart, exec) require explicit env vars NOT set here.
+      - POST=1
+      # All explicit-off (= belt-and-braces; would default to 0 anyway).
+      - START=0
+      - STOP=0
+      - RESTART=0
+      - EXEC=0
+      - INFO=0
+      - IMAGES=0
+      - NETWORKS=0
+      - VOLUMES=0
+      - BUILD=0
+      - COMMIT=0
+      - EVENTS=0
+      - PING=1  # Used by docker CLI for connection probe; harmless GET.
+      - VERSION=1  # Same as PING; harmless GET.
+    networks:
+      - hup-watcher-private
+
+networks:
+  hup-watcher-private:
+    name: hup-watcher-private
+    driver: bridge
+    internal: true  # No external internet access for either container.
