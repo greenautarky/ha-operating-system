@@ -28,9 +28,26 @@ See `memory/design_phase_1g_mosquitto_hup_2026_06_22.md` for the design rational
 
 ## Build
 
+### From source (= local dev / testing)
+
 ```bash
-docker build -t ga-mosquitto-hup-watcher:0.1.0 .
+docker build -t ga-mosquitto-hup-watcher:dev .
 ```
+
+### From GHCR (= production)
+
+Image is published by `.github/workflows/ga-mosquitto-hup-watcher.yml`
+on any push to master that touches this directory. The version comes
+from the `VERSION` file in this directory (= bump it in a PR to ship
+a new tagged release):
+
+```bash
+docker pull ghcr.io/greenautarky/ga-mosquitto-hup-watcher:0.1.0
+# or :latest
+```
+
+The image is multi-arch (linux/amd64 + linux/arm64) so the same tag
+works on ga-tools (= x86_64) and any future ARM-based ops host.
 
 ## Deploy
 
@@ -38,7 +55,7 @@ Add to ga-tools' `~/mosquitto/docker-compose.yml`:
 
 ```yaml
 mosquitto-hup-watcher:
-  image: ga-mosquitto-hup-watcher:0.1.0
+  image: ghcr.io/greenautarky/ga-mosquitto-hup-watcher:0.1.0
   container_name: mosquitto-hup-watcher
   restart: unless-stopped
   volumes:
