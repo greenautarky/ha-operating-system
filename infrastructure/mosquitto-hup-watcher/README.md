@@ -51,7 +51,28 @@ works on ga-tools (= x86_64) and any future ARM-based ops host.
 
 ## Deploy
 
-Add to ga-tools' `~/mosquitto/docker-compose.yml`:
+### 0.2.0+ (= hardened deployment with docker-socket-proxy)
+
+The 0.2.0 release adds a `tecnativa/docker-socket-proxy` sidecar
+between the watcher and `/var/run/docker.sock`. The watcher no longer
+mounts the host's docker socket directly; it talks to the proxy over
+a private bridge network. The proxy is configured to allow ONLY
+`GET /containers/json` + `POST /containers/{id}/kill`. All other API
+endpoints (start/stop/restart/exec/build/pull/push/volumes/networks
+etc.) return 403.
+
+See `docker-compose.snippet.yaml` for the full configuration. Add the
+two services + the `hup-watcher-private` network to ga-tools'
+`~/mosquitto/docker-compose.yml`, then `docker compose up -d`.
+
+Rationale: docker.sock access widens a container's blast radius
+significantly (= a compromise can issue any Docker API call to the
+host). The proxy reduces this to "list containers + send signals" —
+no escape path to volume mounting, container spawning, or image
+pulls. See `memory/privacy_review_phase_1g_watcher_2026_06_22.md`
+for the audit + the Phase 2 hardening recommendation.
+
+### 0.1.0 (= legacy, direct socket mount — STILL works, kept for back-compat)
 
 ```yaml
 mosquitto-hup-watcher:
@@ -69,7 +90,9 @@ mosquitto-hup-watcher:
     - mosquitto
 ```
 
-Then `docker compose up -d`.
+Operators are recommended to migrate to 0.2.0 before non-canary
+rollout — the privacy review memo flags the unproxied socket as a
+hardening prerequisite.
 
 ## Verify
 
