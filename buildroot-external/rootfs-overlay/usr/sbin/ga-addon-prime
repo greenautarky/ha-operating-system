@@ -102,6 +102,7 @@ while IFS= read -r SLUG; do
     set -e
     if [ "$UPDATE_RC" -eq 0 ]; then
         log "  → $SLUG: primed OK"
+        PRIMED_OK=1
     elif echo "$UPDATE_OUT" | grep -qiE 'no update available|already at version'; then
         # Discovered 2026-06-18 on K0: `ha addons update` returns rc!=0
         # with "No update available" when the addon is already at the
@@ -111,9 +112,33 @@ while IFS= read -r SLUG; do
         # "force an upgrade". Treat as success + log so the operator
         # has the trail.
         log "  → $SLUG: already at pinned version (no-op)"
+        PRIMED_OK=1
     else
         log "  → $SLUG: FAILED — $(echo "$UPDATE_OUT" | head -1 | cut -c1-120)"
         FAIL=$((FAIL + 1))
+        PRIMED_OK=0
+    fi
+
+    # 1.2.22+: defensive `ha addons start` after every successful update.
+    # The Supervisor 2025.11.4.6 no-autostart-after-update bug
+    # (= bug_supervisor_no_autostart_after_addon_update_2026_06_19) lands
+    # the addon in state=stopped despite boot:auto. Chaining a start here
+    # papers over the bug at the OS priming layer (the runtime ga_manager
+    # addon-update worker carries the equivalent fix as of 0.48.0).
+    # No-op when the addon is already running. `|| true` because some
+    # addons may be intentionally stopped (= protected user override) +
+    # we don't want a benign start failure to fail the prime gate.
+    if [ "$PRIMED_OK" -eq 1 ]; then
+        set +e
+        docker exec hassio_cli ha addons start "$SLUG" >/dev/null 2>&1
+        START_RC=$?
+        set -e
+        if [ "$START_RC" -eq 0 ]; then
+            log "  → $SLUG: defensive start OK"
+        else
+            # rc!=0 is normal for "already running" — only log at debug level.
+            log "  → $SLUG: defensive start rc=$START_RC (= addon may already be running)"
+        fi
     fi
 done < "$PRIME_CONF"
 
