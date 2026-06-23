@@ -2332,6 +2332,61 @@ else
 fi
 
 # =========================================================================
+# Supervisor / Core channel + fork invariants (2026-06-23 audit)
+#
+# Guards the conclusions of the Core<->Supervisor fallback analysis:
+# the OS must never let Supervisor drift to a DEV channel or pull the
+# Supervisor fork from anywhere but greenautarky. The one real
+# channel-drift vector is SUPERVISOR_DEV=1 forcing DEV on every boot
+# (supervisor bootstrap.py); the image + feed are otherwise hardcoded
+# to GA in usr/sbin/hassos-supervisor.
+# =========================================================================
+echo "--- Supervisor channel + fork invariants ---"
+
+SUPERVISOR_LAUNCH="${TARGET}/usr/sbin/hassos-supervisor"
+
+# SUP-CHANNEL-01: the supervisor launch script must NOT set SUPERVISOR_DEV.
+# If it did, the supervisor bootstrap would force channel=DEV every boot
+# -> the device fetches dev.json instead of stable.json.
+if [[ -f "$SUPERVISOR_LAUNCH" ]]; then
+  if grep -qE 'SUPERVISOR_DEV' "$SUPERVISOR_LAUNCH"; then
+    _fail "SUP-CHANNEL-01: hassos-supervisor references SUPERVISOR_DEV (= forces DEV channel every boot)"
+  else
+    _pass "SUP-CHANNEL-01: hassos-supervisor does not set SUPERVISOR_DEV (channel stays stable)"
+  fi
+else
+  _skip "SUP-CHANNEL-01: SUPERVISOR_DEV guard" "hassos-supervisor not at ${SUPERVISOR_LAUNCH}"
+fi
+
+# SUP-CHANNEL-02: the Supervisor image must be pulled from the GA fork.
+if [[ -f "$SUPERVISOR_LAUNCH" ]]; then
+  if grep -qE 'SUPERVISOR_IMAGE=.*ghcr\.io/greenautarky/' "$SUPERVISOR_LAUNCH"; then
+    _pass "SUP-CHANNEL-02: Supervisor image pinned to ghcr.io/greenautarky fork"
+  else
+    _fail "SUP-CHANNEL-02: Supervisor image is NOT pinned to ghcr.io/greenautarky (fork drift risk)"
+  fi
+else
+  _skip "SUP-CHANNEL-02: Supervisor image pin" "hassos-supervisor not at ${SUPERVISOR_LAUNCH}"
+fi
+
+# SUP-CHANNEL-03: the bootstrap version-feed fallback in the launch
+# script must point at the GA version feed, not upstream
+# version.home-assistant.io.
+if [[ -f "$SUPERVISOR_LAUNCH" ]]; then
+  if grep -qE 'greenautarky/haos-version' "$SUPERVISOR_LAUNCH"; then
+    if grep -qE 'version\.home-assistant\.io/(stable|beta|dev)\.json' "$SUPERVISOR_LAUNCH"; then
+      _fail "SUP-CHANNEL-03: launch script also references upstream version feed (fallback drift risk)"
+    else
+      _pass "SUP-CHANNEL-03: version-feed fallback uses greenautarky/haos-version only"
+    fi
+  else
+    _skip "SUP-CHANNEL-03: version-feed fallback" "no feed URL in launch script (relies on supervisor const.py)"
+  fi
+else
+  _skip "SUP-CHANNEL-03: version-feed fallback" "hassos-supervisor not at ${SUPERVISOR_LAUNCH}"
+fi
+
+# =========================================================================
 # Summary
 # =========================================================================
 echo ""
