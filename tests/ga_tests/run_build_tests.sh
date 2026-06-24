@@ -58,6 +58,52 @@ grep -q 'wlan0' "${TARGET}/etc/telegraf/telegraf.conf" 2>/dev/null \
   && _pass "CFG-05: telegraf.conf monitors wlan0 interface" \
   || _fail "CFG-05: telegraf.conf missing wlan0 in net interfaces"
 
+# --- Edge-buffered telemetry (TELEMETRY-DATA-FLOW.md) ---
+TG_CONF="${TARGET}/etc/telegraf/telegraf.conf"
+
+# CFG-20: durable disk store-and-forward buffer enabled
+grep -q 'buffer_strategy *= *"disk_write_through"' "$TG_CONF" 2>/dev/null \
+  && _pass "CFG-20: telegraf disk buffer (buffer_strategy=disk_write_through)" \
+  || _fail "CFG-20: telegraf disk buffer not enabled"
+
+# CFG-21: buffer_directory is under /mnt/data (NOT /tmp = 15 MB zram)
+grep -qE 'buffer_directory *= *"/mnt/data/telegraf/buffer"' "$TG_CONF" 2>/dev/null \
+  && _pass "CFG-21: buffer_directory under /mnt/data" \
+  || _fail "CFG-21: buffer_directory missing or not under /mnt/data"
+
+# CFG-22: SD-friendly flush (300s, batched WAL writes)
+grep -qE 'flush_interval *= *"300s"' "$TG_CONF" 2>/dev/null \
+  && _pass "CFG-22: SD-friendly flush_interval=300s" \
+  || _fail "CFG-22: flush_interval not 300s (SD-wear)"
+
+# CFG-23: cpu temperature input
+grep -q '\[\[inputs.temp\]\]' "$TG_CONF" 2>/dev/null \
+  && _pass "CFG-23: telegraf has cpu temperature input (inputs.temp)" \
+  || _fail "CFG-23: telegraf missing inputs.temp"
+
+# CFG-24: ga_manager network-signal file-drop input
+grep -q '\[\[inputs.file\]\]' "$TG_CONF" 2>/dev/null \
+  && grep -q 'ga-network.influx' "$TG_CONF" 2>/dev/null \
+  && _pass "CFG-24: telegraf reads ga_manager signal file (inputs.file)" \
+  || _fail "CFG-24: telegraf missing ga-network.influx file input"
+
+# CFG-25: signal file path = host view of the addon /share bridge
+grep -q '/mnt/data/supervisor/share/telegraf/ga-network.influx' "$TG_CONF" 2>/dev/null \
+  && _pass "CFG-25: signal file path = /share addon->host bridge" \
+  || _fail "CFG-25: signal file path wrong (must be host view of /share)"
+
+# CFG-26: telegraf.service creates the buffer dir
+grep -qE 'mkdir .*-p .*/mnt/data/telegraf/buffer' "${TARGET}/etc/systemd/system/telegraf.service" 2>/dev/null \
+  && _pass "CFG-26: telegraf.service creates buffer dir" \
+  || _fail "CFG-26: telegraf.service missing buffer-dir mkdir"
+
+# CFG-27: tmpfiles.d declares the buffer dir (create-only, no destructive clean)
+TG_TMPFILES="${TARGET}/usr/lib/tmpfiles.d/ga-telegraf-buffer.conf"
+[[ -f "$TG_TMPFILES" ]] \
+  && grep -q '/mnt/data/telegraf/buffer' "$TG_TMPFILES" 2>/dev/null \
+  && _pass "CFG-27: tmpfiles.d declares telegraf buffer dir" \
+  || _fail "CFG-27: tmpfiles.d buffer entry missing"
+
 # CFG-07: fluent-bit.conf exists
 [[ -f "${TARGET}/etc/fluent-bit/fluent-bit.conf" ]] \
   && _pass "CFG-07: fluent-bit.conf exists on rootfs" \
