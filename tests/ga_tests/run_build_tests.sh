@@ -104,6 +104,20 @@ TG_TMPFILES="${TARGET}/usr/lib/tmpfiles.d/ga-telegraf-buffer.conf"
   && _pass "CFG-27: tmpfiles.d declares telegraf buffer dir" \
   || _fail "CFG-27: tmpfiles.d buffer entry missing"
 
+# CFG-28: telegraf.service reads the per-device InfluxDB cred (ADR-0002)
+TG_SVC="${TARGET}/etc/systemd/system/telegraf.service"
+grep -q 'ga-fleet-influx.yaml' "$TG_SVC" 2>/dev/null \
+  && grep -q 'INFLUX_PASSWORD=' "$TG_SVC" 2>/dev/null \
+  && _pass "CFG-28: telegraf.service reads per-device InfluxDB cred" \
+  || _fail "CFG-28: telegraf.service missing ga-fleet-influx.yaml reader"
+
+# CFG-29: telegraf.conf uses ${INFLUX_USER} (not a hardcoded shared user)
+if grep -q 'username = "${INFLUX_USER}"' "$TG_CONF" 2>/dev/null && ! grep -q 'username = "device_writer"' "$TG_CONF" 2>/dev/null; then
+  _pass "CFG-29: telegraf.conf uses per-device \${INFLUX_USER}"
+else
+  _fail "CFG-29: telegraf.conf still hardcodes the influx username"
+fi
+
 # CFG-07: fluent-bit.conf exists
 [[ -f "${TARGET}/etc/fluent-bit/fluent-bit.conf" ]] \
   && _pass "CFG-07: fluent-bit.conf exists on rootfs" \
