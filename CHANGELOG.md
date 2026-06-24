@@ -12,6 +12,68 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## 16.3.1.2 (V1.2-clean) — in flight, 2026-06-24 (edge-buffered telemetry + iHost LED bake)
+
+Telemetry-survivability session (PRs #100–#108 on master; the telegraf 1.38
+revert PR #109 is the companion fix). Pairs with ga_manager 0.50→0.53,
+fleet-manager `influx_creds` autopush, and ga-bootstrap 1.2.8. See
+[ADR-0001 / ADR-0002] and the
+[session note](https://github.com/greenautarky/ga-ihost-docs) for the full
+write-up.
+
+### Added — edge-buffered telemetry (signal survives outage + reboot) (#100)
+
+On-device telegraf now disk-buffers metrics so a network or InfluxDB outage —
+or a reboot — no longer drops the signal.
+
+- **Disk store-and-forward** — `buffer_strategy = "disk_write_through"` with an
+  on-`/mnt/data` buffer directory (ext4 persistent partition, survives the
+  ZRAM `/var` wipe across reboot). Native to telegraf since 1.35.
+- **SD-friendly flush** — 300 s flush interval to keep eMMC/SD write
+  amplification low while still bounding worst-case data loss.
+- **`inputs.temp`** — adds CPU/SoC temperature to the metric set.
+- **`inputs.file` signal file-drop** — telegraf tails the ga_manager
+  network-signal file drop (RSSI / link state), so radio health rides the same
+  buffered pipeline. Pairs with ga_manager 0.51.0 (#102).
+
+### Added — per-device InfluxDB write credential (ADR-0002) (#103, #106)
+
+Closes the
+[InfluxDB write-password gap](https://github.com/greenautarky/ga-ihost-docs)
+(the shared `device_writer` password was never provisioned by the OS or the
+flasher and was lost on every telegraf restart → 401 → dropped metrics).
+
+- `telegraf.service` `ExecStartPre` now **reads the fleet-delivered per-device
+  write credential** (`dev_<KIB-SON>`, identity-derived per ADR-0002) and
+  exports it into the telegraf runtime env, so the write user survives
+  restart/reboot.
+- **`skip_database_creation = true`** — the per-device user is write-only and
+  cannot create the database; this stops telegraf from erroring on the DDL it
+  isn't authorised to run.
+- CFG-29 build test switched to `grep -qF` for the literal `${INFLUX_USER}`
+  needle (BRE choked on `${}`) (#104).
+
+### Changed — baked addon / component pins
+
+- **ga_manager → 0.53.0** (#107) — iHost LED state driver (also picks up
+  0.50–0.52: influx-creds-write, signal file-drop, edge-telemetry support).
+- **greenautarky-onboarding → 1.0.4** (#108) — customer-facing LED on/off
+  endpoint (`GALedConfigView`), so the customer can disable the iHost status
+  LED.
+- **ga-bootstrap 1.2.8** — released this session (force `protected=false` /
+  docker_api self-heal; see ga-bootstrap CHANGELOG).
+
+### Fixed — telegraf pinned back to 1.38.0 (Go toolchain gap) (#109)
+
+The 1.38→1.39 bump (#101) does not build: telegraf 1.38.4 / 1.39.x set
+`go 1.26.0` in `go.mod`, but the buildroot host Go is 1.25.7 with
+`GOTOOLCHAIN=local`, so the go-mod vendor stage fails at `.stamp_downloaded`
+(`requires go >= 1.26.0`). 1.38.0 keeps `go 1.25.7`, builds, and still has the
+`disk_write_through` buffer (since 1.35) — the revert loses nothing. Added a
+`telegraf.mk` guard note: **do not bump to ≥ 1.38.4 until buildroot Go ≥ 1.26.0**.
+
+---
+
 ## 16.3.1.2 (V1.2-clean) — in flight, 2026-05-28 ninth update
 
 ### Changed — ga-ha-init sheds watchdog + weather (ownership moved/dropped)
