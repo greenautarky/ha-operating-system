@@ -8,8 +8,9 @@ ConditionPathExists=/mnt/data/.ga-consent-metrics
 [Service]
 Type=simple
 
-# Ensure writable directory for env file
-ExecStartPre=/bin/mkdir -p /mnt/data/telegraf
+# Ensure writable directory for env file + the durable metric buffer
+# (buffer_strategy=disk_write_through writes the WAL here; survives reboots).
+ExecStartPre=/bin/mkdir -p /mnt/data/telegraf /mnt/data/telegraf/buffer
 
 # Safe defaults (EnvironmentFile is read BEFORE ExecStartPre, so first boot needs these)
 Environment=GA_ENV=dev DEVICE_UUID=unknown GATEWAY_IP=unknown DEVICE_LABEL=unknown GA_BUILD_TIMESTAMP=unknown
