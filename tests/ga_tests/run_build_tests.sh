@@ -112,7 +112,7 @@ grep -q 'ga-fleet-influx.yaml' "$TG_SVC" 2>/dev/null \
   || _fail "CFG-28: telegraf.service missing ga-fleet-influx.yaml reader"
 
 # CFG-29: telegraf.conf uses ${INFLUX_USER} (not a hardcoded shared user)
-if grep -q 'username = "${INFLUX_USER}"' "$TG_CONF" 2>/dev/null && ! grep -q 'username = "device_writer"' "$TG_CONF" 2>/dev/null; then
+if grep -qF 'username = "${INFLUX_USER}"' "$TG_CONF" 2>/dev/null && ! grep -qF 'username = "device_writer"' "$TG_CONF" 2>/dev/null; then
   _pass "CFG-29: telegraf.conf uses per-device \${INFLUX_USER}"
 else
   _fail "CFG-29: telegraf.conf still hardcodes the influx username"
