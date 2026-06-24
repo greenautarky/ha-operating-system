@@ -1,8 +1,16 @@
 ################################################################################
-# Telegraf 1.39.0 - Buildroot (Go) + systemd + writable runtime config
+# Telegraf 1.38.0 - Buildroot (Go) + systemd + writable runtime config
 ################################################################################
+#
+# DO NOT bump to >= 1.38.4 until buildroot's Go toolchain is >= 1.26.0.
+# telegraf 1.38.4 / 1.39.x set `go 1.26.0` in go.mod; the buildroot host Go is
+# 1.25.7 with GOTOOLCHAIN=local (no auto-download), so the go-mod vendor stage
+# fails at .stamp_downloaded ("requires go >= 1.26.0"). 1.38.0–1.38.2 keep
+# `go 1.25.7` and build. The native disk store-and-forward buffer
+# (buffer_strategy = "disk_write_through") we rely on is available since 1.35,
+# so staying on 1.38.0 loses nothing for the edge-buffered-telemetry work.
 
-TELEGRAF_VERSION = 1.39.0
+TELEGRAF_VERSION = 1.38.0
 TELEGRAF_SITE = https://github.com/influxdata/telegraf/archive/refs/tags
 TELEGRAF_SOURCE = v$(TELEGRAF_VERSION).tar.gz
 
