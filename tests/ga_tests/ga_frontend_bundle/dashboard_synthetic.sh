@@ -202,7 +202,7 @@ mkdir -p "$(dirname "${DASH_YAML}")"
         ;;
       *)
         printf "      - type: markdown\n"
-        printf "        content: 'card %%s — fallback (custom-tag rendered for sanity check)'\n" "${cid}"
+        printf "        content: 'card %s — fallback (custom-tag rendered for sanity check)'\n" "${cid}"
         ;;
     esac
   done
