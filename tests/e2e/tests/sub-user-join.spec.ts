@@ -1,13 +1,21 @@
 import { test, expect } from '../fixtures/device';
 import { waitForHA } from '../helpers/ha-api';
 import { execFileSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 
 /**
  * Sub-User Join — Master-User Management Plane E2E (ADR-0006)
  *
  * Drives the real browser journey of a household Sub-User self-registering via
- * the same link (`/greenautarky-join`): enter invite-PIN + password + display
- * name → account created. Mirrors the existing onboarding E2E.
+ * the same link (`/greenautarky-join`). Since 2026-07 the join REUSES the real
+ * onboarding wizard components (max code-share, "so upstream wie möglich"):
+ *   - `ga-setup-pin` in join mode collects the 6-digit invite PIN
+ *   - `ga-setup-create-user` in join mode reuses the ha-form + password-strength
+ *     UI, posting to /api/greenautarky_onboarding/sub_user/join
+ *   - the panel detects /greenautarky-join and starts at the PIN step
+ * The standalone HTML join form is gone; /greenautarky-join now 302-redirects
+ * into the wizard (`/greenautarky-setup.html?join=1`).
  *
  * REQUIRES (like the dashboard/auth tests):
  *   DEVICE_IP        — the canary iHost (SSH + HTTP), component PATCHED with the
@@ -16,12 +24,20 @@ import { execFileSync } from 'child_process';
  *
  * Auto-skips if auth is missing OR the component isn't patched (join route 404).
  *
+ * Screenshots for the docs/KB are written to SHOT_DIR (default test-results/join-shots).
+ *
  * Run:
  *   DEVICE_IP=100.126.35.139 HA_ADMIN_PASS=... npx playwright test tests/sub-user-join.spec.ts --project=desktop
  */
 
 const SUB_NAME = 'E2E SubUser';
-const SUB_PASSWORD = 'e2e-sub-pw-12345';
+const SUB_PASSWORD = 'SubUserE2E!2026'; // strong: upper+lower+digit+symbol, >= 8
+const SHOT_DIR = process.env.SHOT_DIR || path.resolve(__dirname, '../test-results/join-shots');
+
+function shot(name: string): string {
+  fs.mkdirSync(SHOT_DIR, { recursive: true });
+  return path.join(SHOT_DIR, name);
+}
 
 function ssh(cmd: string): string {
   const ip = process.env.DEVICE_IP;
@@ -75,8 +91,8 @@ async function getToken(deviceUrl: string): Promise<string> {
   return tok.access_token as string;
 }
 
-async function api(deviceUrl: string, token: string, method: string, path: string, body?: unknown) {
-  const res = await fetch(`${deviceUrl}/api/greenautarky_onboarding${path}`, {
+async function api(deviceUrl: string, token: string, method: string, apiPath: string, body?: unknown) {
+  const res = await fetch(`${deviceUrl}/api/greenautarky_onboarding${apiPath}`, {
     method,
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -91,20 +107,46 @@ function skipGuards() {
     test.skip(true, 'Auth required — set HA_TOKEN or HA_ADMIN_PASS');
 }
 
-test.describe('Sub-User join (ADR-0006)', () => {
+/**
+ * Wait for the create-user step to actually render its ha-form (the selectors
+ * resolve async chunks). Returns the rendered <input> count so callers can
+ * assert the form is live. Pierces shadow roots.
+ */
+async function waitCreateUserInputs(page: import('@playwright/test').Page): Promise<number> {
+  const handle = await page.waitForFunction(
+    () => {
+      const panel = document.querySelector('ha-panel-greenautarky-setup');
+      const cu = panel?.shadowRoot?.querySelector('ga-setup-create-user');
+      if (!cu || !(cu as HTMLElement & { shadowRoot?: ShadowRoot }).shadowRoot) return false;
+      let n = 0;
+      const walk = (root: ParentNode) =>
+        root.querySelectorAll('*').forEach((el) => {
+          if ((el as HTMLElement).tagName === 'INPUT') n++;
+          const sr = (el as HTMLElement & { shadowRoot?: ShadowRoot }).shadowRoot;
+          if (sr) walk(sr);
+        });
+      walk((cu as HTMLElement & { shadowRoot: ShadowRoot }).shadowRoot);
+      return n >= 3 ? n : false;
+    },
+    { timeout: 30_000 },
+  );
+  return (await handle.jsonValue()) as number;
+}
+
+test.describe('Sub-User join via onboarding wizard (ADR-0006)', () => {
   let token = '';
   let ownerId = '';
   let invitePin = '';
-  let createdUsername = '';
+  let createdUserId = '';
 
   test.beforeAll(async ({ deviceUrl }) => {
     skipGuards();
     await waitForHA(deviceUrl, 60_000);
 
-    // Component patched? (join route must exist)
-    const probe = await fetch(`${deviceUrl}/greenautarky-join`).catch(() => null);
-    if (!probe || probe.status !== 200)
-      test.skip(true, 'component not patched — /greenautarky-join is not 200');
+    // Component patched? /greenautarky-join must redirect into the wizard (302).
+    const probe = await fetch(`${deviceUrl}/greenautarky-join`, { redirect: 'manual' }).catch(() => null);
+    if (!probe || (probe.status !== 302 && probe.status !== 200))
+      test.skip(true, 'component not patched — /greenautarky-join did not redirect');
 
     token = await getToken(deviceUrl);
 
@@ -119,84 +161,115 @@ test.describe('Sub-User join (ADR-0006)', () => {
       `mkdir -p /mnt/data/supervisor/homeassistant/ga && printf '%s' '{"masters":[{"ha_user_id":"${ownerId}"}]}' > /mnt/data/supervisor/homeassistant/ga/ga-master-users.json`,
     );
 
-    // Mint an invite as the master.
+    // Mint an invite as the master (owner). 6-digit numeric PIN (reuses wizard PIN step).
     const inv = await api(deviceUrl, token, 'POST', '/sub_user/invite', {});
     expect(inv.status).toBe(200);
     invitePin = inv.json.pin;
-    expect(invitePin).toBeTruthy();
+    expect(invitePin).toMatch(/^\d{6}$/);
   });
 
-  test('join page renders the form', async ({ page, deviceUrl }) => {
+  test('join link redirects into the wizard PIN step', async ({ page, deviceUrl }) => {
     skipGuards();
     await page.goto(`${deviceUrl}/greenautarky-join`);
-    await expect(page.locator('#pin')).toBeVisible();
-    await expect(page.locator('#password')).toBeVisible();
-    await expect(page.locator('#submit')).toBeVisible();
+    await expect(page).toHaveURL(/greenautarky-setup\.html\?join=1/);
+    await expect(page.locator('ga-setup-pin')).toBeAttached({ timeout: 20_000 });
+    // Join-specific copy (not the device-PIN copy).
+    await expect(page.locator('ga-setup-pin')).toContainText('Einladungs-PIN', { timeout: 10_000 });
+    await page.screenshot({ path: shot('join-1-pin.png'), animations: 'disabled' });
   });
 
-  test('sub-user self-registers with a valid invite', async ({ page, deviceUrl }) => {
+  test('sub-user self-registers through the wizard', async ({ page, deviceUrl }) => {
     skipGuards();
     await page.goto(`${deviceUrl}/greenautarky-join`);
-    await page.locator('#name').fill(SUB_NAME);
-    await page.locator('#pin').fill(invitePin);
-    await page.locator('#password').fill(SUB_PASSWORD);
-    await page.locator('#password2').fill(SUB_PASSWORD);
-    await page.locator('#submit').click();
+    await expect(page.locator('ga-setup-pin')).toBeAttached({ timeout: 20_000 });
 
-    const msg = page.locator('#msg.ok');
-    await expect(msg).toBeVisible({ timeout: 15_000 });
-    await expect(msg).toContainText(/Konto erstellt/i);
-    createdUsername = (await msg.locator('code').textContent())?.trim() || '';
-    expect(createdUsername).toBeTruthy();
+    // PIN step: entering 6 digits auto-submits and advances to create-user.
+    await page.locator('ga-setup-pin input').first().fill(invitePin);
+
+    // create-user step renders the ha-form (name + password + confirm).
+    await expect(page.locator('ga-setup-create-user')).toBeAttached({ timeout: 20_000 });
+    const inputCount = await waitCreateUserInputs(page);
+    expect(inputCount).toBeGreaterThanOrEqual(3);
+
+    await page.locator('input[autocomplete="name"]').fill(SUB_NAME);
+    await page.locator('input[autocomplete="new-password"]').nth(0).fill(SUB_PASSWORD);
+    await page.locator('input[autocomplete="new-password"]').nth(1).fill(SUB_PASSWORD);
+
+    // Password-strength (reused component) must show "Stark" and enable submit.
+    await expect(page.locator('ga-setup-create-user')).toContainText('Stark', { timeout: 10_000 });
+    await page.screenshot({ path: shot('join-2-account.png'), animations: 'disabled' });
+
+    // Submit → join endpoint → Non-Admin user + auto-login → redirect to /.
+    await page.locator('ga-setup-create-user ha-button').click({ force: true });
+    await page.waitForURL((url) => url.pathname === '/' || url.pathname.startsWith('/lovelace'), {
+      timeout: 30_000,
+    });
+    await page.screenshot({ path: shot('join-3-logged-in.png'), animations: 'disabled' });
   });
 
-  test('created sub-user is a Non-Admin under the master', async ({ deviceUrl }) => {
+  test('created sub-user is a Non-Admin under the master, with a linked Person', async ({ deviceUrl }) => {
     skipGuards();
     // via the master API: the new user appears in the master's list
     const list = await api(deviceUrl, token, 'GET', '/sub_user/list');
     expect(list.status).toBe(200);
-    const mine = list.json.sub_users.find((u: { username: string; user_id: string }) => u.username === createdUsername);
+    const mine = list.json.sub_users.find(
+      (u: { username: string; user_id: string }) => u.username === 'e2e_subuser',
+    );
     expect(mine, 'new sub-user present in master list').toBeTruthy();
+    createdUserId = mine.user_id;
 
-    // via the device store: Non-Admin group + parent == owner
+    // via the device store: Non-Admin group + parent == owner + linked person
     const check = ssh(
-      `docker exec homeassistant python3 -c 'import json;a=json.load(open("/config/.storage/auth"))["data"];u=next(x for x in a["users"] if x["id"]=="${mine.user_id}");g=u.get("group_ids",[]);st=json.load(open("/config/.storage/greenautarky_onboarding"))["data"];p=st.get("sub_users",{}).get("${mine.user_id}",{}).get("master");print(("system-users" in g) and ("system-admin" not in g) and (not u.get("is_owner")) and (p=="${ownerId}"))'`,
+      `docker exec homeassistant python3 -c 'import json;a=json.load(open("/config/.storage/auth"))["data"];u=next(x for x in a["users"] if x["id"]=="${mine.user_id}");g=u.get("group_ids",[]);st=json.load(open("/config/.storage/greenautarky_onboarding"))["data"];p=st.get("sub_users",{}).get("${mine.user_id}",{}).get("master");ps=json.load(open("/config/.storage/person"))["data"]["items"];person=any(x.get("user_id")=="${mine.user_id}" for x in ps);print(("system-users" in g) and ("system-admin" not in g) and (not u.get("is_owner")) and (p=="${ownerId}") and person)'`,
     );
     expect(check).toBe('True');
   });
 
-  test('a wrong invite PIN is rejected', async ({ page, deviceUrl }) => {
+  test('a wrong invite PIN is rejected at submit', async ({ page, deviceUrl }) => {
     skipGuards();
     await page.goto(`${deviceUrl}/greenautarky-join`);
-    await page.locator('#name').fill('Nope');
-    await page.locator('#pin').fill('WRONGPIN');
-    await page.locator('#password').fill(SUB_PASSWORD);
-    await page.locator('#password2').fill(SUB_PASSWORD);
-    await page.locator('#submit').click();
-    await expect(page.locator('#msg.err')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('ga-setup-pin')).toBeAttached({ timeout: 20_000 });
+
+    // In join mode the PIN step does NOT verify against the device — it forwards
+    // any 6-digit PIN; the join endpoint rejects a bad invite at submit time.
+    await page.locator('ga-setup-pin input').first().fill('000000');
+    await expect(page.locator('ga-setup-create-user')).toBeAttached({ timeout: 20_000 });
+    await waitCreateUserInputs(page);
+
+    await page.locator('input[autocomplete="name"]').fill('Nope');
+    await page.locator('input[autocomplete="new-password"]').nth(0).fill(SUB_PASSWORD);
+    await page.locator('input[autocomplete="new-password"]').nth(1).fill(SUB_PASSWORD);
+    await page.locator('ga-setup-create-user ha-button').click({ force: true });
+
+    // An error alert appears; no navigation to /.
+    await expect(page.locator('ga-setup-create-user ha-alert')).toBeVisible({ timeout: 15_000 });
+    await expect(page).toHaveURL(/greenautarky-setup\.html/);
   });
 
   test.afterAll(async ({ deviceUrl }) => {
     if (!token) return;
     // Best-effort cleanup: delete the test sub-user (WS) + remove the flag file.
     try {
-      if (createdUsername) {
+      if (!createdUserId) {
         const list = await api(deviceUrl, token, 'GET', '/sub_user/list');
-        const mine = list.json.sub_users?.find((u: { username: string; user_id: string }) => u.username === createdUsername);
-        if (mine?.user_id) {
-          const ws = new WebSocket(`${deviceUrl.replace('http', 'ws')}/api/websocket`);
-          await new Promise<void>((resolve, reject) => {
-            let id = 0;
-            ws.onmessage = (ev) => {
-              const m = JSON.parse(ev.data as string);
-              if (m.type === 'auth_required') ws.send(JSON.stringify({ type: 'auth', access_token: token }));
-              else if (m.type === 'auth_ok') ws.send(JSON.stringify({ id: ++id, type: 'config/auth/delete', user_id: mine.user_id }));
-              else if (m.type === 'result') { ws.close(); resolve(); }
-            };
-            ws.onerror = () => reject(new Error('ws error'));
-            setTimeout(() => { ws.close(); resolve(); }, 10_000);
-          });
-        }
+        createdUserId =
+          list.json.sub_users?.find((u: { username: string; user_id: string }) => u.username === 'e2e_subuser')
+            ?.user_id || '';
+      }
+      if (createdUserId) {
+        const ws = new WebSocket(`${deviceUrl.replace('http', 'ws')}/api/websocket`);
+        await new Promise<void>((resolve) => {
+          let id = 0;
+          ws.onmessage = (ev) => {
+            const m = JSON.parse(ev.data as string);
+            if (m.type === 'auth_required') ws.send(JSON.stringify({ type: 'auth', access_token: token }));
+            else if (m.type === 'auth_ok')
+              ws.send(JSON.stringify({ id: ++id, type: 'config/auth/delete', user_id: createdUserId }));
+            else if (m.type === 'result') { ws.close(); resolve(); }
+          };
+          ws.onerror = () => resolve();
+          setTimeout(() => { ws.close(); resolve(); }, 10_000);
+        });
       }
     } catch {
       /* best-effort */
