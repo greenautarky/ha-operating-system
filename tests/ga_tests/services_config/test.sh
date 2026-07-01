@@ -72,6 +72,15 @@ run_test "SVC-19" "hosts file has ota.greenautarky.com" \
 run_test "SVC-20" "hosts GA entries match ga-services.conf IP ($EXPECTED_IP)" \
   "grep 'influx.greenautarky.com' $HOSTS_FILE 2>/dev/null | grep -q '$EXPECTED_IP'"
 
+# SVC-20b: self-clean — exactly one influx entry (no stale OLD-IP duplicate that
+# would win the files lookup and pin clients to a decommissioned backend).
+run_test "SVC-20b" "hosts has no stale duplicate influx entry (self-clean)" \
+  "[ \"\$(grep -c 'influx.greenautarky.com' $HOSTS_FILE 2>/dev/null)\" -eq 1 ]"
+
+# SVC-20c: exactly one managed marker block (idempotent regeneration)
+run_test "SVC-20c" "hosts has exactly one ga-services marker block" \
+  "[ \"\$(grep -c '$MARKER' $HOSTS_FILE 2>/dev/null)\" -eq 1 ]"
+
 # =========================================================================
 # DNS resolution (SVC-21..23)
 # =========================================================================
@@ -116,6 +125,11 @@ fi
 # SVC-26: No hardcoded IPs in ga-defaults/hosts (should be comment only)
 run_test "SVC-26" "ga-defaults/hosts has no hardcoded GA IPs" \
   "! grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+.*greenautarky' /usr/share/ga-defaults/hosts 2>/dev/null"
+
+# SVC-27: applied-IP record (drives the endpoint-change client bounce) matches
+# the active services IP — absent is OK (first boot before any run persisted it).
+run_test "SVC-27" "applied-ip record matches services IP (or absent on first boot)" \
+  "test ! -f /mnt/data/.ga-services-applied-ip || grep -qx '$EXPECTED_IP' /mnt/data/.ga-services-applied-ip"
 
 rm -rf "$TMPDIR_SVC"
 
