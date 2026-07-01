@@ -32,6 +32,15 @@ HOSTS_FILE="/mnt/overlay/etc/hosts"
 OTA_ACTIVE_FILE="/run/ga-resolve-ota.active"
 MARKER="# ga-services managed entries (do not edit manually)"
 END_MARKER="# end ga-services"
+# Persistent record of the last-applied services IP, so we can detect an
+# endpoint change across runs/reboots and bounce clients that cache the
+# resolved IP (fluent-bit, telegraf). On /mnt/data so it survives OTA reboots.
+APPLIED_IP_FILE="/mnt/data/.ga-services-applied-ip"
+# Legacy pre-marker header older versions of this script emitted; stripped below.
+LEGACY_COMMENT="# GreenAutarky services — fallback when NetBird DNS is unavailable"
+# Services that cache the resolved GA endpoint IP and must be bounced when it
+# changes so they re-resolve (only restarted if present + already running).
+ENDPOINT_BOUND_SERVICES="fluent-bit-tier0.service telegraf.service"
 
 if [ -f "$CONF_OVERRIDE" ]; then
     . "$CONF_OVERRIDE"
@@ -69,6 +78,11 @@ GA_HOSTS_LINE="${GA_SERVICES_IP}"
 [ -n "${GA_INFLUX_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_INFLUX_HOST}"
 [ -n "${GA_LOKI_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_LOKI_HOST}"
 
+# Read the last-applied services IP (persists across reboots) to decide later
+# whether the endpoint changed and clients need a bounce.
+PREV_SERVICES_IP=""
+[ -f "$APPLIED_IP_FILE" ] && PREV_SERVICES_IP=$(tr -d '[:space:]' < "$APPLIED_IP_FILE" 2>/dev/null || true)
+
 # Build new content in memory, then truncate-write the file in-place.
 # Preserve any existing non-GA content (localhost, hostname pin, etc.).
 PRESERVED=""
@@ -85,6 +99,16 @@ ff02::1		ip6-allnodes
 ff02::2		ip6-allrouters'
     echo "ga-update-hosts: creating base hosts file"
 fi
+
+# Self-clean: drop ANY pre-existing line for a GA-managed hostname (and the
+# legacy header), not just this script's marker block. Older builds wrote
+# un-markered entries; on an endpoint change those would linger and, being
+# first in /etc/hosts, win the files lookup — pinning clients to the OLD IP.
+# The fresh managed block below re-adds the correct entries.
+PRESERVED=$(printf '%s\n' "$PRESERVED" | grep -vF "$LEGACY_COMMENT" || true)
+for _h in "${GA_INFLUX_HOST:-}" "${GA_LOKI_HOST:-}" "${GA_OTA_HOST:-}"; do
+    [ -n "$_h" ] && PRESERVED=$(printf '%s\n' "$PRESERVED" | grep -vF "$_h" || true)
+done
 
 # Strip trailing blank lines from preserved section
 PRESERVED=$(printf '%s\n' "$PRESERVED" | awk 'NF{c=NR} {a[NR]=$0} END{for(i=1;i<=c;i++)print a[i]}')
@@ -129,6 +153,14 @@ fi
 # in boot or on a device that never had Supervisor). Will catch up at
 # the next ga-update-hosts trigger.
 if docker inspect hassio_supervisor >/dev/null 2>&1; then
+    # First strip any stale GA-managed host lines inside the container (same
+    # self-clean as on the host) so a changed endpoint can't leave the OLD IP
+    # winning the lookup, then re-add the fresh entries.
+    for _h in "${GA_INFLUX_HOST:-}" "${GA_LOKI_HOST:-}" "${GA_OTA_HOST:-}"; do
+        [ -n "$_h" ] && docker exec hassio_supervisor sh -c \
+            "grep -vF '$_h' /etc/hosts > /tmp/.ga_hosts && cat /tmp/.ga_hosts > /etc/hosts && rm -f /tmp/.ga_hosts" \
+            >/dev/null 2>&1 || true
+    done
     # Build list of entries to inject. grep -qF before appending so we don't
     # duplicate on repeated ga-update-hosts invocations.
     inject() {
@@ -144,3 +176,25 @@ if docker inspect hassio_supervisor >/dev/null 2>&1; then
     fi
     echo "ga-update-hosts: injected entries into hassio_supervisor /etc/hosts"
 fi
+
+# ---------------------------------------------------------------------------
+# Persist the applied services IP and bounce endpoint-bound clients on change.
+#
+# Long-lived clients (fluent-bit, telegraf) resolve the GA endpoint once at
+# start and hold the connection, so a cutover to a new backend IP would not
+# take effect until they happen to reconnect (or the device reboots). When the
+# services IP differs from the last-applied value we restart them so they
+# re-resolve immediately. First run (no prior record) does NOT bounce — a fresh
+# start already resolves the current IP.
+# ---------------------------------------------------------------------------
+if [ -n "$PREV_SERVICES_IP" ] && [ "$PREV_SERVICES_IP" != "$GA_SERVICES_IP" ]; then
+    echo "ga-update-hosts: services IP changed ${PREV_SERVICES_IP} -> ${GA_SERVICES_IP}; bouncing endpoint-bound clients"
+    for _svc in $ENDPOINT_BOUND_SERVICES; do
+        if systemctl cat "$_svc" >/dev/null 2>&1; then
+            systemctl try-restart --no-block "$_svc" >/dev/null 2>&1 || true
+            echo "ga-update-hosts: try-restart $_svc"
+        fi
+    done
+fi
+# Record the now-applied IP (best effort; /mnt/data may be unmounted very early).
+printf '%s\n' "$GA_SERVICES_IP" > "$APPLIED_IP_FILE" 2>/dev/null || true
