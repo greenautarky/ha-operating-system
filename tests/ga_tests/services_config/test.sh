@@ -22,7 +22,12 @@ run_test "SVC-11" "ga-services.conf has GA_SERVICES_IP" \
   "grep -q 'GA_SERVICES_IP=' $CONF_DEFAULT 2>/dev/null"
 
 run_test "SVC-12" "ga-services.conf has all service hostnames" \
-  "grep -q 'GA_INFLUX_HOST=' $CONF_DEFAULT && grep -q 'GA_LOKI_HOST=' $CONF_DEFAULT && grep -q 'GA_OTA_HOST=' $CONF_DEFAULT"
+  "grep -q 'GA_INFLUX_HOST=' $CONF_DEFAULT && grep -q 'GA_LOKI_HOST=' $CONF_DEFAULT && grep -q 'GA_OTA_HOST=' $CONF_DEFAULT && grep -q 'GA_MQTT_HOST=' $CONF_DEFAULT"
+
+# SVC-12b: MQTT broker resolves via /etc/hosts to GA_SERVICES_IP (same as
+# influx/loki) so the endpoint cutover covers it — not a hardcoded IP in /share.
+run_test "SVC-12b" "mqtt.greenautarky.com resolves to GA_SERVICES_IP" \
+  ". $CONF_DEFAULT 2>/dev/null; [ -f $CONF_OVERRIDE ] && . $CONF_OVERRIDE 2>/dev/null; getent hosts \"\${GA_MQTT_HOST:-mqtt.greenautarky.com}\" 2>/dev/null | grep -q \"\${GA_SERVICES_IP}\""
 
 # SVC-13: Config is valid shell (sourceable without errors)
 run_test "SVC-13" "ga-services.conf is valid shell" \

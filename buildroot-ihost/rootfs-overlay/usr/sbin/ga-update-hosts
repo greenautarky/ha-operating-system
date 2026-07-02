@@ -77,6 +77,7 @@ fi
 GA_HOSTS_LINE="${GA_SERVICES_IP}"
 [ -n "${GA_INFLUX_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_INFLUX_HOST}"
 [ -n "${GA_LOKI_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_LOKI_HOST}"
+[ -n "${GA_MQTT_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_MQTT_HOST}"
 
 # Read the last-applied services IP (persists across reboots) to decide later
 # whether the endpoint changed and clients need a bounce.
@@ -156,7 +157,7 @@ if docker inspect hassio_supervisor >/dev/null 2>&1; then
     # First strip any stale GA-managed host lines inside the container (same
     # self-clean as on the host) so a changed endpoint can't leave the OLD IP
     # winning the lookup, then re-add the fresh entries.
-    for _h in "${GA_INFLUX_HOST:-}" "${GA_LOKI_HOST:-}" "${GA_OTA_HOST:-}"; do
+    for _h in "${GA_INFLUX_HOST:-}" "${GA_LOKI_HOST:-}" "${GA_MQTT_HOST:-}" "${GA_OTA_HOST:-}"; do
         [ -n "$_h" ] && docker exec hassio_supervisor sh -c \
             "grep -vF '$_h' /etc/hosts > /tmp/.ga_hosts && cat /tmp/.ga_hosts > /etc/hosts && rm -f /tmp/.ga_hosts" \
             >/dev/null 2>&1 || true
