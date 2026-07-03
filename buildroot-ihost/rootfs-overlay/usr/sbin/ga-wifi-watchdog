@@ -1,0 +1,149 @@
+#!/bin/sh
+# ga-wifi-watchdog — recover the rtw88_8723ds runtime "degraded-TX" hang.
+#
+# Failure mode (mode B, distinct from the cold-boot probe failure that
+# ga-rtw-recover handles at boot): wlan0 stays UP with a STRONG signal, but the
+# chip firmware stops completing transmits and the driver spams
+#   rtw_8723ds mmc1:0001:1: failed to get tx report from firmware
+# Transmit retries pile up, throughput collapses (~18 KB/s despite -44 dBm), and
+# any OS OTA times out (ga-rauc-install killed at its 15-min start-timeout). Seen
+# on K7 + K17 (2026-07-02); a reboot cleared it (18 KB/s -> 2.68 MB/s, tx-report
+# errors 375 -> 0). See ga-ihost-docs DISCUSSION-WIFI-RTW88-DEGRADED-TX.md / KB123.
+#
+# This runs periodically (ga-wifi-watchdog.timer) and escalates:
+#   1. in-place module reload (rmmod/modprobe) — cheapest recovery;
+#   2. if the NEXT check still shows the hang, a GUARDED reboot — bounded to
+#      REBOOT_MAX within REBOOT_WINDOW_S so a genuine hardware fault can never
+#      cause a boot loop (mirrors the ga-boot-check / ga-crash-marker ledger).
+#
+# Fail-safe by construction: only acts when wlan0 is the ACTIVE default route
+# (so a hang actually strands the device) AND the signal is strong (rules out a
+# legitimately-weak/absent link), AND the tx-report error rate is climbing NOW.
+set -eu
+
+TAG="ga-wifi-watchdog"
+SDIO_DEV="/sys/bus/sdio/devices/mmc1:0001:1"
+IFACE="wlan0"
+ERR_STATE="/run/ga-wifi-watchdog.errcount"      # last-seen tx-report error count
+STREAK_STATE="/run/ga-wifi-watchdog.streak"     # consecutive degraded checks
+RELOADED_MARK="/run/ga-wifi-watchdog.reloaded"  # a reload was already tried this session
+REBOOT_LEDGER="/mnt/data/.ga-wifi-recover-reboots"  # epoch per reboot (persists across boots)
+
+# ---- tunables ----
+ERR_DELTA_THRESHOLD=15   # NEW tx-report errors since last check = actively failing
+STREAK_TO_ACT=2          # require N consecutive degraded checks (anti-flap)
+MIN_RSSI_DBM=-72         # only act on a strong link (negative int compare is fine in sh)
+RELOAD_SETTLE_S=25       # wait for wlan0 to re-associate after a module reload
+REBOOT_MAX=3             # at most this many self-reboots ...
+REBOOT_WINDOW_S=21600    # ... within 6 h; beyond that, stop (likely hardware)
+
+log() { echo "$TAG: $*"; }
+
+# ---- preconditions ----
+[ -d "$SDIO_DEV" ] || { log "no rtw SDIO device — not an iHost WiFi chip, skip"; exit 0; }
+[ -d "/sys/class/net/$IFACE" ] || { log "$IFACE absent — cold-boot recovery is ga-rtw-recover's job, skip"; exit 0; }
+# Only matters if this WiFi is the ACTIVE uplink; on ethernet a TX hang doesn't strand us.
+if ! ip route 2>/dev/null | grep -q "^default .* dev $IFACE "; then
+    log "$IFACE is not the default route — skip"
+    exit 0
+fi
+
+# ---- degraded signal: NEW tx-report errors since the last run ----
+now_err=$(dmesg 2>/dev/null | grep -c "failed to get tx report" || true)
+now_err=${now_err:-0}
+prev_err=0
+[ -f "$ERR_STATE" ] && prev_err=$(cat "$ERR_STATE" 2>/dev/null || echo 0)
+printf '%s\n' "$now_err" > "$ERR_STATE"
+# dmesg ring can wrap/be cleared -> if it shrank, count all current as fresh.
+if [ "$now_err" -ge "$prev_err" ]; then
+    delta=$(( now_err - prev_err ))
+else
+    delta=$now_err
+fi
+
+# RSSI: /proc/net/wireless is PRIMARY — it still reports during the hang, whereas
+# `iw dev wlan0 link` returns nothing (the chip can't answer). level = 4th field
+# on the wlan0 row, e.g. "wlan0: 0000 66. -44. -256" -> -44 (strip trailing dot).
+rssi=$(grep -E "^[[:space:]]*${IFACE}:" /proc/net/wireless 2>/dev/null | awk '{v=$4; gsub(/\./,"",v); print v; exit}')
+[ -z "${rssi:-}" ] && rssi=$(iw dev "$IFACE" link 2>/dev/null | awk '/signal:/{print $2; exit}')
+rssi=${rssi:-0}
+
+degraded=0
+if [ "$delta" -ge "$ERR_DELTA_THRESHOLD" ] && [ "$rssi" -ge "$MIN_RSSI_DBM" ]; then
+    degraded=1
+fi
+
+streak=0
+[ -f "$STREAK_STATE" ] && streak=$(cat "$STREAK_STATE" 2>/dev/null || echo 0)
+if [ "$degraded" -eq 1 ]; then
+    streak=$(( streak + 1 ))
+else
+    streak=0
+    # healthy check clears the "reload already tried" latch
+    rm -f "$RELOADED_MARK"
+fi
+printf '%s\n' "$streak" > "$STREAK_STATE"
+
+log "check: tx_report_errs=$now_err delta=$delta rssi=${rssi}dBm degraded=$degraded streak=$streak"
+
+# Initial detection needs STREAK_TO_ACT consecutive hits (anti-flap). But once a
+# reload has already been tried (RELOADED_MARK set), a SINGLE further degraded
+# tick is enough to know the reload didn't help -> escalate to reboot promptly.
+act_threshold="$STREAK_TO_ACT"
+[ -f "$RELOADED_MARK" ] && act_threshold=1
+[ "$streak" -ge "$act_threshold" ] || exit 0
+
+# ---- confirmed degraded: recover ----
+printf '0\n' > "$STREAK_STATE"
+
+reload_stack() {
+    log "degraded TX confirmed — reloading rtw88_8723ds module stack"
+    for m in rtw88_8723ds rtw88_8723d rtw88_8723x rtw88_sdio; do
+        if lsmod 2>/dev/null | grep -q "^${m} "; then
+            rmmod "$m" 2>/dev/null && log "unloaded $m" || log "rmmod $m failed — continuing"
+        fi
+    done
+    modprobe rtw88_8723ds || log "modprobe rtw88_8723ds failed"
+    i=0
+    while [ "$i" -lt "$RELOAD_SETTLE_S" ]; do
+        [ -d "/sys/class/net/$IFACE" ] && iw dev "$IFACE" link 2>/dev/null | grep -q "Connected to" && break
+        sleep 1
+        i=$(( i + 1 ))
+    done
+    # Reset the error baseline so the NEXT tick measures errors produced AFTER the
+    # reload — that's how we tell whether the reload actually fixed the TX path.
+    printf '%s\n' "$(dmesg 2>/dev/null | grep -c 'failed to get tx report' || echo 0)" > "$ERR_STATE"
+}
+
+guarded_reboot() {
+    now=$(date +%s 2>/dev/null || echo 0)
+    recent=0
+    fresh=""
+    if [ -f "$REBOOT_LEDGER" ]; then
+        while IFS= read -r ts; do
+            [ -n "$ts" ] || continue
+            if [ "$(( now - ts ))" -lt "$REBOOT_WINDOW_S" ]; then
+                fresh="${fresh}${ts}
+"
+                recent=$(( recent + 1 ))
+            fi
+        done < "$REBOOT_LEDGER"
+        printf '%s' "$fresh" > "$REBOOT_LEDGER" 2>/dev/null || true
+    fi
+    if [ "$recent" -ge "$REBOOT_MAX" ]; then
+        log "reload did NOT clear degraded TX, and already rebooted ${recent}x in ${REBOOT_WINDOW_S}s — NOT rebooting (likely hardware); leaving device degraded for inspection"
+        return 0
+    fi
+    printf '%s\n' "$now" >> "$REBOOT_LEDGER" 2>/dev/null || true
+    log "reload did NOT clear degraded TX — scheduling reboot ($(( recent + 1 ))/${REBOOT_MAX} in window)"
+    sync
+    systemctl reboot
+}
+
+if [ -f "$RELOADED_MARK" ]; then
+    # A reload was already attempted and it's STILL degraded -> escalate.
+    guarded_reboot
+else
+    reload_stack
+    touch "$RELOADED_MARK"
+fi

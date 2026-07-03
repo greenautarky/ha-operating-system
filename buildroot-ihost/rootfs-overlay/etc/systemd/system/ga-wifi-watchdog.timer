@@ -1,0 +1,14 @@
+[Unit]
+Description=Periodic rtw88_8723ds degraded-TX watchdog
+
+[Timer]
+# Give the device time to settle after boot (ga-rtw-recover owns the cold-boot
+# probe-failure path); then poll on a tight-enough cadence to catch the runtime
+# hang and reboot well within the 15-min ga-rauc-install OTA timeout.
+OnBootSec=5min
+OnUnitActiveSec=3min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

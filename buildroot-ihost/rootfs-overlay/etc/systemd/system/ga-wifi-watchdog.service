@@ -1,0 +1,11 @@
+[Unit]
+Description=Recover rtw88_8723ds WiFi runtime degraded-TX hang (mode B)
+After=NetworkManager.service
+# Only on hardware that actually has the iHost rtw SDIO WiFi chip.
+ConditionPathExists=/sys/bus/sdio/devices/mmc1:0001:1
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-wifi-watchdog
+Nice=10
+TimeoutStartSec=90
