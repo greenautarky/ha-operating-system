@@ -37,7 +37,13 @@ RELOAD_SETTLE_S=25       # wait for wlan0 to re-associate after a module reload
 REBOOT_MAX=3             # at most this many self-reboots ...
 REBOOT_WINDOW_S=21600    # ... within 6 h; beyond that, stop (likely hardware)
 
-log() { echo "$TAG: $*"; }
+# log() = routine (journald info, stays on-device — dropped by fluent-bit's
+# PRIORITY [0-4] filter). logw()/loge() prefix the systemd stdout priority
+# (`<4>`=warning, `<3>`=err) so the ACTUAL trigger/recovery events pass that
+# filter and reach Loki, while the every-3-min healthy checks do not.
+log()  { echo "$TAG: $*"; }
+logw() { echo "<4>$TAG: $*"; }
+loge() { echo "<3>$TAG: $*"; }
 
 # ---- preconditions ----
 [ -d "$SDIO_DEV" ] || { log "no rtw SDIO device — not an iHost WiFi chip, skip"; exit 0; }
@@ -97,7 +103,7 @@ act_threshold="$STREAK_TO_ACT"
 printf '0\n' > "$STREAK_STATE"
 
 reload_stack() {
-    log "degraded TX confirmed — reloading rtw88_8723ds module stack"
+    logw "degraded TX confirmed — reloading rtw88_8723ds module stack"
     for m in rtw88_8723ds rtw88_8723d rtw88_8723x rtw88_sdio; do
         if lsmod 2>/dev/null | grep -q "^${m} "; then
             rmmod "$m" 2>/dev/null && log "unloaded $m" || log "rmmod $m failed — continuing"
@@ -131,11 +137,11 @@ guarded_reboot() {
         printf '%s' "$fresh" > "$REBOOT_LEDGER" 2>/dev/null || true
     fi
     if [ "$recent" -ge "$REBOOT_MAX" ]; then
-        log "reload did NOT clear degraded TX, and already rebooted ${recent}x in ${REBOOT_WINDOW_S}s — NOT rebooting (likely hardware); leaving device degraded for inspection"
+        loge "reload did NOT clear degraded TX, and already rebooted ${recent}x in ${REBOOT_WINDOW_S}s — NOT rebooting (likely hardware); leaving device degraded for inspection"
         return 0
     fi
     printf '%s\n' "$now" >> "$REBOOT_LEDGER" 2>/dev/null || true
-    log "reload did NOT clear degraded TX — scheduling reboot ($(( recent + 1 ))/${REBOOT_MAX} in window)"
+    loge "reload did NOT clear degraded TX — scheduling reboot ($(( recent + 1 ))/${REBOOT_MAX} in window)"
     sync
     systemctl reboot
 }

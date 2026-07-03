@@ -14,8 +14,10 @@ log_crash() {
     local boot_id
     boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo "unknown")
 
-    # Log to journal (echo goes to journal via systemd service stdout)
-    echo "WARNING: UNCLEAN SHUTDOWN DETECTED - previous boot did not complete cleanly"
+    # Log to journal (echo goes to journal via systemd service stdout).
+    # `<4>` = warning priority so it passes fluent-bit's PRIORITY [0-4] filter
+    # and reaches Loki (fleet-central crash visibility), not just on-device.
+    echo "<4>WARNING: UNCLEAN SHUTDOWN DETECTED - previous boot did not complete cleanly"
 
     # Append to persistent crash log
     {
