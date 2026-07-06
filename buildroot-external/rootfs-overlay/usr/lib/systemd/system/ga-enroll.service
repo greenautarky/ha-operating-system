@@ -1,0 +1,21 @@
+[Unit]
+Description=GA — Device self-enrollment with the fleet-manager (ADR-0010)
+# Enroll after the mesh is (potentially) up and /etc/hosts carries the
+# GA service entries — but neither is a hard Requires: the script copes
+# with a missing wt0 address (enrolls without it, refreshed next boot)
+# and retries until the fleet-manager answers.
+After=network-online.target ga-netbird-register.service ga-update-hosts.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/ga-enroll
+RemainAfterExit=yes
+# Transient failures (fleet unreachable, mesh not up yet, 5xx) exit 1 —
+# retry once a minute until the enrollment lands. Exits 0 immediately on
+# images without GA_FLEET_HOST in ga-services.conf (feature disabled).
+Restart=on-failure
+RestartSec=60s
+
+[Install]
+WantedBy=multi-user.target
