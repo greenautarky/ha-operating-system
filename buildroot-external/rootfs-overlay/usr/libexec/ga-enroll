@@ -1,0 +1,129 @@
+#!/bin/sh
+# ga-enroll — device self-enrollment with the fleet-manager (ADR-0010 P1).
+#
+# WHY THIS EXISTS
+# ---------------
+# Until ADR-0010, a freshly flashed device was invisible to the fleet:
+# the operator hand-edited devices.yaml, and ga-bootstrap sat retrying
+# forever because nothing could deliver GHCR pull creds to a device the
+# fleet-manager didn't know (the autopush only serves registered
+# devices, and it pushes THROUGH ga_manager — which isn't installed yet
+# without those very creds). This service breaks that chicken-and-egg:
+#
+#   POST /api/enroll  {hw_serial, ha_uuid, netbird_hostname, netbird_ip,
+#                      ga_release}
+#     → fleet-manager stores a PENDING enrollment (tag enroll:pending)
+#     → the RESPONSE carries the GHCR pull creds, which we write to
+#       /mnt/data/ghcr-creds.json (fallback 4 of ga-bootstrap's chain,
+#       root-only). ga-bootstrap's next retry then installs ga_manager.
+#
+# The device API token is NOT handled here — ga_manager binds its own
+# /data/auth.token later via POST /api/enroll/token (trust-on-first-use
+# while pending). This script never touches secrets other than writing
+# the received GHCR creds to a root-only path. Per the /share rule
+# (DISCUSSION-SECRETS-SHARE-VS-DATA.md) NOTHING secret goes to /share;
+# the bridge state file written there is metadata only.
+#
+# IDEMPOTENT / RUNS EVERY BOOT
+# ----------------------------
+# Re-enrolling is safe and wanted: it refreshes the device's mesh IP and
+# ga_release at the fleet-manager after every boot/reflash. The GHCR
+# creds file is only (re)written when content actually changed.
+#
+# RETRY BEHAVIOR
+# --------------
+# Exit 1 on any transient failure (fleet unreachable, 5xx, no mesh IP
+# yet); the unit retries every 60 s until enrollment succeeds.
+set -e
+
+LOG_TAG="ga-enroll"
+CONF_DEFAULT="/etc/ga-services.conf"
+CONF_OVERRIDE="/mnt/data/ga-services.conf"
+CREDS_FILE="/mnt/data/ghcr-creds.json"
+STATE_FILE="/mnt/data/supervisor/share/ga-enroll-state.json"
+NB_ENV="/mnt/data/netbird/netbird.env"
+HA_UUID_STORE="/mnt/data/supervisor/homeassistant/.storage/core.uuid"
+
+log()  { echo "${LOG_TAG}: $*"; }
+warn() { echo "${LOG_TAG}: WARNING: $*" >&2; }
+die()  { echo "${LOG_TAG}: ERROR: $*" >&2; exit 1; }
+
+# 1. Endpoint config — runtime override wins (same precedence as
+#    ga-update-hosts / ga-resolve-ota).
+# shellcheck disable=SC1090
+if [ -f "$CONF_OVERRIDE" ]; then . "$CONF_OVERRIDE"; else . "$CONF_DEFAULT"; fi
+if [ -z "${GA_FLEET_HOST:-}" ]; then
+    log "GA_FLEET_HOST not set in ga-services.conf — enrollment disabled on this image"
+    exit 0
+fi
+FLEET_URL="http://${GA_FLEET_HOST}:${GA_FLEET_PORT:-8090}"
+
+command -v jq >/dev/null 2>&1 || die "jq not present — required to parse the enroll response"
+
+# 2. Collect identity facts (all best-effort except hw_serial).
+hw_serial=""
+if [ -r /sys/firmware/devicetree/base/serial-number ]; then
+    hw_serial=$(tr -d '\0' < /sys/firmware/devicetree/base/serial-number)
+fi
+[ -n "$hw_serial" ] || hw_serial=$(awk '/^Serial/{print $3; exit}' /proc/cpuinfo 2>/dev/null || true)
+[ -n "$hw_serial" ] || hw_serial=$(cat /etc/machine-id 2>/dev/null || true)
+[ -n "$hw_serial" ] || die "no hardware serial source available"
+
+ha_uuid=""
+[ -r "$HA_UUID_STORE" ] && ha_uuid=$(jq -r '.data.uuid // empty' "$HA_UUID_STORE" 2>/dev/null || true)
+
+nb_hostname=$(hostname 2>/dev/null || true)
+if [ -r "$NB_ENV" ]; then
+    # shellcheck disable=SC1090
+    nb_from_env=$(. "$NB_ENV" 2>/dev/null; echo "${NB_HOSTNAME:-}")
+    [ -n "$nb_from_env" ] && nb_hostname="$nb_from_env"
+fi
+
+netbird_ip=$(ip -4 -o addr show dev wt0 2>/dev/null | awk '{split($4,a,"/"); print a[1]; exit}')
+[ -n "$netbird_ip" ] || warn "no wt0 address yet — enrolling without netbird_ip (refreshed next boot)"
+
+ga_release=""
+[ -r /etc/ga-release ] && ga_release=$(head -1 /etc/ga-release | tr -d '\r\n')
+
+# 3. Enroll. --max-time keeps a hung fleet-manager from wedging the unit.
+payload=$(jq -cn \
+    --arg hw "$hw_serial" --arg uuid "$ha_uuid" --arg host "$nb_hostname" \
+    --arg ip "$netbird_ip" --arg rel "$ga_release" \
+    '{hw_serial:$hw, ha_uuid:$uuid, netbird_hostname:$host, netbird_ip:$ip, ga_release:$rel}')
+log "enrolling hw_serial=${hw_serial} at ${FLEET_URL} (ip=${netbird_ip:-none})"
+response=$(curl -fsS --max-time 20 -H "Content-Type: application/json" \
+    -X POST "${FLEET_URL}/api/enroll" -d "$payload") \
+    || die "fleet-manager unreachable or rejected the enrollment — will retry"
+
+status=$(printf '%s' "$response" | jq -r '.status // empty')
+prov_id=$(printf '%s' "$response" | jq -r '.provisional_id // empty')
+[ -n "$status" ] || die "malformed enroll response"
+log "enrolled: status=${status} provisional_id=${prov_id}"
+
+# 4. GHCR pull creds from the response → root-only persistent fallback in
+#    ga-bootstrap's chain. Atomic write, only on change.
+registries=$(printf '%s' "$response" | jq -S '.registries // empty')
+if [ -n "$registries" ] && [ "$registries" != "null" ]; then
+    if [ ! -f "$CREDS_FILE" ] || ! printf '%s\n' "$registries" | cmp -s - "$CREDS_FILE"; then
+        umask 077
+        printf '%s\n' "$registries" > "${CREDS_FILE}.tmp"
+        mv "${CREDS_FILE}.tmp" "$CREDS_FILE"
+        chmod 0600 "$CREDS_FILE"
+        log "GHCR creds written to ${CREDS_FILE}"
+    else
+        log "GHCR creds unchanged"
+    fi
+else
+    warn "enroll response carried no registries — ga-bootstrap stays blocked unless creds exist already"
+fi
+
+# 5. Non-secret bridge state for ga_manager's enroll worker (token bind):
+#    tells the addon its hw_serial + where the fleet-manager lives.
+mkdir -p "$(dirname "$STATE_FILE")"
+jq -cn --arg hw "$hw_serial" --arg url "$FLEET_URL" --arg pid "$prov_id" \
+       --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+       '{hw_serial:$hw, fleet_url:$url, provisional_id:$pid, enrolled_at:$at}' \
+    > "${STATE_FILE}.tmp"
+mv "${STATE_FILE}.tmp" "$STATE_FILE"
+chmod 0644 "$STATE_FILE"
+log "state written to ${STATE_FILE}"

@@ -78,6 +78,7 @@ GA_HOSTS_LINE="${GA_SERVICES_IP}"
 [ -n "${GA_INFLUX_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_INFLUX_HOST}"
 [ -n "${GA_LOKI_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_LOKI_HOST}"
 [ -n "${GA_MQTT_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_MQTT_HOST}"
+[ -n "${GA_FLEET_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_FLEET_HOST}"
 
 # Read the last-applied services IP (persists across reboots) to decide later
 # whether the endpoint changed and clients need a bounce.
@@ -107,7 +108,7 @@ fi
 # first in /etc/hosts, win the files lookup — pinning clients to the OLD IP.
 # The fresh managed block below re-adds the correct entries.
 PRESERVED=$(printf '%s\n' "$PRESERVED" | grep -vF "$LEGACY_COMMENT" || true)
-for _h in "${GA_INFLUX_HOST:-}" "${GA_LOKI_HOST:-}" "${GA_OTA_HOST:-}"; do
+for _h in "${GA_INFLUX_HOST:-}" "${GA_LOKI_HOST:-}" "${GA_OTA_HOST:-}" "${GA_FLEET_HOST:-}"; do
     [ -n "$_h" ] && PRESERVED=$(printf '%s\n' "$PRESERVED" | grep -vF "$_h" || true)
 done
 
