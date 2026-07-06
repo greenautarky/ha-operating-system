@@ -22,7 +22,7 @@
     },
     "sonoff_dongle_flasher": {
       "image": "ghcr.io/ihost-open-source-project/hassio-ihost-sonoff-dongle-flasher-{arch}",
-      "version": "1.2.3"
+      "version": "1.3.4"
     },
     "ga_manager": {
       "image": "ghcr.io/greenautarky/ga_manager-{arch}",
