@@ -119,10 +119,19 @@ fi
 
 # 5. Non-secret bridge state for ga_manager's enroll worker (token bind):
 #    tells the addon its hw_serial + where the fleet-manager lives.
+#    fleet_url_ip: addon containers resolve via Supervisor CoreDNS, which
+#    (as of 2025.11.4.6) does NOT know fleet.greenautarky.com — only the
+#    HOST /etc/hosts does. We resolve here (host-side) and pass the IP
+#    URL as fallback so enroll_bind works without the CoreDNS entry
+#    (K0 rc12 finding 2026-07-06; CoreDNS fix = next Supervisor release).
+fleet_ip=$(getent hosts "$GA_FLEET_HOST" 2>/dev/null | awk '{print $1; exit}')
+[ -n "$fleet_ip" ] || fleet_ip=$(awk -v h="$GA_FLEET_HOST" '$0 ~ h {print $1; exit}' /etc/hosts)
+FLEET_URL_IP=""
+[ -n "$fleet_ip" ] && FLEET_URL_IP="http://${fleet_ip}:${GA_FLEET_PORT:-8090}"
 mkdir -p "$(dirname "$STATE_FILE")"
-jq -cn --arg hw "$hw_serial" --arg url "$FLEET_URL" --arg pid "$prov_id" \
-       --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-       '{hw_serial:$hw, fleet_url:$url, provisional_id:$pid, enrolled_at:$at}' \
+jq -cn --arg hw "$hw_serial" --arg url "$FLEET_URL" --arg ipurl "$FLEET_URL_IP" \
+       --arg pid "$prov_id" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+       '{hw_serial:$hw, fleet_url:$url, fleet_url_ip:$ipurl, provisional_id:$pid, enrolled_at:$at}' \
     > "${STATE_FILE}.tmp"
 mv "${STATE_FILE}.tmp" "$STATE_FILE"
 chmod 0644 "$STATE_FILE"
