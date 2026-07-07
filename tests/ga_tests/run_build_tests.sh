@@ -1277,6 +1277,14 @@ if [[ -n "$SRC" ]]; then
   for fe_dir in "${SRC}/../homeassistant_frontend" "/home/user/git/homeassistant_frontend"; do
     [[ -d "$fe_dir/src" ]] && FE_ROOT="$fe_dir" && break
   done
+  # CORE_ROOT discovery — the SRC-14d..e / BLD-ADMIN checks below reference it.
+  # (Restored here after the de-fork removed the SRC-11 block that used to
+  # define it; the ha-core fork is retired so this is never found and those
+  # checks _skip cleanly, but the var must exist under `set -u`.)
+  CORE_ROOT=""
+  for core_dir in "${SRC}/../homeassisant_core" "/home/user/git/homeassisant_core"; do
+    [[ -d "$core_dir/.github" ]] && CORE_ROOT="$core_dir" && break
+  done
 
   # SRC-14: PIN verification integration (frontend + core)
   if [[ -n "$FE_ROOT" ]]; then
