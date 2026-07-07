@@ -74,7 +74,7 @@ fi
 #       - LICENSE-SUMMARY.txt
 #
 # Usage (order-independent):
-#   ./scripts/ga_build.sh [full|partial|kernel|update] [dev|prod]
+#   ./scripts/ga_build.sh [full|partial|kernel|update] [dev|test|prod]
 #   ./scripts/ga_build.sh dev full   # same as "full dev"
 #   ./scripts/ga_build.sh dev        # shorthand for "full dev" (default mode=full)
 #   ./scripts/ga_build.sh prod       # shorthand for "full prod"
@@ -88,8 +88,12 @@ fi
 # Environment (default: dev):
 #   dev  - Development build: fast, skips post-build artifacts
 #          (no SBOMs, no config archive, no provisioning image)
-#   prod - Production build: full artifacts for release
-#          (SBOMs, config archive, provisioning if enabled)
+#   test - Alias for dev — use for canary / bench-test bakes (e.g. flashing K31
+#          to gegencheck a change). Fast, no SBOM. Identical to dev.
+#   prod - Production build: full artifacts for release (SBOMs, config archive,
+#          provisioning if enabled). Use ONLY for actual fleet releases —
+#          SBOMs are required for OSS-license compliance, so don't waste them
+#          on throwaway canary bakes (use dev/test for those).
 #
 # Environment Variables (override defaults):
 #   BUILDROOT_DIR    - Path to Buildroot source (default: /build/buildroot)
@@ -136,12 +140,14 @@ for arg in "${@}"; do
       [[ -z "$MODE" ]] || { echo "ERROR: Duplicate mode argument: '$arg' (already have '$MODE')." >&2; exit 1; }
       MODE="$arg"
       ;;
-    dev|prod)
+    dev|test|prod)
       [[ -z "$_CLI_ENV" ]] || { echo "ERROR: Duplicate environment argument: '$arg' (already have '$_CLI_ENV')." >&2; exit 1; }
       _CLI_ENV="$arg"
+      # 'test' = fast canary/bench build — pure alias for dev (no SBOM/archive/provisioning)
+      [[ "$_CLI_ENV" == "test" ]] && _CLI_ENV="dev"
       ;;
     *)
-      echo "ERROR: Unknown argument '$arg'. Usage: $0 [full|partial|kernel|update] [dev|prod]" >&2
+      echo "ERROR: Unknown argument '$arg'. Usage: $0 [full|partial|kernel|update] [dev|test|prod]" >&2
       exit 1
       ;;
   esac
