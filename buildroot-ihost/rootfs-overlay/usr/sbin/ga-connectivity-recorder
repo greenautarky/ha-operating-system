@@ -1,0 +1,135 @@
+#!/bin/sh
+# ga-connectivity-recorder - the always-on connectivity flight recorder.
+#
+# Records connectivity *transitions* (not samples) so the fleet-manager can
+# tell WHY a device was offline: internet outage vs WiFi/LTE carrier loss vs
+# reboot vs power cut. The device is the only witness to its own outage, so it
+# writes a durable append-only log and the ga_manager addon classifies it and
+# hands the verdict back on /info.last_gap.
+#
+# This daemon owns the rungs it can see from the OS, which the addon cannot:
+#   link  - per-interface carrier (eth0 / wlan0 / usb0)
+#   wan   - NetworkManager connectivity (full / limited / none)  [= internet]
+#   boot  - clean vs unclean, emitted once at startup
+# The ga_manager addon owns the mesh + broker rungs (separate /data stream);
+# ga_manager.flight_recorder merges both. Design:
+#   ga-ihost-docs/CONNECTIVITY-FLIGHT-RECORDER.md  (-> ADR-0011)
+#
+# POSIX /bin/sh (BusyBox ash) — no python on the image. Writes JSON-lines to
+# the /share bridge so the addon container can read it.
+#
+# Test hook: `GA_CR_TEST=1 . ga-connectivity-recorder` sources the functions
+# without starting the loop; LOG and SYS_NET are overridable via env.
+
+# --- config (all overridable for tests) -----------------------------------
+# The /share bridge: host /mnt/data/supervisor/share == /share inside addons.
+LOG="${GA_CR_LOG:-/mnt/data/supervisor/share/connectivity_history.jsonl}"
+SYS_NET="${GA_CR_SYS_NET:-/sys/class/net}"
+INTERVAL="${GA_CR_INTERVAL:-20}"       # seconds between polls
+MAX_LINES="${GA_CR_MAX_LINES:-2000}"   # tail-truncate retention
+IFACES="${GA_CR_IFACES:-eth0 wlan0 usb0}"  # link rungs we track
+
+BOOT_ID="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)"
+
+# --- helpers ---------------------------------------------------------------
+
+# map_connectivity <nmcli-connectivity-word> -> our wan state (or empty=skip)
+# nmcli reports: none | portal | limited | full | unknown
+map_connectivity() {
+    case "$1" in
+        full)            echo full ;;
+        limited|portal)  echo limited ;;
+        none)            echo none ;;
+        *)               echo "" ;;   # unknown -> skip, avoids boot noise
+    esac
+}
+
+# carrier <iface> -> up | down | absent  (via sysfs, no subprocess)
+carrier() {
+    _c="$SYS_NET/$1/carrier"
+    if [ ! -e "$SYS_NET/$1" ]; then
+        echo absent
+    elif [ "$(cat "$_c" 2>/dev/null)" = "1" ]; then
+        echo up
+    else
+        echo down
+    fi
+}
+
+# emit <rung> <to> [iface] [detail]  -> append one JSON line + rotate
+emit() {
+    _rung="$1"; _to="$2"; _iface="$3"; _detail="$4"
+    _ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    _mono="$(awk '{print $1; exit}' /proc/uptime 2>/dev/null || echo 0)"
+    _line="{\"ts\":\"$_ts\",\"mono\":$_mono,\"boot_id\":\"$BOOT_ID\",\"rung\":\"$_rung\",\"to\":\"$_to\""
+    [ -n "$_iface" ] && _line="$_line,\"iface\":\"$_iface\""
+    [ -n "$_detail" ] && _line="$_line,\"detail\":\"$_detail\""
+    _line="$_line}"
+    mkdir -p "$(dirname "$LOG")" 2>/dev/null
+    printf '%s\n' "$_line" >> "$LOG"
+    _n="$(wc -l < "$LOG" 2>/dev/null || echo 0)"
+    if [ "$_n" -gt "$MAX_LINES" ]; then
+        tail -n "$MAX_LINES" "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
+    fi
+}
+
+# read_wan -> current mapped wan state (empty if nmcli absent/unknown)
+read_wan() {
+    map_connectivity "$(nmcli -t -f CONNECTIVITY general status 2>/dev/null | head -1)"
+}
+
+# boot_kind -> clean | unclean  (reuses the existing ga-boot-check verdict)
+boot_kind() {
+    if journalctl -u ga-boot-check -b 0 --no-pager -q 2>/dev/null \
+        | grep -q "UNCLEAN SHUTDOWN"; then
+        echo unclean
+    else
+        echo clean
+    fi
+}
+
+# --- main loop -------------------------------------------------------------
+main() {
+    # Boot marker first — the device just came back up. The classifier reads
+    # this as reboot (clean) / power_loss (unclean) for the gap that just ended.
+    emit boot "$(boot_kind)"
+
+    # Seed per-rung state. First observation only emits when NON-nominal, so a
+    # device that boots straight into an outage is on record, but a healthy
+    # boot stays quiet.
+    prev_wan=""
+    for _if in $IFACES; do eval "prev_link_$_if=''"; done
+
+    while true; do
+        # WAN (internet) via NM connectivity.
+        cur_wan="$(read_wan)"
+        if [ -n "$cur_wan" ]; then
+            if [ -z "$prev_wan" ]; then
+                [ "$cur_wan" != "full" ] && emit wan "$cur_wan" "" "nm-connectivity"
+                prev_wan="$cur_wan"
+            elif [ "$cur_wan" != "$prev_wan" ]; then
+                emit wan "$cur_wan" "" "nm-connectivity"
+                prev_wan="$cur_wan"
+            fi
+        fi
+
+        # LINK (carrier) per tracked interface.
+        for _if in $IFACES; do
+            cur="$(carrier "$_if")"
+            [ "$cur" = "absent" ] && continue
+            eval "prev=\$prev_link_$_if"
+            if [ -z "$prev" ]; then
+                [ "$cur" != "up" ] && emit link "$cur" "$_if"
+                eval "prev_link_$_if=\$cur"
+            elif [ "$cur" != "$prev" ]; then
+                emit link "$cur" "$_if"
+                eval "prev_link_$_if=\$cur"
+            fi
+        done
+
+        sleep "$INTERVAL"
+    done
+}
+
+# Sourced for tests (GA_CR_TEST=1): expose functions, don't run the loop.
+[ "${GA_CR_TEST:-}" = "1" ] || main "$@"

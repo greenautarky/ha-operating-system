@@ -566,6 +566,25 @@ done
   && _pass "DG-01: disk guard script installed" \
   || _fail "DG-01: disk guard script missing"
 
+# CFR: connectivity flight recorder (why-offline attribution)
+CFR_SCRIPT="${TARGET}/usr/sbin/ga-connectivity-recorder"
+CFR_SVC="${SVC_DIR}/ga-connectivity-recorder.service"
+[[ -f "${CFR_SCRIPT}" && -x "${CFR_SCRIPT}" ]] \
+  && _pass "CFR-01: connectivity-recorder script present + executable" \
+  || _fail "CFR-01: connectivity-recorder script missing or not executable"
+[[ -f "${CFR_SVC}" ]] \
+  && _pass "CFR-02: connectivity-recorder.service present" \
+  || _fail "CFR-02: connectivity-recorder.service missing"
+[[ -L "${SVC_DIR}/multi-user.target.wants/ga-connectivity-recorder.service" ]] \
+  && _pass "CFR-03: connectivity-recorder.service enabled" \
+  || _fail "CFR-03: connectivity-recorder.service NOT enabled"
+grep -q '/mnt/data/supervisor/share' "${CFR_SCRIPT}" 2>/dev/null \
+  && _pass "CFR-04: recorder writes to /share bridge (addon-readable)" \
+  || _fail "CFR-04: recorder does not target the /share bridge"
+grep -q 'ga-boot-check.service' "${CFR_SVC}" 2>/dev/null \
+  && _pass "CFR-05: recorder ordered after ga-boot-check (boot verdict ready)" \
+  || _fail "CFR-05: recorder not ordered after ga-boot-check"
+
 echo ""
 echo "--- Binaries ---"
 
