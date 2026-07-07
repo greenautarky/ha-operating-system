@@ -1,0 +1,19 @@
+[Unit]
+Description=GreenAutarky connectivity flight recorder (why-offline attribution)
+Documentation=https://github.com/greenautarky/ga-ihost-docs/blob/main/CONNECTIVITY-FLIGHT-RECORDER.md
+# Needs NetworkManager for `nmcli` connectivity, the data partition for the
+# /share bridge log, and ga-boot-check to have logged the boot verdict first.
+After=network.target NetworkManager.service mnt-data.mount ga-boot-check.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/ga-connectivity-recorder
+Restart=on-failure
+RestartSec=10
+# Tiny always-on daemon — a poll loop around nmcli + sysfs reads.
+MemoryMax=32M
+CPUQuota=5%
+
+[Install]
+WantedBy=multi-user.target
