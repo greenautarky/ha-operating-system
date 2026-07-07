@@ -187,14 +187,48 @@ echo "Using DEV_CA_PEM=$DEV_CA_PEM"
 # is expected to run sync first; we just verify the synced files are
 # present.
 if [ -f "${REPO_ROOT:-$(pwd)}/version.yaml" ]; then
-  for comp in $(grep -E "^  [a-z][-a-z]+: " "${REPO_ROOT:-$(pwd)}/version.yaml" | grep -v 'null' | awk '{print $1}' | tr -d ':'); do
-    domain="${comp//-/_}"
-    dest="${REPO_ROOT:-$(pwd)}/buildroot-external/rootfs-overlay/usr/share/ga/custom_components/${domain}"
-    if [ -d "${dest}" ] && [ -f "${dest}/manifest.json" ]; then
-      ver=$(grep -oE '"version":[[:space:]]*"[^"]*"' "${dest}/manifest.json" | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
-      echo "Component check: ${comp} present (manifest version ${ver:-?})"
-    fi
-  done
+  # components: section — FAIL-FAST if a pinned Tier-2 component is missing
+  # from the overlay, or version-mismatched. Without this a forgotten
+  # `sync-components.sh` after a pin change ships an image WITHOUT the
+  # component yet still exits 0 — the exact silent no-op that hid
+  # greenautarky_telemetry from BOSv1.2.21-rc15 (2026-07-07). Mirrors the
+  # rootfs_overlays check below. See memory feedback_ga_build_sync_first.
+  in_components_block=0
+  while IFS= read -r line; do
+    case "$line" in
+      "components:"*) in_components_block=1; continue;;
+      [a-z]*":"*)     in_components_block=0;;
+    esac
+    [ "$in_components_block" -eq 1 ] || continue
+    case "$line" in
+      "  "[a-z]*":"*)
+        comp=$(echo "$line" | awk '{print $1}' | tr -d ':')
+        pinned=$(echo "$line" | awk '{print $2}' | tr -d '"' | sed 's/[#].*//' | tr -d '[:space:]')
+        { [ -z "$pinned" ] || [ "$pinned" = "null" ]; } && continue
+        domain="${comp//-/_}"
+        dest="${REPO_ROOT:-$(pwd)}/buildroot-external/rootfs-overlay/usr/share/ga/custom_components/${domain}"
+        if [ ! -f "${dest}/manifest.json" ]; then
+          echo "FAIL: component '${comp}' pinned to ${pinned} but ${dest} is missing — run scripts/sync-components.sh first" >&2
+          PREFLIGHT_FAIL_COMPONENT=1
+        else
+          on_disk=$(grep -oE '"version":[[:space:]]*"[^"]*"' "${dest}/manifest.json" | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+          if [ "$on_disk" != "$pinned" ]; then
+            echo "FAIL: component '${comp}' manifest says ${on_disk} but version.yaml pins ${pinned} — run scripts/sync-components.sh" >&2
+            PREFLIGHT_FAIL_COMPONENT=1
+          else
+            echo "Component check: ${comp}@${pinned} ✓"
+          fi
+        fi
+        ;;
+    esac
+  done < "${REPO_ROOT:-$(pwd)}/version.yaml"
+  if [ "${PREFLIGHT_FAIL_COMPONENT:-0}" -eq 1 ]; then
+    echo "" >&2
+    echo "ABORT: components: out of sync (see FAIL lines above). Fix:" >&2
+    echo "  (host)  cd ${REPO_ROOT:-$(pwd)} && ./scripts/sync-components.sh" >&2
+    echo "  then re-run ga_build.sh inside the container." >&2
+    exit 1
+  fi
 
   # rootfs_overlays staleness check — fail fast if the on-disk synced
   # version doesn't match version.yaml. Without this, a forgotten
