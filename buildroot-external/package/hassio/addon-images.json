@@ -1,8 +1,8 @@
 {
   "addons": {
     "mosquitto": {
-      "image": "homeassistant/{arch}-addon-mosquitto",
-      "version": "6.5.2"
+      "image": "ghcr.io/greenautarky/ga_mosquitto-{arch}",
+      "version": "7.1.0"
     },
     "ga_tailscale": {
       "image": "ghcr.io/greenautarky/ga_tailscale-{arch}",
