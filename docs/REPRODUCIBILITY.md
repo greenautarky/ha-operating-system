@@ -100,7 +100,7 @@ The build system pins containers by digest, not just tag:
 {
   "images": [
     {
-      "image": "ghcr.io/greenautarky/tinker-homeassistant:2025.11.3.1",
+      "image": "ghcr.io/home-assistant/tinker-homeassistant:2025.11.3",
       "digest": "sha256:0e4c57f9b550...",
       "tar_sha256": "abc123..."
     }
@@ -110,7 +110,7 @@ The build system pins containers by digest, not just tag:
 
 To reproduce with exact same containers, pull by digest:
 ```bash
-skopeo copy docker://ghcr.io/greenautarky/tinker-homeassistant@sha256:0e4c57f9b550... \
+skopeo copy docker://ghcr.io/home-assistant/tinker-homeassistant@sha256:0e4c57f9b550... \
   docker-archive:core.tar
 ```
 

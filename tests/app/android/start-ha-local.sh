@@ -14,10 +14,11 @@
 #   Default: ghcr.io/home-assistant/home-assistant:stable (upstream, x86_64)
 #            → supports login tests, but no GA onboarding integration
 #
-#   GA custom (armv7 — requires QEMU emulation):
-#     HA_IMAGE=ghcr.io/greenautarky/tinker-homeassistant:2025.11.3.1 \
+#   Stock Core (armv7 — requires QEMU emulation):
+#     HA_IMAGE=ghcr.io/home-assistant/tinker-homeassistant:2025.11.3 \
 #       tests/app/android/start-ha-local.sh
-#     → supports GA onboarding tests, but slow (~3× slower via QEMU)
+#     → stock Core; GA onboarding/telemetry ship as vendored custom_components
+#       now (not baked into a Core image) — slow (~3× slower via QEMU)
 #     → requires: sudo apt install qemu-user-static binfmt-support
 #
 # Environment:

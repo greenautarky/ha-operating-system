@@ -1220,149 +1220,17 @@ if [[ -n "$SRC" ]]; then
   # onboarding repo's own CI; that the component reaches the device is
   # covered by BLD-FE-02 (vendored into the OS rootfs-overlay — T4).
 
-  # SRC-11: Core CI workflow verifies wheel contents
-  CORE_ROOT=""
-  for core_dir in "${SRC}/../homeassisant_core" "/home/user/git/homeassisant_core"; do
-    [[ -d "$core_dir/.github" ]] && CORE_ROOT="$core_dir" && break
-  done
-  if [[ -n "$CORE_ROOT" ]]; then
-    CORE_WF="${CORE_ROOT}/.github/workflows/build-ga-core.yml"
-    if [[ -f "$CORE_WF" ]]; then
-      grep -q 'greenautarky-setup.html' "$CORE_WF" 2>/dev/null \
-        && _pass "SRC-11: Core CI workflow verifies greenautarky-setup.html in wheel" \
-        || _fail "SRC-11: Core CI workflow does NOT verify greenautarky-setup.html in wheel"
-
-      # BLD-VER-CONSISTENCY: HA_VERSION env in build-ga-core.yml matches the
-      # Core version selected at OS build time (from version.json fetched via
-      # stable.json on whichever release branch the build was pointed at).
-      # Catches a desync between the two sources of truth — e.g. someone
-      # bumps stable.json on release/v1.X-rebuild but forgets to bump
-      # HA_VERSION in build-ga-core.yml. The released image would then carry
-      # the wrong io.hass.version label, supervisor would loop.
-      if [[ -f "$VER_JSON" ]]; then
-        # Two-step extract: find the HA_VERSION line, then pull the version
-        # number out of it (greedy regex on a one-liner eats the leading "20").
-        HA_VER_ENV=$(grep -E '^[[:space:]]*HA_VERSION:' "$CORE_WF" 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?')
-        VER_TINKER=$(jq -r '.homeassistant.tinker // "unknown"' "$VER_JSON" 2>/dev/null)
-        if [[ -z "$HA_VER_ENV" ]]; then
-          _skip "BLD-VER-CONSISTENCY" "could not parse HA_VERSION env from build-ga-core.yml"
-        elif [[ "$HA_VER_ENV" = "$VER_TINKER" ]]; then
-          _pass "BLD-VER-CONSISTENCY: HA_VERSION ($HA_VER_ENV) in ha-core/build-ga-core.yml matches version.json (homeassistant.tinker=$VER_TINKER)"
-        else
-          _fail "BLD-VER-CONSISTENCY: HA_VERSION ($HA_VER_ENV) in ha-core/build-ga-core.yml does NOT match version.json (homeassistant.tinker=$VER_TINKER) — bump one to match the other"
-        fi
-      else
-        _skip "BLD-VER-CONSISTENCY" "version.json not yet available (build hasn't reached hassio.mk CONFIGURE_CMDS)"
-      fi
-
-      # BLD-RELEASE-MANIFEST: extends BLD-VER-CONSISTENCY by adding the
-      # release manifest in greenautarky/releases as a third source of
-      # truth. The cut-release.sh flow promises that, for the v1.X bundle
-      # the operator is cutting toward:
-      #   manifest.versions.core       == HA_VERSION (build-ga-core.yml)
-      #                                == version.json.homeassistant.tinker
-      #   manifest.versions.supervisor == version.json.supervisor
-      #   manifest.versions.os         endswith buildroot-external/meta
-      #                                          VERSION_SUFFIX
-      # We pick the manifest by ``versions.core == HA_VER_ENV`` — that's
-      # what the operator just bumped, regardless of the OS / supervisor
-      # state. Falls back to the newest in-development manifest if no
-      # core-match exists (e.g. someone bumped HA_VERSION but didn't run
-      # cut-release.sh yet — that itself is the kind of drift this test
-      # exists to catch).
-      RELEASES_DIR=""
-      for r_dir in "${SRC}/../releases" "/home/user/git/releases"; do
-        [[ -d "$r_dir/releases" ]] && RELEASES_DIR="$r_dir" && break
-      done
-      if [[ -z "$RELEASES_DIR" ]]; then
-        _skip "BLD-RELEASE-MANIFEST" "greenautarky/releases checkout not found"
-      elif [[ ! -f "$VER_JSON" ]]; then
-        _skip "BLD-RELEASE-MANIFEST" "version.json not yet available"
-      elif [[ -z "$HA_VER_ENV" ]]; then
-        _skip "BLD-RELEASE-MANIFEST" "could not parse HA_VERSION env (BLD-VER-CONSISTENCY already failed)"
-      elif ! command -v python3 >/dev/null 2>&1; then
-        _skip "BLD-RELEASE-MANIFEST" "python3 not available for YAML parsing"
-      else
-        VER_SUP_BUILT="$(jq -r '.supervisor // "unknown"' "$VER_JSON" 2>/dev/null)"
-        META_SUFFIX="$(grep -oE 'VERSION_SUFFIX="[^"]*"' "${SRC}/buildroot-external/meta" 2>/dev/null | cut -d'"' -f2)"
-        # Inline python keeps the test self-contained (no extra deps);
-        # PyYAML is already required by tools in greenautarky/releases.
-        MATCH_OUT="$(python3 - "$RELEASES_DIR/releases" "$HA_VER_ENV" <<'PY' 2>/dev/null
-import os, sys, glob
-try:
-    import yaml
-except ImportError:
-    print("NOYAML"); sys.exit(0)
-root, target_core = sys.argv[1], sys.argv[2]
-candidates = []
-for p in sorted(glob.glob(os.path.join(root, "v*", "manifest.yaml"))):
-    try:
-        m = yaml.safe_load(open(p))
-    except Exception:
-        continue
-    if isinstance(m, dict):
-        candidates.append((p, m))
-if not candidates:
-    print("NOMANIFESTS"); sys.exit(0)
-exact = [(p, m) for p, m in candidates
-         if (m.get("versions") or {}).get("core") == target_core]
-chosen = exact[0] if exact else None
-if not chosen:
-    in_dev = [(p, m) for p, m in candidates if m.get("status") == "in-development"]
-    chosen = in_dev[-1] if in_dev else candidates[-1]
-p, m = chosen
-v = m.get("versions") or {}
-print("PATH=" + p)
-print("BUNDLE=" + str(m.get("bundle") or "?"))
-print("STATUS=" + str(m.get("status") or "?"))
-print("OS=" + str(v.get("os") or "?"))
-print("CORE=" + str(v.get("core") or "?"))
-print("SUP=" + str(v.get("supervisor") or "?"))
-print("MATCH_BY_CORE=" + ("yes" if exact else "no"))
-PY
-)"
-        if [[ "$MATCH_OUT" = "NOYAML" ]]; then
-          _skip "BLD-RELEASE-MANIFEST" "PyYAML not installed (pip install pyyaml)"
-        elif [[ "$MATCH_OUT" = "NOMANIFESTS" ]]; then
-          _skip "BLD-RELEASE-MANIFEST" "no manifest.yaml under $RELEASES_DIR/releases/"
-        elif [[ -z "$MATCH_OUT" ]]; then
-          _skip "BLD-RELEASE-MANIFEST" "manifest selection helper produced no output"
-        else
-          MAN_PATH=$(echo   "$MATCH_OUT" | grep '^PATH='          | cut -d= -f2-)
-          MAN_BUNDLE=$(echo "$MATCH_OUT" | grep '^BUNDLE='        | cut -d= -f2-)
-          MAN_STATUS=$(echo "$MATCH_OUT" | grep '^STATUS='        | cut -d= -f2-)
-          MAN_OS=$(echo     "$MATCH_OUT" | grep '^OS='            | cut -d= -f2-)
-          MAN_CORE=$(echo   "$MATCH_OUT" | grep '^CORE='          | cut -d= -f2-)
-          MAN_SUP=$(echo    "$MATCH_OUT" | grep '^SUP='           | cut -d= -f2-)
-          MATCHED=$(echo    "$MATCH_OUT" | grep '^MATCH_BY_CORE=' | cut -d= -f2-)
-          mismatches=()
-          if [[ "$MATCHED" != "yes" ]]; then
-            mismatches+=("no manifest with versions.core=$HA_VER_ENV — using newest in-development ($MAN_BUNDLE) as fallback; run cut-release.sh to land the bump")
-          fi
-          [[ "$MAN_CORE" = "$HA_VER_ENV"    ]] || mismatches+=("core: manifest=$MAN_CORE != build-ga-core.yml HA_VERSION=$HA_VER_ENV")
-          [[ "$MAN_CORE" = "$VER_TINKER"    ]] || mismatches+=("core: manifest=$MAN_CORE != version.json.homeassistant.tinker=$VER_TINKER")
-          [[ "$MAN_SUP"  = "$VER_SUP_BUILT" ]] || mismatches+=("supervisor: manifest=$MAN_SUP != version.json.supervisor=$VER_SUP_BUILT")
-          if [[ -n "$META_SUFFIX" ]]; then
-            # Manifest OS string ends with the buildroot suffix, e.g.
-            # "16.3.1.2" endswith "1.2".
-            case "$MAN_OS" in
-              *".$META_SUFFIX") : ;;
-              *) mismatches+=("os: manifest=$MAN_OS does not end with buildroot VERSION_SUFFIX=$META_SUFFIX") ;;
-            esac
-          fi
-          if [[ ${#mismatches[@]} -eq 0 ]]; then
-            _pass "BLD-RELEASE-MANIFEST: $MAN_BUNDLE ($MAN_STATUS) agrees with version.json + build-ga-core.yml + buildroot meta (os=$MAN_OS, core=$MAN_CORE, sup=$MAN_SUP)"
-          else
-            _fail "BLD-RELEASE-MANIFEST: $MAN_BUNDLE ($MAN_STATUS) at $MAN_PATH disagrees with build sources: $(printf '%s; ' "${mismatches[@]}")re-run cut-release.sh after bumping all sides in lock-step"
-          fi
-        fi
-      fi
-    else
-      _skip "SRC-11 + BLD-VER-CONSISTENCY + BLD-RELEASE-MANIFEST" "build-ga-core.yml not found"
-    fi
-  else
-    _skip "SRC-11 + BLD-VER-CONSISTENCY + BLD-RELEASE-MANIFEST" "ha-core repo not found"
-  fi
+  # SRC-11 + BLD-VER-CONSISTENCY + BLD-RELEASE-MANIFEST — REMOVED (de-fork):
+  # these asserted the greenautarky/ha-core fork's build-ga-core.yml (SRC-11:
+  # the Core CI wheel verifies greenautarky-setup.html; BLD-VER-CONSISTENCY:
+  # HA_VERSION env == version.json.homeassistant.tinker) and the cut-release.sh
+  # release manifest in greenautarky/releases (BLD-RELEASE-MANIFEST). The Core
+  # fork + build-ga-core.yml are retired, and cut-release.sh /
+  # bump-release-version.sh were deleted — Core ships stock
+  # (ghcr.io/home-assistant/tinker-homeassistant, pinned in version.yaml
+  # homeassistant_core), so there is no GA-managed Core version to cross-check
+  # here. Core io.hass.version correctness is covered by VER-11; the onboarding
+  # component reaching the device by BLD-FE-02.
 
   # SRC-12 — REMOVED (V1.2-clean T3): SRC-12a..g asserted the GA app-flow
   # redirect wired into the greenautarky/frontend fork's authorize.ts and the
