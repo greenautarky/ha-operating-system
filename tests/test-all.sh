@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unified test orchestrator for GA OS, Frontend, and Core repos.
+# Unified test orchestrator for GA OS source/build/CI tests.
 #
 # Usage:
 #   ./tests/test-all.sh                     # source + CI status (default)
@@ -7,19 +7,14 @@
 #   ./tests/test-all.sh --level build       # post-build tests (needs build output)
 #   ./tests/test-all.sh --level device      # device tests (needs SSH/serial)
 #   ./tests/test-all.sh --level all         # all three in sequence
-#   ./tests/test-all.sh --local             # also run local frontend/core tests
 #
 # Environment variables:
-#   FRONTEND_ROOT   Path to frontend repo (default: ~/git/homeassistant_frontend)
-#   CORE_ROOT       Path to core repo (default: ~/git/homeassisant_core)
 #   REPO_ROOT       Path to OS repo (default: auto-detected)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-FRONTEND_ROOT="${FRONTEND_ROOT:-$HOME/git/homeassistant_frontend}"
-CORE_ROOT="${CORE_ROOT:-$HOME/git/homeassisant_core}"
 
 # Colors
 RED='\033[0;31m'
@@ -35,7 +30,6 @@ total_skip=0
 
 # Parse arguments
 LEVEL="source"
-LOCAL=false
 PASSTHROUGH_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -43,10 +37,6 @@ while [[ $# -gt 0 ]]; do
         --level)
             LEVEL="$2"
             shift 2
-            ;;
-        --local)
-            LOCAL=true
-            shift
             ;;
         *)
             PASSTHROUGH_ARGS+=("$1")
@@ -87,7 +77,7 @@ run_os_source_tests() {
     fi
 
     local output
-    output=$(REPO_ROOT="$REPO_ROOT" FRONTEND_ROOT="${FRONTEND_ROOT:-}" bash "$test_script" 2>&1) || true
+    output=$(REPO_ROOT="$REPO_ROOT" bash "$test_script" 2>&1) || true
 
     # Count results from the test output
     local pass_count fail_count skip_count
@@ -179,69 +169,8 @@ run_ci_checks() {
         "Version Chain Check" \
         "master" \
         "CI-OS"
-
-    check_ci_status \
-        "thomas-greenautarky/frontend" \
-        "CI" \
-        "ga/custom-onboarding" \
-        "CI-FE"
-
-    check_ci_status \
-        "greenautarky/ha-core" \
-        "Build greenautarky HA Core image" \
-        "ga/custom-onboarding" \
-        "CI-CORE"
 }
 
-# ---------------------------------------------------------------------------
-# Section D: Local repo tests (optional, --local flag)
-# ---------------------------------------------------------------------------
-run_local_frontend_tests() {
-    _section "Frontend: local tests (vitest)"
-
-    if [[ ! -d "$FRONTEND_ROOT" ]]; then
-        _skip "FE-LOCAL" "frontend repo not found at $FRONTEND_ROOT"
-        return
-    fi
-
-    if [[ ! -f "$FRONTEND_ROOT/package.json" ]]; then
-        _skip "FE-LOCAL" "no package.json in $FRONTEND_ROOT"
-        return
-    fi
-
-    local output
-    if (cd "$FRONTEND_ROOT" && yarn test --run 2>&1) >/dev/null 2>&1; then
-        _pass "Frontend vitest: all tests passed"
-    else
-        _fail "Frontend vitest: tests failed — run: cd $FRONTEND_ROOT && yarn test"
-    fi
-}
-
-run_local_core_tests() {
-    _section "Core: local tests (pytest)"
-
-    if [[ ! -d "$CORE_ROOT" ]]; then
-        _skip "CORE-LOCAL" "core repo not found at $CORE_ROOT"
-        return
-    fi
-
-    local test_dir="$CORE_ROOT/tests/components/greenautarky_onboarding"
-    local tel_dir="$CORE_ROOT/tests/components/greenautarky_telemetry"
-
-    if [[ ! -d "$test_dir" ]]; then
-        _skip "CORE-LOCAL" "greenautarky_onboarding tests not found"
-        return
-    fi
-
-    local targets="$test_dir"
-    [[ -d "$tel_dir" ]] && targets="$targets $tel_dir"
-
-    if (cd "$CORE_ROOT" && python -m pytest $targets -q 2>&1) >/dev/null 2>&1; then
-        _pass "Core pytest: all GA tests passed"
-    else
-        _fail "Core pytest: tests failed — run: cd $CORE_ROOT && python -m pytest $targets -v"
-    fi
-}
 
 # ---------------------------------------------------------------------------
 # Main
@@ -249,20 +178,13 @@ run_local_core_tests() {
 echo ""
 echo "=== GA Test Orchestrator ==="
 echo "  Level: $LEVEL"
-echo "  Local: $LOCAL"
 echo "  OS repo: $REPO_ROOT"
-[[ "$LOCAL" == true ]] && echo "  Frontend: $FRONTEND_ROOT"
-[[ "$LOCAL" == true ]] && echo "  Core: $CORE_ROOT"
 
 case "$LEVEL" in
     source)
         run_os_source_tests
         run_image_check
         run_ci_checks
-        if [[ "$LOCAL" == true ]]; then
-            run_local_frontend_tests
-            run_local_core_tests
-        fi
         ;;
     build)
         _section "Build tests (delegating to run_build_tests.sh)"
@@ -276,10 +198,6 @@ case "$LEVEL" in
         run_os_source_tests
         run_image_check
         run_ci_checks
-        if [[ "$LOCAL" == true ]]; then
-            run_local_frontend_tests
-            run_local_core_tests
-        fi
         # Build and device tests need explicit args — just run source level for "all"
         echo ""
         printf "${YELLOW}NOTE${NC}: build and device tests require additional args.\n"

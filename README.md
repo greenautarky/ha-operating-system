@@ -242,10 +242,17 @@ upstream open-source projects. Original license terms are preserved.
 
 #### Core Components
 
-| Repository | Based on | License | Description |
-|------------|----------|---------|-------------|
-| [ha-core](https://github.com/greenautarky/ha-core) | [home-assistant/core](https://github.com/home-assistant/core) | Apache-2.0 | Home Assistant Core with GreenAutarky onboarding and tenant management |
-| [frontend](https://github.com/greenautarky/frontend) | [home-assistant/frontend](https://github.com/home-assistant/frontend) | Apache-2.0 | Home Assistant frontend with GreenAutarky customizations |
+GreenAutarky OS ships **stock, unmodified** Home Assistant Core and frontend
+(`ghcr.io/home-assistant/tinker-homeassistant`) — there is no longer a Core or
+frontend fork. All GreenAutarky customization is delivered as vendored
+`custom_components` and Lovelace bundles, published as standalone OCI artifacts
+and pinned in [`version.yaml`](version.yaml) under `components:` (ADR-0007):
+
+| Component | Kind | Description |
+|-----------|------|-------------|
+| [greenautarky-onboarding](https://github.com/greenautarky/greenautarky-onboarding) | custom_component | Post-onboarding setup wizard, GDPR consent, operator auto-login |
+| [greenautarky-telemetry](https://github.com/greenautarky/greenautarky-telemetry) | custom_component | Telemetry-consent storage backend (Privacy Tiers 1/2 + WebSocket API) |
+| [ga-frontend-bundle](https://github.com/greenautarky/ga-frontend-bundle) | Lovelace cards | 14 vendored Lovelace cards (de-HACS) |
 
 #### Add-ons
 
