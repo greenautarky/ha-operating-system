@@ -19,6 +19,7 @@ components:
   # level dir matching the component's HA-integration domain name.
   # Extracted into buildroot-external/rootfs-overlay/usr/share/ga/custom_components/.
   greenautarky-onboarding: "1.0.4"   # https://github.com/greenautarky/greenautarky-onboarding
+  greenautarky-telemetry:  "0.2.3"   # https://github.com/greenautarky/greenautarky-telemetry — consent-tier storage backend (Privacy Tiers 1/2 opt-out/opt-in) + WS API; extracted standalone from ha-greenautarky-onboarding v0.2.3. Enabled on-device by ga_manager converge (GA_INTEGRATIONS_TO_ENABLE).
   ga-frontend-bundle:       "1.0.1"  # https://github.com/greenautarky/ga-frontend-bundle (14 vendored Lovelace cards, ~6 MB; was embedded)
 
 rootfs_overlays:
