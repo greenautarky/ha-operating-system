@@ -1,0 +1,23 @@
+[Unit]
+Description=GA — stage OS-vendored custom_components into /share (every boot, idempotent)
+Documentation=man:systemd.special(7)
+# Pure host-side file copy — no supervisor/network needed. Runs early, before
+# the Supervisor starts any addon, so /share/ga-custom-components is current by
+# the time ga_manager's converge/reconcile reads it (layer 1 of the OTA-
+# converge fix; layer 2 is ga_manager reconcile_vendored_on_startup).
+DefaultDependencies=no
+After=local-fs.target mnt-data.mount ga-bootstrap-disk.service
+Before=basic.target hassos-supervisor.service
+RequiresMountsFor=/mnt/data
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Cheap version-gated copy; must never block boot. The script is internally
+# fail-safe and always exits 0, so no Restart= is needed.
+TimeoutStartSec=120
+ExecStart=/usr/libexec/ga-stage-vendored-components
+
+[Install]
+WantedBy=sysinit.target
