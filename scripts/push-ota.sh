@@ -62,10 +62,17 @@ FORCE=false
 VERSION=""
 SSH_KEY="${SSH_KEY:-$HOME/Nextcloud2/GreenAutarky/security_store/HomeassistantGreen0.pem}"
 SSH_PORT="${SSH_PORT:-22222}"
-# OTA server (ga-tools): SSH target alias, NOT the public hostname.
-# Override via OTA_SSH_HOST if your ssh config uses a different alias.
-OTA_SSH_HOST="${OTA_SSH_HOST:-ga-tools_tailscale}"
-OTA_SERVER_PATH="${OTA_SERVER_PATH:-/data/ota/releases}"
+# OTA server: SSH target alias, NOT the public hostname.
+# Post-Hetzner-migration (2026-06) the OTA server is ga-newhost, and
+# ota.greenautarky.com is served by Caddy from the named volume
+# caddy_caddy_data (mounted at /data in the container). The host-side path of
+# that volume is /var/lib/docker/volumes/caddy_caddy_data/_data/ota, so we scp
+# there directly. (The old ga-tools_tailscale target + /data/ota/releases was
+# stale — /data/ota on the ga-newhost host is a DIFFERENT dir, not the served
+# one.) A cleaner long-term fix is a bind-mount or `docker cp` into caddy.
+# Override both via OTA_SSH_HOST / OTA_SERVER_PATH if your setup differs.
+OTA_SSH_HOST="${OTA_SSH_HOST:-ga-newhost}"
+OTA_SERVER_PATH="${OTA_SERVER_PATH:-/var/lib/docker/volumes/caddy_caddy_data/_data/ota/releases}"
 # Display name used in URLs / log output (Caddy-served hostname)
 OTA_PUBLIC_HOST="${OTA_PUBLIC_HOST:-ota.greenautarky.com}"
 
