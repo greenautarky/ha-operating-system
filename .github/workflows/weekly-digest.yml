@@ -1,0 +1,49 @@
+name: Weekly Engineering Digest
+
+# Every Friday afternoon: gather the week's merged PRs across the GA repos,
+# synthesise a one-pager, and post it to the Odoo Product_iHOST project chatter.
+# Also runnable on demand (workflow_dispatch) for testing.
+on:
+  schedule:
+    - cron: "37 13 * * 5"   # Fri 13:37 UTC ≈ 15:37 CEST
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the digest to the log instead of posting to Odoo"
+        type: boolean
+        default: false
+      since:
+        description: "Window start YYYY-MM-DD (default: 7 days ago)"
+        type: string
+        default: ""
+
+concurrency:
+  group: weekly-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for the script)
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate & post the weekly digest
+        env:
+          # Cross-repo read access — the built-in GITHUB_TOKEN only sees this
+          # repo, so a PAT (repo:read on the greenautarky org) is required.
+          GH_TOKEN: ${{ secrets.DIGEST_GH_PAT }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ODOO_URL: ${{ secrets.ODOO_URL }}
+          ODOO_DB: ${{ secrets.ODOO_DB }}
+          ODOO_LOGIN: ${{ secrets.ODOO_LOGIN }}
+          ODOO_APIKEY: ${{ secrets.ODOO_APIKEY }}
+        run: |
+          python3 scripts/ops/weekly_digest.py \
+            ${{ (inputs.dry_run && '--dry-run') || '' }} \
+            ${{ inputs.since && format('--since {0}', inputs.since) || '' }}
