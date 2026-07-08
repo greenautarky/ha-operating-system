@@ -1,0 +1,75 @@
+#!/bin/sh
+# ga-stage-vendored-components — stage the OS-vendored Home Assistant
+# custom_components from the read-only rootfs into the persistent, addon-
+# visible /share tree, on EVERY boot, idempotently.
+#
+# WHY THIS EXISTS (the OTA-converge gap, layer 1 of 2)
+# ----------------------------------------------------
+# Vendored integrations ship in the OS image under /usr/share/ga/
+# custom_components/ (laid out by scripts/sync-components.sh at build time).
+# The ga_manager addon CANNOT read the host rootfs — it only maps /share,
+# /config, /ssl, /addon_configs — so a host-side step must copy the rootfs
+# trees into /share/ga-custom-components/, from where the addon's `converge`
+# worker (and its steady-state reconcile) places them into
+# /config/custom_components/ and enables them (layer 2).
+#
+# Historically this staging was assumed to be done by `ga-bootstrap`, but that
+# service is first-boot-only (ConditionPathExists=!/mnt/data/.ga-bootstrapped,
+# a marker on persistent /mnt/data that survives an OS OTA). So a component
+# NEWLY shipped or version-bumped in an OTA was never re-staged on already-
+# provisioned devices: /share kept its first-boot contents and the new
+# integration silently never appeared. This oneshot closes that gap by running
+# on every boot with NO marker gate — the host-side twin of ga_manager's
+# steady-state vendored-component reconcile.
+#
+# SAFETY: best-effort — this must NEVER block boot (it is ordered
+# Before=hassos-supervisor.service). Every failure is logged and swallowed;
+# the script always exits 0. Staging is version-gated (compares manifest.json)
+# so an unchanged device performs NO writes — important for eMMC longevity.
+
+set -u
+
+SRC="/usr/share/ga/custom_components"
+# Host path for the Supervisor "share" folder; the ga_manager addon sees this
+# same directory mounted as /share.
+DST="/mnt/data/supervisor/share/ga-custom-components"
+
+log() { echo "ga-stage-vendored-components: $*"; }
+
+if [ ! -d "$SRC" ]; then
+	log "no vendored source at $SRC — OS staged none; nothing to do"
+	exit 0
+fi
+
+if ! mkdir -p "$DST" 2>/dev/null; then
+	log "WARN could not create $DST — skipping (boot not blocked)"
+	exit 0
+fi
+
+staged=0
+current=0
+for comp in "$SRC"/*/; do
+	[ -d "$comp" ] || continue
+	name=$(basename "$comp")
+	# Only stage real integrations (a directory with a manifest.json). This
+	# also skips VENDORED.md and any stray non-component file.
+	[ -f "$comp/manifest.json" ] || continue
+	dst="$DST/$name"
+	# Version-gate: a released component bumps its manifest.json version, so an
+	# identical manifest is a reliable proxy for "unchanged" and lets us skip
+	# the rm+cp (no eMMC write on a steady-state boot). Matches the addon-side
+	# _place_components version-gate for consistency.
+	if [ -f "$dst/manifest.json" ] && cmp -s "$comp/manifest.json" "$dst/manifest.json"; then
+		current=$((current + 1))
+		continue
+	fi
+	if rm -rf "$dst" && cp -a "$comp" "$dst"; then
+		log "staged $name"
+		staged=$((staged + 1))
+	else
+		log "WARN failed to stage $name — leaving previous copy in place"
+	fi
+done
+
+log "done — staged=$staged already-current=$current into $DST"
+exit 0
