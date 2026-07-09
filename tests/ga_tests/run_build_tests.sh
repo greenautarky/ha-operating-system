@@ -1655,20 +1655,25 @@ if [[ -n "$SRC" ]]; then
       _fail "INT-02: telegraf-debug.conf influx host mismatch"
     fi
 
-    # INT-03: fluent-bit.conf uses the same loki hostname as ga-services.conf
-    if [[ -f "$FB_CONF" ]] && grep -q "$_LOKI_HOST" "$FB_CONF" 2>/dev/null; then
-      _pass "INT-03: fluent-bit.conf loki host matches ga-services.conf ($_LOKI_HOST)"
+    # INT-03: fluent-bit.conf points at Loki correctly. Since #172 the OUTPUT
+    # Host is env-based (`Host ${LOKI_HOST}`, anonymous-safe default
+    # loki.greenautarky.com), so accept EITHER the ${LOKI_HOST} indirection OR
+    # the literal host from ga-services.conf — both are correct.
+    if [[ -f "$FB_CONF" ]] && grep -qE "\\$\\{LOKI_HOST\\}|$_LOKI_HOST" "$FB_CONF" 2>/dev/null; then
+      _pass "INT-03: fluent-bit.conf loki output configured (env \${LOKI_HOST} or $_LOKI_HOST)"
     else
-      _fail "INT-03: fluent-bit.conf loki host does NOT match ga-services.conf ($_LOKI_HOST)"
+      _fail "INT-03: fluent-bit.conf has no loki host (neither \${LOKI_HOST} nor $_LOKI_HOST)"
     fi
 
-    # INT-04: fluent-bit-debug.conf uses the same loki hostname
-    if [[ -f "$FB_DEBUG" ]] && grep -q "$_LOKI_HOST" "$FB_DEBUG" 2>/dev/null; then
-      _pass "INT-04: fluent-bit-debug.conf loki host matches ga-services.conf"
-    elif [[ ! -f "$FB_DEBUG" ]]; then
+    # INT-04: fluent-bit-debug.conf, same env-or-literal check (see INT-03).
+    # #172 moved its OUTPUT Host to ${LOKI_HOST} too — the old literal grep
+    # false-failed on a config that is in fact correct.
+    if [[ ! -f "$FB_DEBUG" ]]; then
       _skip "INT-04" "fluent-bit-debug.conf not found"
+    elif grep -qE "\\$\\{LOKI_HOST\\}|$_LOKI_HOST" "$FB_DEBUG" 2>/dev/null; then
+      _pass "INT-04: fluent-bit-debug.conf loki output configured (env \${LOKI_HOST} or $_LOKI_HOST)"
     else
-      _fail "INT-04: fluent-bit-debug.conf loki host mismatch"
+      _fail "INT-04: fluent-bit-debug.conf has no loki host (neither \${LOKI_HOST} nor $_LOKI_HOST)"
     fi
 
     # INT-05: Supervisor dns.py has all three hostnames from ga-services.conf
