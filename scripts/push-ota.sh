@@ -22,9 +22,13 @@
 #   (c) emergency recovery when fleet-manager or Supervisor is down.
 #
 # Usage:
-#   # Upload to OTA server (devices pull via Supervisor or the new
+#   # Upload to OTA server PROD slot (devices pull via Supervisor or the new
 #   # host-service mode in ga_manager 0.41.0+)
 #   ./scripts/push-ota.sh --server --raucb <path>
+#
+#   # Upload to a per-rc CANARY slot (releases/<ver>/<rc>/…) — pulled only by a
+#   # targeted ota-update dispatch with the same ga_release; never touches prod
+#   ./scripts/push-ota.sh --server --raucb <path> --ga-release BOSv1.2.21-rc19
 #
 #   # Push to single device (= one-time fallback for pre-BOSv1.2.17 hosts)
 #   ./scripts/push-ota.sh --device <netbird-ip> --raucb <path>
@@ -42,6 +46,8 @@
 #   --force              Install even if device is already on target version
 #                        (useful for canary re-install of same-version dev iterations)
 #   --version VER        Version string (auto-detected from bundle if omitted)
+#   --ga-release LABEL   Stage to a per-rc canary slot releases/<ver>/<LABEL>/
+#                        instead of the shared prod slot (server mode)
 #
 # Server mode notes (--server):
 #   - SSH target is the ga-tools host alias (default: ga-tools_tailscale).
@@ -60,6 +66,7 @@ DRY_RUN=false
 NO_REBOOT=false
 FORCE=false
 VERSION=""
+GA_RELEASE=""
 SSH_KEY="${SSH_KEY:-$HOME/Nextcloud2/GreenAutarky/security_store/HomeassistantGreen0.pem}"
 SSH_PORT="${SSH_PORT:-22222}"
 # OTA server: SSH target alias, NOT the public hostname.
@@ -86,6 +93,7 @@ while [[ $# -gt 0 ]]; do
     --no-reboot) NO_REBOOT=true; shift ;;
     --force)     FORCE=true; shift ;;
     --version)   VERSION="$2"; shift 2 ;;
+    --ga-release) GA_RELEASE="$2"; shift 2 ;;
     *) echo "Unknown: $1"; exit 1 ;;
   esac
 done
@@ -123,11 +131,28 @@ SCP_CMD="scp -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o UserKnownHostsF
 OTA_SSH="ssh -o ConnectTimeout=15 $OTA_SSH_HOST"
 OTA_SCP="scp -o ConnectTimeout=15"
 
-# --- Server mode: upload to ga-tools OTA path ---
+# --- Server mode: upload to the OTA server ---
 if [[ "$MODE" == "server" ]]; then
-  # Expected filename for Supervisor pull: haos_ihost-{version}.raucb
+  # Expected filename for the device pull: haos_ihost-{version}.raucb
   OTA_FILENAME="haos_ihost-${VERSION}.raucb"
-  DEST_DIR="${OTA_SERVER_PATH}/${VERSION}"
+  # Without --ga-release: the shared per-HAOS-version PROD slot
+  #   releases/<version>/haos_ihost-<version>.raucb  (Supervisor fleet auto-
+  #   update pulls this on a real version bump — reserve it for prod releases).
+  # With --ga-release: a per-rc CANARY slot
+  #   releases/<version>/<ga_release>/haos_ihost-<version>.raucb  — pulled ONLY
+  #   by a targeted ota-update dispatch that carries the same ga_release, so a
+  #   canary build never occupies the prod slot. (ga-rauc-install falls back to
+  #   the prod slot on a 404, so pre-per-rc hosts still resolve.)
+  if [[ -n "$GA_RELEASE" ]]; then
+    case "$GA_RELEASE" in
+      *[!A-Za-z0-9.-]* | "") echo "ERROR: --ga-release must match [A-Za-z0-9.-]"; exit 1 ;;
+    esac
+    DEST_DIR="${OTA_SERVER_PATH}/${VERSION}/${GA_RELEASE}"
+    echo "  Slot:     per-rc canary ($GA_RELEASE)"
+  else
+    DEST_DIR="${OTA_SERVER_PATH}/${VERSION}"
+    echo "  Slot:     shared prod (releases/$VERSION)"
+  fi
   REMOTE_PATH="$DEST_DIR/$OTA_FILENAME"
   REMOTE_SHA_PATH="$REMOTE_PATH.sha256"
 
@@ -177,12 +202,20 @@ if [[ "$MODE" == "server" ]]; then
   fi
   echo "  SHA verified ✓"
 
+  URL_SUBPATH="$VERSION"
+  [[ -n "$GA_RELEASE" ]] && URL_SUBPATH="$VERSION/$GA_RELEASE"
   echo ""
-  echo "  Public URL: https://$OTA_PUBLIC_HOST/releases/$VERSION/$OTA_FILENAME"
-  echo "  Sidecar:    https://$OTA_PUBLIC_HOST/releases/$VERSION/$OTA_FILENAME.sha256"
+  echo "  Public URL: https://$OTA_PUBLIC_HOST/releases/$URL_SUBPATH/$OTA_FILENAME"
+  echo "  Sidecar:    https://$OTA_PUBLIC_HOST/releases/$URL_SUBPATH/$OTA_FILENAME.sha256"
   echo ""
-  echo "  Devices will auto-update when Supervisor checks stable.json."
-  echo "  stable.json hassos.ihost must be '$VERSION' for update to trigger."
+  if [[ -n "$GA_RELEASE" ]]; then
+    echo "  Per-rc canary slot — NOT auto-pulled by Supervisor. Dispatch"
+    echo "  ota-update {ga_release:'$GA_RELEASE', rauc_install_via_host_service:true}"
+    echo "  to the target cohort ONLY (see the canary-ota-roll skill)."
+  else
+    echo "  Prod slot — devices auto-update when Supervisor checks stable.json."
+    echo "  stable.json hassos.ihost must be '$VERSION' for update to trigger."
+  fi
   exit 0
 fi
 
