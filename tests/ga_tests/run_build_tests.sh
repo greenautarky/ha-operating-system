@@ -2352,6 +2352,171 @@ else
 fi
 
 # =========================================================================
+# rc19 OS features — RAUC host-install bridge, telegraf per-device cred,
+# every-boot vendored-component stager, push-ota --ga-release
+# (2026-07-09 test-coverage add — self-contained block, rebase-friendly)
+#
+# These are static greps on the SHIPPED artifacts. They resolve each file to
+# the built target tree when present, else the in-repo source (rootfs-overlay /
+# buildroot-external/package / scripts), so the block also runs standalone
+# against the repo tree WITHOUT a full build.
+# =========================================================================
+echo ""
+echo "--- rc19 OS features (RAUC install bridge · telegraf cred · vendored stager · push-ota) ---"
+
+# Source repo root: prefer in-build $SRC, else derive from the script location.
+GA_SRC=""
+if [[ -n "${SRC:-}" && -d "${SRC}/buildroot-external" ]]; then
+  GA_SRC="$SRC"
+elif [[ -d "$(dirname "$0")/../../buildroot-external" ]]; then
+  GA_SRC="$(cd "$(dirname "$0")/../.." && pwd)"
+fi
+OVL="${GA_SRC:+${GA_SRC}/buildroot-external/rootfs-overlay}"
+PKG_TG="${GA_SRC:+${GA_SRC}/buildroot-external/package/telegraf}"
+
+# --- RAUC host-install bridge (ga-rauc-install + .path unit) ---
+RAUC_INSTALL="${TARGET}/usr/sbin/ga-rauc-install"
+[[ -f "$RAUC_INSTALL" ]] || RAUC_INSTALL="${OVL}/usr/sbin/ga-rauc-install"
+
+if [[ -f "$RAUC_INSTALL" ]]; then
+  _pass "RAUC-01: ga-rauc-install helper present"
+
+  # RAUC-02: reads the per-rc ga_release sidecar (<request>.rc, head -c 64).
+  if grep -qF 'REQUEST_RC_FILE="${REQUEST_FILE}.rc"' "$RAUC_INSTALL" 2>/dev/null \
+     && grep -qF 'head -c 64 "$REQUEST_RC_FILE"' "$RAUC_INSTALL" 2>/dev/null; then
+    _pass "RAUC-02: reads the per-rc ga_release sidecar (<request>.rc)"
+  else
+    _fail "RAUC-02: sidecar read missing (REQUEST_RC_FILE / head -c 64)"
+  fi
+
+  # RAUC-03: per-rc slot URL includes the ga_release label.
+  if grep -qF 'PRIMARY_URL="${BASE_URL}/${GA_RELEASE}/haos_ihost' "$RAUC_INSTALL" 2>/dev/null; then
+    _pass "RAUC-03: per-rc slot URL built from \${GA_RELEASE}"
+  else
+    _fail "RAUC-03: per-rc PRIMARY_URL construction missing"
+  fi
+
+  # RAUC-04: prod fallback (version-only slot) on per-rc slot miss.
+  if grep -qF 'FALLBACK_URL="${BASE_URL}/haos_ihost' "$RAUC_INSTALL" 2>/dev/null \
+     && grep -q 'falling back' "$RAUC_INSTALL" 2>/dev/null; then
+    _pass "RAUC-04: prod fallback to version-only slot on per-rc miss"
+  else
+    _fail "RAUC-04: prod fallback (FALLBACK_URL) missing"
+  fi
+else
+  _skip "RAUC-01: ga-rauc-install helper" "not at target or overlay"
+  _skip "RAUC-02: sidecar read" "ga-rauc-install absent"
+  _skip "RAUC-03: per-rc slot URL" "ga-rauc-install absent"
+  _skip "RAUC-04: prod fallback" "ga-rauc-install absent"
+fi
+
+# RAUC-05: the .path watcher unit exists + watches the request file + wanted.
+RAUC_PATH="${TARGET}/usr/lib/systemd/system/ga-rauc-install.path"
+[[ -f "$RAUC_PATH" ]] || RAUC_PATH="${OVL}/usr/lib/systemd/system/ga-rauc-install.path"
+if [[ -f "$RAUC_PATH" ]] \
+   && grep -q 'PathChanged=/mnt/data/supervisor/share/ga-rauc-install-request' "$RAUC_PATH" 2>/dev/null \
+   && grep -q 'WantedBy=multi-user.target' "$RAUC_PATH" 2>/dev/null; then
+  _pass "RAUC-05: ga-rauc-install.path watches the request file (WantedBy multi-user)"
+else
+  _fail "RAUC-05: ga-rauc-install.path unit missing or not wired to the request file"
+fi
+
+# RAUC-06: the .path unit is enabled (checked-in wants symlink).
+RAUC_LINK="${TARGET}/usr/lib/systemd/system/multi-user.target.wants/ga-rauc-install.path"
+[[ -L "$RAUC_LINK" || -f "$RAUC_LINK" ]] || RAUC_LINK="${OVL}/usr/lib/systemd/system/multi-user.target.wants/ga-rauc-install.path"
+[[ -L "$RAUC_LINK" || -f "$RAUC_LINK" ]] \
+  && _pass "RAUC-06: ga-rauc-install.path enabled (multi-user.target.wants symlink)" \
+  || _fail "RAUC-06: ga-rauc-install.path NOT enabled (no wants symlink)"
+
+# --- telegraf.service per-device InfluxDB cred, SERVICE side (extends CFG-28/CFG-31) ---
+TG_SVC_SRC="${TARGET}/etc/systemd/system/telegraf.service"
+[[ -f "$TG_SVC_SRC" ]] || TG_SVC_SRC="${PKG_TG}/telegraf.service"
+if [[ -f "$TG_SVC_SRC" ]]; then
+  # TGSVC-01: hardened BOUNDED-WAIT ExecStartPre — polls the /share cred file a
+  # fixed number of times (6x5s) instead of blocking the unit forever.
+  if grep -qF 'for n in 1 2 3 4 5 6' "$TG_SVC_SRC" 2>/dev/null \
+     && grep -qF 'ga-fleet-influx.yaml' "$TG_SVC_SRC" 2>/dev/null; then
+    _pass "TGSVC-01: telegraf.service has the hardened bounded-wait ExecStartPre (6x5s)"
+  else
+    _fail "TGSVC-01: telegraf.service bounded-wait ExecStartPre missing"
+  fi
+  # TGSVC-02: fail-safe — a missing cred must NOT fail the unit (starts with
+  # defaults, exit 0), else a cred-delivery lag would take telegraf down.
+  if grep -q 'starting with unit defaults' "$TG_SVC_SRC" 2>/dev/null \
+     && grep -q 'exit 0' "$TG_SVC_SRC" 2>/dev/null; then
+    _pass "TGSVC-02: cred-wait is fail-safe (missing cred -> defaults, exit 0)"
+  else
+    _fail "TGSVC-02: telegraf.service cred-wait not fail-safe (could block/kill the unit)"
+  fi
+else
+  _skip "TGSVC-01: bounded-wait ExecStartPre" "telegraf.service not found"
+  _skip "TGSVC-02: fail-safe cred-wait" "telegraf.service not found"
+fi
+
+# TGSVC-03: telegraf.conf keeps the ${INFLUX_PASSWORD} placeholder (companion to
+# CFG-31; resolved via the source-fallback so it also runs standalone).
+TG_CONF_SRC="${TARGET}/etc/telegraf/telegraf.conf"
+[[ -f "$TG_CONF_SRC" ]] || TG_CONF_SRC="${PKG_TG}/telegraf.conf"
+if grep -qF 'password = "${INFLUX_PASSWORD}"' "$TG_CONF_SRC" 2>/dev/null; then
+  _pass "TGSVC-03: telegraf.conf keeps the \${INFLUX_PASSWORD} placeholder (runtime-substituted)"
+else
+  _fail "TGSVC-03: telegraf.conf \${INFLUX_PASSWORD} placeholder missing/replaced"
+fi
+
+# --- every-boot vendored-component stager (ga-stage-vendored-components) ---
+STAGE_SVC="${TARGET}/usr/lib/systemd/system/ga-stage-vendored-components.service"
+[[ -f "$STAGE_SVC" ]] || STAGE_SVC="${OVL}/usr/lib/systemd/system/ga-stage-vendored-components.service"
+if [[ -f "$STAGE_SVC" ]] \
+   && grep -q 'ExecStart=/usr/libexec/ga-stage-vendored-components' "$STAGE_SVC" 2>/dev/null \
+   && grep -q 'Type=oneshot' "$STAGE_SVC" 2>/dev/null; then
+  _pass "STAGE-01: ga-stage-vendored-components.service present (oneshot -> libexec)"
+else
+  _fail "STAGE-01: ga-stage-vendored-components.service missing or not wired to the stager"
+fi
+
+STAGE_BIN="${TARGET}/usr/libexec/ga-stage-vendored-components"
+[[ -f "$STAGE_BIN" ]] || STAGE_BIN="${OVL}/usr/libexec/ga-stage-vendored-components"
+[[ -f "$STAGE_BIN" ]] \
+  && _pass "STAGE-02: ga-stage-vendored-components stager script present" \
+  || _fail "STAGE-02: ga-stage-vendored-components stager script missing"
+
+# STAGE-03: enabled every boot (sysinit.target.wants symlink).
+STAGE_LINK="${TARGET}/etc/systemd/system/sysinit.target.wants/ga-stage-vendored-components.service"
+[[ -L "$STAGE_LINK" || -f "$STAGE_LINK" ]] || STAGE_LINK="${OVL}/etc/systemd/system/sysinit.target.wants/ga-stage-vendored-components.service"
+[[ -L "$STAGE_LINK" || -f "$STAGE_LINK" ]] \
+  && _pass "STAGE-03: stager enabled every boot (sysinit.target.wants symlink)" \
+  || _fail "STAGE-03: stager NOT enabled (no sysinit.target.wants symlink)"
+
+# STAGE-04: stages the OS-vendored components into the addon-visible /share tree.
+if [[ -f "$STAGE_BIN" ]] \
+   && grep -qF 'SRC="/usr/share/ga/custom_components"' "$STAGE_BIN" 2>/dev/null \
+   && grep -qF 'DST="/mnt/data/supervisor/share/ga-custom-components"' "$STAGE_BIN" 2>/dev/null; then
+  _pass "STAGE-04: stages /usr/share/ga -> /share/ga-custom-components (addon bridge)"
+else
+  _fail "STAGE-04: stager SRC/DST paths not as expected"
+fi
+
+# --- push-ota.sh --ga-release path ---
+PUSH_OTA="${GA_SRC:+${GA_SRC}/scripts/push-ota.sh}"
+if [[ -n "$PUSH_OTA" && -f "$PUSH_OTA" ]]; then
+  # POTA-01: the script parses cleanly.
+  bash -n "$PUSH_OTA" 2>/dev/null \
+    && _pass "POTA-01: push-ota.sh parses (bash -n)" \
+    || _fail "POTA-01: push-ota.sh has a syntax error (bash -n)"
+
+  # POTA-02: --ga-release is parsed AND validated against the [A-Za-z0-9.-] charset.
+  if grep -qF -- '--ga-release) GA_RELEASE=' "$PUSH_OTA" 2>/dev/null \
+     && grep -qF '*[!A-Za-z0-9.-]*' "$PUSH_OTA" 2>/dev/null; then
+    _pass "POTA-02: --ga-release parsed + charset-validated"
+  else
+    _fail "POTA-02: --ga-release parse/validation missing"
+  fi
+else
+  _skip "POTA-01: push-ota.sh parses" "scripts/push-ota.sh not found (source tree only)"
+  _skip "POTA-02: --ga-release validation" "scripts/push-ota.sh not found (source tree only)"
+fi
+
+# =========================================================================
 # Summary
 # =========================================================================
 echo ""
