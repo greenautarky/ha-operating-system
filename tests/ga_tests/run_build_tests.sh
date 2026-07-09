@@ -118,6 +118,16 @@ else
   _fail "CFG-29: telegraf.conf still hardcodes the influx username"
 fi
 
+# CFG-31: NO shared influx password baked into telegraf.conf (ADR-0003 Step 2).
+# 87-influx-password.sh used to sed-replace ${INFLUX_PASSWORD} with the shared
+# device_writer secret at build time; with it deleted the literal placeholder
+# must survive the build (telegraf resolves it from the systemd env at runtime).
+if grep -qF 'password = "${INFLUX_PASSWORD}"' "$TG_CONF" 2>/dev/null; then
+  _pass "CFG-31: telegraf.conf has no baked influx password (\${INFLUX_PASSWORD} literal intact)"
+else
+  _fail "CFG-31: telegraf.conf \${INFLUX_PASSWORD} placeholder replaced — a shared password got baked in"
+fi
+
 # CFG-07: fluent-bit.conf exists
 [[ -f "${TARGET}/etc/fluent-bit/fluent-bit.conf" ]] \
   && _pass "CFG-07: fluent-bit.conf exists on rootfs" \
