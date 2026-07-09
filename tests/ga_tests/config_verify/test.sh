@@ -76,6 +76,34 @@ run_test "CFG-21" "fluent-bit.conf tail inputs use homeassistant parser" \
 run_test "CFG-22" "fluent-bit.conf storage buffer >= 300M" \
   "grep 'storage.total_limit_size' /etc/fluent-bit/fluent-bit.conf | grep -v '^#' | grep -qE '[3-9][0-9]{2}M|[0-9]{4,}M'"
 
+# --- Fluent-Bit per-device Loki identity wiring (ADR-0003 Step 3) ---
+# The OUTPUT must take endpoint + auth + tenant from the env, and the unit must
+# provide anonymous-compatible defaults + the addon-data sidecar read, so a
+# device WITHOUT a delivered cred behaves exactly like the pre-Step-3 build.
+run_test "CFG-36" "fluent-bit.conf Loki OUTPUT http_user from env" \
+  "grep -q 'http_user.*LOKI_USER' /etc/fluent-bit/fluent-bit.conf"
+
+run_test "CFG-37" "fluent-bit.conf Loki OUTPUT tenant_id from env" \
+  "grep -q 'tenant_id.*LOKI_TENANT' /etc/fluent-bit/fluent-bit.conf"
+
+run_test "CFG-38" "fluent-bit.conf Loki OUTPUT host/port from env" \
+  "grep -q 'Host.*LOKI_HOST' /etc/fluent-bit/fluent-bit.conf && grep -q 'Port.*LOKI_PORT' /etc/fluent-bit/fluent-bit.conf"
+
+run_test "CFG-39" "fluent-bit.service has anonymous-safe LOKI defaults" \
+  "systemctl cat fluent-bit 2>/dev/null | grep -q 'Environment=.*LOKI_USER=anonymous'"
+
+run_test "CFG-40" "fluent-bit.service reads loki cred sidecar via addon-data glob" \
+  "systemctl cat fluent-bit 2>/dev/null | grep -q '_ga_manager/ga-fleet-loki.yaml'"
+
+# If a cred was delivered, the built env must carry the parsed values (a device
+# without the sidecar legitimately runs on defaults — skip, don't fail).
+if ls /mnt/data/supervisor/addons/data/*_ga_manager/ga-fleet-loki.yaml >/dev/null 2>&1; then
+  run_test "CFG-41" "fluent-bit env has per-device LOKI_USER (cred delivered)" \
+    "grep -q '^LOKI_USER=dev_' /mnt/data/fluent-bit/env"
+else
+  skip_test "CFG-41" "fluent-bit env has per-device LOKI_USER (no loki sidecar delivered)"
+fi
+
 # --- Device label file ---
 if [ -f /mnt/data/ga-device-label ]; then
   run_test_show "CFG-12" "ga-device-label file has valid content" \
