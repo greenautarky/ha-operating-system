@@ -25,13 +25,20 @@ ExecStartPre=/bin/sh -c 'LABEL=$(cat /mnt/data/ga-device-label 2>/dev/null); ech
 ExecStartPre=/bin/sh -c 'GW=$(ip route | grep "^default" | head -1 | awk "{print \$3}"); echo "GATEWAY_IP=${GW:-unknown}" >> /mnt/data/telegraf/env'
 # Read OS build version for fleet version tracking
 ExecStartPre=/bin/sh -c '. /etc/os-release 2>/dev/null; echo "GA_BUILD_TIMESTAMP=${GA_BUILD_TIMESTAMP:-unknown}" >> /mnt/data/telegraf/env'
-# Per-device InfluxDB write credential (ADR-0002). Delivered by the fleet-manager
-# influx_creds_autopush -> ga_manager influx-creds-write worker into the addon
-# /share (host view below). This makes the InfluxDB write auth durable across
-# restart + reboot (previously the password lived only in the running process,
-# see ga-ihost-docs/adr/ADR-0002). username = dev_<KIB-SON>. The password is a
-# quote-safe (alphanumeric) random string, so the plain sed extraction is exact.
-ExecStartPre=/bin/sh -c 'F=/mnt/data/supervisor/share/ga-fleet-influx.yaml; [ -f "$F" ] || exit 0; U=$(sed -n "s/^username: *//p" "$F" | head -1); P=$(sed -n "s/^password: *//p" "$F" | head -1); [ -n "$U" ] && echo "INFLUX_USER=${U}" >> /mnt/data/telegraf/env; [ -n "$P" ] && echo "INFLUX_PASSWORD=${P}" >> /mnt/data/telegraf/env'
+# Per-device InfluxDB write credential (ADR-0002 / ADR-0003 Step 2). Delivered
+# by the fleet-manager influx_creds_autopush -> ga_manager influx-creds-write
+# worker into the addon /share (host view below). This makes the InfluxDB write
+# auth durable across restart + reboot (previously the password lived only in
+# the running process, see ga-ihost-docs/adr/ADR-0002). username =
+# dev_<KIB-SON>. The password is a quote-safe (alphanumeric) random string, so
+# the plain sed extraction is exact.
+# Hardened against the /share mount boot race (seen live on K0 2026-07-09:
+# telegraf started before /mnt/data/supervisor/share was populated, the old
+# "[ -f ] || exit 0" silently skipped the cred and every write 401'd until the
+# next restart): bounded wait up to 6x5s for the cred file, loud journal lines
+# either way, creds written only when BOTH fields are non-empty, and the step
+# never fails the unit.
+ExecStartPre=/bin/sh -c 'F=/mnt/data/supervisor/share/ga-fleet-influx.yaml; for n in 1 2 3 4 5 6; do [ -f "$F" ] && break; echo "telegraf: per-device influx cred $F not present (try $n/6) — waiting 5s for the /share mount"; sleep 5; done; if [ ! -f "$F" ]; then echo "telegraf: no per-device influx cred at $F — starting with unit defaults (InfluxDB writes will 401 until the fleet-manager delivers the cred)"; exit 0; fi; U=$(sed -n "s/^username: *//p" "$F" | head -1); P=$(sed -n "s/^password: *//p" "$F" | head -1); if [ -n "$U" ] && [ -n "$P" ]; then echo "INFLUX_USER=${U}" >> /mnt/data/telegraf/env; echo "INFLUX_PASSWORD=${P}" >> /mnt/data/telegraf/env; echo "telegraf: per-device influx cred loaded (user=${U})"; else echo "telegraf: cred file $F present but username/password missing — ignoring it"; fi; exit 0'
 # EnvironmentFile overrides defaults above on subsequent starts
 EnvironmentFile=-/mnt/data/telegraf/env
 

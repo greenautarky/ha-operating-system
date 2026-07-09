@@ -76,7 +76,6 @@ jobs:
           mkdir -p secrets
           echo "${{ secrets.WIFI_INSTALL_PSK }}" > secrets/wifi-install.psk
           echo "${{ secrets.OPENSTICK_WIFI_KEY }}" > secrets/openstick-wifi.key
-          echo "${{ secrets.INFLUX_PASSWORD }}" > secrets/influx-password
           printf '%s\n' "$ROOT_PW_HASH_LINE" > scripts/local.env
           echo "${{ secrets.REL_CA_PEM }}" > buildroot-external/ota/rel-ca.pem
           ln -sf rel-ca.pem buildroot-external/ota/dev-ca.pem
@@ -98,13 +97,10 @@ jobs:
             -v "$HOME/hassos-cache:/cache" \
             -v /dev:/dev \
             -e FORCE_UNSAFE_CONFIGURE=1 \
-            -e INFLUX_PASSWORD="${INFLUX_PASSWORD}" \
             hassos:local \
             bash -c "cd /build && ./scripts/ga_build.sh ${{ inputs.mode || 'update' }} ${{ inputs.env || 'dev' }}"
           # Verify build actually produced images (docker exit code can be unreliable with tee+pipefail)
           ls ga_output/images/bos_ihost-*.img.xz || { echo "ERROR: No output image found"; exit 1; }
-        env:
-          INFLUX_PASSWORD: ${{ secrets.INFLUX_PASSWORD }}
 
       - name: Upload image artifacts
         uses: actions/upload-artifact@v4
