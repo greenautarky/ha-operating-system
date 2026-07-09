@@ -197,6 +197,14 @@ test.describe('Sub-User join via onboarding wizard (ADR-0006)', () => {
 
     // Password-strength (reused component) must show "Stark" and enable submit.
     await expect(page.locator('ga-setup-create-user')).toContainText('Stark', { timeout: 10_000 });
+
+    // Datenschutz consent (required in join mode since onboarding 1.1.0):
+    // the consent copy + link are shown and the submit stays gated until checked.
+    await expect(page.locator('ga-setup-create-user')).toContainText('Datenschutzerklärung');
+    await expect(
+      page.locator('ga-setup-create-user a[href="https://greenautarky.com/datenschutz"]'),
+    ).toBeAttached();
+    await page.locator('ga-setup-create-user ha-checkbox').click();
     await page.screenshot({ path: shot('join-2-account.png'), animations: 'disabled' });
 
     // Submit → join endpoint → Non-Admin user + auto-login → redirect to /.
@@ -220,7 +228,7 @@ test.describe('Sub-User join via onboarding wizard (ADR-0006)', () => {
 
     // via the device store: Non-Admin group + parent == owner + linked person
     const check = ssh(
-      `docker exec homeassistant python3 -c 'import json;a=json.load(open("/config/.storage/auth"))["data"];u=next(x for x in a["users"] if x["id"]=="${mine.user_id}");g=u.get("group_ids",[]);st=json.load(open("/config/.storage/greenautarky_onboarding"))["data"];p=st.get("sub_users",{}).get("${mine.user_id}",{}).get("master");ps=json.load(open("/config/.storage/person"))["data"]["items"];person=any(x.get("user_id")=="${mine.user_id}" for x in ps);print(("system-users" in g) and ("system-admin" not in g) and (not u.get("is_owner")) and (p=="${ownerId}") and person)'`,
+      `docker exec homeassistant python3 -c 'import json;a=json.load(open("/config/.storage/auth"))["data"];u=next(x for x in a["users"] if x["id"]=="${mine.user_id}");g=u.get("group_ids",[]);st=json.load(open("/config/.storage/greenautarky_onboarding"))["data"];p=st.get("sub_users",{}).get("${mine.user_id}",{}).get("master");c=st.get("sub_users",{}).get("${mine.user_id}",{}).get("consent",{}).get("datenschutz",{}).get("version")==1;ps=json.load(open("/config/.storage/person"))["data"]["items"];person=any(x.get("user_id")=="${mine.user_id}" for x in ps);print(("system-users" in g) and ("system-admin" not in g) and (not u.get("is_owner")) and (p=="${ownerId}") and person and c)'`,
     );
     expect(check).toBe('True');
   });
@@ -239,6 +247,7 @@ test.describe('Sub-User join via onboarding wizard (ADR-0006)', () => {
     await page.locator('input[autocomplete="name"]').fill('Nope');
     await page.locator('input[autocomplete="new-password"]').nth(0).fill(SUB_PASSWORD);
     await page.locator('input[autocomplete="new-password"]').nth(1).fill(SUB_PASSWORD);
+    await page.locator('ga-setup-create-user ha-checkbox').click();
     await page.locator('ga-setup-create-user ha-button').click({ force: true });
 
     // An error alert appears; no navigation to /.
