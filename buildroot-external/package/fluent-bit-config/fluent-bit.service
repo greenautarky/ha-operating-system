@@ -13,8 +13,13 @@ ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit
 ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit/storage
 ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit/db
 
-# Safe defaults (EnvironmentFile is read BEFORE ExecStartPre, so first boot needs these)
+# Safe defaults (EnvironmentFile is read BEFORE ExecStartPre, so first boot needs these).
+# LOKI_* defaults = the pre-ADR-0003-Step-3 anonymous behavior: push straight to
+# the anonymous :3100 listener. Loki in single-tenant mode (auth_enabled: false)
+# IGNORES both the Authorization header and X-Scope-OrgID, so the "anonymous"
+# sentinel creds/tenant are wire-inert — byte-compatible with today's pushes.
 Environment=GA_ENV=dev DEVICE_UUID=unknown DEVICE_LABEL=unknown
+Environment=LOKI_HOST=loki.greenautarky.com LOKI_PORT=3100 LOKI_USER=anonymous LOKI_PASSWORD=anonymous LOKI_TENANT=anonymous
 
 # Load GA environment (dev/prod) - check data partition override first, then rootfs default
 ExecStartPre=/bin/sh -c '[ -f /mnt/data/ga-env.conf ] && . /mnt/data/ga-env.conf || . /etc/ga-env.conf 2>/dev/null; echo "GA_ENV=${GA_ENV:-dev}" > /mnt/data/fluent-bit/env'
@@ -22,6 +27,19 @@ ExecStartPre=/bin/sh -c '[ -f /mnt/data/ga-env.conf ] && . /mnt/data/ga-env.conf
 ExecStartPre=/bin/sh -c 'UUID=$(grep -oE "[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}" /mnt/data/supervisor/homeassistant/.storage/core.uuid 2>/dev/null | head -1); echo "DEVICE_UUID=${UUID:-unknown}" >> /mnt/data/fluent-bit/env'
 # Read device label (QR code, e.g. KIB-SON-00001234) for log tagging
 ExecStartPre=/bin/sh -c 'LABEL=$(cat /mnt/data/ga-device-label 2>/dev/null); echo "DEVICE_LABEL=${LABEL:-unknown}" >> /mnt/data/fluent-bit/env'
+# Per-device Loki credential (ADR-0003 Step 3). Delivered by the fleet-manager
+# credentials_autopush -> ga_manager creds-write worker (0.75.0+), which renders
+# the FLAT sidecar ga-fleet-loki.yaml in its addon-private /data dir — read here
+# root-only via the slug-tolerant glob (the ga-bootstrap ghcr-creds pattern; NOT
+# /share, per the ADR-0003 2026-07-06 amendment). Values are quote-safe
+# (alphanumeric password, KIB-SON tenant), so the plain sed extraction is exact.
+# Same /mnt/data mount boot-race hardening as telegraf.service (rc19): bounded
+# wait 6x5s, loud journal lines either way, env written only when ALL fields are
+# non-empty, and the step never fails the unit. Without a cred file the service
+# keeps today's anonymous behavior (defaults above) — nothing breaks
+# pre-activation, and the anonymous listener stays open until the runbook's
+# close-out stage confirms every cohort device authenticated (D6 rule).
+ExecStartPre=/bin/sh -c 'F=""; for n in 1 2 3 4 5 6; do for c in /mnt/data/supervisor/addons/data/*_ga_manager/ga-fleet-loki.yaml; do [ -f "$c" ] && F="$c" && break; done; [ -n "$F" ] && break; echo "fluent-bit: per-device loki cred not present (try $n/6) — waiting 5s for the addon data mount"; sleep 5; done; if [ -z "$F" ]; then echo "fluent-bit: no per-device loki cred — starting with anonymous defaults (pre-ADR-0003-Step-3 behavior)"; exit 0; fi; H=$(sed -n "s/^host: *//p" "$F" | head -1); PT=$(sed -n "s/^port: *//p" "$F" | head -1); U=$(sed -n "s/^username: *//p" "$F" | head -1); P=$(sed -n "s/^password: *//p" "$F" | head -1); T=$(sed -n "s/^tenant: *//p" "$F" | head -1); if [ -n "$H" ] && [ -n "$PT" ] && [ -n "$U" ] && [ -n "$P" ] && [ -n "$T" ]; then { echo "LOKI_HOST=${H}"; echo "LOKI_PORT=${PT}"; echo "LOKI_USER=${U}"; echo "LOKI_PASSWORD=${P}"; echo "LOKI_TENANT=${T}"; } >> /mnt/data/fluent-bit/env; echo "fluent-bit: per-device loki cred loaded (user=${U} tenant=${T} endpoint=${H}:${PT})"; else echo "fluent-bit: loki cred file $F present but incomplete — ignoring it (anonymous defaults)"; fi; exit 0'
 # EnvironmentFile overrides defaults above on subsequent starts
 EnvironmentFile=-/mnt/data/fluent-bit/env
 
