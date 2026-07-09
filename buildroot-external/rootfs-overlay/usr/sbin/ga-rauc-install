@@ -9,15 +9,19 @@
 # file at /share/ga-rauc-install-request).
 #
 # Argument modes:
-#   ga-rauc-install              — no arg: read version from request file
-#                                  (delete-first to allow re-trigger).
-#   ga-rauc-install <version>    — explicit arg: skip the request file,
-#                                  use the passed version. For operator
-#                                  debug from the host.
+#   ga-rauc-install                    — no arg: read version from the request
+#                                        file + optional ga_release from its
+#                                        .rc sidecar (delete-first to re-trigger).
+#   ga-rauc-install <version> [<rc>]   — explicit args: skip the request file,
+#                                        use the passed version + optional
+#                                        ga_release. For operator debug.
 #
-# Either path then validates the version regex, downloads the OTA
-# bundle from a fixed URL pattern, runs `rauc info` + `rauc install`,
-# and schedules a 5-second-delayed reboot.
+# Either path validates the version regex, then downloads the OTA bundle. With
+# a ga_release it pulls the per-rc canary slot
+# releases/<version>/<ga_release>/haos_ihost-<version>.raucb (falling back to
+# the version-only prod slot on 404); without one it pulls the prod slot
+# releases/<version>/haos_ihost-<version>.raucb. Then `rauc info` +
+# `rauc install` + a 5-second-delayed reboot.
 #
 # Background — why the path-watcher pattern instead of the original
 # BOSv1.2.17 systemd template @.service: Supervisor's REST API
@@ -32,7 +36,15 @@
 set -eu
 
 REQUEST_FILE="/mnt/data/supervisor/share/ga-rauc-install-request"
+# Optional sidecar carrying the GA release label (e.g. BOSv1.2.21-rc19). When
+# present, the bundle is pulled from the per-rc CANARY slot
+# releases/<version>/<ga_release>/… instead of the shared per-HAOS-version
+# PROD slot releases/<version>/… — so a canary build never occupies the
+# production slot. The version request file itself stays byte-identical, so
+# pre-per-rc hosts (which never read this sidecar) behave exactly as before.
+REQUEST_RC_FILE="${REQUEST_FILE}.rc"
 VERSION="${1:-}"
+GA_RELEASE="${2:-}"
 
 if [ -z "$VERSION" ]; then
     if [ ! -f "$REQUEST_FILE" ]; then
@@ -44,8 +56,12 @@ if [ -z "$VERSION" ]; then
     # the desired behaviour: don't retry a known-bad version on every
     # path event).
     VERSION="$(head -c 64 "$REQUEST_FILE" | tr -d '[:space:]')"
-    rm -f "$REQUEST_FILE"
-    echo "[ga-rauc-install] read VERSION='$VERSION' from $REQUEST_FILE (file removed)"
+    # Read the optional ga_release sidecar BEFORE removing the request file.
+    if [ -z "$GA_RELEASE" ] && [ -f "$REQUEST_RC_FILE" ]; then
+        GA_RELEASE="$(head -c 64 "$REQUEST_RC_FILE" | tr -d '[:space:]')"
+    fi
+    rm -f "$REQUEST_FILE" "$REQUEST_RC_FILE"
+    echo "[ga-rauc-install] read VERSION='$VERSION' GA_RELEASE='${GA_RELEASE}' from $REQUEST_FILE (files removed)"
 fi
 
 # Validate version format — refuse anything that isn't N.N.N.N digits-
@@ -60,7 +76,29 @@ case "$VERSION" in
         ;;
 esac
 
-URL="https://ota.greenautarky.com/releases/${VERSION}/haos_ihost-${VERSION}.raucb"
+# Validate the optional ga_release label (defence in depth — anything able to
+# write /share/ can write the sidecar). Allow only [A-Za-z0-9.-]; on anything
+# else, DROP it and fall back to the version-only slot rather than fail the
+# whole install.
+case "$GA_RELEASE" in
+    "" ) : ;;                      # no label → version-only PROD slot
+    *[!A-Za-z0-9.-]* )
+        echo "[ga-rauc-install] WARN: ignoring malformed ga_release '$GA_RELEASE' — using version-only slot" >&2
+        GA_RELEASE=""
+        ;;
+esac
+
+# Per-rc slot when a ga_release is given, else the version-only prod slot.
+# With a ga_release we FALL BACK to the prod slot on a 404 so a device is never
+# stranded if the per-rc bundle wasn't staged (e.g. transitional roll).
+BASE_URL="https://ota.greenautarky.com/releases/${VERSION}"
+if [ -n "$GA_RELEASE" ]; then
+    PRIMARY_URL="${BASE_URL}/${GA_RELEASE}/haos_ihost-${VERSION}.raucb"
+    FALLBACK_URL="${BASE_URL}/haos_ihost-${VERSION}.raucb"
+else
+    PRIMARY_URL="${BASE_URL}/haos_ihost-${VERSION}.raucb"
+    FALLBACK_URL=""
+fi
 # Staging directory: /mnt/data/tmp/ — our canonical "scratch space for
 # anything larger than a few MB". /tmp/ on HAOS is a 15 MB zram tmpfs
 # (see device:/etc/fstab) — a 230 MB raucb bundle does not fit there,
@@ -71,10 +109,18 @@ STAGING_DIR="/mnt/data/tmp"
 mkdir -p "$STAGING_DIR"
 BUNDLE="$STAGING_DIR/ga-rauc-install-${VERSION}.raucb"
 
-echo "[ga-rauc-install] downloading $URL"
-if ! curl --fail --silent --show-error --location --output "$BUNDLE" "$URL"; then
-    echo "[ga-rauc-install] FATAL: download failed for $URL" >&2
-    exit 3
+echo "[ga-rauc-install] downloading $PRIMARY_URL"
+if ! curl --fail --silent --show-error --location --output "$BUNDLE" "$PRIMARY_URL"; then
+    if [ -n "$FALLBACK_URL" ]; then
+        echo "[ga-rauc-install] per-rc slot miss — falling back to $FALLBACK_URL" >&2
+        if ! curl --fail --silent --show-error --location --output "$BUNDLE" "$FALLBACK_URL"; then
+            echo "[ga-rauc-install] FATAL: download failed for $PRIMARY_URL and $FALLBACK_URL" >&2
+            exit 3
+        fi
+    else
+        echo "[ga-rauc-install] FATAL: download failed for $PRIMARY_URL" >&2
+        exit 3
+    fi
 fi
 echo "[ga-rauc-install] downloaded $(stat -c %s "$BUNDLE" 2>/dev/null || wc -c < "$BUNDLE") bytes"
 
