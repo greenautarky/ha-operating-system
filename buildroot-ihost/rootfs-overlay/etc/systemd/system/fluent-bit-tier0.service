@@ -13,8 +13,14 @@ Type=simple
 ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit/storage/tier0
 ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit/db
 
-# Safe defaults (EnvironmentFile is read BEFORE ExecStartPre, so first boot needs these)
-Environment=GA_ENV=dev DEVICE_UUID=unknown DEVICE_LABEL=unknown LOKI_HOST=loki.greenautarky.com
+# Safe defaults (EnvironmentFile is read BEFORE ExecStartPre, so first boot needs these).
+# LOKI_* = the pre-ADR-0003-Step-3 anonymous behavior (push straight to
+# loki.greenautarky.com:3100, no auth). The per-device cred below overrides them,
+# so tier-0 authenticates to the same per-device tenant as tier-1 once the cred
+# is delivered — WITHOUT which auth_enabled=true on Loki would silently drop the
+# connectivity-flight-recorder (network_details) stream at close-out.
+Environment=GA_ENV=dev DEVICE_UUID=unknown DEVICE_LABEL=unknown
+Environment=LOKI_HOST=loki.greenautarky.com LOKI_PORT=3100 LOKI_USER=anonymous LOKI_PASSWORD=anonymous LOKI_TENANT=anonymous
 
 # Reuse the env file the tier-1 service builds — it contains DEVICE_LABEL etc.
 # If tier-1 hasn't run yet, fall through to baked defaults above.
@@ -26,6 +32,22 @@ ExecStartPre=/bin/sh -c '[ -f /mnt/data/fluent-bit/env ] || ( \
   LABEL=$(cat /mnt/data/ga-device-label 2>/dev/null); \
   echo "DEVICE_LABEL=${LABEL:-unknown}" >> /mnt/data/fluent-bit/env; \
 )'
+
+# Per-device Loki cred (ADR-0003 Step 3). Reads the same ga-fleet-loki.yaml
+# sidecar as tier-1 and appends LOKI_* to the shared env — but ONLY if tier-1
+# hasn't already done so (guard on LOKI_USER != anonymous), so the two services
+# never duplicate lines and tier-0 stays independent of tier-1's start order.
+# Absent/incomplete cred → keep the anonymous defaults (stream still flows).
+ExecStartPre=/bin/sh -c 'E=/mnt/data/fluent-bit/env; grep -q "^LOKI_USER=" "$E" 2>/dev/null && exit 0; \
+  F=""; for c in /mnt/data/supervisor/addons/data/*_ga_manager/ga-fleet-loki.yaml; do [ -f "$c" ] && F="$c" && break; done; \
+  [ -n "$F" ] || { echo "fluent-bit-tier0: no per-device loki cred — anonymous defaults"; exit 0; }; \
+  H=$(sed -n "s/^host: *//p" "$F" | head -1); PT=$(sed -n "s/^port: *//p" "$F" | head -1); \
+  U=$(sed -n "s/^username: *//p" "$F" | head -1); P=$(sed -n "s/^password: *//p" "$F" | head -1); \
+  T=$(sed -n "s/^tenant: *//p" "$F" | head -1); \
+  if [ -n "$H" ] && [ -n "$PT" ] && [ -n "$U" ] && [ -n "$P" ] && [ -n "$T" ]; then \
+    { echo "LOKI_HOST=${H}"; echo "LOKI_PORT=${PT}"; echo "LOKI_USER=${U}"; echo "LOKI_PASSWORD=${P}"; echo "LOKI_TENANT=${T}"; } >> "$E"; \
+    echo "fluent-bit-tier0: per-device loki cred loaded (user=${U} tenant=${T} endpoint=${H}:${PT})"; \
+  else echo "fluent-bit-tier0: loki cred file $F incomplete — anonymous defaults"; fi; exit 0'
 
 EnvironmentFile=-/mnt/data/fluent-bit/env
 
