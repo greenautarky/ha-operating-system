@@ -164,6 +164,31 @@ grep -q "available true" "$NETDETAILS_CONF" 2>/dev/null \
   && _pass "CFG-19: network-details.conf filters available=true only" \
   || _fail "CFG-19: network-details.conf missing 'available true' filter"
 
+# CFG-42/43/44: tier-0 (network_details / CFR stream) must authenticate to Loki
+# like tier-1, else Loki auth_enabled=true (ADR-0003 Step 3 L4) silently drops it.
+# OUTPUT must be env-based (${LOKI_HOST}) AND carry auth keys; the tier-0 service
+# must read the per-device cred sidecar with anonymous-safe defaults.
+FB_TIER0_SVC="${TARGET}/etc/systemd/system/fluent-bit-tier0.service"
+if grep -qE 'Host[[:space:]]+\$\{LOKI_HOST\}' "$NETDETAILS_CONF" 2>/dev/null \
+   && ! grep -qE 'Host[[:space:]]+loki\.greenautarky\.com' "$NETDETAILS_CONF" 2>/dev/null; then
+  _pass "CFG-42: network-details.conf loki OUTPUT is env-based (\${LOKI_HOST}, no hard-coded host)"
+else
+  _fail "CFG-42: network-details.conf loki OUTPUT still hard-codes the host (breaks at auth_enabled=true)"
+fi
+if grep -q 'http_user' "$NETDETAILS_CONF" 2>/dev/null \
+   && grep -q 'http_passwd' "$NETDETAILS_CONF" 2>/dev/null \
+   && grep -q 'tenant_id' "$NETDETAILS_CONF" 2>/dev/null; then
+  _pass "CFG-43: network-details.conf loki OUTPUT carries http_user/http_passwd/tenant_id"
+else
+  _fail "CFG-43: network-details.conf loki OUTPUT missing auth keys"
+fi
+if [[ -f "$FB_TIER0_SVC" ]] && grep -q 'ga-fleet-loki.yaml' "$FB_TIER0_SVC" 2>/dev/null \
+   && grep -qE 'LOKI_USER=anonymous' "$FB_TIER0_SVC" 2>/dev/null; then
+  _pass "CFG-44: fluent-bit-tier0.service reads the loki cred sidecar (anonymous-safe defaults)"
+else
+  _fail "CFG-44: fluent-bit-tier0.service does not read the per-device loki cred / lacks safe defaults"
+fi
+
 # CFG-20: NOT YET included from main config (= scaffold-only until Phase 7 ships)
 if grep -q '@INCLUDE network-details.conf' "${TARGET}/etc/fluent-bit/fluent-bit.conf" 2>/dev/null; then
     _fail "CFG-20: fluent-bit.conf already includes network-details.conf — Phase 7 activation must be explicit"
