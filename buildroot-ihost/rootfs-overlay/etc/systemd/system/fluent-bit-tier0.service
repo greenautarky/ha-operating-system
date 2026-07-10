@@ -5,50 +5,38 @@ After=network-online.target hassio-supervisor.service netbird.service
 Wants=network-online.target
 # NO ConditionPathExists — Tier 0 ships regardless of consent state.
 # Legal basis: DSGVO Art. 6 (b) Vertragserfüllung + (f) berechtigtes Interesse.
+#
+# Because tier-1 (fluent-bit.service) IS consent-gated, tier-0 is the only
+# fluent-bit running on most of the fleet, and therefore its only Loki writer.
+# It must carry the per-device credential before Loki enforces auth_enabled, or
+# those devices go dark. Its Loki OUTPUT lives in fluent-bit-tier0.conf, shipped
+# by the ga-telemetry-config OCI overlay (pinned in version.yaml) — not in this
+# repo. That is why an earlier "tier-0 auth fix" patched network-details.conf,
+# a scaffold no service loads, and changed nothing.
 
 [Service]
 Type=simple
 
-# Writable dirs for tier-0 storage buffer + db
-ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit/storage/tier0
-ExecStartPre=/bin/mkdir -p /mnt/data/fluent-bit/db
+# Builds /mnt/data/fluent-bit/env: GA_ENV, DEVICE_UUID, DEVICE_LABEL, and the
+# per-device LOKI_* credential read from the ga-fleet-loki.yaml sidecar.
+#
+# Do NOT inline shell here. systemd expands ${VAR} in Exec* lines itself, before
+# /bin/sh ever sees them; the previous inline version therefore wrote EMPTY
+# LOKI_* values, and its "key already present" guard made them permanent. The
+# script rewrites the env file in full on every start, so a wrong value heals.
+# It always exits 0 — an absent cred degrades to the anonymous defaults below
+# instead of taking the stream down.
+ExecStartPre=/usr/libexec/ga-fluent-bit-env
 
-# Safe defaults (EnvironmentFile is read BEFORE ExecStartPre, so first boot needs these).
-# LOKI_* = the pre-ADR-0003-Step-3 anonymous behavior (push straight to
-# loki.greenautarky.com:3100, no auth). The per-device cred below overrides them,
-# so tier-0 authenticates to the same per-device tenant as tier-1 once the cred
-# is delivered — WITHOUT which auth_enabled=true on Loki would silently drop the
-# connectivity-flight-recorder (network_details) stream at close-out.
+# Fallback for the case where /mnt/data/fluent-bit/env cannot be read at all
+# (EnvironmentFile below is optional — note the leading '-'). These LOKI_*
+# reproduce the pre-ADR-0003-Step-3 behaviour: plain :3100, no auth. Loki in
+# single-tenant mode ignores both the Authorization header and X-Scope-OrgID,
+# so the "anonymous" sentinels are wire-inert.
 Environment=GA_ENV=dev DEVICE_UUID=unknown DEVICE_LABEL=unknown
 Environment=LOKI_HOST=loki.greenautarky.com LOKI_PORT=3100 LOKI_USER=anonymous LOKI_PASSWORD=anonymous LOKI_TENANT=anonymous
 
-# Reuse the env file the tier-1 service builds — it contains DEVICE_LABEL etc.
-# If tier-1 hasn't run yet, fall through to baked defaults above.
-ExecStartPre=/bin/sh -c '[ -f /mnt/data/fluent-bit/env ] || ( \
-  [ -f /mnt/data/ga-env.conf ] && . /mnt/data/ga-env.conf || . /etc/ga-env.conf 2>/dev/null; \
-  echo "GA_ENV=${GA_ENV:-dev}" > /mnt/data/fluent-bit/env; \
-  UUID=$(grep -oE "[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}" /mnt/data/supervisor/homeassistant/.storage/core.uuid 2>/dev/null | head -1); \
-  echo "DEVICE_UUID=${UUID:-unknown}" >> /mnt/data/fluent-bit/env; \
-  LABEL=$(cat /mnt/data/ga-device-label 2>/dev/null); \
-  echo "DEVICE_LABEL=${LABEL:-unknown}" >> /mnt/data/fluent-bit/env; \
-)'
-
-# Per-device Loki cred (ADR-0003 Step 3). Reads the same ga-fleet-loki.yaml
-# sidecar as tier-1 and appends LOKI_* to the shared env — but ONLY if tier-1
-# hasn't already done so (guard on LOKI_USER != anonymous), so the two services
-# never duplicate lines and tier-0 stays independent of tier-1's start order.
-# Absent/incomplete cred → keep the anonymous defaults (stream still flows).
-ExecStartPre=/bin/sh -c 'E=/mnt/data/fluent-bit/env; grep -q "^LOKI_USER=" "$E" 2>/dev/null && exit 0; \
-  F=""; for c in /mnt/data/supervisor/addons/data/*_ga_manager/ga-fleet-loki.yaml; do [ -f "$c" ] && F="$c" && break; done; \
-  [ -n "$F" ] || { echo "fluent-bit-tier0: no per-device loki cred — anonymous defaults"; exit 0; }; \
-  H=$(sed -n "s/^host: *//p" "$F" | head -1); PT=$(sed -n "s/^port: *//p" "$F" | head -1); \
-  U=$(sed -n "s/^username: *//p" "$F" | head -1); P=$(sed -n "s/^password: *//p" "$F" | head -1); \
-  T=$(sed -n "s/^tenant: *//p" "$F" | head -1); \
-  if [ -n "$H" ] && [ -n "$PT" ] && [ -n "$U" ] && [ -n "$P" ] && [ -n "$T" ]; then \
-    { echo "LOKI_HOST=${H}"; echo "LOKI_PORT=${PT}"; echo "LOKI_USER=${U}"; echo "LOKI_PASSWORD=${P}"; echo "LOKI_TENANT=${T}"; } >> "$E"; \
-    echo "fluent-bit-tier0: per-device loki cred loaded (user=${U} tenant=${T} endpoint=${H}:${PT})"; \
-  else echo "fluent-bit-tier0: loki cred file $F incomplete — anonymous defaults"; fi; exit 0'
-
+# Written by the ExecStartPre above; overrides the defaults for ExecStart.
 EnvironmentFile=-/mnt/data/fluent-bit/env
 
 ExecStart=/usr/bin/fluent-bit -c /etc/fluent-bit/fluent-bit-tier0.conf
