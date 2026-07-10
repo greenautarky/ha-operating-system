@@ -23,6 +23,12 @@ define FLUENT_BIT_CONFIG_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0644 $(FLUENT_BIT_CONFIG_PKGDIR)/network-details.conf \
 		$(TARGET_DIR)/etc/fluent-bit/network-details.conf
 
+	# Env-file builder shared by BOTH tiers (fluent-bit.service here and
+	# fluent-bit-tier0.service from the buildroot-ihost overlay). Kept out of
+	# the unit files because systemd expands ${VAR} in Exec* lines itself.
+	$(INSTALL) -D -m 0755 $(FLUENT_BIT_CONFIG_PKGDIR)/ga-fluent-bit-env \
+		$(TARGET_DIR)/usr/libexec/ga-fluent-bit-env
+
 	# Install systemd service (overrides upstream fluent-bit.service with GA version)
 	$(INSTALL) -D -m 0644 $(FLUENT_BIT_CONFIG_PKGDIR)/fluent-bit.service \
 		$(TARGET_DIR)/usr/lib/systemd/system/fluent-bit.service

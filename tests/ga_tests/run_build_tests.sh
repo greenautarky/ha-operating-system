@@ -164,30 +164,128 @@ grep -q "available true" "$NETDETAILS_CONF" 2>/dev/null \
   && _pass "CFG-19: network-details.conf filters available=true only" \
   || _fail "CFG-19: network-details.conf missing 'available true' filter"
 
-# CFG-42/43/44: tier-0 (network_details / CFR stream) must authenticate to Loki
-# like tier-1, else Loki auth_enabled=true (ADR-0003 Step 3 L4) silently drops it.
-# OUTPUT must be env-based (${LOKI_HOST}) AND carry auth keys; the tier-0 service
-# must read the per-device cred sidecar with anonymous-safe defaults.
-FB_TIER0_SVC="${TARGET}/etc/systemd/system/fluent-bit-tier0.service"
-if grep -qE 'Host[[:space:]]+\$\{LOKI_HOST\}' "$NETDETAILS_CONF" 2>/dev/null \
-   && ! grep -qE 'Host[[:space:]]+loki\.greenautarky\.com' "$NETDETAILS_CONF" 2>/dev/null; then
-  _pass "CFG-42: network-details.conf loki OUTPUT is env-based (\${LOKI_HOST}, no hard-coded host)"
+# CFG-42..46: Loki auth must be asserted on the config each unit ACTUALLY LOADS.
+#
+# History (2026-07-10): CFG-42/43 used to assert on network-details.conf — while
+# CFG-20 below simultaneously asserted that same file is NOT included by any
+# config. A scaffold nobody loads was verified green, and the real tier-0 output
+# (fluent-bit-tier0.conf, shipped by the ga-telemetry-config OCI overlay) went to
+# production with `Port 3100` hard-coded and no credentials at all. tier-0 is the
+# only fluent-bit on a consent-less device, so `auth_enabled: true` would have
+# blacked out most of the fleet.
+#
+# So: derive the config set from each unit's ExecStart `-c` flag, and fail loudly
+# on any shipped config carrying a loki OUTPUT that no unit loads and that is not
+# an explicitly declared scaffold.
+
+# Configs that legitimately ship without being loaded by anything.
+_LOKI_SCAFFOLDS=("network-details.conf" "fluent-bit-debug.conf")
+
+_fb_units=()
+for _u in "${TARGET}"/usr/lib/systemd/system/fluent-bit*.service \
+          "${TARGET}"/etc/systemd/system/fluent-bit*.service; do
+  [[ -f "$_u" ]] || continue
+  [[ "$_u" == */multi-user.target.wants/* ]] && continue
+  _fb_units+=("$_u")
+done
+
+# The loki [OUTPUT] block of a fluent-bit config, or empty.
+_loki_block() {
+  awk '
+    /^[[:space:]]*\[/ {
+        if (isloki) { printf "%s", buf; exit }
+        inblk = ($0 ~ /\[OUTPUT\]/); buf = ""; isloki = 0; next
+    }
+    inblk { buf = buf $0 "\n"; if ($1 == "Name" && $2 == "loki") isloki = 1 }
+    END { if (isloki) printf "%s", buf }
+  ' "$1" 2>/dev/null
+}
+
+# Configs under /etc/fluent-bit referenced by a `-c` flag in this unit.
+_configs_of_unit() {
+  grep -E '^Exec(Start|StartPre)=' "$1" 2>/dev/null \
+    | grep -oE -- '-c[[:space:]]+/etc/fluent-bit/[A-Za-z0-9._-]+' \
+    | awk '{print $2}' | sort -u
+}
+
+_loaded_confs=()
+for _u in "${_fb_units[@]}"; do
+  while read -r _c; do
+    [[ -n "$_c" ]] && _loaded_confs+=("${_c##*/}")
+  done < <(_configs_of_unit "$_u")
+done
+
+if [[ ${#_fb_units[@]} -gt 0 && ${#_loaded_confs[@]} -gt 0 ]]; then
+  _pass "CFG-42a: discovered ${#_fb_units[@]} fluent-bit unit(s) loading ${#_loaded_confs[@]} config(s)"
 else
-  _fail "CFG-42: network-details.conf loki OUTPUT still hard-codes the host (breaks at auth_enabled=true)"
+  _fail "CFG-42a: could not resolve which config any fluent-bit unit loads"
 fi
-if grep -q 'http_user' "$NETDETAILS_CONF" 2>/dev/null \
-   && grep -q 'http_passwd' "$NETDETAILS_CONF" 2>/dev/null \
-   && grep -q 'tenant_id' "$NETDETAILS_CONF" 2>/dev/null; then
-  _pass "CFG-43: network-details.conf loki OUTPUT carries http_user/http_passwd/tenant_id"
+
+# CFG-42: every LOADED config's loki OUTPUT takes endpoint + creds from the env.
+_cfg42_bad=""
+for _name in "${_loaded_confs[@]}"; do
+  _f="${TARGET}/etc/fluent-bit/${_name}"
+  [[ -f "$_f" ]] || continue
+  _blk="$(_loki_block "$_f")"
+  [[ -n "$_blk" ]] || continue
+  for _key in Host Port http_user http_passwd tenant_id; do
+    _val="$(printf '%s' "$_blk" | awk -v k="$_key" '$1==k {print $2; exit}')"
+    if [[ -z "$_val" || "$_val" != '${'* ]]; then
+      _cfg42_bad+=" ${_name}:${_key}=${_val:-MISSING}"
+    fi
+  done
+done
+if [[ -z "$_cfg42_bad" ]]; then
+  _pass "CFG-42: every loaded fluent-bit config takes Loki endpoint+creds from the env"
 else
-  _fail "CFG-43: network-details.conf loki OUTPUT missing auth keys"
+  _fail "CFG-42: loaded config has literal Loki endpoint/cred (silently dropped once Loki enforces auth):${_cfg42_bad}"
 fi
-if [[ -f "$FB_TIER0_SVC" ]] && grep -q 'ga-fleet-loki.yaml' "$FB_TIER0_SVC" 2>/dev/null \
-   && grep -qE 'LOKI_USER=anonymous' "$FB_TIER0_SVC" 2>/dev/null; then
-  _pass "CFG-44: fluent-bit-tier0.service reads the loki cred sidecar (anonymous-safe defaults)"
+
+# CFG-43: no loaded config pins a shared static tenant (that is not isolation).
+_cfg43_bad=""
+for _name in "${_loaded_confs[@]}"; do
+  _f="${TARGET}/etc/fluent-bit/${_name}"
+  [[ -f "$_f" ]] || continue
+  if _loki_block "$_f" | grep -qiE '^[[:space:]]*tenant_id[[:space:]]+[^$[:space:]]'; then
+    _cfg43_bad+=" ${_name}"
+  fi
+done
+[[ -z "$_cfg43_bad" ]] \
+  && _pass "CFG-43: no loaded config pins a static Loki tenant" \
+  || _fail "CFG-43: static Loki tenant in loaded config(s):${_cfg43_bad}"
+
+# CFG-44: no ${braced} vars in any Exec* line — systemd expands them ITSELF,
+# before /bin/sh sees them, so they silently become empty strings.
+_cfg44_bad=""
+for _u in "${_fb_units[@]}"; do
+  grep -E '^Exec' "$_u" | grep -q '\${' && _cfg44_bad+=" ${_u##*/}"
+done
+[[ -z "$_cfg44_bad" ]] \
+  && _pass "CFG-44: no \${braced} vars in fluent-bit unit Exec* lines (systemd would eat them)" \
+  || _fail "CFG-44: \${braced} var in Exec* line — systemd expands it to empty:${_cfg44_bad}"
+
+# CFG-45: the shared env builder is installed, executable and sh-syntax-valid.
+_FB_ENV="${TARGET}/usr/libexec/ga-fluent-bit-env"
+if [[ -x "$_FB_ENV" ]] && sh -n "$_FB_ENV" 2>/dev/null; then
+  _pass "CFG-45: /usr/libexec/ga-fluent-bit-env installed, executable, sh-syntax-valid"
 else
-  _fail "CFG-44: fluent-bit-tier0.service does not read the per-device loki cred / lacks safe defaults"
+  _fail "CFG-45: /usr/libexec/ga-fluent-bit-env missing, not executable, or has a syntax error"
 fi
+
+# CFG-46: a config with a loki OUTPUT that no unit loads is a lie waiting to be
+# 'fixed'. It must be an explicitly declared scaffold.
+_cfg46_bad=""
+for _f in "${TARGET}"/etc/fluent-bit/*.conf; do
+  [[ -f "$_f" ]] || continue
+  _name="${_f##*/}"
+  [[ -z "$(_loki_block "$_f")" ]] && continue
+  printf '%s\n' "${_loaded_confs[@]}" | grep -qx "$_name" && continue
+  printf '%s\n' "${_LOKI_SCAFFOLDS[@]}" | grep -qx "$_name" && continue
+  _cfg46_bad+=" ${_name}"
+done
+[[ -z "$_cfg46_bad" ]] \
+  && _pass "CFG-46: every shipped config with a loki OUTPUT is either loaded or a declared scaffold" \
+  || _fail "CFG-46: config has a loki OUTPUT but no unit loads it and it is not a declared scaffold:${_cfg46_bad}"
 
 # CFG-20: NOT YET included from main config (= scaffold-only until Phase 7 ships)
 if grep -q '@INCLUDE network-details.conf' "${TARGET}/etc/fluent-bit/fluent-bit.conf" 2>/dev/null; then

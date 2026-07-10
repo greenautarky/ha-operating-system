@@ -1,0 +1,125 @@
+#!/bin/sh
+# ga-fluent-bit-env — build /mnt/data/fluent-bit/env for BOTH fluent-bit tiers.
+#
+# Why this is a script and not a set of ExecStartPre one-liners
+# ------------------------------------------------------------
+# systemd expands ${VAR} in Exec* lines *itself*, before /bin/sh ever sees the
+# command. The previous inline version read the per-device Loki credential and
+# then wrote it out with `echo "LOKI_HOST=${H}" ...` — systemd replaced every
+# ${braced} reference with an empty string, so the env file was filled with
+# EMPTY LOKI_* values. Its "have we done this already?" guard
+# (`grep -q "^LOKI_USER=" && exit 0`) then made those empty values permanent:
+# idempotent on a broken state never heals. On 2026-07-10 this took tier-0 down
+# on all six canaries ("no upstream connections available").
+#
+# The same class of bug produced DEVICE_LABEL=unknown forever on any device
+# whose first boot won the race against /mnt/data/ga-device-label being written:
+# the base env block was guarded by `[ -f "$ENV_FILE" ] ||`, so it was never
+# rebuilt.
+#
+# Two rules follow, and this script exists to enforce both:
+#   1. No shell, and therefore no ${…}, in the unit files.
+#   2. Rewrite the env file in full on every start. Never append, never guard on
+#      "the key is already present" — a wrong value must be able to heal.
+#
+# Exit status is always 0: a missing or incomplete credential must degrade to
+# the pre-ADR-0003-Step-3 anonymous behaviour, never take the log stream down.
+
+set -u
+
+ENV_FILE=/mnt/data/fluent-bit/env
+LABEL_FILE=/mnt/data/ga-device-label
+UUID_FILE=/mnt/data/supervisor/homeassistant/.storage/core.uuid
+# shellcheck disable=SC2125  # expanded unquoted in find_cred(), by design
+CRED_GLOB=/mnt/data/supervisor/addons/data/*_ga_manager/ga-fleet-loki.yaml
+
+log() { echo "ga-fluent-bit-env: $*"; }
+
+mkdir -p /mnt/data/fluent-bit/storage /mnt/data/fluent-bit/db
+
+# ── base identity ────────────────────────────────────────────────────────────
+if [ -f /mnt/data/ga-env.conf ]; then
+    . /mnt/data/ga-env.conf
+elif [ -f /etc/ga-env.conf ]; then
+    . /etc/ga-env.conf
+fi
+GA_ENV="${GA_ENV:-dev}"
+
+UUID=$(grep -oE '[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}' \
+       "$UUID_FILE" 2>/dev/null | head -1)
+LABEL=$(cat "$LABEL_FILE" 2>/dev/null)
+
+# ── per-device Loki credential (ADR-0003 Step 3) ─────────────────────────────
+# Delivered by the fleet-manager credentials_autopush -> ga_manager creds-write
+# worker, which renders the flat sidecar in its addon-private /data dir. Read
+# root-only via the slug-tolerant glob (NOT /share, per the 2026-07-06 ADR-0003
+# amendment). Values are quote-safe, so plain sed extraction is exact.
+#
+# Bounded wait for the /mnt/data addon mount (same boot-race hardening as
+# telegraf.service): only wait when the addon data root exists but the cred does
+# not, so a device that will never have a cred does not pay 30s every boot.
+find_cred() {
+    for c in $CRED_GLOB; do
+        [ -f "$c" ] && { printf '%s' "$c"; return 0; }
+    done
+    return 1
+}
+
+CRED=$(find_cred) || CRED=""
+if [ -z "$CRED" ] && [ -d /mnt/data/supervisor/addons/data ]; then
+    n=1
+    while [ "$n" -le 6 ]; do
+        sleep 5
+        CRED=$(find_cred) && break
+        CRED=""
+        log "per-device loki cred not present (try $n/6) — waiting for the addon data mount"
+        n=$((n + 1))
+    done
+fi
+
+L_HOST=""; L_PORT=""; L_USER=""; L_PASS=""; L_TENANT=""
+if [ -n "$CRED" ]; then
+    L_HOST=$(sed -n 's/^host: *//p' "$CRED" | head -1)
+    L_PORT=$(sed -n 's/^port: *//p' "$CRED" | head -1)
+    L_USER=$(sed -n 's/^username: *//p' "$CRED" | head -1)
+    L_PASS=$(sed -n 's/^password: *//p' "$CRED" | head -1)
+    L_TENANT=$(sed -n 's/^tenant: *//p' "$CRED" | head -1)
+fi
+
+# Anonymous-safe fallback. Loki in single-tenant mode ignores both the
+# Authorization header and X-Scope-OrgID, so these sentinels are wire-inert.
+if [ -z "$L_HOST" ] || [ -z "$L_PORT" ] || [ -z "$L_USER" ] || \
+   [ -z "$L_PASS" ] || [ -z "$L_TENANT" ]; then
+    if [ -n "$CRED" ]; then
+        log "loki cred $CRED incomplete — anonymous defaults"
+    else
+        log "no per-device loki cred — anonymous defaults"
+    fi
+    L_HOST=loki.greenautarky.com
+    L_PORT=3100
+    L_USER=anonymous
+    L_PASS=anonymous
+    L_TENANT=anonymous
+else
+    log "per-device loki cred loaded (user=$L_USER tenant=$L_TENANT endpoint=$L_HOST:$L_PORT)"
+fi
+
+# ── write the file in full (never append) ────────────────────────────────────
+# The password lands here, so 0600 before it is moved into place.
+TMP="$ENV_FILE.new.$$"
+{
+    echo "GA_ENV=$GA_ENV"
+    echo "DEVICE_UUID=${UUID:-unknown}"
+    echo "DEVICE_LABEL=${LABEL:-unknown}"
+    echo "LOKI_HOST=$L_HOST"
+    echo "LOKI_PORT=$L_PORT"
+    echo "LOKI_USER=$L_USER"
+    echo "LOKI_PASSWORD=$L_PASS"
+    echo "LOKI_TENANT=$L_TENANT"
+} > "$TMP"
+chmod 600 "$TMP"
+mv "$TMP" "$ENV_FILE"
+
+[ -n "${LABEL:-}" ] || log "WARNING: $LABEL_FILE missing — logs will be labelled 'unknown'"
+
+exit 0
