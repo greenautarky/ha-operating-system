@@ -155,4 +155,26 @@ fi
 run_test "CFG-47" "ga-enroll writes ga_release into the enroll-state bridge" \
   "grep -q 'ga_release:\$rel' /usr/libexec/ga-enroll"
 
+# --- systemd ${braced} trap, fleet-wide (CFG-48) ------------------------------
+# systemd expands PLAIN ${VAR} in Exec* lines ITSELF, before /bin/sh sees them.
+# It does NOT touch shell-default forms (${VAR:-x}) — which is exactly why this
+# hid for weeks: DEVICE_LABEL=${LABEL:-unknown} worked while INFLUX_USER=${U}
+# silently became empty and 401'd every write (2026-07-13), same class as the
+# empty LOKI_* that took tier-0 down fleet-wide (2026-07-10).
+# Rule: no plain ${VAR} in any Exec* line of any GA unit — build the env in a
+# script under /usr/libexec instead.
+run_test "CFG-48" "no plain \${VAR} in Exec* lines of any GA unit (systemd eats them)" \
+  '! grep -hE "^Exec[A-Za-z]*=" /etc/systemd/system/*.service /usr/lib/systemd/system/ga-*.service 2>/dev/null \
+     | grep -E "\$\{[A-Za-z_][A-Za-z0-9_]*\}"'
+
+run_test "CFG-49" "telegraf builds its env via /usr/libexec/ga-telegraf-env" \
+  "test -x /usr/libexec/ga-telegraf-env && systemctl cat telegraf 2>/dev/null | grep -q 'ExecStartPre=/usr/libexec/ga-telegraf-env'"
+
+if [ -f /mnt/data/supervisor/share/ga-fleet-influx.yaml ]; then
+  run_test "CFG-50" "telegraf env has a NON-EMPTY per-device INFLUX_USER (cred delivered)" \
+    "grep -qE '^INFLUX_USER=dev_KIB-SON-[0-9]+' /mnt/data/telegraf/env"
+else
+  skip_test "CFG-50" "telegraf env per-device INFLUX_USER (no influx cred delivered yet)"
+fi
+
 suite_end

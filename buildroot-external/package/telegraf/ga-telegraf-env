@@ -1,0 +1,100 @@
+#!/bin/sh
+# ga-telegraf-env — build /mnt/data/telegraf/env for telegraf.service.
+#
+# Why this is a script and not a set of ExecStartPre one-liners
+# ------------------------------------------------------------
+# systemd expands PLAIN ${VAR} references in Exec* lines *itself*, before
+# /bin/sh ever sees the command. The previous inline version read the
+# per-device InfluxDB credential and wrote it out with
+#   echo "INFLUX_USER=${U}" >> …
+# — systemd replaced ${U} and ${P} with empty strings (they are not in the
+# unit's environment), so the env file got INFLUX_USER= / INFLUX_PASSWORD=
+# and EVERY write 401'd. The unbraced "$U" inside `[ -n "$U" ]` survived, so
+# the guard happily took the success branch and even logged
+# "cred loaded (user=)" — an empty user, reported as success.
+#
+# Subtlety that hid this for weeks: the other lines used shell-default syntax
+# (${LABEL:-unknown}). systemd does NOT recognise "${VAR:-default}" as a
+# simple variable reference, so it passes those through untouched — DEVICE_LABEL
+# was always correct while the credential was always empty. Only plain ${VAR}
+# is eaten.
+#
+# Same class as the 2026-07-10 fluent-bit outage (empty LOKI_*), fixed the same
+# way — see ga-fluent-bit-env. Two rules, enforced by this script and by build
+# test CFG-48 (no plain ${VAR} in any Exec* line of any GA unit):
+#   1. No shell, and therefore no ${…}, in the unit files.
+#   2. Rewrite the env file in full on every start. Never append, never guard on
+#      "the key is already present" — a wrong value must be able to heal.
+#
+# Exit status is always 0: a missing or incomplete credential must degrade to
+# "no per-device auth" (writes 401 until the fleet-manager delivers it), never
+# block the unit from starting.
+
+set -u
+
+ENV_FILE=/mnt/data/telegraf/env
+CRED_FILE=/mnt/data/supervisor/share/ga-fleet-influx.yaml
+
+mkdir -p /mnt/data/telegraf /mnt/data/telegraf/buffer
+
+# --- base env (rebuilt in full every start, so a wrong value can heal) -------
+
+if [ -f /mnt/data/ga-env.conf ]; then
+    . /mnt/data/ga-env.conf
+elif [ -f /etc/ga-env.conf ]; then
+    . /etc/ga-env.conf
+fi
+
+UUID=$(grep -oE '[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}' \
+       /mnt/data/supervisor/homeassistant/.storage/core.uuid 2>/dev/null | head -1)
+LABEL=$(cat /mnt/data/ga-device-label 2>/dev/null)
+GW=$(ip route 2>/dev/null | grep '^default' | head -1 | awk '{print $3}')
+
+BUILD_TS=""
+if [ -f /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release 2>/dev/null
+    BUILD_TS="${GA_BUILD_TIMESTAMP:-}"
+fi
+
+{
+    printf 'GA_ENV=%s\n'             "${GA_ENV:-dev}"
+    printf 'DEVICE_UUID=%s\n'        "${UUID:-unknown}"
+    printf 'DEVICE_LABEL=%s\n'       "${LABEL:-unknown}"
+    printf 'GATEWAY_IP=%s\n'         "${GW:-unknown}"
+    printf 'GA_BUILD_TIMESTAMP=%s\n' "${BUILD_TS:-unknown}"
+} > "$ENV_FILE"
+
+# --- per-device InfluxDB credential (ADR-0002 / ADR-0003 Step 2) -------------
+#
+# Delivered by fleet-manager influx_creds_autopush -> ga_manager
+# influx-creds-write worker into the addon /share (host view: CRED_FILE).
+# Hardened against the /share mount boot race (seen live on K0 2026-07-09):
+# bounded wait, loud journal lines either way, creds written only when BOTH
+# fields are non-empty.
+
+n=1
+while [ "$n" -le 6 ]; do
+    [ -f "$CRED_FILE" ] && break
+    echo "telegraf: per-device influx cred $CRED_FILE not present (try $n/6) — waiting 5s for the /share mount"
+    sleep 5
+    n=$((n + 1))
+done
+
+if [ ! -f "$CRED_FILE" ]; then
+    echo "telegraf: no per-device influx cred at $CRED_FILE — starting without one (InfluxDB writes will 401 until the fleet-manager delivers it)"
+    exit 0
+fi
+
+U=$(sed -n 's/^username: *//p' "$CRED_FILE" | head -1)
+P=$(sed -n 's/^password: *//p' "$CRED_FILE" | head -1)
+
+if [ -n "$U" ] && [ -n "$P" ]; then
+    printf 'INFLUX_USER=%s\n'     "$U" >> "$ENV_FILE"
+    printf 'INFLUX_PASSWORD=%s\n' "$P" >> "$ENV_FILE"
+    echo "telegraf: per-device influx cred loaded (user=$U)"
+else
+    echo "telegraf: cred file $CRED_FILE present but username/password missing — writes will 401"
+fi
+
+exit 0

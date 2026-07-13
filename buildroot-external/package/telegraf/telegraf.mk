@@ -59,6 +59,11 @@ endef
 ################################################################################
 
 define TELEGRAF_INSTALL_INIT_SYSTEMD
+	# Env-file builder — a real script, NOT inline shell in the unit:
+	# systemd expands plain $${VAR} in Exec* lines itself (see ga-telegraf-env).
+	$(INSTALL) -D -m 0755 $(TELEGRAF_PKGDIR)/ga-telegraf-env \
+		$(TARGET_DIR)/usr/libexec/ga-telegraf-env
+
 	# Install systemd service unit
 	$(INSTALL) -D -m 0644 $(TELEGRAF_PKGDIR)/telegraf.service \
 		$(TARGET_DIR)/etc/systemd/system/telegraf.service
