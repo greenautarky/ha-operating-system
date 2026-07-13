@@ -92,10 +92,14 @@ grep -q '/mnt/data/supervisor/share/telegraf/ga-network.influx' "$TG_CONF" 2>/de
   && _pass "CFG-25: signal file path = /share addon->host bridge" \
   || _fail "CFG-25: signal file path wrong (must be host view of /share)"
 
-# CFG-26: telegraf.service creates the buffer dir
-grep -qE 'mkdir .*-p .*/mnt/data/telegraf/buffer' "${TARGET}/etc/systemd/system/telegraf.service" 2>/dev/null \
-  && _pass "CFG-26: telegraf.service creates buffer dir" \
-  || _fail "CFG-26: telegraf.service missing buffer-dir mkdir"
+# CFG-26: the buffer dir is created before telegraf starts.
+# Since the systemd-${braced} fix (Odoo #519) the env/dir setup lives in
+# /usr/libexec/ga-telegraf-env, NOT in inline unit shell — assert the BEHAVIOUR
+# where it now lives (the unit itself must stay shell-free, see CFG-48).
+TG_ENV_SH="${TARGET}/usr/libexec/ga-telegraf-env"
+grep -qE 'mkdir .*-p .*/mnt/data/telegraf/buffer' "$TG_ENV_SH" 2>/dev/null \
+  && _pass "CFG-26: ga-telegraf-env creates the buffer dir" \
+  || _fail "CFG-26: ga-telegraf-env missing buffer-dir mkdir"
 
 # CFG-27: tmpfiles.d declares the buffer dir (create-only, no destructive clean)
 TG_TMPFILES="${TARGET}/usr/lib/tmpfiles.d/ga-telegraf-buffer.conf"
@@ -104,12 +108,14 @@ TG_TMPFILES="${TARGET}/usr/lib/tmpfiles.d/ga-telegraf-buffer.conf"
   && _pass "CFG-27: tmpfiles.d declares telegraf buffer dir" \
   || _fail "CFG-27: tmpfiles.d buffer entry missing"
 
-# CFG-28: telegraf.service reads the per-device InfluxDB cred (ADR-0002)
+# CFG-28: the per-device InfluxDB cred (ADR-0002) is read + written to the env.
+# Lives in the env script since Odoo #519; the unit only calls it.
 TG_SVC="${TARGET}/etc/systemd/system/telegraf.service"
-grep -q 'ga-fleet-influx.yaml' "$TG_SVC" 2>/dev/null \
-  && grep -q 'INFLUX_PASSWORD=' "$TG_SVC" 2>/dev/null \
-  && _pass "CFG-28: telegraf.service reads per-device InfluxDB cred" \
-  || _fail "CFG-28: telegraf.service missing ga-fleet-influx.yaml reader"
+grep -q 'ga-fleet-influx.yaml' "$TG_ENV_SH" 2>/dev/null \
+  && grep -q 'INFLUX_PASSWORD=' "$TG_ENV_SH" 2>/dev/null \
+  && grep -q 'ExecStartPre=/usr/libexec/ga-telegraf-env' "$TG_SVC" 2>/dev/null \
+  && _pass "CFG-28: ga-telegraf-env reads the per-device InfluxDB cred (and the unit calls it)" \
+  || _fail "CFG-28: per-device InfluxDB cred reader missing or not wired into telegraf.service"
 
 # CFG-29: telegraf.conf uses ${INFLUX_USER} (not a hardcoded shared user)
 if grep -qF 'username = "${INFLUX_USER}"' "$TG_CONF" 2>/dev/null && ! grep -qF 'username = "device_writer"' "$TG_CONF" 2>/dev/null; then
@@ -2557,28 +2563,36 @@ RAUC_LINK="${TARGET}/usr/lib/systemd/system/multi-user.target.wants/ga-rauc-inst
   || _fail "RAUC-06: ga-rauc-install.path NOT enabled (no wants symlink)"
 
 # --- telegraf.service per-device InfluxDB cred, SERVICE side (extends CFG-28/CFG-31) ---
-TG_SVC_SRC="${TARGET}/etc/systemd/system/telegraf.service"
-[[ -f "$TG_SVC_SRC" ]] || TG_SVC_SRC="${PKG_TG}/telegraf.service"
-if [[ -f "$TG_SVC_SRC" ]]; then
-  # TGSVC-01: hardened BOUNDED-WAIT ExecStartPre — polls the /share cred file a
-  # fixed number of times (6x5s) instead of blocking the unit forever.
-  if grep -qF 'for n in 1 2 3 4 5 6' "$TG_SVC_SRC" 2>/dev/null \
-     && grep -qF 'ga-fleet-influx.yaml' "$TG_SVC_SRC" 2>/dev/null; then
-    _pass "TGSVC-01: telegraf.service has the hardened bounded-wait ExecStartPre (6x5s)"
+TG_ENV_SRC="${TARGET}/usr/libexec/ga-telegraf-env"
+[[ -f "$TG_ENV_SRC" ]] || TG_ENV_SRC="${PKG_TG}/ga-telegraf-env"
+if [[ -f "$TG_ENV_SRC" ]]; then
+  # TGSVC-01: bounded wait for the /share cred file (6x5s) — never block forever.
+  if grep -qE 'while \[ "\$n" -le 6 \]|for n in 1 2 3 4 5 6' "$TG_ENV_SRC" 2>/dev/null \
+     && grep -qF 'ga-fleet-influx.yaml' "$TG_ENV_SRC" 2>/dev/null; then
+    _pass "TGSVC-01: ga-telegraf-env has the bounded cred wait (6x5s)"
   else
-    _fail "TGSVC-01: telegraf.service bounded-wait ExecStartPre missing"
+    _fail "TGSVC-01: ga-telegraf-env bounded cred wait missing"
   fi
-  # TGSVC-02: fail-safe — a missing cred must NOT fail the unit (starts with
-  # defaults, exit 0), else a cred-delivery lag would take telegraf down.
-  if grep -q 'starting with unit defaults' "$TG_SVC_SRC" 2>/dev/null \
-     && grep -q 'exit 0' "$TG_SVC_SRC" 2>/dev/null; then
-    _pass "TGSVC-02: cred-wait is fail-safe (missing cred -> defaults, exit 0)"
+  # TGSVC-02: fail-safe — a missing cred must NOT fail the unit (exit 0), else a
+  # cred-delivery lag would take telegraf down.
+  if grep -qE 'writes will 401|without one' "$TG_ENV_SRC" 2>/dev/null \
+     && grep -q 'exit 0' "$TG_ENV_SRC" 2>/dev/null; then
+    _pass "TGSVC-02: cred wait is fail-safe (missing cred -> no auth, exit 0)"
   else
-    _fail "TGSVC-02: telegraf.service cred-wait not fail-safe (could block/kill the unit)"
+    _fail "TGSVC-02: ga-telegraf-env cred wait not fail-safe (could block/kill the unit)"
+  fi
+  # TGSVC-03 (NEW, Odoo #519): the env must be REWRITTEN in full every start —
+  # an append-only builder made the empty INFLUX_USER permanent. A truncating
+  # redirect (> "$ENV_FILE") is the guarantee that a wrong value can heal.
+  if grep -qE '>[[:space:]]*"\$ENV_FILE"' "$TG_ENV_SRC" 2>/dev/null; then
+    _pass "TGSVC-03: env file is rewritten in full every start (wrong values can heal)"
+  else
+    _fail "TGSVC-03: env file is only appended to — a bad value would be permanent"
   fi
 else
-  _skip "TGSVC-01: bounded-wait ExecStartPre" "telegraf.service not found"
-  _skip "TGSVC-02: fail-safe cred-wait" "telegraf.service not found"
+  _skip "TGSVC-01: bounded cred wait" "ga-telegraf-env not found"
+  _skip "TGSVC-02: fail-safe cred wait" "ga-telegraf-env not found"
+  _skip "TGSVC-03: env rewritten in full" "ga-telegraf-env not found"
 fi
 
 # TGSVC-03: telegraf.conf keeps the ${INFLUX_PASSWORD} placeholder (companion to
