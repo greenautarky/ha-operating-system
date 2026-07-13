@@ -151,4 +151,8 @@ else
   skip_test "CFG-35" "HA external_url set to ki-butler domain (no configuration.yaml)"
 fi
 
+# --- ga-enroll bridge carries ga_release (Odoo #513 release-verify gate) ---
+run_test "CFG-47" "ga-enroll writes ga_release into the enroll-state bridge" \
+  "grep -q 'ga_release:\$rel' /usr/libexec/ga-enroll"
+
 suite_end

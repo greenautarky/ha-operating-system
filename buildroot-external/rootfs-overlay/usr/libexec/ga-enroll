@@ -129,9 +129,13 @@ fleet_ip=$(getent hosts "$GA_FLEET_HOST" 2>/dev/null | awk '{print $1; exit}')
 FLEET_URL_IP=""
 [ -n "$fleet_ip" ] && FLEET_URL_IP="http://${fleet_ip}:${GA_FLEET_PORT:-8090}"
 mkdir -p "$(dirname "$STATE_FILE")"
+# ga_release rides in the bridge so config-mapped addons (ga_manager /info,
+# status page) can report the live release — no addon can see /etc/ga-release
+# (Odoo #513: the release-train's verify gate polls exactly this).
 jq -cn --arg hw "$hw_serial" --arg url "$FLEET_URL" --arg ipurl "$FLEET_URL_IP" \
        --arg pid "$prov_id" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-       '{hw_serial:$hw, fleet_url:$url, fleet_url_ip:$ipurl, provisional_id:$pid, enrolled_at:$at}' \
+       --arg rel "$ga_release" \
+       '{hw_serial:$hw, fleet_url:$url, fleet_url_ip:$ipurl, provisional_id:$pid, enrolled_at:$at, ga_release:$rel}' \
     > "${STATE_FILE}.tmp"
 mv "${STATE_FILE}.tmp" "$STATE_FILE"
 chmod 0644 "$STATE_FILE"
