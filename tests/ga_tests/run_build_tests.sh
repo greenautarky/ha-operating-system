@@ -2199,6 +2199,20 @@ else
   _skip "NB-REG-05" "no setup-key baked (secret missing at build time — fresh-flash devices won't auto-register)"
 fi
 
+# NB-REG-06: the idempotency guard must be a POSITIVE probe. The old
+# negative check ("not NeedsLogin ⇒ registered") misfired on a
+# just-started daemon before WiFi-up and latched the unit done on an
+# unregistered device (2026-07-14, KIB-SON-00000055). Registered is
+# concluded ONLY from a "Management:" status line; anything
+# inconclusive must exit non-zero so Restart=on-failure re-probes.
+if [[ -x "$NB_REG_SCRIPT" ]]; then
+  if grep -q '\*Management:\*)' "$NB_REG_SCRIPT" && grep -q 'inconclusive' "$NB_REG_SCRIPT"; then
+    _pass "NB-REG-06: register guard is a positive probe (Management: match + inconclusive retry path)"
+  else
+    _fail "NB-REG-06: register guard regressed to a negative NeedsLogin-only check (boot-race: unit latches done on unregistered device)"
+  fi
+fi
+
 # =========================================================================
 # HA-INIT-01..06: ga-ha-init first-boot HA configuration
 # =========================================================================
