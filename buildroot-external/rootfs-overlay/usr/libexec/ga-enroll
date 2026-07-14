@@ -132,10 +132,16 @@ mkdir -p "$(dirname "$STATE_FILE")"
 # ga_release rides in the bridge so config-mapped addons (ga_manager /info,
 # status page) can report the live release — no addon can see /etc/ga-release
 # (Odoo #513: the release-train's verify gate polls exactly this).
+# ga_env (dev/prod) rides in the bridge too: addons map /share but not
+# /mnt/data, so /mnt/data/ga-env.conf is invisible to them. ga_manager's
+# canary-only set-telemetry-consent guardrail reads it here (gm 0.85.0).
+ga_env=""
+[ -r /mnt/data/ga-env.conf ] && ga_env=$(sed -n 's/^GA_ENV=//p' /mnt/data/ga-env.conf | head -1 | tr -d '\r\n"'"'"'')
+[ -n "$ga_env" ] || { [ -r /etc/ga-env.conf ] && ga_env=$(sed -n 's/^GA_ENV=//p' /etc/ga-env.conf | head -1 | tr -d '\r\n"'"'"''); }
 jq -cn --arg hw "$hw_serial" --arg url "$FLEET_URL" --arg ipurl "$FLEET_URL_IP" \
        --arg pid "$prov_id" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-       --arg rel "$ga_release" \
-       '{hw_serial:$hw, fleet_url:$url, fleet_url_ip:$ipurl, provisional_id:$pid, enrolled_at:$at, ga_release:$rel}' \
+       --arg rel "$ga_release" --arg env "$ga_env" \
+       '{hw_serial:$hw, fleet_url:$url, fleet_url_ip:$ipurl, provisional_id:$pid, enrolled_at:$at, ga_release:$rel, ga_env:$env}' \
     > "${STATE_FILE}.tmp"
 mv "${STATE_FILE}.tmp" "$STATE_FILE"
 chmod 0644 "$STATE_FILE"

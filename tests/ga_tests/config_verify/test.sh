@@ -177,4 +177,7 @@ else
   skip_test "CFG-50" "telegraf env per-device INFLUX_USER (no influx cred delivered yet)"
 fi
 
+run_test "CFG-51" "ga-enroll writes ga_env into the enroll-state bridge (addon-visible env source)" \
+  "grep -q 'ga_env:\$env' /usr/libexec/ga-enroll"
+
 suite_end
