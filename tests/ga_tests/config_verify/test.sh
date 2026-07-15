@@ -180,4 +180,13 @@ fi
 run_test "CFG-51" "ga-enroll writes ga_env into the enroll-state bridge (addon-visible env source)" \
   "grep -q 'ga_env:\$env' /usr/libexec/ga-enroll"
 
+# --- DEVICE_LABEL single-source-of-truth fallback (CFG-52) --------------------
+# Both host env-builders read the legacy /mnt/data/ga-device-label (flasher
+# stage 72b) and must fall back to the canonical ga-identity.json device_id when
+# it is absent — else a device with an identity blob but no label file ships
+# device_label=unknown forever (7 prod devices, 2026-07-15). Keeps logs+metrics
+# on the same label. See #528.
+run_test "CFG-52" "fluent-bit + telegraf env-builders fall back to ga-identity.json for DEVICE_LABEL" \
+  "grep -q 'ga-identity.json' /usr/libexec/ga-fluent-bit-env && grep -q 'ga-identity.json' /usr/libexec/ga-telegraf-env"
+
 suite_end

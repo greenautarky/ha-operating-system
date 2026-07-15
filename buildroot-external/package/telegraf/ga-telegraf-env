@@ -48,6 +48,13 @@ fi
 UUID=$(grep -oE '[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}' \
        /mnt/data/supervisor/homeassistant/.storage/core.uuid 2>/dev/null | head -1)
 LABEL=$(cat /mnt/data/ga-device-label 2>/dev/null)
+# Fallback (2026-07-15): derive from the canonical per-device identity when the
+# legacy /mnt/data/ga-device-label is absent — ADR-0010 single source of truth.
+# Same class + fix as ga-fluent-bit-env; keeps metrics + logs on the same label.
+if [ -z "$LABEL" ] && [ -f /mnt/data/supervisor/share/ga-identity.json ]; then
+    LABEL=$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            /mnt/data/supervisor/share/ga-identity.json 2>/dev/null | head -1)
+fi
 GW=$(ip route 2>/dev/null | grep '^default' | head -1 | awk '{print $3}')
 
 BUILD_TS=""
