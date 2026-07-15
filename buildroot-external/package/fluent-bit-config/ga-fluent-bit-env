@@ -29,6 +29,10 @@ set -u
 
 ENV_FILE=/mnt/data/fluent-bit/env
 LABEL_FILE=/mnt/data/ga-device-label
+# Canonical per-device identity (ADR-0010): device_id + url_prefix, placed by
+# identity-write / the fleet-manager identity backfill. Host view of the addon's
+# /share. Used as the DEVICE_LABEL fallback below.
+IDENTITY_FILE=/mnt/data/supervisor/share/ga-identity.json
 UUID_FILE=/mnt/data/supervisor/homeassistant/.storage/core.uuid
 # shellcheck disable=SC2125  # expanded unquoted in find_cred(), by design
 CRED_GLOB=/mnt/data/supervisor/addons/data/*_ga_manager/ga-fleet-loki.yaml
@@ -48,6 +52,18 @@ GA_ENV="${GA_ENV:-dev}"
 UUID=$(grep -oE '[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}' \
        "$UUID_FILE" 2>/dev/null | head -1)
 LABEL=$(cat "$LABEL_FILE" 2>/dev/null)
+# Fallback (2026-07-15): derive the label from the canonical per-device identity
+# when the legacy /mnt/data/ga-device-label file is absent. This is the ADR-0010
+# single source of truth — a device that has an identity blob (fresh enrol or a
+# fleet-manager identity backfill) but never got the flasher's stage-72b label
+# file would otherwise ship device_label=unknown forever (observed on ~7 prod
+# devices, 2026-07-15). The addon cannot write /mnt/data/ga-device-label (no
+# mount), so the host-side env-builder heals it here instead.
+if [ -z "$LABEL" ] && [ -f "$IDENTITY_FILE" ]; then
+    LABEL=$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "$IDENTITY_FILE" 2>/dev/null | head -1)
+    [ -n "$LABEL" ] && log "DEVICE_LABEL derived from ga-identity.json: $LABEL"
+fi
 
 # ── per-device Loki credential (ADR-0003 Step 3) ─────────────────────────────
 # Delivered by the fleet-manager credentials_autopush -> ga_manager creds-write
