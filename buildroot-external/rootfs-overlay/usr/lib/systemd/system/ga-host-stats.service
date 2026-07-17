@@ -1,0 +1,13 @@
+[Unit]
+Description=GA — publish host-truth stats to /share for the ga_manager addon
+Documentation=file:/usr/libexec/ga-host-stats
+# Needs docker for container restart counts; degrade gracefully if it is
+# not up yet (jq gets an empty containers array).
+After=docker.service mnt-data.mount
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/ga-host-stats
+# Bounded: journal read is -p warning/-24h (a handful of lines), the rest
+# is /proc + docker inspect. Keep it from ever wedging the timer.
+TimeoutStartSec=30s

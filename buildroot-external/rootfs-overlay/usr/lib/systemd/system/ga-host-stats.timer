@@ -1,0 +1,14 @@
+[Unit]
+Description=GA — host-truth stats every 2min (ga_manager health bridge)
+Documentation=file:/usr/libexec/ga-host-stats
+
+[Timer]
+# First run early so the addon's first health tick after boot already has
+# host truth; then every 2min. The addon's rolling windows (1h) need only
+# two samples, so 2min leaves plenty of margin while staying cheap on SD.
+OnBootSec=90s
+OnUnitActiveSec=2min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
