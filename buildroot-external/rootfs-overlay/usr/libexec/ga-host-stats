@@ -1,0 +1,49 @@
+#!/bin/sh
+# ga-host-stats - periodic host-truth snapshot for the ga_manager addon
+#
+# The addon container cannot see three things its health checks need
+# (Odoo #547): the host journal (no journalctl in the container), the
+# host network namespace (bridge netns hides wt0/wwan0), and container
+# restart counts (Supervisor 2025.11.4.6 exposes no restart_count).
+# This script publishes all three over the blessed /share bridge as one
+# small JSON, rewritten atomically every timer tick.
+#
+# Consumers treat a stale ts (older than ~3 ticks) as "collector down"
+# and degrade to state=unknown - never fabricate health from old data.
+
+OUT="/mnt/data/supervisor/share/ga-host-stats.json"
+
+main() {
+    mkdir -p "$(dirname "$OUT")"
+
+    oom_24h=$(journalctl -k -p warning --since "-24h" --no-pager -o cat 2>/dev/null \
+        | grep -ci 'out of memory')
+    [ -n "$oom_24h" ] || oom_24h=0
+
+    # iface -> {rx_bytes, tx_bytes} from the HOST netns (skip lo + per-container veths)
+    netdev_json=$(awk -F: 'NR>2 {
+        iface=$1; gsub(/ /,"",iface);
+        if (iface=="lo" || iface ~ /^veth/) next;
+        split($2,c," ");
+        printf "%s{\"iface\":\"%s\",\"rx_bytes\":%s,\"tx_bytes\":%s}", sep, iface, c[1], c[9];
+        sep=","
+    }' /proc/net/dev)
+
+    # container name -> docker RestartCount (all containers incl. stopped)
+    restarts_json=$(docker ps -aq 2>/dev/null \
+        | xargs -r docker inspect --format '{"name":"{{slice .Name 1}}","restart_count":{{.RestartCount}},"status":"{{.State.Status}}"}' 2>/dev/null \
+        | paste -sd, -)
+
+    jq -n \
+        --argjson ts "$(date +%s)" \
+        --arg boot_id "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)" \
+        --argjson oom_24h "$oom_24h" \
+        --argjson netdev "[${netdev_json}]" \
+        --argjson containers "[${restarts_json}]" \
+        '{ts: $ts, boot_id: $boot_id, oom_kernel_events_24h: $oom_24h,
+          netdev: ($netdev | map({(.iface): {rx_bytes, tx_bytes}}) | add // {}),
+          containers: ($containers | map({(.name): {restart_count, status}}) | add // {})}' \
+        > "${OUT}.tmp" && mv "${OUT}.tmp" "$OUT"
+}
+
+main "$@"

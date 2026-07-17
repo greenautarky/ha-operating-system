@@ -7,6 +7,11 @@
 MARKER_FILE="/mnt/data/.ga_unclean_shutdown"
 CRASH_LOG="/mnt/data/crash_history.log"
 MAX_LOG_SIZE=102400  # 100KB max log size
+# Per-boot verdict for the ga_manager addon (reads /share = supervisor/share).
+# The live marker itself is useless to the addon: ga-crash-marker re-creates
+# it right after us, so it exists during ALL normal runtime. Only this file
+# says what the LAST boot actually was.
+VERDICT_FILE="/mnt/data/supervisor/share/.ga_last_boot_unclean"
 
 log_crash() {
     local timestamp
@@ -45,13 +50,19 @@ log_crash() {
 }
 
 main() {
+    mkdir -p "$(dirname "$VERDICT_FILE")"
     # Check if marker exists from previous boot
     if [ -f "$MARKER_FILE" ]; then
         log_crash
+        {
+            echo "detected_at=$(date '+%Y-%m-%d %H:%M:%S')"
+            echo "boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)"
+        } > "$VERDICT_FILE"
         # Remove the stale marker (new one will be created by ga-crash-marker.service)
         rm -f "$MARKER_FILE"
     else
         echo "Clean boot - previous shutdown was graceful"
+        rm -f "$VERDICT_FILE"
     fi
 }
 
