@@ -1,0 +1,61 @@
+#!/bin/sh
+# ga-bluetooth-status — write the ACTUAL onboard-Bluetooth state to a file the
+# ga_manager addon can read over the /share bridge (the addon container cannot
+# see the host's kernel modules / hci device / bluetoothd directly).
+#
+# Runs After=bluetooth.service so the reported state reflects the applied
+# result of ga-bluetooth-gate + bluetoothd. Both enable/disable are legitimate
+# operator choices — this is purely informational, never a fault.
+#
+# Consumer: ga_manager healthchecks/ga_specific.check_bluetooth() reads
+# /share/ga-bluetooth-status.json (= this file via the share map).
+set -u
+
+SHARE_DIR=/mnt/data/supervisor/share
+OUT="$SHARE_DIR/ga-bluetooth-status.json"
+SHARE_FLAG="$SHARE_DIR/ga-bluetooth-enabled"
+BOOT_MARKER=/mnt/boot/ga-bluetooth
+
+config_enabled=false; [ -e "$SHARE_FLAG" ] && config_enabled=true
+manual_enabled=false; [ -e "$BOOT_MARKER" ] && manual_enabled=true
+
+module_loaded=false
+grep -q '^hci_uart ' /proc/modules 2>/dev/null && module_loaded=true
+
+hci_present=false
+for d in /sys/class/bluetooth/hci*; do
+	[ -e "$d" ] && hci_present=true && break
+done
+
+bluetoothd_active=false
+if systemctl is-active --quiet bluetooth.service 2>/dev/null; then
+	bluetoothd_active=true
+fi
+
+# "enabled" = the desired state (either source); "active" = actually up now.
+enabled=false
+source=none
+if [ "$config_enabled" = true ]; then
+	enabled=true
+	source=config
+elif [ "$manual_enabled" = true ]; then
+	enabled=true
+	source=manual
+fi
+
+[ -d "$SHARE_DIR" ] || exit 0
+tmp="$OUT.tmp.$$"
+cat > "$tmp" <<EOF
+{
+  "schema_version": 1,
+  "enabled": $enabled,
+  "source": "$source",
+  "config_enabled": $config_enabled,
+  "manual_enabled": $manual_enabled,
+  "module_loaded": $module_loaded,
+  "hci_present": $hci_present,
+  "bluetoothd_active": $bluetoothd_active
+}
+EOF
+mv -f "$tmp" "$OUT" 2>/dev/null || { rm -f "$tmp"; exit 0; }
+exit 0
