@@ -1,0 +1,16 @@
+[Unit]
+Description=Publish onboard Bluetooth status to /share for ga_manager
+# Runs after the gate + bluetoothd so the reported state is the applied one.
+# Informational only (both enabled and disabled are valid) — writes
+# /mnt/data/supervisor/share/ga-bluetooth-status.json.
+RequiresMountsFor=/mnt/data
+After=ga-bluetooth.service bluetooth.service
+Wants=ga-bluetooth.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/ga-bluetooth-status
+
+[Install]
+WantedBy=multi-user.target

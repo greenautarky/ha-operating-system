@@ -1,0 +1,47 @@
+#!/bin/sh
+# ga-bluetooth-gate — decide at boot whether onboard Bluetooth is enabled,
+# and if so load the module so bluetoothd can attach.
+#
+# Two independent, equally-valid enable sources (either one turns it ON):
+#   1. Fleet-managed  — /mnt/data/supervisor/share/ga-bluetooth-enabled
+#      (= the ga_manager addon's `/share/ga-bluetooth-enabled`, written from
+#      the per-device `bluetooth.enabled` config option).
+#   2. Manual/recovery — /mnt/boot/ga-bluetooth
+#      (operator marker on the boot partition; survives a data-partition wipe).
+#
+# Default OFF: with neither present the modprobe.d blacklist keeps the modules
+# unloaded and bluetooth.service stays gated off — fleet behaviour unchanged.
+#
+# This runs Before=bluetooth.service. It sets the runtime flag
+# /run/ga-bluetooth.enabled that bluetooth.service is conditioned on, so a
+# preset-enabled bluetoothd still no-ops when BT is disabled here.
+set -eu
+
+SHARE_FLAG=/mnt/data/supervisor/share/ga-bluetooth-enabled
+BOOT_MARKER=/mnt/boot/ga-bluetooth
+RUN_FLAG=/run/ga-bluetooth.enabled
+
+enabled=0
+source=none
+if [ -e "$SHARE_FLAG" ]; then
+	enabled=1
+	source=config
+elif [ -e "$BOOT_MARKER" ]; then
+	enabled=1
+	source=manual
+fi
+
+if [ "$enabled" = 1 ]; then
+	echo "ga-bluetooth-gate: enabled (source=$source) — loading hci_uart"
+	# --ignore-install bypasses the `install hci_uart /bin/true` hard-block in
+	# /usr/lib/modprobe.d/ga-bluetooth.conf (that block is what keeps BT off by
+	# default against the serdev auto-trigger). Deps load normally.
+	/usr/sbin/modprobe --ignore-install hci_uart || echo "ga-bluetooth-gate: modprobe hci_uart failed" >&2
+	mkdir -p "$(dirname "$RUN_FLAG")"
+	: > "$RUN_FLAG"
+else
+	echo "ga-bluetooth-gate: disabled (default OFF) — leaving BT unloaded"
+	rm -f "$RUN_FLAG"
+fi
+
+exit 0
