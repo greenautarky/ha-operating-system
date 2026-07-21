@@ -33,7 +33,10 @@ fi
 
 if [ "$enabled" = 1 ]; then
 	echo "ga-bluetooth-gate: enabled (source=$source) — loading hci_uart"
-	/usr/sbin/modprobe hci_uart || echo "ga-bluetooth-gate: modprobe hci_uart failed" >&2
+	# --ignore-install bypasses the `install hci_uart /bin/true` hard-block in
+	# /usr/lib/modprobe.d/ga-bluetooth.conf (that block is what keeps BT off by
+	# default against the serdev auto-trigger). Deps load normally.
+	/usr/sbin/modprobe --ignore-install hci_uart || echo "ga-bluetooth-gate: modprobe hci_uart failed" >&2
 	mkdir -p "$(dirname "$RUN_FLAG")"
 	: > "$RUN_FLAG"
 else
