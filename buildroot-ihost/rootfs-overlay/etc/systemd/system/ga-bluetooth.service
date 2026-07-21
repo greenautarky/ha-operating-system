@@ -1,0 +1,18 @@
+[Unit]
+Description=Activate onboard Bluetooth when boot marker is present
+# Boot-time switch: ON = `touch /mnt/boot/ga-bluetooth` + reboot,
+# OFF = `rm /mnt/boot/ga-bluetooth` + reboot. Without the marker neither the
+# kernel modules load (modprobe.d/ga-bluetooth.conf) nor does bluetoothd start
+# (bluetooth.service.d/ga-marker-gate.conf).
+ConditionPathExists=/mnt/boot/ga-bluetooth
+RequiresMountsFor=/mnt/boot
+Wants=bluetooth.service
+Before=bluetooth.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/modprobe hci_uart
+
+[Install]
+WantedBy=multi-user.target
