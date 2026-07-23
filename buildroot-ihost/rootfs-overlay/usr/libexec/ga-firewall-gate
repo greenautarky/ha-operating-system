@@ -1,0 +1,178 @@
+#!/bin/sh
+# ga-firewall-gate — decide at boot whether the host firewall is active, and if
+# so load an nftables ruleset that keeps blocked services off the customer LAN
+# while leaving the NetBird mesh + loopback ALWAYS reachable.
+#
+# PREPARED / DEFAULT OFF. Two independent enable sources (either turns it ON):
+#   1. Fleet-managed  — /mnt/data/supervisor/share/ga-firewall-enabled
+#      (= ga_manager's `/share/ga-firewall-enabled`, written from the per-device
+#      `firewall.enabled` config option) + the policy in ga-firewall-policy.json.
+#   2. Manual/recovery — /mnt/boot/ga-firewall
+#      (operator marker on the boot partition; survives a data-partition wipe).
+#
+# With NEITHER marker present the table is flushed (removed) → every port stays
+# exposed exactly as before the firewall existed. Fleet behaviour unchanged.
+#
+# SAFETY (this is the high-blast-radius component — a bad rule = an unreachable
+# device in a customer home, recoverable only over the serial console):
+#   * HARD INVARIANT: loopback + the NetBird mesh (wt0) + Tailscale (tailscale0)
+#     are accepted FIRST in every chain, hardcoded, never derived from policy.
+#     GACI/fleet-manager reach :8099/:8123 over the mesh, so the mesh must never
+#     be firewalled — even if the policy asked to block everything.
+#   * FAIL-OPEN: the base chains use `policy accept`; only services explicitly
+#     set to `false` in the policy get a targeted `drop`. A missing/garbled
+#     policy blocks nothing. If `nft -f` fails, the table is deleted (open).
+#   * established,related is accepted so flipping the firewall never tears down
+#     an in-flight mesh session.
+#
+# Host-vs-container: dropbear SSH (:22222) is a HOST process → filtered in the
+# `input` hook. HA Core (:8123), ga_manager (:8099), the Supervisor observer
+# (:4357), Mosquitto (:1883) and device-local InfluxDB (:8086) are Docker
+# containers with PUBLISHED ports → their inbound traffic is DNAT'd and
+# traverses the `forward` hook, NOT `input`. Both chains are therefore needed;
+# an input-only filter would silently fail to block the container ports.
+#
+# Consumer of the status file: ga_manager healthchecks/ga_specific.check_firewall
+# reads /share/ga-firewall-status.json (= this file over the share map).
+set -u
+
+SHARE_DIR=/mnt/data/supervisor/share
+ENABLE_FLAG="$SHARE_DIR/ga-firewall-enabled"
+POLICY_FILE="$SHARE_DIR/ga-firewall-policy.json"
+BOOT_MARKER=/mnt/boot/ga-firewall
+STATUS_FILE="$SHARE_DIR/ga-firewall-status.json"
+TABLE="inet ga_firewall"
+
+log() { echo "ga-firewall-gate: $*"; }
+
+# --- resolve enable state --------------------------------------------------
+enabled=0
+source=none
+if [ -e "$ENABLE_FLAG" ]; then
+	enabled=1
+	source=config
+elif [ -e "$BOOT_MARKER" ]; then
+	enabled=1
+	source=manual
+fi
+
+# nft absent (image predates BR2_PACKAGE_NFTABLES) → nothing we can do; report.
+if ! command -v nft >/dev/null 2>&1; then
+	log "nft not installed — firewall inert"
+	write_status() { :; }
+	enabled=0
+	source=none
+fi
+
+flush_table() {
+	# Idempotent removal: `delete table` errors if absent, so probe first.
+	if nft list table $TABLE >/dev/null 2>&1; then
+		nft delete table $TABLE 2>/dev/null || true
+	fi
+}
+
+# --- status writer ---------------------------------------------------------
+# $1 = enabled(true/false) $2 = source $3 = ruleset_loaded(true/false)
+# $4 = blocked services (space separated)
+write_status() {
+	[ -d "$SHARE_DIR" ] || return 0
+	_blocked_json=""
+	for _s in $4; do
+		[ -n "$_blocked_json" ] && _blocked_json="$_blocked_json, "
+		_blocked_json="$_blocked_json\"$_s\""
+	done
+	tmp="$STATUS_FILE.tmp.$$"
+	cat > "$tmp" <<EOF
+{
+  "schema_version": 1,
+  "enabled": $1,
+  "source": "$2",
+  "ruleset_loaded": $3,
+  "blocked": [$_blocked_json]
+}
+EOF
+	mv -f "$tmp" "$STATUS_FILE" 2>/dev/null || { rm -f "$tmp"; return 0; }
+}
+
+# --- default OFF: flush and exit -------------------------------------------
+if [ "$enabled" != 1 ]; then
+	flush_table
+	log "disabled (default OFF) — no ruleset loaded"
+	write_status false none false ""
+	exit 0
+fi
+
+# --- policy parse ----------------------------------------------------------
+# Format (from ga_manager firewall_reconcile): {"enabled":bool,
+# "services":{"ssh":true,...}}. A service is BLOCKED when set to false.
+# Missing/unreadable policy → nothing blocked (fail-open).
+svc_blocked() {
+	[ -r "$POLICY_FILE" ] || return 1
+	grep -Eq "\"$1\"[[:space:]]*:[[:space:]]*false" "$POLICY_FILE" 2>/dev/null
+}
+
+# service -> port ; and which hook (host=input, container=forward)
+INPUT_DROPS=""    # host-service dports to drop on the LAN
+FORWARD_DROPS=""  # container-published dports to drop on the LAN
+BLOCKED=""
+
+add_block() { # $1=svc $2=port $3=hook
+	BLOCKED="$BLOCKED $1"
+	if [ "$3" = input ]; then
+		INPUT_DROPS="$INPUT_DROPS $2"
+	else
+		FORWARD_DROPS="$FORWARD_DROPS $2"
+	fi
+}
+
+svc_blocked ssh        && add_block ssh        22222 input
+svc_blocked observer   && add_block observer   4357  forward
+svc_blocked ha_core    && add_block ha_core    8123  forward
+svc_blocked ga_manager && add_block ga_manager 8099  forward
+svc_blocked mqtt       && add_block mqtt       1883  forward
+svc_blocked influxdb   && add_block influxdb   8086  forward
+
+# --- build ruleset ---------------------------------------------------------
+RULES="$(mktemp /tmp/ga-firewall.XXXXXX)" || { log "mktemp failed"; write_status true "$source" false ""; exit 0; }
+
+{
+	echo "table $TABLE {"
+	# INPUT: host-destined traffic (dropbear SSH, host netns services)
+	echo "  chain input {"
+	echo "    type filter hook input priority 0; policy accept;"
+	echo "    iif \"lo\" accept"
+	echo "    iifname { \"wt0\", \"tailscale0\" } accept"
+	echo "    ct state established,related accept"
+	for p in $INPUT_DROPS; do
+		echo "    tcp dport $p drop"
+	done
+	echo "  }"
+	# FORWARD: DNAT'd traffic to published container ports. The mesh + established
+	# accepts come first so container ports stay reachable over the mesh; the
+	# drops match the (post-DNAT) container port and only bite LAN ingress.
+	echo "  chain forward {"
+	echo "    type filter hook forward priority -5; policy accept;"
+	echo "    iifname { \"wt0\", \"tailscale0\" } accept"
+	echo "    ct state established,related accept"
+	for p in $FORWARD_DROPS; do
+		echo "    ct status dnat tcp dport $p drop"
+	done
+	echo "  }"
+	echo "}"
+} > "$RULES"
+
+# Atomic load. On failure, delete the table so we never leave a half-applied
+# ruleset that could lock the device out.
+flush_table
+if nft -f "$RULES" 2>/tmp/ga-firewall.err; then
+	log "enabled (source=$source) — ruleset loaded; blocked:${BLOCKED:- none}"
+	write_status true "$source" true "$BLOCKED"
+	rc=0
+else
+	log "nft load FAILED — flushing to fail-open: $(cat /tmp/ga-firewall.err 2>/dev/null)"
+	flush_table
+	write_status true "$source" false ""
+	rc=0
+fi
+rm -f "$RULES" /tmp/ga-firewall.err
+exit $rc
