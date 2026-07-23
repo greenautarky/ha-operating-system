@@ -39,7 +39,7 @@ export async function waitForHA(hassUrl: string, timeoutMs = 60_000): Promise<vo
  * This endpoint is unauthenticated by design (gated by completion check).
  */
 export async function getGAOnboardingStatus(hassUrl: string): Promise<GAOnboardingStatus> {
-  const res = await fetch(`${hassUrl}/api/greenautarky_onboarding/status`);
+  const res = await fetch(`${hassUrl}/api/greenautarky_site/status`);
   if (!res.ok) {
     throw new Error(`Status endpoint returned ${res.status} — is HA Core running?`);
   }

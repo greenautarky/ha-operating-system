@@ -177,7 +177,7 @@ fi
 # (it needs the HA owner account, which doesn't exist at boot+85s — the owner
 # is created later by ga_manager converge step 3). It was a guaranteed WARN
 # no-op. We do NOT migrate it: the customer sets their real location in the
-# greenautarky_onboarding wizard, so a generic Berlin fleet-default is
+# greenautarky_site wizard, so a generic Berlin fleet-default is
 # low-value and a direct core.config write is schema-fragile. If a default is
 # ever wanted, add it to converge AFTER step 3 (owner exists). See
 # todo_v12_bake_followups_2026_05_27.md #3.

@@ -7,7 +7,7 @@
 #   1. HA stock onboarding   (POST /api/onboarding/users, /core_config, /integration)
 #   2. Login via /auth/token (long-lived-token / regular token exchange)
 #   3. Lovelace dashboard with all 14 ga_frontend_bundle cards
-#   4. greenautarky_onboarding wizard (simulated state from ga_manager step 9)
+#   4. greenautarky_site wizard (simulated state from ga_manager step 9)
 #   5. Password-forgotten via PIN
 #   6. Console-login signed-token auto-login
 #
@@ -38,10 +38,10 @@ suite_start "User flows (onboarding + login + dashboard + wizard + password-rese
 HA="http://localhost:8123"
 CFG_DIR="/mnt/data/supervisor/homeassistant"
 STORAGE_DIR="${CFG_DIR}/.storage"
-STATE_FILE="${STORAGE_DIR}/greenautarky_onboarding"
+STATE_FILE="${STORAGE_DIR}/greenautarky_site"
 GA_SECRETS_DIR="${STORAGE_DIR}/greenautarky_secrets"
 BUNDLE_COMMUNITY="${CFG_DIR}/custom_components/ga_frontend_bundle/community"
-# greenautarky_onboarding v1.0.3 moved the PIN file from /config/ga-onboarding-pin
+# greenautarky_site v1.0.3 moved the PIN file from /config/ga-onboarding-pin
 # to /config/.storage/greenautarky_secrets/onboarding_pin (= same .storage/
 # dir already used since v1.0.1 for the console-login secret). Test writes
 # the new path; integration's _migrate_legacy_pin handles devices upgrading
@@ -62,7 +62,7 @@ mkdir -p "$STORAGE_DIR"
 # ALWAYS reset to a clean wizard-pending state at the start of each run —
 # tests assert completed=false (PWRST, WIZ) AND need a known baseline to
 # restore to after DASH-02 (which flips completed=true).
-printf '%s' '{"version":2,"key":"greenautarky_onboarding","data":{"completed":false,"tenant_mode":true,"steps_done":[],"consents":{}}}' \
+printf '%s' '{"version":2,"key":"greenautarky_site","data":{"completed":false,"tenant_mode":true,"steps_done":[],"consents":{}}}' \
   > "$STATE_FILE"
 mkdir -p "$GA_SECRETS_DIR"
 chmod 0700 "$GA_SECRETS_DIR"
@@ -207,7 +207,7 @@ fi
 #   1. HA stock onboarding has THREE steps after `user` (core_config,
 #      analytics, integration) — until ALL are done the served index is
 #      the onboarding shell, NO custom-integration extra-module URLs.
-#   2. greenautarky_onboarding monkey-patches HA's IndexView.get to
+#   2. greenautarky_site monkey-patches HA's IndexView.get to
 #      redirect to /greenautarky-setup until `state.completed == true`.
 #
 # Mark BOTH as complete, then probe. SAVE_STATE restores the greenautarky
@@ -264,12 +264,12 @@ fi
 printf '%s' "$SAVE_STATE" > "$STATE_FILE"
 ha core restart --no-progress >/dev/null 2>&1
 # Same waiting-for-component pattern as DASH-02: /api/states is not enough,
-# the greenautarky_onboarding setup must finish to honor the restored state.
+# the greenautarky_site setup must finish to honor the restored state.
 for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18; do
   sleep 10
   comp=$(curl -s -H "Authorization: Bearer $TOKEN" "$HA/api/config" 2>/dev/null \
          | jq -r '.components // [] | join(",")' 2>/dev/null)
-  echo "$comp" | tr ',' '\n' | grep -qx greenautarky_onboarding && break
+  echo "$comp" | tr ',' '\n' | grep -qx greenautarky_site && break
 done
 
 # DASH-03 — ga_frontend_bundle async_setup actually fired. The integration
@@ -288,15 +288,15 @@ else
   _fail "DASH-03: ga_frontend_bundle NOT in hass.config.components — async_setup did not fire (CONFIG_SCHEMA missing?)"
 fi
 
-# DASH-04 — greenautarky_onboarding integration actually fired.
-if echo "$loaded" | tr ',' '\n' | grep -qx greenautarky_onboarding; then
-  _pass "DASH-04: greenautarky_onboarding integration loaded"
+# DASH-04 — greenautarky_site integration actually fired.
+if echo "$loaded" | tr ',' '\n' | grep -qx greenautarky_site; then
+  _pass "DASH-04: greenautarky_site integration loaded"
 else
-  _fail "DASH-04: greenautarky_onboarding NOT in hass.config.components"
+  _fail "DASH-04: greenautarky_site NOT in hass.config.components"
 fi
 
 # ===========================================================================
-# 4. greenautarky_onboarding wizard (simulated state from converge step 9)
+# 4. greenautarky_site wizard (simulated state from converge step 9)
 # ===========================================================================
 
 # WIZ-01: write state file to ARM the wizard. STORAGE_VERSION must match
@@ -311,13 +311,13 @@ if [ -f "$STATE_FILE" ]; then
   [ "$cur_ver" = "2" ] && NEED_WRITE=0
 fi
 if [ "$NEED_WRITE" = "1" ]; then
-  printf '%s' '{"version":2,"key":"greenautarky_onboarding","data":{"completed":false,"tenant_mode":true,"steps_done":[],"consents":{}}}' \
+  printf '%s' '{"version":2,"key":"greenautarky_site","data":{"completed":false,"tenant_mode":true,"steps_done":[],"consents":{}}}' \
     > "$STATE_FILE"
 fi
 if [ -f "$STATE_FILE" ]; then
-  _pass "WIZ-01: greenautarky_onboarding state file present (version=$(jq -r .version $STATE_FILE))"
+  _pass "WIZ-01: greenautarky_site state file present (version=$(jq -r .version $STATE_FILE))"
 else
-  _fail "WIZ-01: could not write greenautarky_onboarding state"
+  _fail "WIZ-01: could not write greenautarky_site state"
 fi
 
 # WIZ-02: PIN file present (gates password reset)
@@ -340,12 +340,12 @@ while [ $WAIT -lt 90 ]; do
 done
 echo "  (Core restart took ${WAIT}s)"
 
-# WIZ-03: greenautarky onboarding status endpoint (actual URL is /api/greenautarky_onboarding/status)
-status=$(curl -s -H "Authorization: Bearer $TOKEN" "$HA/api/greenautarky_onboarding/status" 2>/dev/null)
+# WIZ-03: greenautarky onboarding status endpoint (actual URL is /api/greenautarky_site/status)
+status=$(curl -s -H "Authorization: Bearer $TOKEN" "$HA/api/greenautarky_site/status" 2>/dev/null)
 if echo "$status" | jq -e 'has("completed") or has("tenant_mode")' >/dev/null 2>&1; then
-  _pass "WIZ-03: /api/greenautarky_onboarding/status returns valid state: $(echo "$status" | jq -c)"
+  _pass "WIZ-03: /api/greenautarky_site/status returns valid state: $(echo "$status" | jq -c)"
 else
-  _fail "WIZ-03: /api/greenautarky_onboarding/status invalid — response: $status"
+  _fail "WIZ-03: /api/greenautarky_site/status invalid — response: $status"
 fi
 
 # WIZ-04: wizard frontend at /greenautarky-setup (no .html suffix)
@@ -360,7 +360,7 @@ fi
 # 5. Password-forgotten via PIN
 # ===========================================================================
 
-# PWRST-01: correct PIN accepted at /api/greenautarky_onboarding/verify_pin
+# PWRST-01: correct PIN accepted at /api/greenautarky_site/verify_pin
 # verify_pin is idempotent — once verified, ANY subsequent call returns
 # {"status":"ok"}. To test the wrong-PIN-rejected case (PWRST-02) we
 # reset pin_verified=false in storage between calls.
@@ -376,7 +376,7 @@ pin_reset() {
 
 pin_reset
 resp=$(curl -s -X POST -H "Content-Type: application/json" \
-  -d "{\"pin\":\"$TEST_PIN\"}" "$HA/api/greenautarky_onboarding/verify_pin" 2>/dev/null)
+  -d "{\"pin\":\"$TEST_PIN\"}" "$HA/api/greenautarky_site/verify_pin" 2>/dev/null)
 if echo "$resp" | jq -e '.status == "ok"' >/dev/null 2>&1; then
   _pass "PWRST-01: verify_pin accepts correct PIN (status=ok)"
 else
@@ -385,7 +385,7 @@ fi
 
 pin_reset
 resp=$(curl -s -X POST -H "Content-Type: application/json" \
-  -d '{"pin":"000000"}' "$HA/api/greenautarky_onboarding/verify_pin" 2>/dev/null)
+  -d '{"pin":"000000"}' "$HA/api/greenautarky_site/verify_pin" 2>/dev/null)
 # Reject = status NOT ok (could be {"status":"error"} or {"error":"..."} or 401)
 if echo "$resp" | jq -e '.status != "ok"' >/dev/null 2>&1; then
   _pass "PWRST-02: verify_pin rejects wrong PIN — response: $resp"

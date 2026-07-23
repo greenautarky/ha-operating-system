@@ -57,7 +57,7 @@ const LOCAL_CONTAINER = process.env.HA_CONTAINER || 'ha-local';
 /**
  * Reset GA onboarding state and restart HA Core.
  *
- * DESTRUCTIVE — deletes /config/.storage/greenautarky_onboarding and restarts.
+ * DESTRUCTIVE — deletes /config/.storage/greenautarky_site and restarts.
  * Takes ~15-20s. Only call on dedicated test devices.
  *
  * LOCAL_MODE:  docker exec on host (no SSH needed)
@@ -67,7 +67,7 @@ export function resetOnboardingState(): void {
   if (LOCAL_MODE) {
     // Local Docker: run docker exec directly on the host
     execSync(
-      `docker exec ${LOCAL_CONTAINER} rm -f /config/.storage/greenautarky_onboarding` +
+      `docker exec ${LOCAL_CONTAINER} rm -f /config/.storage/greenautarky_site` +
       ` && docker restart ${LOCAL_CONTAINER}`,
       { stdio: 'inherit', timeout: 30_000 },
     );
@@ -88,7 +88,7 @@ export function resetOnboardingState(): void {
   ].join(' ');
 
   execSync(
-    `${sshPrefix} "docker exec homeassistant rm -f /config/.storage/greenautarky_onboarding; ha core restart"`,
+    `${sshPrefix} "docker exec homeassistant rm -f /config/.storage/greenautarky_site; ha core restart"`,
     { stdio: 'inherit', timeout: 30_000 },
   );
 }

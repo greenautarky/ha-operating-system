@@ -8,7 +8,7 @@ export interface DeviceFixtures {
   /**
    * Reset GA onboarding state on the device and restart HA Core.
    *
-   * DESTRUCTIVE — deletes /config/.storage/greenautarky_onboarding and restarts core.
+   * DESTRUCTIVE — deletes /config/.storage/greenautarky_site and restarts core.
    * Requires DEVICE_IP and SSH access. Only use on dedicated test devices.
    */
   resetOnboarding: () => void;
@@ -40,11 +40,11 @@ export const test = base.extend<DeviceFixtures>({
       // Deleting the file makes _async_setup_common default to
       // `completed: true` (its "this is an old, pre-GA device, do not drag
       // it into the wizard" branch) and the wizard panel never registers.
-      // Schema must match STORAGE_VERSION=2 (custom_components/greenautarky_onboarding/const.py).
+      // Schema must match STORAGE_VERSION=2 (custom_components/greenautarky_site/const.py).
       const fresh = JSON.stringify({
         version: 2,
         minor_version: 1,
-        key: 'greenautarky_onboarding',
+        key: 'greenautarky_site',
         data: {
           completed: false,
           tenant_mode: true,
@@ -53,7 +53,7 @@ export const test = base.extend<DeviceFixtures>({
           consents: {},
         },
       });
-      sshCmd(`cat > /mnt/data/supervisor/homeassistant/.storage/greenautarky_onboarding <<'EOF'\n${fresh}\nEOF\nchmod 600 /mnt/data/supervisor/homeassistant/.storage/greenautarky_onboarding && docker restart homeassistant`);
+      sshCmd(`cat > /mnt/data/supervisor/homeassistant/.storage/greenautarky_site <<'EOF'\n${fresh}\nEOF\nchmod 600 /mnt/data/supervisor/homeassistant/.storage/greenautarky_site && docker restart homeassistant`);
 
       // Wait for HA to come back up (poll status endpoint).
       // iHost cold-start is ~90-120s after `docker restart homeassistant`;
@@ -65,7 +65,7 @@ export const test = base.extend<DeviceFixtures>({
       while (Date.now() - start < maxWait) {
         try {
           const res = execSync(
-            `curl -sf --connect-timeout 5 ${deviceUrl}/api/greenautarky_onboarding/status`,
+            `curl -sf --connect-timeout 5 ${deviceUrl}/api/greenautarky_site/status`,
             { timeout: 10_000 },
           ).toString();
           if (res.includes('"pin_required"')) return; // HA is back

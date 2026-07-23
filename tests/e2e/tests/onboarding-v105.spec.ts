@@ -55,7 +55,7 @@ test.describe('Onboarding wizard — Siezen copy (read-only)', () => {
     // The wizard only renders the welcome step when GA onboarding is not yet
     // completed. Gate on the status endpoint (deterministic) — ga-setup-welcome
     // is a box-less custom element so an isVisible() gate would false-skip.
-    const status = await fetch(`${deviceUrl}/api/greenautarky_onboarding/status`)
+    const status = await fetch(`${deviceUrl}/api/greenautarky_site/status`)
       .then((r) => r.json())
       .catch(() => ({}));
     if (status.completed === true)

@@ -15,7 +15,7 @@ every tag. The trees themselves are **not** committed to this directory
 
 | Component | Source repo | Pin location | Pulled from |
 |---|---|---|---|
-| `greenautarky_onboarding` | [greenautarky/greenautarky-onboarding](https://github.com/greenautarky/greenautarky-onboarding) | `version.yaml` → `components.greenautarky-onboarding` | `ghcr.io/greenautarky/greenautarky-onboarding:<ver>` |
+| `greenautarky_site` | [greenautarky/greenautarky-onboarding](https://github.com/greenautarky/greenautarky-onboarding) (source repo not yet renamed) | `version.yaml` → `components.greenautarky-site` | `ghcr.io/greenautarky/greenautarky-site:<ver>` |
 | `ga_frontend_bundle` | [greenautarky/ga-frontend-bundle](https://github.com/greenautarky/ga-frontend-bundle) | `version.yaml` → `components.ga-frontend-bundle` | `ghcr.io/greenautarky/ga-frontend-bundle:<ver>` |
 
 `ga_frontend_bundle` is stateless (no `config_flow`, no `Store`): converge places
