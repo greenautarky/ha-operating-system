@@ -9,13 +9,13 @@ only the GA-specific onboarding panel is reset.
 | Component | Location | Repo |
 |-----------|----------|------|
 | Reset script | `buildroot-external/rootfs-overlay/usr/sbin/ga-reset-onboarding` | ha-operating-system |
-| GA onboarding panel | `homeassistant/components/greenautarky_onboarding/` | homeassisant_core |
+| GA onboarding panel | `homeassistant/components/greenautarky_site/` | homeassisant_core |
 
 ## How it works
 
 The GA onboarding state lives in a single file:
 ```
-/mnt/data/supervisor/homeassistant/.storage/greenautarky_onboarding
+/mnt/data/supervisor/homeassistant/.storage/greenautarky_site
 ```
 
 Resetting onboarding = writing this file with `completed: false` and `tenant_mode: true`.
@@ -35,11 +35,11 @@ Options:
   --dry-run   Show what would be done without making changes
 ```
 
-All it does is write/overwrite the `greenautarky_onboarding` storage file:
+All it does is write/overwrite the `greenautarky_site` storage file:
 ```json
 {
     "version": 1,
-    "key": "greenautarky_onboarding",
+    "key": "greenautarky_site",
     "data": {
         "completed": false,
         "tenant_mode": true,
@@ -56,7 +56,7 @@ No need to stop HA Core, no auth file manipulation, no Python-in-Docker.
 ```
 PROVISIONING (ga-flasher-py)
   stage 50  →  admin created
-  stage 69  →  greenautarky_onboarding written (completed=false, tenant_mode=true)
+  stage 69  →  greenautarky_site written (completed=false, tenant_mode=true)
                   ↓
 FIRST TENANT ONBOARDING
   GA panel appears → GDPR consent, user account, custom pages, analytics
@@ -67,7 +67,7 @@ DEVICE IN USE
                   ↓
 RESET FOR NEW TENANT
   SSH to device:  ga-reset-onboarding
-  (or inline in flasher: write greenautarky_onboarding file)
+  (or inline in flasher: write greenautarky_site file)
                   ↓
 NEW TENANT ONBOARDING
   GA panel appears again → same flow as first tenant
@@ -92,10 +92,10 @@ ga-reset-onboarding
 ### Inline alternative (no script needed)
 
 ```bash
-cat > /mnt/data/supervisor/homeassistant/.storage/greenautarky_onboarding << 'EOF'
+cat > /mnt/data/supervisor/homeassistant/.storage/greenautarky_site << 'EOF'
 {
     "version": 1,
-    "key": "greenautarky_onboarding",
+    "key": "greenautarky_site",
     "data": {
         "completed": false,
         "tenant_mode": true,

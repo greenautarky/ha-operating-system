@@ -1,6 +1,6 @@
 #!/bin/sh
 # Core image & onboarding verification - runs ON the device.
-# V1.2-clean model: STOCK HA Core image + the greenautarky_onboarding
+# V1.2-clean model: STOCK HA Core image + the greenautarky_site
 # custom_component (German onboarding, GDPR consent, telemetry preferences).
 # The Supervisor stays a greenautarky fork; Core + frontend are stock upstream.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -41,7 +41,7 @@ run_test_show "OB-04b" "GA release identifier" \
 # customer lands on the stock HA login (because ga_manager already
 # created the admin user) and never finds the GA wizard. The
 # `_patch_index_view_for_wizard_redirect` server-side hook in
-# greenautarky_onboarding owns this behaviour; the add_extra_js_url
+# greenautarky_site owns this behaviour; the add_extra_js_url
 # client-side fallback alone can't fix it because HA Core injects
 # extra_module_url tags only into the authenticated dashboard HTML.
 #
@@ -51,7 +51,7 @@ run_test_show "OB-04b" "GA release identifier" \
 # Both run unauthenticated (curl with no token). The wizard URL is
 # `/greenautarky-setup.html` (the actual page) — NOT `/greenautarky-setup`
 # (which is the view that itself 302s).
-_wizard_completed=$(jq -r '.data.completed // false' /mnt/data/supervisor/homeassistant/.storage/greenautarky_onboarding 2>/dev/null || echo "false")
+_wizard_completed=$(jq -r '.data.completed // false' /mnt/data/supervisor/homeassistant/.storage/greenautarky_site 2>/dev/null || echo "false")
 _root_redirect=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --connect-timeout 5 'http://localhost:8123/' 2>/dev/null)
 
 if [ "$_wizard_completed" = "false" ]; then
@@ -86,16 +86,16 @@ run_test_show "OB-08" "Core image is latest (not stale)" \
 
 # --- Custom onboarding content ---
 # V1.2-clean: the onboarding customization moved OUT of the Core fork's
-# strings.json INTO the greenautarky_onboarding custom_component, which
+# strings.json INTO the greenautarky_site custom_component, which
 # ga_manager's converge worker places into /config/custom_components
 # (= the data partition's homeassistant/custom_components/). The component's
 # runtime registration is additionally proven by OB-13 / PW-* (its HTTP views).
-GA_COMP="/mnt/data/supervisor/homeassistant/custom_components/greenautarky_onboarding"
-run_test "OB-09" "greenautarky_onboarding custom_component placed (converge step 2)" \
+GA_COMP="/mnt/data/supervisor/homeassistant/custom_components/greenautarky_site"
+run_test "OB-09" "greenautarky_site custom_component placed (converge step 2)" \
   "[ -f '$GA_COMP/manifest.json' ]"
 
-run_test "OB-10" "greenautarky_onboarding manifest declares its domain" \
-  "grep -q 'greenautarky_onboarding' '$GA_COMP/manifest.json' 2>/dev/null"
+run_test "OB-10" "greenautarky_site manifest declares its domain" \
+  "grep -q 'greenautarky_site' '$GA_COMP/manifest.json' 2>/dev/null"
 
 # --- Frontend ---
 run_test "OB-11" "Frontend wheel installed" \
@@ -121,7 +121,7 @@ fi
 # --- Ethernet consent ---
 # OB-13: Ethernet consent API endpoint exists
 run_test "OB-13" "Ethernet consent API endpoint exists" \
-  "curl -sf --connect-timeout 5 -X POST http://localhost:8123/api/greenautarky_onboarding/ethernet \
+  "curl -sf --connect-timeout 5 -X POST http://localhost:8123/api/greenautarky_site/ethernet \
    -H 'Content-Type: application/json' -d '{\"enable_ethernet\": false}' 2>/dev/null | grep -q 'status'"
 
 # OB-14: Default Ethernet state after provisioning
@@ -138,13 +138,13 @@ run_test "PW-01" "Password reset page accessible" \
 
 run_test "PW-02" "Password reset API rejects wrong PIN" \
   "HTTP_CODE=\$(curl -sf --connect-timeout 5 -o /dev/null -w '%{http_code}' \
-   -X POST http://localhost:8123/api/greenautarky_onboarding/password_reset/users \
+   -X POST http://localhost:8123/api/greenautarky_site/password_reset/users \
    -H 'Content-Type: application/json' -d '{\"pin\": \"000000\"}' 2>/dev/null); \
    [ \"\$HTTP_CODE\" = '401' ] || [ \"\$HTTP_CODE\" = '404' ]"
 
 run_test "PW-03" "Password reset API rejects missing fields" \
   "HTTP_CODE=\$(curl -sf --connect-timeout 5 -o /dev/null -w '%{http_code}' \
-   -X POST http://localhost:8123/api/greenautarky_onboarding/password_reset \
+   -X POST http://localhost:8123/api/greenautarky_site/password_reset \
    -H 'Content-Type: application/json' -d '{\"pin\": \"000000\", \"username\": \"\", \"new_password\": \"\"}' 2>/dev/null); \
    [ \"\$HTTP_CODE\" = '400' ] || [ \"\$HTTP_CODE\" = '401' ] || [ \"\$HTTP_CODE\" = '404' ]"
 

@@ -55,7 +55,7 @@ async function hasConsentMarker(marker: string): Promise<boolean> {
 
 test.describe('Telemetry Consent — API', () => {
   test('telemetry endpoint exists (returns 200 or 403)', async ({ deviceUrl }) => {
-    const res = await fetch(`${deviceUrl}/api/greenautarky_onboarding/telemetry`, {
+    const res = await fetch(`${deviceUrl}/api/greenautarky_site/telemetry`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ error_logs: false, metrics: false }),
@@ -132,7 +132,7 @@ test.describe('Telemetry Consent — Wizard flow', () => {
     // Reset onboarding via admin API
     const { execSync } = await import('child_process');
     execSync(
-      `${SSH_CMD} 'curl -sf -X POST http://localhost:8123/api/greenautarky_onboarding/reset -H "Authorization: Bearer $(cat /mnt/data/supervisor/homeassistant/.storage/auth 2>/dev/null | grep -o \\"[a-f0-9]\\{64\\}\\" | head -1)" 2>/dev/null || true'`,
+      `${SSH_CMD} 'curl -sf -X POST http://localhost:8123/api/greenautarky_site/reset -H "Authorization: Bearer $(cat /mnt/data/supervisor/homeassistant/.storage/auth 2>/dev/null | grep -o \\"[a-f0-9]\\{64\\}\\" | head -1)" 2>/dev/null || true'`,
       { timeout: 15_000 },
     );
     await waitForHA(deviceUrl, 30_000);

@@ -22,7 +22,7 @@ test.describe("PIN verification (onboarding)", () => {
 
   test.beforeAll(async ({ request, deviceUrl }) => {
     // Check if PIN is required on this device
-    const res = await request.get(`${deviceUrl}/api/greenautarky_onboarding/status`);
+    const res = await request.get(`${deviceUrl}/api/greenautarky_site/status`);
     if (res.ok()) {
       const status = await res.json();
       pinRequired = status.pin_required === true && status.pin_verified !== true;
@@ -30,7 +30,7 @@ test.describe("PIN verification (onboarding)", () => {
   });
 
   test("status endpoint includes PIN fields", async ({ request, deviceUrl }) => {
-    const res = await request.get(`${deviceUrl}/api/greenautarky_onboarding/status`);
+    const res = await request.get(`${deviceUrl}/api/greenautarky_site/status`);
     expect(res.ok()).toBeTruthy();
     const status = await res.json();
     expect(status).toHaveProperty("pin_required");
@@ -42,7 +42,7 @@ test.describe("PIN verification (onboarding)", () => {
   test("verify_pin rejects wrong PIN", async ({ request, deviceUrl }) => {
     test.skip(!pinRequired, "No PIN required on this device");
 
-    const res = await request.post(`${deviceUrl}/api/greenautarky_onboarding/verify_pin`, {
+    const res = await request.post(`${deviceUrl}/api/greenautarky_site/verify_pin`, {
       data: { pin: "000000" },
     });
     expect(res.status()).toBe(401);
@@ -55,12 +55,12 @@ test.describe("PIN verification (onboarding)", () => {
     test.skip(!pinRequired, "No PIN required on this device");
 
     // First wrong attempt (may already have attempts from previous test)
-    await request.post(`${deviceUrl}/api/greenautarky_onboarding/verify_pin`, {
+    await request.post(`${deviceUrl}/api/greenautarky_site/verify_pin`, {
       data: { pin: "111111" },
     });
 
     // Second wrong attempt should have retry_after
-    const res = await request.post(`${deviceUrl}/api/greenautarky_onboarding/verify_pin`, {
+    const res = await request.post(`${deviceUrl}/api/greenautarky_site/verify_pin`, {
       data: { pin: "222222" },
     });
     const body = await res.json();
@@ -80,13 +80,13 @@ test.describe("PIN verification (onboarding)", () => {
     test.skip(!DEVICE_PIN, "DEVICE_PIN env var not set");
 
     // Wait for any rate limit to expire
-    const statusRes = await request.get(`${deviceUrl}/api/greenautarky_onboarding/status`);
+    const statusRes = await request.get(`${deviceUrl}/api/greenautarky_site/status`);
     const status = await statusRes.json();
     if (status.pin_retry_after && status.pin_retry_after > 0) {
       test.skip(true, `Rate limited for ${status.pin_retry_after}s — run later`);
     }
 
-    const res = await request.post(`${deviceUrl}/api/greenautarky_onboarding/verify_pin`, {
+    const res = await request.post(`${deviceUrl}/api/greenautarky_site/verify_pin`, {
       data: { pin: DEVICE_PIN },
     });
     expect(res.ok()).toBeTruthy();
@@ -94,7 +94,7 @@ test.describe("PIN verification (onboarding)", () => {
     expect(body.status).toBe("ok");
 
     // Verify status reflects verification
-    const afterRes = await request.get(`${deviceUrl}/api/greenautarky_onboarding/status`);
+    const afterRes = await request.get(`${deviceUrl}/api/greenautarky_site/status`);
     const afterStatus = await afterRes.json();
     expect(afterStatus.pin_verified).toBe(true);
     expect(afterStatus.steps_done).toContain("pin");
@@ -105,11 +105,11 @@ test.describe("PIN verification (onboarding)", () => {
     test.skip(!DEVICE_PIN, "DEVICE_PIN env var not set");
 
     // If already verified (from previous test), should return ok
-    const statusRes = await request.get(`${deviceUrl}/api/greenautarky_onboarding/status`);
+    const statusRes = await request.get(`${deviceUrl}/api/greenautarky_site/status`);
     const status = await statusRes.json();
     test.skip(!status.pin_verified, "PIN not yet verified");
 
-    const res = await request.post(`${deviceUrl}/api/greenautarky_onboarding/verify_pin`, {
+    const res = await request.post(`${deviceUrl}/api/greenautarky_site/verify_pin`, {
       data: { pin: DEVICE_PIN },
     });
     expect(res.ok()).toBeTruthy();
@@ -121,11 +121,11 @@ test.describe("PIN verification (onboarding)", () => {
     test.skip(!pinRequired, "No PIN required on this device");
 
     // Only test if PIN is NOT yet verified
-    const statusRes = await request.get(`${deviceUrl}/api/greenautarky_onboarding/status`);
+    const statusRes = await request.get(`${deviceUrl}/api/greenautarky_site/status`);
     const status = await statusRes.json();
     test.skip(status.pin_verified === true, "PIN already verified");
 
-    const res = await request.post(`${deviceUrl}/api/greenautarky_onboarding/gdpr`, {
+    const res = await request.post(`${deviceUrl}/api/greenautarky_site/gdpr`, {
       data: { accepted: true },
     });
     expect(res.status()).toBe(403);
@@ -248,7 +248,7 @@ test.describe("PIN verification (onboarding)", () => {
 
     // Send with dash format (e.g. "847-293")
     const dashPin = DEVICE_PIN.slice(0, 3) + "-" + DEVICE_PIN.slice(3);
-    const res = await request.post(`${deviceUrl}/api/greenautarky_onboarding/verify_pin`, {
+    const res = await request.post(`${deviceUrl}/api/greenautarky_site/verify_pin`, {
       data: { pin: dashPin },
     });
     // Should work — backend strips dashes

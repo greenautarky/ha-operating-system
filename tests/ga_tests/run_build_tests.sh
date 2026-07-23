@@ -1044,7 +1044,7 @@ fi
 
 # BLD-FE: V1.2-clean — the greenautarky/frontend fork is RETIRED (T3).
 # The GA onboarding wizard no longer rides inside the Core image; it is a
-# `greenautarky_onboarding` custom_component. The "vendor it into the
+# `greenautarky_site` custom_component. The "vendor it into the
 # ga_manager addon image" plan was DROPPED (T4, commit 0d2c65ff3): the
 # ga_manager Dockerfile's clone of the private ha-greenautarky-onboarding
 # repo had no build credentials and was removed. The component now ships
@@ -1053,7 +1053,7 @@ fi
 #   BLD-FE-01 — stock Core image carries a built STOCK frontend (catches a
 #               broken/empty Core image — the only frontend assertion the
 #               OS repo can still make about Core).
-#   BLD-FE-02 — the greenautarky_onboarding custom_component is present in
+#   BLD-FE-02 — the greenautarky_site custom_component is present in
 #               the OS rootfs-overlay (source-tree check, not an image tar).
 echo ""
 echo "--- Frontend (V1.2-clean: stock Core + onboarding in OS overlay) ---"
@@ -1088,9 +1088,9 @@ else
   _skip "BLD-FE-01: stock frontend in Core image" "only present after full build"
 fi
 
-# BLD-FE-02: greenautarky_onboarding custom_component ships inside the OS
+# BLD-FE-02: greenautarky_site custom_component ships inside the OS
 # rootfs-overlay (T4, commit 0d2c65ff3). The OS bakes it into the read-only
-# rootfs at /usr/share/ga/custom_components/greenautarky_onboarding/;
+# rootfs at /usr/share/ga/custom_components/greenautarky_site/;
 # ga-bootstrap stages it to /share at runtime and ga_manager's converge
 # worker copies it into /config/custom_components. This is a source-tree
 # check (the overlay is part of the OS repo), so it does NOT need a full
@@ -1105,17 +1105,17 @@ elif [[ -d "$(dirname "$0")/../../buildroot-external" ]]; then
   BLD_FE_SRC="$(cd "$(dirname "$0")/../.." && pwd)"
 fi
 if [[ -n "$BLD_FE_SRC" ]]; then
-  GA_ONBOARD_DIR="${BLD_FE_SRC}/buildroot-external/rootfs-overlay/usr/share/ga/custom_components/greenautarky_onboarding"
+  GA_ONBOARD_DIR="${BLD_FE_SRC}/buildroot-external/rootfs-overlay/usr/share/ga/custom_components/greenautarky_site"
   if [[ -f "${GA_ONBOARD_DIR}/__init__.py" ]] && [[ -f "${GA_ONBOARD_DIR}/manifest.json" ]]; then
     # Also sanity-check the manifest declares the expected domain so a
     # stray empty/wrong directory cannot pass this test.
-    if jq -e '.domain == "greenautarky_onboarding"' "${GA_ONBOARD_DIR}/manifest.json" >/dev/null 2>&1; then
-      _pass "BLD-FE-02: greenautarky_onboarding custom_component present in OS rootfs-overlay"
+    if jq -e '.domain == "greenautarky_site"' "${GA_ONBOARD_DIR}/manifest.json" >/dev/null 2>&1; then
+      _pass "BLD-FE-02: greenautarky_site custom_component present in OS rootfs-overlay"
     else
-      _fail "BLD-FE-02: greenautarky_onboarding manifest.json present but domain is wrong/missing"
+      _fail "BLD-FE-02: greenautarky_site manifest.json present but domain is wrong/missing"
     fi
   else
-    _fail "BLD-FE-02: greenautarky_onboarding custom_component MISSING from OS rootfs-overlay (expected __init__.py + manifest.json under ${GA_ONBOARD_DIR})"
+    _fail "BLD-FE-02: greenautarky_site custom_component MISSING from OS rootfs-overlay (expected __init__.py + manifest.json under ${GA_ONBOARD_DIR})"
   fi
 else
   _skip "BLD-FE-02: onboarding component in OS overlay" "source tree (buildroot-external) not found"
@@ -1371,7 +1371,7 @@ if [[ -n "$SRC" ]]; then
   # entrypoint TS, bundle.cjs, entry-html.js, the Lit panel, build_frontend
   # verification). That fork is retired — the OS ships the stock
   # home-assistant-frontend inside stock Core, and the GA setup wizard now
-  # lives as the greenautarky_onboarding custom_component built in the
+  # lives as the greenautarky_site custom_component built in the
   # ha-greenautarky-onboarding repo. None of those source files exist in or
   # near the OS repo any more, so there is nothing here for a build-time OS
   # test to assert. The wizard build is covered by the ha-greenautarky-
@@ -1394,7 +1394,7 @@ if [[ -n "$SRC" ]]; then
   # redirect wired into the greenautarky/frontend fork's authorize.ts and the
   # greenautarky-setup Lit panel (ga_bypass, ga_auth_redirect, the admin
   # escape hatches). The frontend fork is retired — authorize.ts is stock
-  # again and the wizard panel moved to the greenautarky_onboarding
+  # again and the wizard panel moved to the greenautarky_site
   # custom_component (ha-greenautarky-onboarding repo). The OS build cannot
   # assert against a fork that no longer exists; the redirect/escape-hatch
   # behaviour is now the onboarding component repo's own test surface.
@@ -1446,38 +1446,53 @@ if [[ -n "$SRC" ]]; then
   fi
 
   if [[ -n "$CORE_ROOT" ]]; then
+    # Component source was split from a single http.py into packages
+    # (onboarding/ household/ scoping/ + store.py console_login.py
+    # consent_views.py) as part of the greenautarky_onboarding ->
+    # greenautarky_site rename (#574). These checks assert the feature
+    # SYMBOLS still exist somewhere in the component tree, so they grep the
+    # whole component dir recursively instead of a single (now absent) file.
+    GA_COMP_DIR="${CORE_ROOT}/homeassistant/components/greenautarky_site"
+
     # SRC-14d: Core has verify_pin endpoint
-    grep -q 'verify_pin' "${CORE_ROOT}/homeassistant/components/greenautarky_onboarding/http.py" 2>/dev/null \
+    grep -rq 'verify_pin' "${GA_COMP_DIR}" 2>/dev/null \
       && _pass "SRC-14d: Core has verify_pin endpoint" \
       || _fail "SRC-14d: Core missing verify_pin endpoint"
 
     # SRC-14e: Core has PIN rate limiting (exponential backoff)
-    grep -q 'pin_locked_until' "${CORE_ROOT}/homeassistant/components/greenautarky_onboarding/http.py" 2>/dev/null \
+    grep -rq 'pin_locked_until' "${GA_COMP_DIR}" 2>/dev/null \
       && _pass "SRC-14e: Core has PIN rate limiting" \
       || _fail "SRC-14e: Core missing PIN rate limiting"
 
+    # Locate the module that defines GAAdminBypassView (post-split it may live
+    # in any package module, no longer http.py) so the context-anchored greps
+    # below still run against a single file (grep -r would prefix context lines
+    # with a filename and break the ^-anchored url match).
+    GA_ADMIN_FILE="$(grep -rl 'class GAAdminBypassView' "${GA_COMP_DIR}" 2>/dev/null | head -1)"
+
     # BLD-ADMIN-01: Core has GAAdminBypassView (the /admin endpoint)
-    GA_HTTP="${CORE_ROOT}/homeassistant/components/greenautarky_onboarding/http.py"
-    grep -q 'class GAAdminBypassView' "$GA_HTTP" 2>/dev/null \
+    [[ -n "$GA_ADMIN_FILE" ]] \
       && _pass "BLD-ADMIN-01: GAAdminBypassView class exists in core" \
       || _fail "BLD-ADMIN-01: GAAdminBypassView missing — /admin endpoint not implemented"
 
     # BLD-ADMIN-02: /admin URL is bound to the bypass view
-    grep -A 30 'class GAAdminBypassView' "$GA_HTTP" 2>/dev/null \
+    grep -A 30 'class GAAdminBypassView' "$GA_ADMIN_FILE" 2>/dev/null \
       | grep -qE '^\s*url\s*=\s*"/admin"' \
       && _pass "BLD-ADMIN-02: GAAdminBypassView is bound to /admin" \
       || _fail "BLD-ADMIN-02: GAAdminBypassView is NOT bound to /admin"
 
     # BLD-ADMIN-03: redirect_uri uses /config (not /lovelace) — avoids GA panel auto-default
-    grep -A 30 'class GAAdminBypassView' "$GA_HTTP" 2>/dev/null \
+    grep -A 30 'class GAAdminBypassView' "$GA_ADMIN_FILE" 2>/dev/null \
       | grep -qE 'redirect_uri.*\{origin\}/config' \
       && _pass "BLD-ADMIN-03: GAAdminBypassView uses /config (not /lovelace) so admin lands in HA Settings" \
       || _fail "BLD-ADMIN-03: GAAdminBypassView redirect_uri does not point to /config — admin lands back on GA panel"
 
-    # BLD-ADMIN-04: GAAdminBypassView is registered in __init__.py (otherwise the URL is dead)
-    GA_INIT="${CORE_ROOT}/homeassistant/components/greenautarky_onboarding/__init__.py"
+    # BLD-ADMIN-04: GAAdminBypassView is registered in the component __init__.py
+    # (otherwise the URL is dead). Registration stays in the component entry
+    # point even after the package split, so this still targets __init__.py.
+    GA_INIT="${GA_COMP_DIR}/__init__.py"
     grep -q 'GAAdminBypassView' "$GA_INIT" 2>/dev/null \
-      && _pass "BLD-ADMIN-04: GAAdminBypassView is registered in greenautarky_onboarding/__init__.py" \
+      && _pass "BLD-ADMIN-04: GAAdminBypassView is registered in greenautarky_site/__init__.py" \
       || _fail "BLD-ADMIN-04: GAAdminBypassView is NOT registered — /admin will return 404"
   else
     _skip "SRC-14d..e + BLD-ADMIN-01..04" "ha-core repo not found"

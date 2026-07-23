@@ -12,7 +12,7 @@ import * as path from 'path';
  * onboarding wizard components (max code-share, "so upstream wie möglich"):
  *   - `ga-setup-pin` in join mode collects the 6-digit invite PIN
  *   - `ga-setup-create-user` in join mode reuses the ha-form + password-strength
- *     UI, posting to /api/greenautarky_onboarding/sub_user/join
+ *     UI, posting to /api/greenautarky_site/sub_user/join
  *   - the panel detects /greenautarky-join and starts at the PIN step
  * The standalone HTML join form is gone; /greenautarky-join now 302-redirects
  * into the wizard (`/greenautarky-setup.html?join=1`).
@@ -92,7 +92,7 @@ async function getToken(deviceUrl: string): Promise<string> {
 }
 
 async function api(deviceUrl: string, token: string, method: string, apiPath: string, body?: unknown) {
-  const res = await fetch(`${deviceUrl}/api/greenautarky_onboarding${apiPath}`, {
+  const res = await fetch(`${deviceUrl}/api/greenautarky_site${apiPath}`, {
     method,
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -228,7 +228,7 @@ test.describe('Sub-User join via onboarding wizard (ADR-0006)', () => {
 
     // via the device store: Non-Admin group + parent == owner + linked person
     const check = ssh(
-      `docker exec homeassistant python3 -c 'import json;a=json.load(open("/config/.storage/auth"))["data"];u=next(x for x in a["users"] if x["id"]=="${mine.user_id}");g=u.get("group_ids",[]);st=json.load(open("/config/.storage/greenautarky_onboarding"))["data"];p=st.get("sub_users",{}).get("${mine.user_id}",{}).get("master");c=st.get("sub_users",{}).get("${mine.user_id}",{}).get("consent",{}).get("datenschutz",{}).get("version")==1;ps=json.load(open("/config/.storage/person"))["data"]["items"];person=any(x.get("user_id")=="${mine.user_id}" for x in ps);print(("system-users" in g) and ("system-admin" not in g) and (not u.get("is_owner")) and (p=="${ownerId}") and person and c)'`,
+      `docker exec homeassistant python3 -c 'import json;a=json.load(open("/config/.storage/auth"))["data"];u=next(x for x in a["users"] if x["id"]=="${mine.user_id}");g=u.get("group_ids",[]);st=json.load(open("/config/.storage/greenautarky_site"))["data"];p=st.get("sub_users",{}).get("${mine.user_id}",{}).get("master");c=st.get("sub_users",{}).get("${mine.user_id}",{}).get("consent",{}).get("datenschutz",{}).get("version")==1;ps=json.load(open("/config/.storage/person"))["data"]["items"];person=any(x.get("user_id")=="${mine.user_id}" for x in ps);print(("system-users" in g) and ("system-admin" not in g) and (not u.get("is_owner")) and (p=="${ownerId}") and person and c)'`,
     );
     expect(check).toBe('True');
   });

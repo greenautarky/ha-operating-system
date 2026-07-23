@@ -4,7 +4,7 @@ import { getGAOnboardingStatus } from '../helpers/ha-api';
 /**
  * GA Setup Panel — smoke tests (read-only, no auth required)
  *
- * Tests the greenautarky_onboarding integration and the /greenautarky-setup panel.
+ * Tests the greenautarky_site integration and the /greenautarky-setup panel.
  * These are safe to run on any device at any time — they do not modify state.
  *
  * Runs on all device profiles: desktop, mobile-ios, mobile-android.

@@ -2,7 +2,7 @@
 
 ## Purpose
 Verify the **V1.2-clean model**: the device runs **stock upstream HA Core**
-(the Core fork is retired) plus the `greenautarky_onboarding`
+(the Core fork is retired) plus the `greenautarky_site`
 **custom_component**, which provides German-language onboarding, GDPR consent,
 and greenautarky telemetry preferences. The **Supervisor** stays a greenautarky
 fork (iHost hardware + GA version-URL); Core and the frontend are stock.
@@ -51,14 +51,14 @@ fork (iHost hardware + GA version-URL); Core and the frontend are stock.
 - **Expected**: A digest is present — the OS build picked up the pinned core image
 - **Catches**: Stale cached image
 
-### OB-09: greenautarky_onboarding custom_component placed
-- **Command**: `[ -f /mnt/data/supervisor/homeassistant/custom_components/greenautarky_onboarding/manifest.json ]`
+### OB-09: greenautarky_site custom_component placed
+- **Command**: `[ -f /mnt/data/supervisor/homeassistant/custom_components/greenautarky_site/manifest.json ]`
 - **Expected**: The custom_component is present (placed by ga_manager converge step 2)
 - **Catches**: Converge didn't place the component → no GA onboarding/GDPR/telemetry UI
 
-### OB-10: greenautarky_onboarding manifest declares its domain
-- **Command**: `grep -q 'greenautarky_onboarding' /mnt/data/supervisor/homeassistant/custom_components/greenautarky_onboarding/manifest.json`
-- **Expected**: manifest.json declares `domain: greenautarky_onboarding`
+### OB-10: greenautarky_site manifest declares its domain
+- **Command**: `grep -q 'greenautarky_site' /mnt/data/supervisor/homeassistant/custom_components/greenautarky_site/manifest.json`
+- **Expected**: manifest.json declares `domain: greenautarky_site`
 - **Catches**: A stray/empty component directory. Runtime registration is further proven by OB-13/PW-* (the component's HTTP views).
 
 ### OB-11: Stock frontend wheel installed

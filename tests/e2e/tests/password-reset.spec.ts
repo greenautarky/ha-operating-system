@@ -74,7 +74,7 @@ test.describe('Password Reset — Page', () => {
 
 test.describe('Password Reset — API', () => {
   test('users endpoint exists (returns 401 or 404)', async ({ deviceUrl }) => {
-    const res = await fetch(`${deviceUrl}/api/greenautarky_onboarding/password_reset/users`, {
+    const res = await fetch(`${deviceUrl}/api/greenautarky_site/password_reset/users`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pin: '000000' }),
@@ -84,7 +84,7 @@ test.describe('Password Reset — API', () => {
   });
 
   test('reset endpoint exists (returns 400 or 401 or 404)', async ({ deviceUrl }) => {
-    const res = await fetch(`${deviceUrl}/api/greenautarky_onboarding/password_reset`, {
+    const res = await fetch(`${deviceUrl}/api/greenautarky_site/password_reset`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pin: '000000', username: 'test', new_password: 'test' }),
