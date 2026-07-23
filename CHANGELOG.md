@@ -21,6 +21,34 @@ fleet-manager `influx_creds` autopush, and ga-bootstrap 1.2.8. See
 [session note](https://github.com/greenautarky/ga-ihost-docs) for the full
 write-up.
 
+### Added — host-firewall control plane (prepared, DEFAULT OFF) (Odoo #581 / #225)
+
+A boot-time nftables gate that can keep blocked services off the customer LAN
+while the NetBird mesh + loopback stay reachable — **prepared, default OFF,
+inert until enabled.** Pairs with ga_manager 0.94.0 (`firewall` config option →
+`/share` markers) and fleet-manager 0.71.0 (status surfacing).
+
+- `usr/libexec/ga-firewall-gate` + `ga-firewall.service` (enabled via the
+  multi-user wants symlink), modelled on the `ga-bluetooth-gate` marker pattern.
+  Enable sources: the fleet marker `/mnt/data/supervisor/share/ga-firewall-enabled`
+  (+ `ga-firewall-policy.json`) or the manual `/mnt/boot/ga-firewall`. **With
+  neither present the table is flushed → every port stays exposed as before.**
+- `BR2_PACKAGE_NFTABLES=y` (both iHost defconfigs) ships the `nft` CLI for the
+  atomic `nft -f` ruleset load. Adds the tool without changing behavior.
+- Two-chain ruleset: `input` filters HOST services (dropbear SSH :22222);
+  `forward` filters DNAT'd published container ports (HA Core :8123,
+  ga_manager :8099, observer :4357, Mosquitto :1883, InfluxDB :8086) — an
+  input-only filter would silently miss the container ports.
+- **Fail-safe by design:** `policy accept` (targeted-deny — only services set
+  `false` in the policy get a drop); loopback + `wt0`/`tailscale0` mesh accepted
+  FIRST in every chain as a hard invariant (never lock out the recovery path,
+  even if the policy blocks everything); `nft -f` failure deletes the table
+  (fail-open). Verified locally against nftables v1.1.3 + a sandbox logic run.
+- On-device test suite `tests/ga_tests/firewall/test.sh` (control-plane always;
+  ruleset-generation opt-in via `GA_FW_ENFORCE_TEST=1` on a BENCH device;
+  reachability permutations documented as E2E). The hardening flip (block SSH +
+  observer from the LAN) is then a per-device config change, not a code change.
+
 ### Added — edge-buffered telemetry (signal survives outage + reboot) (#100)
 
 On-device telegraf now disk-buffers metrics so a network or InfluxDB outage —

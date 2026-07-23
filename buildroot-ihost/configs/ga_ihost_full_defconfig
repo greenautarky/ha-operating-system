@@ -107,6 +107,10 @@ BR2_PACKAGE_GESFTPSERVER=y
 BR2_PACKAGE_IPROUTE2=y
 BR2_PACKAGE_IPTABLES_NFTABLES=y
 BR2_PACKAGE_IPTABLES_NFTABLES_DEFAULT=y
+# nft CLI for the ga-firewall host-firewall gate (atomic `nft -f` ruleset load).
+# Prepared/default-OFF: the gate loads a ruleset only when the /share marker is
+# present, so this adds the tool without changing behavior. See ga-firewall-gate.
+BR2_PACKAGE_NFTABLES=y
 BR2_PACKAGE_NETWORK_MANAGER=y
 BR2_PACKAGE_NETWORK_MANAGER_CLI=y
 BR2_PACKAGE_RPCBIND=y

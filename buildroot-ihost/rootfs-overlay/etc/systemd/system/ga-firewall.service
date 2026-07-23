@@ -1,0 +1,22 @@
+[Unit]
+Description=Gate the host firewall at boot (default OFF, fleet-managed or manual)
+# Enable sources (either one): the ga_manager-managed
+# /mnt/data/supervisor/share/ga-firewall-enabled (+ ga-firewall-policy.json), or
+# the manual /mnt/boot/ga-firewall marker. With neither present the gate flushes
+# the ruleset → all ports stay exposed (current behavior). See ga-firewall-gate.
+RequiresMountsFor=/mnt/data /mnt/boot
+# After docker so the container `forward` chains exist before we add ours, and
+# after the network is up so mesh/LAN interfaces are known. The nft rules match
+# by interface NAME + port, so wt0 appearing later (netbird) is still handled.
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/ga-firewall-gate
+# Re-flush on stop so disabling/removing the unit reliably reopens the ports.
+ExecStop=/bin/sh -c 'command -v nft >/dev/null 2>&1 && nft list table inet ga_firewall >/dev/null 2>&1 && nft delete table inet ga_firewall || true'
+
+[Install]
+WantedBy=multi-user.target
