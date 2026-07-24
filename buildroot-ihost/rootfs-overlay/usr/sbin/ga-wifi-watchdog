@@ -1,24 +1,35 @@
 #!/bin/sh
-# ga-wifi-watchdog — recover the rtw88_8723ds runtime "degraded-TX" hang.
+# ga-wifi-watchdog — recover two distinct rtw88_8723ds runtime WiFi failures,
+# both of which strand the device while wlan0 stays UP at a STRONG signal, and
+# both invisible to a simple "is wlan0 up?" check.
 #
-# Failure mode (mode B, distinct from the cold-boot probe failure that
-# ga-rtw-recover handles at boot): wlan0 stays UP with a STRONG signal, but the
-# chip firmware stops completing transmits and the driver spams
+# MODE B — degraded TX hang. The chip firmware stops completing transmits and
+# the driver spams
 #   rtw_8723ds mmc1:0001:1: failed to get tx report from firmware
 # Transmit retries pile up, throughput collapses (~18 KB/s despite -44 dBm), and
 # any OS OTA times out (ga-rauc-install killed at its 15-min start-timeout). Seen
 # on K7 + K17 (2026-07-02); a reboot cleared it (18 KB/s -> 2.68 MB/s, tx-report
 # errors 375 -> 0). See ga-ihost-docs DISCUSSION-WIFI-RTW88-DEGRADED-TX.md / KB123.
 #
-# This runs periodically (ga-wifi-watchdog.timer) and escalates:
+# MODE C — beacon-loss association flapping. The client stops hearing the AP's
+# beacons at STRONG signal, so wpa_supplicant logs CTRL-EVENT-BEACON-LOSS in a
+# storm and the association drops and re-forms every few minutes — the device is
+# effectively offline for hours. tx-report errors stay FLAT, so mode B is blind
+# to it. Observed on K0 (2026-07-24): 2854 beacon-loss events/hour, AP logged
+# connect/disconnect every 2-5 min at -44 dBm. Classic rtw88 power-save symptom.
+# See Odoo #596/#597, KB #167.
+#
+# This runs periodically (ga-wifi-watchdog.timer, every 3 min) and, on EITHER
+# failure, escalates:
 #   1. in-place module reload (rmmod/modprobe) — cheapest recovery;
-#   2. if the NEXT check still shows the hang, a GUARDED reboot — bounded to
+#   2. if the NEXT check still shows the fault, a GUARDED reboot — bounded to
 #      REBOOT_MAX within REBOOT_WINDOW_S so a genuine hardware fault can never
 #      cause a boot loop (mirrors the ga-boot-check / ga-crash-marker ledger).
 #
 # Fail-safe by construction: only acts when wlan0 is the ACTIVE default route
-# (so a hang actually strands the device) AND the signal is strong (rules out a
-# legitimately-weak/absent link), AND the tx-report error rate is climbing NOW.
+# (so a fault actually strands the device) AND the signal is strong (rules out a
+# legitimately-weak/absent link — a weak link legitimately loses beacons), AND
+# the fault is happening NOW (tx-report errors climbing / beacon-loss storming).
 set -eu
 
 TAG="ga-wifi-watchdog"
@@ -30,7 +41,10 @@ RELOADED_MARK="/run/ga-wifi-watchdog.reloaded"  # a reload was already tried thi
 REBOOT_LEDGER="/mnt/data/.ga-wifi-recover-reboots"  # epoch per reboot (persists across boots)
 
 # ---- tunables ----
-ERR_DELTA_THRESHOLD=15   # NEW tx-report errors since last check = actively failing
+ERR_DELTA_THRESHOLD=15   # NEW tx-report errors since last check = actively failing (mode B)
+BEACON_LOSS_WINDOW_MIN=4 # look back this far for beacon-loss (timer fires every 3 min)
+BEACON_LOSS_THRESHOLD=20 # NEW CTRL-EVENT-BEACON-LOSS in the window = flapping (mode C).
+                         # A stable link produces ~0; the K0 pathology was ~140 per 3 min.
 STREAK_TO_ACT=2          # require N consecutive degraded checks (anti-flap)
 MIN_RSSI_DBM=-72         # only act on a strong link (negative int compare is fine in sh)
 RELOAD_SETTLE_S=25       # wait for wlan0 to re-associate after a module reload
@@ -74,8 +88,31 @@ rssi=$(grep -E "^[[:space:]]*${IFACE}:" /proc/net/wireless 2>/dev/null | awk '{v
 [ -z "${rssi:-}" ] && rssi=$(iw dev "$IFACE" link 2>/dev/null | awk '/signal:/{print $2; exit}')
 rssi=${rssi:-0}
 
-degraded=0
+degraded_tx=0
 if [ "$delta" -ge "$ERR_DELTA_THRESHOLD" ] && [ "$rssi" -ge "$MIN_RSSI_DBM" ]; then
+    degraded_tx=1
+fi
+
+# ---- degraded signal C: beacon-loss association flapping ----
+# wpa_supplicant logs "CTRL-EVENT-BEACON-LOSS" each time it misses the AP's
+# beacons; a storm of them at STRONG signal is the power-save disassociation
+# pathology (mode C). Counted over a short window rather than as a cumulative
+# delta because, unlike tx-report errors, these are transient log lines. The
+# strong-RSSI gate is essential: a genuinely weak link loses beacons too, and we
+# must not reboot for that.
+beacon_loss=$(journalctl --since "-${BEACON_LOSS_WINDOW_MIN} min" --no-pager 2>/dev/null \
+                | grep -c "CTRL-EVENT-BEACON-LOSS" || true)
+beacon_loss=${beacon_loss:-0}
+degraded_beacon=0
+if [ "$beacon_loss" -ge "$BEACON_LOSS_THRESHOLD" ] && [ "$rssi" -ge "$MIN_RSSI_DBM" ]; then
+    degraded_beacon=1
+fi
+
+# Either failure class counts as degraded; both feed the same escalation ladder.
+# (Written as an explicit if — a `a || b && c` one-liner would exit under set -e
+# when both tests are false, because the whole list then returns non-zero.)
+degraded=0
+if [ "$degraded_tx" -eq 1 ] || [ "$degraded_beacon" -eq 1 ]; then
     degraded=1
 fi
 
@@ -90,7 +127,7 @@ else
 fi
 printf '%s\n' "$streak" > "$STREAK_STATE"
 
-log "check: tx_report_errs=$now_err delta=$delta rssi=${rssi}dBm degraded=$degraded streak=$streak"
+log "check: tx_report_errs=$now_err delta=$delta beacon_loss=$beacon_loss rssi=${rssi}dBm degraded=$degraded(tx=$degraded_tx,beacon=$degraded_beacon) streak=$streak"
 
 # Initial detection needs STREAK_TO_ACT consecutive hits (anti-flap). But once a
 # reload has already been tried (RELOADED_MARK set), a SINGLE further degraded
@@ -103,7 +140,7 @@ act_threshold="$STREAK_TO_ACT"
 printf '0\n' > "$STREAK_STATE"
 
 reload_stack() {
-    logw "degraded TX confirmed — reloading rtw88_8723ds module stack"
+    logw "degraded WiFi confirmed (tx=$degraded_tx beacon=$degraded_beacon) — reloading rtw88_8723ds module stack"
     for m in rtw88_8723ds rtw88_8723d rtw88_8723x rtw88_sdio; do
         if lsmod 2>/dev/null | grep -q "^${m} "; then
             rmmod "$m" 2>/dev/null && log "unloaded $m" || log "rmmod $m failed — continuing"

@@ -1,0 +1,21 @@
+# Disable SDIO runtime power management on the rtw88_8723ds onboard WiFi.
+#
+# The kernel default power/control=auto lets the SDIO WiFi chip autosuspend when
+# idle. On the rtw88_8723ds this runtime PM is a known contributor to link
+# instability, so we pin it always-on at boot — standard rtw88-SDIO hardening,
+# costs only a little idle power on an always-on device.
+#
+# HONEST SCOPE: this is a boot-time PREVENTIVE measure, NOT a live rescue.
+# Flipping power/control from auto->on mid-flap on an already-degraded K0 did
+# NOT stop its beacon-loss storm (2026-07-25) — neither did NM 802.11 power-save,
+# which is already disabled globally in NetworkManager.conf. The observed K0
+# pathology (beacon-loss disassociation flapping at strong signal, 8 h stable
+# then continuous) points at a firmware STATE issue that a reboot clears. The
+# detect-and-recover safety net for that failure class is ga-wifi-watchdog
+# mode C (beacon-loss detector -> module reload -> guarded reboot). Whether
+# booting with runtime PM already off prevents the state from arising is still
+# open — to be judged from a fresh-boot canary observation. Odoo #596/#597, KB #167.
+#
+# Match: SDIO device 024C:D723 (Realtek), driver rtw_8723ds. `bind` is the
+# reliable trigger — DRIVER is only set once the driver has bound the device.
+ACTION=="add|bind", SUBSYSTEM=="sdio", DRIVER=="rtw_8723ds", ATTR{power/control}="on"

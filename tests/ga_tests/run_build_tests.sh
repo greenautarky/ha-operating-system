@@ -557,6 +557,38 @@ else
   _pass "WIFI-10: WiFi config correctly NOT in overlaid /etc/NM/system-connections/"
 fi
 
+# WIFI-12: ga-wifi-watchdog recovers BOTH rtw88 runtime failures — degraded-TX
+# (mode B) AND beacon-loss association flapping (mode C, #597). A regression that
+# drops the mode-C detector would let a device flap offline for hours while the
+# watchdog reports healthy, which is exactly the K0 gap this test guards.
+WD="${TARGET}/usr/sbin/ga-wifi-watchdog"
+if [[ -f "$WD" ]]; then
+  grep -q 'failed to get tx report' "$WD" 2>/dev/null \
+    && _pass "WIFI-12a: watchdog detects degraded-TX (mode B)" \
+    || _fail "WIFI-12a: watchdog lost the degraded-TX detector"
+  grep -q 'CTRL-EVENT-BEACON-LOSS' "$WD" 2>/dev/null \
+    && _pass "WIFI-12b: watchdog detects beacon-loss flapping (mode C)" \
+    || _fail "WIFI-12b: watchdog lost the beacon-loss detector (#597 regression)"
+  # mode C must keep the strong-RSSI gate — a weak link legitimately loses beacons
+  grep -q 'degraded_beacon' "$WD" 2>/dev/null && grep -q 'MIN_RSSI_DBM' "$WD" 2>/dev/null \
+    && _pass "WIFI-12c: beacon-loss gated on strong RSSI (no reboot on a weak link)" \
+    || _fail "WIFI-12c: beacon-loss detector not RSSI-gated"
+else
+  _fail "WIFI-12: ga-wifi-watchdog not found in /usr/sbin/"
+fi
+
+# WIFI-13: rtw88 SDIO runtime-PM disabled at boot via a udev rule in the
+# NON-overlaid /usr/lib path (/etc/udev/rules.d is shadowed like modprobe.d).
+RTW_PM_RULE="${TARGET}/usr/lib/udev/rules.d/81-ga-rtw88-runtime-pm.rules"
+if [[ -f "$RTW_PM_RULE" ]]; then
+  grep -q 'ATTR{power/control}="on"' "$RTW_PM_RULE" 2>/dev/null     && _pass "WIFI-13a: rtw88 SDIO runtime PM pinned on (power/control=on)"     || _fail "WIFI-13a: rtw88 runtime-PM rule does not set power/control=on"
+  grep -q 'DRIVER=="rtw_8723ds"' "$RTW_PM_RULE" 2>/dev/null     && _pass "WIFI-13b: runtime-PM rule scoped to rtw_8723ds driver"     || _fail "WIFI-13b: runtime-PM rule not scoped to the rtw driver"
+else
+  _fail "WIFI-13: rtw88 runtime-PM udev rule missing from /usr/lib/udev/rules.d/"
+fi
+# WIFI-13c: must NOT live in the overlay-shadowed /etc/udev/rules.d
+[[ -f "${TARGET}/etc/udev/rules.d/81-ga-rtw88-runtime-pm.rules" ]]   && _fail "WIFI-13c: runtime-PM rule in /etc/udev/rules.d — shadowed by overlay! Use /usr/lib/udev/rules.d/"   || _pass "WIFI-13c: runtime-PM rule correctly NOT in overlaid /etc/udev/rules.d"
+
 # --- HAOS Overlay Safety Checks ---
 # HAOS bind-mounts /mnt/overlay/etc/{hosts,hostname,systemd/timesyncd.conf,...}
 # over the rootfs. Any file placed in these paths at build time will be INVISIBLE
