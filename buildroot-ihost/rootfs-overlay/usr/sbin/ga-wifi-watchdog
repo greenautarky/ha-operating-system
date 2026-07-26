@@ -51,6 +51,13 @@ RELOAD_SETTLE_S=25       # wait for wlan0 to re-associate after a module reload
 REBOOT_MAX=3             # at most this many self-reboots ...
 REBOOT_WINDOW_S=21600    # ... within 6 h; beyond that, stop (likely hardware)
 
+# Health surface: written on EVERY check into the /share addon<->host bridge, so
+# ga_manager can put the device's own WiFi state in /info (the fleet-manager then
+# shows "wifi flapping, N beacon-loss/window, last_action=…" instead of a guessed
+# offline_reason). /share on the host is /mnt/data/supervisor/share.
+SHARE_HEALTH="/mnt/data/supervisor/share/ga-wifi-health.json"
+LAST_ACTION_STATE="/run/ga-wifi-watchdog.last_action"  # "<action> <epoch>"
+
 # log() = routine (journald info, stays on-device — dropped by fluent-bit's
 # PRIORITY [0-4] filter). logw()/loge() prefix the systemd stdout priority
 # (`<4>`=warning, `<3>`=err) so the ACTUAL trigger/recovery events pass that
@@ -58,6 +65,40 @@ REBOOT_WINDOW_S=21600    # ... within 6 h; beyond that, stop (likely hardware)
 log()  { echo "$TAG: $*"; }
 logw() { echo "<4>$TAG: $*"; }
 loge() { echo "<3>$TAG: $*"; }
+
+# Record the last recovery action taken (or "none") + write the health surface.
+record_action() { printf '%s %s\n' "$1" "$(date +%s 2>/dev/null || echo 0)" > "$LAST_ACTION_STATE" 2>/dev/null || true; write_health; }
+
+# Emit the current WiFi-health view for ga_manager /info. Atomic, best-effort:
+# a write failure must never affect recovery. Called on every check + after each
+# action, so the surface always reflects the latest tick.
+write_health() {
+    _d=$(dirname "$SHARE_HEALTH"); [ -d "$_d" ] || return 0
+    _la="none"; _lts=0
+    if [ -f "$LAST_ACTION_STATE" ]; then
+        _la=$(awk '{print $1}' "$LAST_ACTION_STATE" 2>/dev/null || echo none)
+        _lts=$(awk '{print $2}' "$LAST_ACTION_STATE" 2>/dev/null || echo 0)
+    fi
+    _tmp="${SHARE_HEALTH}.tmp"
+    cat > "$_tmp" 2>/dev/null <<JSON || { rm -f "$_tmp" 2>/dev/null; return 0; }
+{
+  "ts": $(date +%s 2>/dev/null || echo 0),
+  "iface": "$IFACE",
+  "rssi_dbm": ${rssi:-0},
+  "tx_report_errs": ${now_err:-0},
+  "tx_delta": ${delta:-0},
+  "beacon_loss_window": ${beacon_loss:-0},
+  "beacon_loss_window_min": ${BEACON_LOSS_WINDOW_MIN:-0},
+  "degraded": ${degraded:-0},
+  "degraded_tx": ${degraded_tx:-0},
+  "degraded_beacon": ${degraded_beacon:-0},
+  "streak": ${streak:-0},
+  "last_action": "${_la:-none}",
+  "last_action_ts": ${_lts:-0}
+}
+JSON
+    mv "$_tmp" "$SHARE_HEALTH" 2>/dev/null || rm -f "$_tmp" 2>/dev/null || true
+}
 
 # ---- preconditions ----
 [ -d "$SDIO_DEV" ] || { log "no rtw SDIO device — not an iHost WiFi chip, skip"; exit 0; }
@@ -128,6 +169,7 @@ fi
 printf '%s\n' "$streak" > "$STREAK_STATE"
 
 log "check: tx_report_errs=$now_err delta=$delta beacon_loss=$beacon_loss rssi=${rssi}dBm degraded=$degraded(tx=$degraded_tx,beacon=$degraded_beacon) streak=$streak"
+write_health
 
 # Initial detection needs STREAK_TO_ACT consecutive hits (anti-flap). But once a
 # reload has already been tried (RELOADED_MARK set), a SINGLE further degraded
@@ -156,6 +198,7 @@ reload_stack() {
     # Reset the error baseline so the NEXT tick measures errors produced AFTER the
     # reload — that's how we tell whether the reload actually fixed the TX path.
     printf '%s\n' "$(dmesg 2>/dev/null | grep -c 'failed to get tx report' || echo 0)" > "$ERR_STATE"
+    record_action "reload"
 }
 
 guarded_reboot() {
@@ -175,17 +218,36 @@ guarded_reboot() {
     fi
     if [ "$recent" -ge "$REBOOT_MAX" ]; then
         loge "reload did NOT clear degraded TX, and already rebooted ${recent}x in ${REBOOT_WINDOW_S}s — NOT rebooting (likely hardware); leaving device degraded for inspection"
+        record_action "reboot-capped"
         return 0
     fi
     printf '%s\n' "$now" >> "$REBOOT_LEDGER" 2>/dev/null || true
     loge "reload did NOT clear degraded TX — scheduling reboot ($(( recent + 1 ))/${REBOOT_MAX} in window)"
+    record_action "reboot"
     sync
     systemctl reboot
 }
 
 if [ -f "$RELOADED_MARK" ]; then
-    # A reload was already attempted and it's STILL degraded -> escalate.
-    guarded_reboot
+    # A reload was already attempted and it's STILL degraded.
+    if [ "$degraded_tx" -eq 1 ]; then
+        # Mode B — a TX-report hang the reload didn't clear. A reboot DOES clear
+        # this (proven K7/K17), so escalate (guarded).
+        guarded_reboot
+    else
+        # Mode C ONLY — beacon-loss that a reload didn't restore. That is almost
+        # always EXTERNAL: channel interference / congestion, which a reboot
+        # cannot fix. And every canary on a congested site would hit this at once
+        # — rebooting them all would be a self-inflicted outage wave on top of the
+        # interference. So do NOT escalate: report it (reaches Loki + the /share
+        # health surface) and back off. The operator / fleet-manager sees
+        # "wifi flapping, reload ineffective — likely interference" instead of a
+        # pointless reboot storm. (Verified 2026-07-25: an entire 2.4 GHz AP's
+        # clients — incl. the router's own uplink — flapped from co-channel
+        # congestion; a per-device reboot would have been useless and harmful.)
+        loge "beacon-loss persists after reload at rssi=${rssi}dBm — NOT rebooting (external RF interference is not reboot-fixable); reporting degraded"
+        record_action "report-interference"
+    fi
 else
     reload_stack
     touch "$RELOADED_MARK"
