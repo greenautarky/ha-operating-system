@@ -1,0 +1,5 @@
+# Locally computed (sha256 of the GitHub release archive + LICENSE). Pins the
+# otherwise-mutable v1.38.0 tag: a moved/re-cut tag changes the archive and
+# FAILS the build instead of silently baking a swapped source. [Vuln-11]
+sha256  18e3d7ba0a8e8ac1c8e8b619a5d97a704cfc9ea3cb49903d3894f0259e2f4a1a  v1.38.0.tar.gz
+sha256  c435b0efb886c4b05a62c4416aba91c93e481ccf62828fa61ae04bdaa9ea0813  LICENSE
