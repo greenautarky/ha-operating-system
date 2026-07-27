@@ -2728,6 +2728,30 @@ else
 fi
 
 # =========================================================================
+# Root password — fail-closed: a prod image must never ship passwordless root
+# =========================================================================
+_shadow="$TARGET/etc/shadow"
+_gaenv=$(sed -n 's/^GA_ENV=//p' "$TARGET/etc/ga-env.conf" 2>/dev/null | tr -d '"' | head -1)
+[ -n "$_gaenv" ] || _gaenv=dev
+if [ -f "$_shadow" ]; then
+  _rootpw=$(awk -F: '$1=="root"{print $2}' "$_shadow")
+  if [ "$_gaenv" = "prod" ]; then
+    case "$_rootpw" in
+      '$6$'*) _pass "ROOTPW-01: prod image ships a SHA-512 root password hash" ;;
+      '')     _fail "ROOTPW-01: prod image ships EMPTY (passwordless) root — set ROOT_PW_HASH" ;;
+      *)      _fail "ROOTPW-01: prod root password is not a \$6\$ hash ('${_rootpw}')" ;;
+    esac
+  else
+    case "$_rootpw" in
+      '$6$'*) _pass "ROOTPW-01: root password hash set (GA_ENV=${_gaenv})" ;;
+      *)      _pass "ROOTPW-01: root password unset/locked — OK for non-prod (GA_ENV=${_gaenv})" ;;
+    esac
+  fi
+else
+  _skip "ROOTPW-01: root password fail-closed" "no ${_shadow} (source tree only)"
+fi
+
+# =========================================================================
 # Summary
 # =========================================================================
 echo ""
