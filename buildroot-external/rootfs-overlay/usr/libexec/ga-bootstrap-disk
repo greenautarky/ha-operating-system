@@ -144,7 +144,9 @@ emmc_erase() {
 write_os_marker() {
 	mkdir -p "$SHARE_DIR"
 	# Small non-empty content: variant + the addon version this OS bakes.
-	printf '%s\n' "$OS_VARIANT" > "$OS_MARKER"
+	# Published symlink-safe: $OS_MARKER lives in the container-writable /share
+	# bridge, so a plain `> "$OS_MARKER"` would follow an addon-planted symlink.
+	printf '%s\n' "$OS_VARIANT" | /usr/libexec/ga-share-publish "$OS_MARKER"
 	log "wrote OS marker ${OS_MARKER} (${OS_VARIANT})"
 }
 

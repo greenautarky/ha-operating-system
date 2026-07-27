@@ -30,16 +30,23 @@ fi
 
 # --- functional: pure recorder functions -------------------------------------
 TMPLOG="$(mktemp 2>/dev/null || echo /tmp/cfr_test_$$.jsonl)"
+TMPAUTH="$(mktemp 2>/dev/null || echo /tmp/cfr_auth_$$.jsonl)"
+TMPSTAGE="$(mktemp -d 2>/dev/null || echo /tmp/cfr_stage_$$)"
+# Locate ga-share-publish: installed path on device, overlay path in-repo.
+PUB="/usr/libexec/ga-share-publish"
+[ -x "$PUB" ] || PUB="$SCRIPT_DIR/../../../buildroot-external/rootfs-overlay/usr/libexec/ga-share-publish"
 
-# emit two events into an isolated log
-( export GA_CR_TEST=1 GA_CR_LOG="$TMPLOG"
+# emit two events; the recorder appends to the root-only AUTH log and publishes
+# a symlink-safe copy to GA_CR_LOG (staged in GA_SHARE_STAGE_DIR, same fs).
+( export GA_CR_TEST=1 GA_CR_LOG="$TMPLOG" GA_CR_AUTH="$TMPAUTH" \
+         GA_SHARE_PUBLISH="$PUB" GA_SHARE_STAGE_DIR="$TMPSTAGE"
   . "$REC"
   emit wan none "" nm-connectivity
   emit link down wlan0 ) 2>/dev/null
 
-run_test "CFR-10" "emit writes a wan transition line" \
+run_test "CFR-10" "emit publishes a wan transition line to /share copy" \
   "grep -q '\"rung\":\"wan\",\"to\":\"none\"' '$TMPLOG'"
-run_test "CFR-11" "emit writes a link line with iface" \
+run_test "CFR-11" "emit publishes a link line with iface to /share copy" \
   "grep -q '\"rung\":\"link\",\"to\":\"down\",\"iface\":\"wlan0\"' '$TMPLOG'"
 
 if command -v jq >/dev/null 2>&1; then
@@ -62,6 +69,6 @@ run_test "CFR-15" "carrier reads down from sysfs" \
 run_test "CFR-16" "carrier reports absent iface" \
   "[ \"\$(GA_CR_TEST=1 GA_CR_SYS_NET='$FAKE_NET'; . '$REC'; carrier wlan9)\" = absent ]"
 
-rm -rf "$TMPLOG" "$FAKE_NET" 2>/dev/null
+rm -rf "$TMPLOG" "$TMPAUTH" "$TMPSTAGE" "$FAKE_NET" 2>/dev/null
 
 suite_end

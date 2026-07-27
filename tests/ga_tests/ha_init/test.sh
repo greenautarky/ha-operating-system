@@ -11,7 +11,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
 suite_start "HA Init (fleet defaults)"
 
-MARKER="/mnt/data/supervisor/share/.ga-ha-init-applied"
+# Marker moved off the container-writable /share bridge to the root-only data
+# partition (no consumer reads it; keeps it off the symlink-follow primitive).
+MARKER="/mnt/data/.ga-ha-init-applied"
 UPDATER_JSON="/mnt/data/supervisor/updater.json"
 DNS_JSON="/mnt/data/supervisor/dns.json"
 
@@ -23,7 +25,7 @@ run_test "HA-INIT-D-02" "ga-ha-init.service unit present" \
   "test -f /usr/lib/systemd/system/ga-ha-init.service"
 
 # HA-INIT-D-03: service ran successfully (marker present).
-run_test "HA-INIT-D-03" "ga-ha-init marker /share/.ga-ha-init-applied written" \
+run_test "HA-INIT-D-03" "ga-ha-init marker /mnt/data/.ga-ha-init-applied written" \
   "test -f $MARKER && test -s $MARKER"
 
 # HA-INIT-D-04: service is active in systemd's view.

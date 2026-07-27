@@ -1,0 +1,76 @@
+#!/bin/sh
+# ga-share-publish — atomically publish stdin to a file that lives in the
+# container-writable Supervisor /share bridge, WITHOUT following a symlink a
+# hostile addon may have pre-planted at the target path.
+#
+# WHY (security — container -> host-root privilege escalation, "Vuln-2")
+# ---------------------------------------------------------------------
+# /mnt/data/supervisor/share == /share inside EVERY addon that maps `share:rw`
+# (Samba, Node-RED, Zigbee2MQTT, File-editor, ...). Those containers run as
+# host uid 0 (no userns-remap in etc/docker/daemon.json), so file permissions
+# inside /share provide NO protection whatsoever. A root host service that does
+#     ... > /share/x.tmp      or      ... > /share/x
+# follows a symlink the addon planted at that path and thereby writes through
+# it to an arbitrary root-owned file OUTSIDE the container's reach (e.g.
+# /mnt/data/ga-services.conf, which several root services `.`-source) — a
+# container -> host-root escalation, persistent across OTA.
+#
+# THE FIX: never let the `>` redirect open a path INSIDE the hostile /share
+# dir. Redirect into a ROOT-ONLY staging dir on the SAME filesystem, then
+# rename() into place. Per POSIX, rename() replaces a symlink AT the
+# destination instead of following it, so the published bytes only ever land
+# at the literal target path — never through a symlink to somewhere else. The
+# attacker can still delete/replace the copy in their own /share sandbox (that
+# only affects what the addon reads, which the addon must validate anyway), but
+# can no longer redirect a root write out of /share.
+#
+# Note the staging dir lives directly under /mnt/data, which addons do NOT map
+# (they see /mnt/data/supervisor/share and their own /data, never /mnt/data
+# itself), so nothing untrusted can plant a symlink in the staging dir either.
+#
+# Usage:  producer | ga-share-publish <target-path> [mode]
+#   <target-path>  file to publish (typically under /mnt/data/supervisor/share)
+#   [mode]         chmod applied to the file BEFORE it is renamed (default 0644)
+#
+# Test hook: GA_SHARE_STAGE_DIR overrides the staging dir. It MUST be on the
+# same filesystem as the target — a cross-filesystem mv falls back to a copy,
+# which is NOT symlink-safe. On-device /mnt/data/.ga-share-stage and
+# /mnt/data/supervisor/share are always the same filesystem.
+set -u
+
+target="${1:?ga-share-publish: target path required}"
+mode="${2:-0644}"
+
+stage_dir="${GA_SHARE_STAGE_DIR:-/mnt/data/.ga-share-stage}"
+if ! mkdir -p "$stage_dir" 2>/dev/null; then
+	echo "ga-share-publish: cannot create staging dir $stage_dir" >&2
+	exit 1
+fi
+chmod 0700 "$stage_dir" 2>/dev/null || true
+
+tmp="$stage_dir/.pub.$$.$(basename "$target")"
+
+# The redirect opens a file in the ROOT-ONLY staging dir → no hostile symlink
+# can be present here, so `>` is safe.
+if ! cat > "$tmp"; then
+	echo "ga-share-publish: failed writing staging file for $target" >&2
+	rm -f "$tmp"
+	exit 1
+fi
+# chmod the staging file (never the published path — chmod'ing the final path
+# would itself follow a planted symlink, the ga-enroll:147 bug this replaces).
+chmod "$mode" "$tmp" 2>/dev/null || true
+
+# The target's parent (the /share dir itself) is host-created, not container-
+# plantable; ensure it exists.
+mkdir -p "$(dirname "$target")" 2>/dev/null || true
+# Defense in depth: drop a symlink sitting at the exact target name. rename()
+# below would not follow it anyway, but this keeps the on-disk state honest.
+[ -L "$target" ] && rm -f "$target"
+# Same-filesystem rename(): atomic, and replaces a destination symlink without
+# following it.
+if ! mv -f "$tmp" "$target"; then
+	echo "ga-share-publish: failed publishing $target" >&2
+	rm -f "$tmp"
+	exit 1
+fi

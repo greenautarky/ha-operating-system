@@ -24,9 +24,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 #            via tests/qemu-ci/runner.py.
 # - device = needs real iHost hardware, network, Docker, HA running.
 # - all    = union; used when no category is specified.
-SUITES_EMU="environment crash_detection boot_timing disk_guard supervisor_health"
+SUITES_EMU="environment crash_detection boot_timing disk_guard supervisor_health share_publish"
 SUITES_DEVICE="health telemetry network ping config_verify dns_config onboarding ga_frontend_bundle provisioning tailscale watchdog stress idle_perf telemetry_buffering hardware openstick ota_update connectivity_recorder rc19_device firewall"
-SUITES_ALL="crash_detection health telemetry environment network ping boot_timing disk_guard watchdog config_verify dns_config stress idle_perf onboarding ga_frontend_bundle provisioning tailscale telemetry_buffering hardware openstick ota_update supervisor_health connectivity_recorder rc19_device firewall"
+SUITES_ALL="crash_detection health telemetry environment network ping boot_timing disk_guard watchdog config_verify dns_config stress idle_perf onboarding ga_frontend_bundle provisioning tailscale telemetry_buffering hardware openstick ota_update supervisor_health connectivity_recorder rc19_device firewall share_publish"
 
 # Parse arguments
 CATEGORY=""
