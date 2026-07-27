@@ -88,13 +88,18 @@ pct exec 107 -- bash -c '
 
 ## GitHub Actions Runner Setup
 
+The builder carries a self-hosted runner that is registered to the **private
+`greenautarky/ga-ops` repository** — deliberately not to this public repo, so
+that build logs and artifacts stay private (hardening decision 2026-07-11).
+
 ```bash
 # SSH into the container
 ssh root@172.16.10.249
 
-# Configure the runner (get token from GitHub repo settings → Actions → Runners)
-cd /opt/actions-runner
-./config.sh --url https://github.com/greenautarky/ha-operating-system --token <TOKEN>
+# Configure the runner (token from ga-ops → Settings → Actions → Runners)
+cd /home/builder/actions-runner
+./config.sh --url https://github.com/greenautarky/ga-ops --token <TOKEN> \
+  --labels self-hosted,Linux,X64,mesh,bake
 
 # Install and start as service
 ./svc.sh install
@@ -102,11 +107,20 @@ cd /opt/actions-runner
 ./svc.sh status
 ```
 
-Then update the workflow:
-```yaml
-# .github/workflows/build-os.yml
-runs-on: self-hosted
-```
+The labels are what address the jobs:
+
+| Label | Used by |
+|-------|---------|
+| `bake` | `bake.yml`, `release-train.yml` (bake jobs) — the OS build |
+| `mesh` | `testgate.yml`, `chatops-cohorts.yml`, release-train stage/roll jobs — need mesh reach to devices and the fleet-manager |
+
+There is no build workflow in this repository. The productive OS build is
+`bake.yml` in `ga-ops` (`workflow_dispatch`, inputs `ga_release` +
+`build_mode`); it reuses the builder's clone at
+`/home/builder/ha-operating-system`, runs `scripts/sync-components.sh`, then
+`ga_build.sh` inside the `hassos:local` container. The legacy `build-os.yml`
+that used to live here was removed in 2026-07 — it addressed the bare
+`self-hosted` label, so it never landed on this builder.
 
 ## Clone and Build
 
@@ -136,7 +150,9 @@ These files must exist on the builder (gitignored, manually copied):
 | `buildroot-external/ota/rel-ca.pem` | RAUC OTA signing CA certificate |
 | `buildroot-external/ota/dev-ca.pem` | Symlink → `rel-ca.pem` |
 
-In CI, these are injected from GitHub Secrets (see `.github/workflows/build-os.yml`).
+These live persistently on the builder. The `ga-ops` bake reuses the builder's
+own clone, so it picks them up from disk — they are not injected from GitHub
+Secrets.
 
 ## Build Cache
 
