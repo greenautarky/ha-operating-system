@@ -6,3 +6,14 @@ HASSOS_NAME="GreenAutarky BOS"
 HASSOS_ID="haos"
 
 DEPLOYMENT="production"
+
+# Legacy RAUC CA bridge (F13, 2026-06-05). "true" bakes the RETIRED
+# pre-2026-03-27 signing CA into every device's keyring so devices provisioned
+# before the ga-builder cert rotation still accept OTAs. This RE-TRUSTS a
+# non-revocable CA:TRUE root (valid to 2035; system.conf has no check-crl) —
+# a fleet-wide security liability that un-does the key rotation. As of
+# 2026-07-27 the NetBird mesh still shows >=16 active legacy-OS devices, so it
+# must stay "true". Flip to "false" (and delete ota/legacy-signing-cert.pem)
+# ONLY after a field audit confirms no pre-rotation device remains. See KB
+# "Fleet migration: retired trust anchors". [Vuln-3]
+GA_LEGACY_CA_BRIDGE="true"
