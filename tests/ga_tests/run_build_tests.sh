@@ -589,6 +589,28 @@ fi
 # WIFI-13c: must NOT live in the overlay-shadowed /etc/udev/rules.d
 [[ -f "${TARGET}/etc/udev/rules.d/81-ga-rtw88-runtime-pm.rules" ]]   && _fail "WIFI-13c: runtime-PM rule in /etc/udev/rules.d — shadowed by overlay! Use /usr/lib/udev/rules.d/"   || _pass "WIFI-13c: runtime-PM rule correctly NOT in overlaid /etc/udev/rules.d"
 
+# WIFI-14: mode C is SAFE for a fleet-wide interference event — beacon-loss that
+# a reload doesn't clear must REPORT, never reboot (only a TX-hang reboots).
+WD="${TARGET}/usr/sbin/ga-wifi-watchdog"
+if grep -q 'record_action "report-interference"' "$WD" 2>/dev/null \
+   && grep -q 'reporting only, no radio action' "$WD" 2>/dev/null; then
+  _pass "WIFI-14a: beacon-loss-only degraded reports, does not escalate to reboot"
+else
+  _fail "WIFI-14a: mode C could reboot on beacon-loss — reboot guarded only by degraded_tx is missing (fleet interference = reboot storm)"
+fi
+# guarded_reboot must be reachable ONLY under the degraded_tx branch
+if awk '/if \[ "\$degraded_tx" -eq 1 \]; then/{f=1} f&&/guarded_reboot/{print "GR_UNDER_TX"; exit}' "$WD" | grep -q GR_UNDER_TX; then
+  _pass "WIFI-14b: guarded_reboot gated behind degraded_tx"
+else
+  _fail "WIFI-14b: guarded_reboot not gated behind degraded_tx"
+fi
+# WIFI-14c: health surface written to the /share bridge for ga_manager /info
+if grep -q 'SHARE_HEALTH="/mnt/data/supervisor/share/ga-wifi-health.json"' "$WD" 2>/dev/null    && grep -q '^write_health()' "$WD" 2>/dev/null; then
+  _pass "WIFI-14c: WiFi-health surface written to /share for ga_manager /info"
+else
+  _fail "WIFI-14c: WiFi-health surface (/share/ga-wifi-health.json) missing"
+fi
+
 # --- HAOS Overlay Safety Checks ---
 # HAOS bind-mounts /mnt/overlay/etc/{hosts,hostname,systemd/timesyncd.conf,...}
 # over the rootfs. Any file placed in these paths at build time will be INVISIBLE
