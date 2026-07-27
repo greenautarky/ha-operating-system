@@ -33,7 +33,15 @@
 set -u
 
 ENV_FILE=/mnt/data/telegraf/env
-CRED_FILE=/mnt/data/supervisor/share/ga-fleet-influx.yaml
+# Per-device InfluxDB credential. PREFERRED source is the addon-PRIVATE /data
+# sidecar written by ga_manager's creds-write worker (ADR-0003: no secret under
+# /share — the /share view is readable by any share:rw addon; Vuln-8). Read it
+# root-only via the slug-tolerant glob, exactly like ga-fluent-bit-env does for
+# loki. Falls back to the LEGACY /share file during the transition (ga_manager
+# < 0.99.0 that has not written the sidecar yet); ADR-0003 Step 5 drops it.
+# shellcheck disable=SC2125  # expanded unquoted in find_influx_cred(), by design
+CRED_GLOB=/mnt/data/supervisor/addons/data/*_ga_manager/ga-fleet-influx.yaml
+LEGACY_CRED=/mnt/data/supervisor/share/ga-fleet-influx.yaml
 
 mkdir -p /mnt/data/telegraf /mnt/data/telegraf/buffer
 
@@ -74,22 +82,34 @@ fi
 
 # --- per-device InfluxDB credential (ADR-0002 / ADR-0003 Step 2) -------------
 #
-# Delivered by fleet-manager influx_creds_autopush -> ga_manager
-# influx-creds-write worker into the addon /share (host view: CRED_FILE).
-# Hardened against the /share mount boot race (seen live on K0 2026-07-09):
-# bounded wait, loud journal lines either way, creds written only when BOTH
-# fields are non-empty.
+# Delivered by fleet-manager influx_creds_autopush -> ga_manager creds-write,
+# which renders the flat sidecar in its addon-private /data dir (host view:
+# CRED_GLOB) and — during the transition — the legacy /share view (LEGACY_CRED).
+# Hardened against the /mnt/data addon-mount boot race (seen live on K0
+# 2026-07-09): bounded wait, loud journal lines either way, creds written only
+# when BOTH fields are non-empty. Same find+wait shape as ga-fluent-bit-env.
+find_influx_cred() {
+    for c in $CRED_GLOB; do
+        [ -f "$c" ] && { printf '%s' "$c"; return 0; }
+    done
+    [ -f "$LEGACY_CRED" ] && { printf '%s' "$LEGACY_CRED"; return 0; }
+    return 1
+}
 
-n=1
-while [ "$n" -le 6 ]; do
-    [ -f "$CRED_FILE" ] && break
-    echo "telegraf: per-device influx cred $CRED_FILE not present (try $n/6) — waiting 5s for the /share mount"
-    sleep 5
-    n=$((n + 1))
-done
+CRED_FILE=$(find_influx_cred) || CRED_FILE=""
+if [ -z "$CRED_FILE" ] && [ -d /mnt/data/supervisor/addons/data ]; then
+    n=1
+    while [ "$n" -le 6 ]; do
+        sleep 5
+        CRED_FILE=$(find_influx_cred) && break
+        CRED_FILE=""
+        echo "telegraf: per-device influx cred not present (try $n/6) — waiting for the addon data mount"
+        n=$((n + 1))
+    done
+fi
 
-if [ ! -f "$CRED_FILE" ]; then
-    echo "telegraf: no per-device influx cred at $CRED_FILE — starting without one (InfluxDB writes will 401 until the fleet-manager delivers it)"
+if [ -z "$CRED_FILE" ]; then
+    echo "telegraf: no per-device influx cred (checked /data sidecar + legacy /share) — starting without one (InfluxDB writes will 401 until the fleet-manager delivers it)"
     exit 0
 fi
 
