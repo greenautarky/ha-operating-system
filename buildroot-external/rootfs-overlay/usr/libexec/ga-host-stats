@@ -43,7 +43,7 @@ main() {
         '{ts: $ts, boot_id: $boot_id, oom_kernel_events_24h: $oom_24h,
           netdev: ($netdev | map({(.iface): {rx_bytes, tx_bytes}}) | add // {}),
           containers: ($containers | map({(.name): {restart_count, status}}) | add // {})}' \
-        > "${OUT}.tmp" && mv "${OUT}.tmp" "$OUT"
+        | /usr/libexec/ga-share-publish "$OUT"
 }
 
 main "$@"

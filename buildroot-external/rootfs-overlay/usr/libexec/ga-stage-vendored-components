@@ -41,8 +41,19 @@ if [ ! -d "$SRC" ]; then
 	exit 0
 fi
 
+# $DST is in the container-writable /share bridge. If a hostile addon replaces
+# it with a symlink to e.g. /mnt/data, the `rm -rf "$dst"` / `cp -a` below would
+# delete+write an arbitrary root-owned tree ("$DST/$name" resolving outside
+# /share). Refuse to operate through a symlinked staging dir. [Vuln-2 hardening]
+if [ -L "$DST" ]; then
+	rm -f "$DST" 2>/dev/null || { log "WARN $DST is a symlink and could not be removed — skipping (boot not blocked)"; exit 0; }
+fi
 if ! mkdir -p "$DST" 2>/dev/null; then
 	log "WARN could not create $DST — skipping (boot not blocked)"
+	exit 0
+fi
+if [ -L "$DST" ] || [ ! -d "$DST" ]; then
+	log "WARN $DST is not a real directory — skipping (boot not blocked)"
 	exit 0
 fi
 

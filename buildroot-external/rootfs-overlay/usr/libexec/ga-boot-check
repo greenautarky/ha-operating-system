@@ -54,10 +54,13 @@ main() {
     # Check if marker exists from previous boot
     if [ -f "$MARKER_FILE" ]; then
         log_crash
+        # $VERDICT_FILE is in the container-writable /share bridge — publish
+        # symlink-safe so a `> "$VERDICT_FILE"` cannot be redirected by an
+        # addon-planted symlink to an arbitrary root-owned file.
         {
             echo "detected_at=$(date '+%Y-%m-%d %H:%M:%S')"
             echo "boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)"
-        } > "$VERDICT_FILE"
+        } | /usr/libexec/ga-share-publish "$VERDICT_FILE"
         # Remove the stale marker (new one will be created by ga-crash-marker.service)
         rm -f "$MARKER_FILE"
     else

@@ -37,7 +37,12 @@
 # IDEMPOTENT: safe to re-run. Each setting is self-checking.
 set -e
 
-MARKER="/mnt/data/supervisor/share/.ga-ha-init-applied"
+# Host-internal "settings applied" flag. Nothing in a container reads it, so it
+# lives on the root-only data partition, NOT the container-writable /share
+# bridge — that keeps it off the symlink-follow write primitive entirely.
+# (On the first boot after this change the old /share marker is ignored and the
+# idempotent settings are re-applied once; harmless.) [Vuln-2 hardening]
+MARKER="/mnt/data/.ga-ha-init-applied"
 UPDATER_JSON="/mnt/data/supervisor/updater.json"
 HA="/usr/bin/ha"
 # 1200s (20m) — see ga-bootstrap for the rationale; Supervisor can be busy

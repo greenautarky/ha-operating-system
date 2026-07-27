@@ -23,7 +23,15 @@
 
 # --- config (all overridable for tests) -----------------------------------
 # The /share bridge: host /mnt/data/supervisor/share == /share inside addons.
+# LOG is the container-readable *published copy*; AUTH is the root-only
+# authoritative log we actually append to. We cannot append/rotate directly
+# into LOG because /share is writable by every share:rw addon (uid 0), so a
+# `>>`/`>` there follows an addon-planted symlink and writes through it to an
+# arbitrary root file. Instead we append+rotate in AUTH (on /mnt/data, which
+# addons cannot see) and publish a symlink-safe copy to LOG. [Vuln-2 hardening]
 LOG="${GA_CR_LOG:-/mnt/data/supervisor/share/connectivity_history.jsonl}"
+AUTH="${GA_CR_AUTH:-/mnt/data/ga-connectivity/connectivity_history.jsonl}"
+PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
 SYS_NET="${GA_CR_SYS_NET:-/sys/class/net}"
 INTERVAL="${GA_CR_INTERVAL:-20}"       # seconds between polls
 MAX_LINES="${GA_CR_MAX_LINES:-2000}"   # tail-truncate retention
@@ -65,12 +73,15 @@ emit() {
     [ -n "$_iface" ] && _line="$_line,\"iface\":\"$_iface\""
     [ -n "$_detail" ] && _line="$_line,\"detail\":\"$_detail\""
     _line="$_line}"
-    mkdir -p "$(dirname "$LOG")" 2>/dev/null
-    printf '%s\n' "$_line" >> "$LOG"
-    _n="$(wc -l < "$LOG" 2>/dev/null || echo 0)"
+    # Append + rotate in the ROOT-ONLY authoritative log (no hostile symlink
+    # possible on /mnt/data), then publish a symlink-safe copy into /share.
+    mkdir -p "$(dirname "$AUTH")" 2>/dev/null
+    printf '%s\n' "$_line" >> "$AUTH"
+    _n="$(wc -l < "$AUTH" 2>/dev/null || echo 0)"
     if [ "$_n" -gt "$MAX_LINES" ]; then
-        tail -n "$MAX_LINES" "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
+        tail -n "$MAX_LINES" "$AUTH" > "$AUTH.tmp" 2>/dev/null && mv "$AUTH.tmp" "$AUTH"
     fi
+    "$PUBLISH" "$LOG" < "$AUTH" 2>/dev/null || true
 }
 
 # read_wan -> current mapped wan state (empty if nmcli absent/unknown)

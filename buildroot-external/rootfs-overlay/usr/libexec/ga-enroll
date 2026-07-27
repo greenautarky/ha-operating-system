@@ -142,7 +142,5 @@ jq -cn --arg hw "$hw_serial" --arg url "$FLEET_URL" --arg ipurl "$FLEET_URL_IP" 
        --arg pid "$prov_id" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
        --arg rel "$ga_release" --arg env "$ga_env" \
        '{hw_serial:$hw, fleet_url:$url, fleet_url_ip:$ipurl, provisional_id:$pid, enrolled_at:$at, ga_release:$rel, ga_env:$env}' \
-    > "${STATE_FILE}.tmp"
-mv "${STATE_FILE}.tmp" "$STATE_FILE"
-chmod 0644 "$STATE_FILE"
+    | /usr/libexec/ga-share-publish "$STATE_FILE" 0644
 log "state written to ${STATE_FILE}"

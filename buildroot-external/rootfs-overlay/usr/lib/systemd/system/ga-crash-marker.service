@@ -13,8 +13,10 @@ RemainAfterExit=yes
 # On start: create marker indicating "boot in progress".
 # Dual-located: the primary marker is read by ga-boot-check; the /share copy
 # (= /share/.ga_unclean_shutdown inside addons) is readable by the ga_manager
-# addon container, which only mounts /mnt/data/supervisor/share.
-ExecStart=/bin/sh -c 'mkdir -p /mnt/data/supervisor/share; touch /mnt/data/.ga_unclean_shutdown /mnt/data/supervisor/share/.ga_unclean_shutdown'
+# addon container, which only mounts /mnt/data/supervisor/share. The /share copy
+# is created via ga-share-publish so a `touch` cannot follow an addon-planted
+# symlink at that path into an arbitrary root-owned file. [Vuln-2 hardening]
+ExecStart=/bin/sh -c 'touch /mnt/data/.ga_unclean_shutdown; : | /usr/libexec/ga-share-publish /mnt/data/supervisor/share/.ga_unclean_shutdown'
 # On stop (clean shutdown): remove both copies of the marker
 ExecStop=/bin/rm -f /mnt/data/.ga_unclean_shutdown /mnt/data/supervisor/share/.ga_unclean_shutdown
 
