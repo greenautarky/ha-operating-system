@@ -117,6 +117,12 @@ grep -q 'ga-fleet-influx.yaml' "$TG_ENV_SH" 2>/dev/null \
   && _pass "CFG-28: ga-telegraf-env reads the per-device InfluxDB cred (and the unit calls it)" \
   || _fail "CFG-28: per-device InfluxDB cred reader missing or not wired into telegraf.service"
 
+# CFG-28b: the influx cred is read from the addon-PRIVATE /data sidecar, not only
+# the legacy /share view that any share:rw addon can read (Vuln-8).
+grep -q 'addons/data/\*_ga_manager/ga-fleet-influx.yaml' "$TG_ENV_SH" 2>/dev/null \
+  && _pass "CFG-28b: ga-telegraf-env prefers the /data influx sidecar (off /share)" \
+  || _fail "CFG-28b: ga-telegraf-env still reads the influx cred only from /share (Vuln-8)"
+
 # CFG-29: telegraf.conf uses ${INFLUX_USER} (not a hardcoded shared user)
 if grep -qF 'username = "${INFLUX_USER}"' "$TG_CONF" 2>/dev/null && ! grep -qF 'username = "device_writer"' "$TG_CONF" 2>/dev/null; then
   _pass "CFG-29: telegraf.conf uses per-device \${INFLUX_USER}"
