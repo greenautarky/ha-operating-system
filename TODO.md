@@ -194,7 +194,8 @@ the founder/pilot circle, OR pre-CRA-deadline (mid-2027).
   - Decision needed: retention policy (how many releases to keep?)
 - [ ] **Automated release pipeline** — trigger after successful test suite
   - Build → Flash → Device Tests → E2E → create-release.sh → upload
-  - CI integration: GitHub Actions job after build-os.yml succeeds?
+  - CI integration: largely superseded by `release-train.yml` in `ga-ops`
+    (bake → stage → roll → testgate as one chained job graph)
   - Or manual trigger after human review of test-report.html?
 - [x] **Release naming convention** — resolved: `v16.3.X.Y` (e.g., `v16.3.1.1`)
   - `16.3` = upstream base, `X` = GA release major, `Y` = GA release minor

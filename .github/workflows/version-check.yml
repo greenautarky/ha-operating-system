@@ -50,8 +50,9 @@ jobs:
             2>&1 | tee test-output.txt
           rc=${PIPESTATUS[0]}
           # We only care about source-level failures here. Build-output
-          # tests will run as part of the actual prod build in
-          # build-os.yml. Filter is INCLUSIVE — only count FAILs from
+          # tests will run as part of the actual prod build (bake.yml in
+          # the private ga-ops repo, on the ga-builder runner).
+          # Filter is INCLUSIVE — only count FAILs from
           # source-level test prefixes (SRC-, VER-, XVER-). Anything
           # else is build-output-dependent and expected to fail in CI
           # where no rootfs/, target/, or version.json exists.
@@ -64,6 +65,6 @@ jobs:
           if [ "$rc" -ne 0 ]; then
             # Script exited non-zero — that's expected, build-output tests
             # have no rootfs to check against. We only care about source-level.
-            echo "Note: script exited rc=$rc, but no source-level FAILs detected (build-output tests will run during build-os.yml against the real rootfs)."
+            echo "Note: script exited rc=$rc, but no source-level FAILs detected (build-output tests will run during the ga-ops bake against the real rootfs)."
           fi
           echo "Source-level tests passed."
