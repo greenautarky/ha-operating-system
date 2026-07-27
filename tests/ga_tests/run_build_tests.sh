@@ -593,7 +593,7 @@ fi
 # a reload doesn't clear must REPORT, never reboot (only a TX-hang reboots).
 WD="${TARGET}/usr/sbin/ga-wifi-watchdog"
 if grep -q 'record_action "report-interference"' "$WD" 2>/dev/null \
-   && grep -q 'NOT rebooting (external RF interference' "$WD" 2>/dev/null; then
+   && grep -q 'reporting only, no radio action' "$WD" 2>/dev/null; then
   _pass "WIFI-14a: beacon-loss-only degraded reports, does not escalate to reboot"
 else
   _fail "WIFI-14a: mode C could reboot on beacon-loss — reboot guarded only by degraded_tx is missing (fleet interference = reboot storm)"
