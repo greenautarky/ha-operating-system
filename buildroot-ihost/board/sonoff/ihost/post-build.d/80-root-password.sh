@@ -10,7 +10,17 @@ if [ -z "$TARGET_DIR" ] || [ ! -d "$TARGET_DIR" ]; then
 fi
 
 if [ -z "$ROOT_PW_HASH" ]; then
-  echo "INFO: ROOT_PW_HASH not set; leaving root password unchanged"
+  # Fail closed on prod: a customer image must NEVER ship a passwordless root.
+  # CI writes ROOT_PW_HASH from a secret; an unset/empty secret must break the
+  # build loudly rather than silently produce `root::` (passwordless console —
+  # anyone with brief physical/serial access on a shipped device gets root).
+  # dev/bench builds may legitimately be passwordless (serial recovery with a
+  # locally-set hash, throwaway images), so those are left unchanged. [Vuln-7]
+  if [ "${GA_ENV:-dev}" = "prod" ]; then
+    echo "ERROR: ROOT_PW_HASH not set for a prod build (GA_ENV=prod) — refusing to ship passwordless root" >&2
+    exit 1
+  fi
+  echo "WARN: ROOT_PW_HASH not set (GA_ENV=${GA_ENV:-dev}); root password left unchanged (passwordless). NON-PROD builds only."
   exit 0
 fi
 
