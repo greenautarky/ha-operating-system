@@ -13,6 +13,9 @@
 TELEGRAF_VERSION = 1.38.0
 TELEGRAF_SITE = https://github.com/influxdata/telegraf/archive/refs/tags
 TELEGRAF_SOURCE = v$(TELEGRAF_VERSION).tar.gz
+# telegraf.hash pins the sha256 of this GitHub archive so a moved/re-cut tag
+# fails the build instead of silently swapping the source. When bumping the
+# version, recompute the hash (see telegraf.hash header). [Vuln-11]
 
 TELEGRAF_LICENSE = MIT
 TELEGRAF_LICENSE_FILES = LICENSE

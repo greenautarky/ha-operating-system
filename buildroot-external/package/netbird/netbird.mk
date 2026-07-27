@@ -2,8 +2,12 @@
 # netbird (v0.71.4) — ARMv7 build for Buildroot with systemd service
 ################################################################################
 
-# Use fully-qualified tag ref to avoid "ambiguous refname" in cached git repos
-NETBIRD_VERSION       = refs/tags/v0.71.4
+# Pin the IMMUTABLE commit SHA of v0.71.4, not the mutable tag: a git checkout
+# verifies the SHA against the fetched objects, so a moved/re-cut upstream tag
+# cannot swap the source under us (the git SHA is itself the content hash — no
+# .hash file needed for a git package). Update this SHA when bumping the version.
+# SHA of refs/tags/v0.71.4 (netbirdio/netbird), resolved 2026-07-27. [Vuln-11]
+NETBIRD_VERSION       = 0358be23136da50e829ba99a83e54ef555071a7f
 NETBIRD_SITE          = https://github.com/netbirdio/netbird.git
 NETBIRD_SITE_METHOD   = git
 

@@ -2798,6 +2798,29 @@ else
 fi
 
 # =========================================================================
+# Package source pinning — mutable tags -> immutable SHAs / hashes (Vuln-11)
+# =========================================================================
+_nb_mk="${SRC:-}/buildroot-external/package/netbird/netbird.mk"
+if [[ -n "${SRC:-}" && -f "$_nb_mk" ]]; then
+  if grep -qE '^NETBIRD_VERSION[[:space:]]*=[[:space:]]*[0-9a-f]{40}[[:space:]]*$' "$_nb_mk" \
+     && ! grep -qE '^NETBIRD_VERSION[[:space:]]*=.*refs/tags/' "$_nb_mk"; then
+    _pass "SRC-PIN-01: netbird pinned to an immutable commit SHA (not a mutable tag)"
+  else
+    _fail "SRC-PIN-01: netbird NOT pinned to a commit SHA — a moved tag can swap the source (Vuln-11)"
+  fi
+else
+  _skip "SRC-PIN-01: netbird commit-SHA pin" "netbird.mk not found (no source tree)"
+fi
+_tg_hash="${SRC:-}/buildroot-external/package/telegraf/telegraf.hash"
+if [[ -n "${SRC:-}" && -f "$_tg_hash" ]]; then
+  grep -qE '^sha256[[:space:]]+[0-9a-f]{64}[[:space:]]+v[0-9.]+\.tar\.gz' "$_tg_hash" \
+    && _pass "SRC-PIN-02: telegraf source archive has a sha256 hash (pins the tag)" \
+    || _fail "SRC-PIN-02: telegraf.hash missing a source-archive sha256 (Vuln-11)"
+else
+  _skip "SRC-PIN-02: telegraf source hash" "telegraf.hash not found (no source tree)"
+fi
+
+# =========================================================================
 # Summary
 # =========================================================================
 echo ""
