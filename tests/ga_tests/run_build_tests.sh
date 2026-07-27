@@ -2752,6 +2752,46 @@ else
 fi
 
 # =========================================================================
+# Legacy RAUC CA bridge — must stay GATED behind GA_LEGACY_CA_BRIDGE (Vuln-3)
+# =========================================================================
+_lca_src="/build"
+[[ -d "${_lca_src}/buildroot-external" ]] || _lca_src="$(cd "$(dirname "$0")/../.." && pwd)"
+_lca_rauc="${_lca_src}/buildroot-external/scripts/rauc.sh"
+_lca_cert="${_lca_src}/buildroot-external/ota/legacy-signing-cert.pem"
+if [[ -f "$_lca_rauc" && -f "$_lca_cert" ]] && command -v openssl >/dev/null 2>&1; then
+  # Source rauc.sh in a subshell (it runs `set -e`; contain it) and exercise the
+  # gate both ways against a scratch keyring: the retired CA must be baked ONLY
+  # when GA_LEGACY_CA_BRIDGE=true.
+  _lca_res=$(
+    # shellcheck disable=SC1090  # dynamic path to the in-tree rauc.sh
+    . "$_lca_rauc" >/dev/null 2>&1 || true   # rauc.sh runs `set -e`; neutralise it
+    set +e
+    _off=$(mktemp); _on=$(mktemp)
+    GA_LEGACY_CA_BRIDGE=false add_legacy_ca_if_enabled "$_off" "$_lca_cert" >/dev/null 2>&1
+    GA_LEGACY_CA_BRIDGE=true  add_legacy_ca_if_enabled "$_on"  "$_lca_cert" >/dev/null 2>&1
+    _c_off=$(grep -c 'BEGIN CERTIFICATE' "$_off" 2>/dev/null)   # always one number
+    _c_on=$(grep -c 'BEGIN CERTIFICATE' "$_on" 2>/dev/null)
+    rm -f "$_off" "$_on"
+    printf '%s %s' "${_c_off:-0}" "${_c_on:-0}"
+  )
+  _lca_off=${_lca_res% *}; _lca_on=${_lca_res#* }
+  if [[ "${_lca_off:-x}" == "0" && "${_lca_on:-0}" -ge 1 ]]; then
+    _pass "RAUC-LEGACY-01: legacy CA baked ONLY when GA_LEGACY_CA_BRIDGE=true (off=${_lca_off} on=${_lca_on})"
+  else
+    _fail "RAUC-LEGACY-01: legacy-CA gate broken (off=${_lca_off} on=${_lca_on}) — retired CA not correctly gated"
+  fi
+else
+  _skip "RAUC-LEGACY-01: legacy-CA gate" "rauc.sh / legacy cert / openssl not available (source tree only)"
+fi
+if [[ -f "${_lca_src}/buildroot-external/meta" ]]; then
+  grep -q '^GA_LEGACY_CA_BRIDGE=' "${_lca_src}/buildroot-external/meta" \
+    && _pass "RAUC-LEGACY-02: buildroot-external/meta declares GA_LEGACY_CA_BRIDGE explicitly" \
+    || _fail "RAUC-LEGACY-02: meta does not declare GA_LEGACY_CA_BRIDGE (gate default would be off/implicit)"
+else
+  _skip "RAUC-LEGACY-02: meta declares flag" "meta not found (source tree only)"
+fi
+
+# =========================================================================
 # Summary
 # =========================================================================
 echo ""

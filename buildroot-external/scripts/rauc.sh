@@ -29,6 +29,31 @@ function write_rauc_config() {
 }
 
 
+# add_legacy_ca_if_enabled <keyring> <legacy-cert>
+# Bake the retired pre-2026-03-27 ("F13") signing CA into <keyring>, but ONLY
+# when GA_LEGACY_CA_BRIDGE=true (see buildroot-external/meta). That cert is a
+# self-signed CA:TRUE root that stays valid until 2035, and system.conf has no
+# check-crl, so trusting it fleet-wide has NO revocation path — it effectively
+# un-does the 2026-03-27 key rotation. It is therefore an explicit, auditable
+# opt-in kept only while pre-rotation devices may still be in the field (as of
+# 2026-07-27 the mesh still shows >=16 active legacy-OS devices). Secure default:
+# unset/anything-but-true => NOT baked. See KB "Fleet migration: retired trust
+# anchors (legacy RAUC CA + shared SSH key)". [Vuln-3]
+function add_legacy_ca_if_enabled() {
+    local keyring="$1" legacy="$2"
+    if [ "${GA_LEGACY_CA_BRIDGE:-false}" != "true" ]; then
+        echo "Legacy CA bridge NOT baked (GA_LEGACY_CA_BRIDGE=${GA_LEGACY_CA_BRIDGE:-unset}) — retired signing CA not trusted."
+        return 0
+    fi
+    if [ ! -f "${legacy}" ]; then
+        echo "WARN: GA_LEGACY_CA_BRIDGE=true but ${legacy} missing — nothing baked."
+        return 0
+    fi
+    echo "Adding legacy (pre-2026-03-27) signing cert to keyring (F13 bridge; GA_LEGACY_CA_BRIDGE=true)."
+    openssl x509 -in "${legacy}" -text >> "${keyring}"
+}
+
+
 function install_rauc_certs() {
     local cert="/build/cert.pem"
 
@@ -46,21 +71,17 @@ function install_rauc_certs() {
         openssl x509 -in "${cert}" -text >> "${TARGET_DIR}/etc/rauc/keyring.pem"
     fi
 
-    # F13 fix (2026-06-05): also bake the LEGACY signing cert (used by
-    # KIB-SONs provisioned before 2026-03-27 ga-builder cert rotation).
-    # Without this, any device upgraded from the legacy stack would need
-    # an explicit CA-bridge bind-mount (see RUNBOOK-LEGACY-CA-BRIDGE-MIGRATION.md
-    # in ga-ihost-docs) on every future OTA, because the build's signing cert
-    # and the device's baked-in keyring don't share a key (only a CN).
-    # The legacy cert was extracted from K6's pre-migration keyring snapshot
-    # (2026-06-05); SHA-256 fingerprint
+    # F13 legacy CA bridge (2026-06-05) — GATED behind GA_LEGACY_CA_BRIDGE.
+    # Re-trusts the retired pre-2026-03-27 signing CA fleet-wide (no revocation
+    # path). Without it, a device provisioned before the ga-builder cert
+    # rotation cannot verify OTAs signed by the current key (the build cert and
+    # its baked-in keyring share only a CN, not a key). Keep enabled only while
+    # such devices remain in the field; the goal is to drop it after a field
+    # audit. Legacy cert fingerprint:
     # 01:E7:CE:81:49:6B:75:43:22:3C:8B:31:29:4C:78:AB:D3:02:7F:FE:62:7A:B5:B6:28:AF:73:83:E1:21:BC:F7
-    # valid 2025-09 to 2035-09. Drop this branch once the last legacy
-    # device is decommissioned (track via fleet-manager devices.yaml).
-    if [ -f "${BR2_EXTERNAL_HASSOS_PATH}/ota/legacy-signing-cert.pem" ]; then
-        echo "Adding legacy (pre-2026-03-27) signing cert to keyring (F13 fix)."
-        openssl x509 -in "${BR2_EXTERNAL_HASSOS_PATH}/ota/legacy-signing-cert.pem" -text >> "${TARGET_DIR}/etc/rauc/keyring.pem"
-    fi
+    add_legacy_ca_if_enabled \
+        "${TARGET_DIR}/etc/rauc/keyring.pem" \
+        "${BR2_EXTERNAL_HASSOS_PATH}/ota/legacy-signing-cert.pem"
 }
 
 
