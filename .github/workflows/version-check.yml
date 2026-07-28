@@ -8,6 +8,11 @@ on:
     # missed openstick / wifi / kernel changes, ga_build.sh changes (where
     # MAKE_OVERRIDES lives), new test additions, and workflow self-edits.
     paths:
+      # version.yaml was missing here until 2026-07-28 — the file the version
+      # chain is ABOUT did not trigger the check that validates it. A release
+      # bump (gaos_release, component pins) therefore went unvalidated until
+      # some unrelated push under one of the other paths happened to run it.
+      - 'version.yaml'
       - 'buildroot-external/**'
       - 'buildroot-ihost/**'
       - 'scripts/**'
@@ -16,10 +21,12 @@ on:
   pull_request:
     branches: [master]
     paths:
+      - 'version.yaml'
       - 'buildroot-external/**'
       - 'buildroot-ihost/**'
       - 'scripts/**'
       - 'tests/ga_tests/**'
+      - '.github/workflows/version-check.yml'
   workflow_dispatch:
 
 jobs:
