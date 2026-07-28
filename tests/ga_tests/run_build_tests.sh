@@ -2843,6 +2843,95 @@ else
 fi
 
 # =========================================================================
+# CVE scan coverage — an empty report must never pass as a clean one
+#
+# Until 2026-07-28 the OS scan reported "CLEAN: no CRITICAL/HIGH" on every
+# build while evaluating 0 of 208 packages: trivy detects `family="buildroot"`,
+# declares it unsupported, and returns success. The empty report then shipped
+# in the release bundle as CVE evidence. These tests pin the fail-closed
+# behaviour that replaced it. See KB #172.
+# =========================================================================
+_cve_src="/build"
+[[ -d "${_cve_src}/scripts" ]] || _cve_src="$(cd "$(dirname "$0")/../.." && pwd)"
+_cve_sh="${_cve_src}/scripts/scan-cves.sh"
+if [[ -f "$_cve_sh" ]]; then
+  # CVE-SCAN-01: the coverage assertion exists and is wired to the fatal exit
+  if grep -q 'list-all-pkgs' "$_cve_sh" \
+     && grep -qE 'COVERAGE_MIN_PCT' "$_cve_sh" \
+     && grep -q 'SCAN_BROKEN=true' "$_cve_sh" \
+     && grep -qE '^[[:space:]]*exit 2$' "$_cve_sh"; then
+    _pass "CVE-SCAN-01: OS scan verifies coverage and exits 2 when it evaluated nothing"
+  else
+    _fail "CVE-SCAN-01: coverage assertion missing — a 0-package scan could pass as clean again"
+  fi
+
+  # CVE-SCAN-02: the known no-op signatures are detected, not ignored
+  if grep -q 'Unsupported os' "$_cve_sh" && grep -q 'No OS package is detected' "$_cve_sh"; then
+    _pass "CVE-SCAN-02: scanner no-op signatures ('Unsupported os') are treated as failure"
+  else
+    _fail "CVE-SCAN-02: no-op signature detection missing from scan-cves.sh"
+  fi
+
+  # CVE-SCAN-03: live decision logic. Drives scan-cves.sh with a stub scanner
+  # that reproduces the exact real-world no-op (logs "Unsupported os", writes an
+  # empty result set, exits 0) and asserts the script refuses to call that clean.
+  # Hermetic on purpose — needs no build output and no real trivy, so the
+  # regression guard also runs on-device and in plain CI.
+  if command -v jq >/dev/null 2>&1; then
+    _cve_tmp=$(mktemp -d)
+    mkdir -p "${_cve_tmp}/bin"
+    cat > "${_cve_tmp}/bin/trivy" <<'CVEEOF'
+#!/usr/bin/env bash
+# stub: reproduces trivy's silent no-op on a Buildroot CycloneDX SBOM
+_out=""; while [[ $# -gt 0 ]]; do [[ "$1" == "--output" ]] && _out="$2"; shift; done
+echo 'WARN  No OS package is detected.' >&2
+echo 'WARN  Unsupported os  family="buildroot"' >&2
+[[ -n "$_out" ]] && echo '{"Results":[]}' > "$_out"
+exit 0
+CVEEOF
+    chmod +x "${_cve_tmp}/bin/trivy"
+    cat > "${_cve_tmp}/sbom.json" <<'CVEEOF'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,
+ "metadata":{"component":{"type":"operating-system","name":"ga-os-test"}},
+ "components":[{"type":"library","name":"alpha","version":"1.0"},
+               {"type":"library","name":"beta","version":"2.0"}]}
+CVEEOF
+    set +e
+    PATH="${_cve_tmp}/bin:$PATH" GA_SBOM="${_cve_tmp}/sbom.json" \
+      OUTPUT_DIR="${_cve_tmp}/out" GA_ENV=dev ALLOW_FILE="${_cve_tmp}/none" \
+      "$_cve_sh" --sbom >"${_cve_tmp}/log" 2>&1
+    _cve_rc=$?
+    set -e
+    if [[ "$_cve_rc" -eq 2 ]]; then
+      _pass "CVE-SCAN-03: a scanner covering 0 packages exits 2 (broken), not 0 (clean)"
+    else
+      _fail "CVE-SCAN-03: zero-coverage scan returned ${_cve_rc}, expected 2 — fail-open regression"
+    fi
+    rm -rf "$_cve_tmp"
+  else
+    _skip "CVE-SCAN-03: zero-coverage behaviour" "jq not available"
+  fi
+else
+  _skip "CVE-SCAN-01: coverage assertion" "scripts/scan-cves.sh not found (no source tree)"
+  _skip "CVE-SCAN-02: no-op signature detection" "scripts/scan-cves.sh not found (no source tree)"
+  _skip "CVE-SCAN-03: unmatchable-SBOM behaviour" "scripts/scan-cves.sh not found (no source tree)"
+fi
+
+# CVE-SCAN-04: the allowlist exists and every active entry carries an expiry date
+_cve_allow="${_cve_src}/.cve-allowlist"
+if [[ -f "$_cve_allow" ]]; then
+  _cve_bad=$(grep -vE '^[[:space:]]*(#|$)' "$_cve_allow" 2>/dev/null \
+             | grep -vcE '^[[:space:]]*CVE-[0-9]{4}-[0-9]+[[:space:]]+[^[:space:]]+[[:space:]]+[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]' || true)
+  if [[ "${_cve_bad:-0}" -eq 0 ]]; then
+    _pass "CVE-SCAN-04: every .cve-allowlist entry has an owner and an expiry date"
+  else
+    _fail "CVE-SCAN-04: ${_cve_bad} allowlist entr(ies) lack owner/expiry — they will not suppress"
+  fi
+else
+  _skip "CVE-SCAN-04: allowlist format" ".cve-allowlist not found (no source tree)"
+fi
+
+# =========================================================================
 # Summary
 # =========================================================================
 echo ""

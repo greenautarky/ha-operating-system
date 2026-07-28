@@ -2137,7 +2137,14 @@ if [[ "$GA_ENV" == "prod" ]]; then
   log_build_step "Generate SBOM"
   generate_sbom 2>&1 | tee -a "$BUILD_LOG"
 
-  # 11) CVE scan of SBOM (informational, non-blocking)
+  # 11) CVE scan of SBOM — coverage-verified, fail-closed on prod
+  #
+  # Delegated to scripts/scan-cves.sh so the coverage assertion lives in ONE
+  # place. Until 2026-07-28 this step ran trivy directly and printed "CVE scan
+  # complete" while scanning 0 of 208 OS packages (trivy has no matcher for
+  # `family="buildroot"`), and the empty report was shipped as release evidence.
+  # A scan without coverage now exits 2 and, on prod, fails the build — the same
+  # fail-closed rule as the root password (#239).
   mkdir -p "${OUT}/images/reports"
   if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]]; then
     log_build_step "CVE scan (SBOM)"
@@ -2150,10 +2157,24 @@ if [[ "$GA_ENV" == "prod" ]]; then
       sed -i 's/"type": "firmware"/"type": "operating-system"/' "${OUT}/images/sbom-cyclonedx.json"
     fi
     echo "Scanning SBOM for CRITICAL/HIGH vulnerabilities..."
-    if trivy sbom --severity CRITICAL,HIGH --format table "${OUT}/images/sbom-cyclonedx.json" 2>&1 | tee "${OUT}/images/reports/cve-scan-sbom.txt"; then
+    _cve_rc=0
+    GA_SBOM="${OUT}/images/sbom-cyclonedx.json" \
+    OUTPUT_DIR="${OUT}/images/reports" \
+      "${SCRIPT_DIR:-/build/scripts}/scan-cves.sh" --sbom --severity CRITICAL,HIGH \
+        2>&1 | tee "${OUT}/images/reports/cve-scan-sbom.txt" || true
+    _cve_rc=${PIPESTATUS[0]}
+    if [[ "$_cve_rc" -eq 2 ]]; then
+      # Broken scan — never report this as clean.
+      if [[ "${GA_ENV:-dev}" == "prod" ]]; then
+        echo "ERROR: OS CVE scan produced no coverage — refusing to build a prod image"
+        echo "       An empty CVE report must not ship as release evidence. See KB #172."
+        exit 1
+      fi
+      echo "WARN: OS CVE scan produced no coverage (non-prod build — continuing)"
+    elif [[ "$_cve_rc" -eq 0 ]]; then
       echo "CVE scan complete — results in ${OUT}/images/reports/cve-scan-sbom.txt"
     else
-      echo "WARN: SBOM CVE scan failed (non-blocking)"
+      echo "CVE scan found vulnerabilities — see ${OUT}/images/reports/cve-scan-sbom.txt"
     fi
 
     # 11b) Scan downloaded container image tars (covers private GHCR images)
@@ -2183,6 +2204,12 @@ if [[ "$GA_ENV" == "prod" ]]; then
       echo "" | tee -a "$_cve_scan_file"
       echo "Container image scan: ${_cve_img_clean} clean, ${_cve_img_findings} with findings (${_cve_img_total} total)" | tee -a "$_cve_scan_file"
     fi
+  elif [[ "${GA_ENV:-dev}" == "prod" ]]; then
+    # Fail closed: a prod release must not ship without a scanned SBOM.
+    command -v trivy &>/dev/null \
+      || { echo "ERROR: trivy not installed — a prod build cannot skip the CVE scan"; exit 1; }
+    echo "ERROR: no SBOM at ${OUT}/images/sbom-cyclonedx.json — a prod build must produce one"
+    exit 1
   else
     echo "Skipping CVE scan (trivy not installed or no SBOM)"
   fi
