@@ -322,8 +322,12 @@ if [[ "$GA_ENV" == "prod" ]] && [[ -z "$VERSION_SUFFIX_CHECK" ]]; then
 fi
 
 # NetBird version consistency: NETBIRD_TAG (ga_build.sh) must match netbird.mk
-NB_MK_VERSION=$(grep '^NETBIRD_VERSION' "$BR2EXT_NETBIRD/package/netbird/netbird.mk" 2>/dev/null \
-  | sed 's/.*refs\/tags\/v//' | tr -d '[:space:]')
+# Read the declared upstream tag, NOT NETBIRD_VERSION: since Vuln-11 the
+# latter is a bare commit SHA, and the old `sed 's|.*refs/tags/v||'` silently
+# matched nothing, leaving the whole line as the "version" — every bake then
+# failed this pre-flight (first seen on the rc36 train, 2026-07-28).
+NB_MK_VERSION=$(grep '^NETBIRD_UPSTREAM_TAG' "$BR2EXT_NETBIRD/package/netbird/netbird.mk" 2>/dev/null \
+  | sed 's/.*=[[:space:]]*v\?//' | tr -d '[:space:]')
 NB_TAG_VERSION="${NETBIRD_TAG#v}"
 if [[ -n "$NB_MK_VERSION" ]] && [[ "$NB_MK_VERSION" != "$NB_TAG_VERSION" ]]; then
   echo "FAIL: NetBird version mismatch — NETBIRD_TAG=$NB_TAG_VERSION but netbird.mk=$NB_MK_VERSION" >&2
