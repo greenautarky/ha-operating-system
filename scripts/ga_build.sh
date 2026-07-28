@@ -2208,8 +2208,12 @@ if [[ "$GA_ENV" == "prod" ]]; then
     fi
     echo "Scanning SBOM for CRITICAL/HIGH vulnerabilities..."
     _cve_rc=0
+    # GA_ENV must be passed EXPLICITLY: it is a plain shell variable here, not
+    # exported, so a child process would otherwise default to dev and silently
+    # downgrade real findings from "fail the prod build" to "report only".
     GA_SBOM="${OUT}/images/sbom-cyclonedx.json" \
     OUTPUT_DIR="${OUT}/images/reports" \
+    GA_ENV="${GA_ENV:-dev}" \
       "${SCRIPT_DIR:-/build/scripts}/scan-cves.sh" --sbom --severity CRITICAL,HIGH \
         2>&1 | tee "${OUT}/images/reports/cve-scan-sbom.txt" || true
     _cve_rc=${PIPESTATUS[0]}

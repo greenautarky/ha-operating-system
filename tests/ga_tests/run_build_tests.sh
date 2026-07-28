@@ -2954,6 +2954,26 @@ else
   _skip "CVE-SCAN-05: enriched-SBOM path" "scan-cves.sh or jq not available"
 fi
 
+# CVE-SCAN-06: ga_build.sh must hand GA_ENV to scan-cves.sh explicitly.
+# GA_ENV is a plain shell variable in ga_build.sh (never exported), so a child
+# process defaults to `dev` and silently downgrades a prod gate to report-only.
+# The failure is invisible: the build still says "CVE scan complete".
+_cve_build="${_cve_src}/scripts/ga_build.sh"
+if [[ -f "$_cve_build" ]]; then
+  # Extract the env-assignment block that precedes the delegation (from the
+  # `_cve_rc=0` line up to the scan-cves.sh invocation) and require a real
+  # GA_ENV assignment in it. Deliberately block-scoped, not a proximity grep:
+  # the surrounding comment mentions GA_ENV and would satisfy a sloppy match.
+  if awk '/_cve_rc=0/{inblk=1} inblk && /^[[:space:]]*GA_ENV=/{found=1}
+          inblk && /scan-cves\.sh/{exit} END{exit !found}' "$_cve_build"; then
+    _pass "CVE-SCAN-06: ga_build.sh passes GA_ENV to scan-cves.sh (prod gate stays armed)"
+  else
+    _fail "CVE-SCAN-06: GA_ENV not passed to scan-cves.sh — prod findings would silently not gate"
+  fi
+else
+  _skip "CVE-SCAN-06: GA_ENV propagation" "ga_build.sh not found (no source tree)"
+fi
+
 # CVE-SCAN-04: the allowlist exists and every active entry carries an expiry date
 _cve_allow="${_cve_src}/.cve-allowlist"
 if [[ -f "$_cve_allow" ]]; then
