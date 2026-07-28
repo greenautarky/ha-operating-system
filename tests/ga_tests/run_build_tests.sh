@@ -3003,6 +3003,42 @@ else
   _skip "CVE-SCAN-07: PIPESTATUS integrity" "ga_build.sh not found (no source tree)"
 fi
 
+# =========================================================================
+# U-Boot: boot must not be interruptible on a shipped device (review finding #9)
+#
+# Any CONFIG_BOOTDELAY >= 0 opens a serial window in which a keypress drops to
+# the U-Boot prompt; from there bootargs can be edited (init=/bin/sh) and every
+# OS-level control is bypassed. With an unencrypted rootfs carrying fleet-shared
+# secrets that is a fleet compromise. U-Boot boot/Kconfig: "-2 = autoboot with
+# no delay and not check for abort".
+# =========================================================================
+_ub_cfg="${_cve_src}/buildroot-ihost/board/sonoff/ihost/uboot.config"
+if [[ -f "$_ub_cfg" ]]; then
+  # Last uncommented assignment wins in a kconfig fragment.
+  _ub_val=$(grep -E '^[[:space:]]*CONFIG_BOOTDELAY=' "$_ub_cfg" | tail -1 | cut -d= -f2 | tr -d ' ')
+  if [[ -z "$_ub_val" ]]; then
+    _pass "UBOOT-01: board config sets no BOOTDELAY (inherits HAOS default -2)"
+  elif [[ "$_ub_val" == "-2" ]]; then
+    _pass "UBOOT-01: CONFIG_BOOTDELAY=-2 — boot is not interruptible"
+  else
+    _fail "UBOOT-01: CONFIG_BOOTDELAY=${_ub_val} — interruptible boot = physical root via the U-Boot prompt"
+  fi
+else
+  _skip "UBOOT-01: bootdelay" "iHost uboot.config not found (no source tree)"
+fi
+# UBOOT-02: verify it survived into the generated U-Boot config, if one exists.
+_ub_built=$(ls -d "${OUT}"/build/uboot-*/.config 2>/dev/null | head -1 || true)
+if [[ -n "$_ub_built" && -f "$_ub_built" ]]; then
+  _ub_bval=$(grep -E '^CONFIG_BOOTDELAY=' "$_ub_built" | tail -1 | cut -d= -f2 | tr -d ' ')
+  if [[ "$_ub_bval" == "-2" ]]; then
+    _pass "UBOOT-02: built U-Boot .config carries BOOTDELAY=-2"
+  else
+    _fail "UBOOT-02: built U-Boot .config has BOOTDELAY=${_ub_bval:-unset} — the fragment did not take effect"
+  fi
+else
+  _skip "UBOOT-02: built U-Boot config" "no uboot build dir (source tree only)"
+fi
+
 # EMBA-01: the firmware analysis must fail closed too. EMBA is the coverage path
 # for the ~30% of shipped packages that carry no usable CPE (measured 2026-07-28:
 # NVD has no CPE for most of them, and several apparent matches are different
