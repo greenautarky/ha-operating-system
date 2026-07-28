@@ -1368,6 +1368,55 @@ CONTAINEREOF
 # Generate SBOMs:
 #   1) CycloneDX SBOM for Buildroot packages (standards-compliant, fast)
 #   2) Container image inventory (not covered by Buildroot's tooling)
+# Enrich a CycloneDX SBOM in place with NVD vulnerability analysis.
+#
+# Uses Buildroot's own `support/scripts/cve-check`, which is the tool built for
+# exactly this input: it matches on the `cpe` our SBOM carries (trivy keys on
+# `purl`, which Buildroot does not emit — that is why the old trivy step scanned
+# 0 of 208 packages), writes CycloneDX `analysis.state` (= VEX, natively), and
+# preserves the per-package `<PKG>_IGNORE_CVES` entries Buildroot pre-seeds.
+#
+# On success a `ga:cve-check` marker is written into metadata.properties so
+# downstream consumers can tell an ENRICHED SBOM from a bare one. Without that
+# marker scan-cves.sh treats the OS scan as having no coverage and fails closed.
+enrich_sbom_with_cves() {
+  local sbom="$1"
+  local cve_check="${BUILDROOT_DIR}/support/scripts/cve-check"
+  local nvd_path="${GA_NVD_PATH:-${BUILDROOT_DIR}/dl/buildroot-nvd}"
+
+  [[ -f "$sbom" ]] || return 0
+  if [[ ! -f "$cve_check" ]]; then
+    echo "WARN: cve-check not found at ${cve_check} — SBOM stays un-enriched"
+    return 0
+  fi
+
+  echo "Enriching SBOM with NVD vulnerability analysis (cve-check)..."
+  local nvd_args=(--nvd-path "$nvd_path")
+  # The NVD mirror is a git clone; skip the refresh when explicitly asked
+  # (offline builds) or when the mirror is already present and GA_NVD_OFFLINE=1.
+  [[ "${GA_NVD_OFFLINE:-0}" == "1" ]] && nvd_args+=(--no-nvd-update)
+
+  local enriched="${sbom}.enriched"
+  if python3 "$cve_check" -i "$sbom" "${nvd_args[@]}" -o "$enriched" 2>&1 | tail -20; then
+    if [[ -s "$enriched" ]] && jq -e '.components' "$enriched" >/dev/null 2>&1; then
+      # Stamp the marker so a bare SBOM can never be mistaken for a scanned one.
+      jq --arg ts "$(date -Iseconds)" \
+         '.metadata.properties = ((.metadata.properties // [])
+            + [{name:"ga:cve-check", value:$ts}])' \
+         "$enriched" > "${enriched}.stamped" 2>/dev/null \
+        && mv "${enriched}.stamped" "$sbom" \
+        && rm -f "$enriched" \
+        && echo "  SBOM enriched: $(jq '[.vulnerabilities // [] | .[] | select(.analysis.state == "exploitable")] | length' "$sbom" 2>/dev/null) exploitable, $(jq '[.vulnerabilities // []] | flatten | length' "$sbom" 2>/dev/null) total entries" \
+        && return 0
+    fi
+    echo "WARN: cve-check produced no usable output — SBOM stays un-enriched"
+  else
+    echo "WARN: cve-check failed — SBOM stays un-enriched"
+  fi
+  rm -f "$enriched" "${enriched}.stamped"
+  return 0
+}
+
 generate_sbom() {
   echo "=== Generating Software Bill of Materials ==="
 
@@ -1419,6 +1468,7 @@ generate_sbom() {
         if command -v jq &>/dev/null; then
           jq . "$cyclonedx" > "${cyclonedx}.tmp" 2>/dev/null && mv "${cyclonedx}.tmp" "$cyclonedx"
         fi
+        enrich_sbom_with_cves "$cyclonedx"
       else
         echo "WARN: CycloneDX generator failed (see ${sbom_err}):"
         cat "$sbom_err" 2>/dev/null | head -20

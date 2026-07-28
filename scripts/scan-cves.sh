@@ -66,9 +66,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Check trivy
-if ! command -v trivy &>/dev/null; then
-  echo "ERROR: trivy not found. Install with:"
+# trivy is required for the container images and for the OS fallback path, but
+# NOT for an SBOM already enriched by cve-check — that path reads CycloneDX
+# directly. Check where it is actually needed rather than up front.
+HAVE_TRIVY=true
+command -v trivy &>/dev/null || HAVE_TRIVY=false
+if [[ "$HAVE_TRIVY" == "false" && "$SCAN_IMAGES" == "true" ]]; then
+  echo "ERROR: trivy not found — the container image scan cannot run. Install with:"
   echo "  curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin"
   exit 2
 fi
@@ -244,7 +248,60 @@ if [[ "$SCAN_SBOM" == "true" ]]; then
     SBOM_COMPONENTS=$(jq '[.components // []] | flatten | length' "$GA_SBOM" 2>/dev/null || echo 0)
     echo "  Components in SBOM: ${SBOM_COMPONENTS}"
 
-    if trivy sbom --severity "$SEVERITY" --list-all-pkgs --format json \
+    # -- Preferred path: a SBOM already enriched by Buildroot's cve-check ------
+    # cve-check matches on `cpe` (which Buildroot emits) instead of `purl`
+    # (which it does not), and writes CycloneDX `analysis.state` per finding.
+    # The `ga:cve-check` marker distinguishes an enriched SBOM from a bare one —
+    # a bare SBOM already carries some `vulnerabilities` (Buildroot's
+    # _IGNORE_CVES), so the presence of that array alone proves nothing.
+    _enriched=$(jq -r '[.metadata.properties // [] | .[] | select(.name=="ga:cve-check") | .value] | first // empty' \
+                  "$GA_SBOM" 2>/dev/null || true)
+    if [[ -n "$_enriched" ]]; then
+      echo "  Enriched by cve-check at ${_enriched}"
+      # Coverage = components cve-check can actually match on (cpe AND version).
+      SBOM_SCANNED=$(jq '[.components // [] | .[] | select(.cpe != null and .version != null)] | length' \
+                       "$GA_SBOM" 2>/dev/null || echo 0)
+      [[ "$SBOM_COMPONENTS" -gt 0 ]] && SBOM_COVERAGE=$(( SBOM_SCANNED * 100 / SBOM_COMPONENTS ))
+      echo "  Packages evaluated: ${SBOM_SCANNED}/${SBOM_COMPONENTS} (${SBOM_COVERAGE}%)"
+      # Shipped (target) packages are the ones that matter — report them separately.
+      _tgt_total=$(jq '[.components // [] | .[] | select((.properties // [] | map(select(.name=="BR_TYPE").value) | first) == "target")] | length' "$GA_SBOM" 2>/dev/null || echo 0)
+      _tgt_cov=$(jq '[.components // [] | .[] | select((.properties // [] | map(select(.name=="BR_TYPE").value) | first) == "target") | select(.cpe != null and .version != null)] | length' "$GA_SBOM" 2>/dev/null || echo 0)
+      [[ "${_tgt_total:-0}" -gt 0 ]] && echo "  ...of which shipped (BR_TYPE=target): ${_tgt_cov}/${_tgt_total} ($(( _tgt_cov * 100 / _tgt_total ))%)"
+
+      # Findings = entries cve-check marked exploitable, at or above SEVERITY,
+      # minus anything the allowlist still covers.
+      _sev_re=$(echo "$SEVERITY" | tr 'A-Z,' 'a-z|')
+      SBOM_FINDINGS=0; SBOM_SUPPRESSED=0
+      while IFS= read -r _id; do
+        [[ -z "$_id" ]] && continue
+        if is_allowed "$_id"; then SBOM_SUPPRESSED=$((SBOM_SUPPRESSED + 1))
+        else SBOM_FINDINGS=$((SBOM_FINDINGS + 1)); echo "    ${_id}"; fi
+      done < <(jq -r --arg sev "$_sev_re" '
+                 [.vulnerabilities // [] | .[]
+                  | select(.analysis.state == "exploitable")
+                  | select([.ratings // [] | .[] | .severity // ""] | any(test($sev)))
+                  | .id] | unique | .[]' "$GA_SBOM" 2>/dev/null || true)
+
+      if [[ "$SBOM_COVERAGE" -lt "$COVERAGE_MIN_PCT" ]]; then
+        echo "  ERROR: only ${SBOM_COVERAGE}% of SBOM components carry a matchable CPE (minimum ${COVERAGE_MIN_PCT}%)"
+        SBOM_STATUS="no-coverage"
+        SCAN_BROKEN=true
+      elif [[ "$SBOM_FINDINGS" -gt 0 ]]; then
+        echo "  FOUND: ${SBOM_FINDINGS} exploitable ${SEVERITY} vulnerabilities$([[ "$SBOM_SUPPRESSED" -gt 0 ]] && echo ", ${SBOM_SUPPRESSED} allowlisted")"
+        SBOM_STATUS="findings"
+        EXIT_CODE=1
+      else
+        echo "  CLEAN: no unsuppressed exploitable ${SEVERITY} findings across ${SBOM_SCANNED} matched packages$([[ "$SBOM_SUPPRESSED" -gt 0 ]] && echo " (${SBOM_SUPPRESSED} allowlisted)")"
+        SBOM_STATUS="clean"
+      fi
+
+    # -- Fallback: no enrichment marker -> try trivy, which will almost -------
+    # certainly cover nothing on a Buildroot SBOM and therefore exit 2.
+    elif [[ "$HAVE_TRIVY" == "false" ]]; then
+      echo "  ERROR: SBOM is not enriched (no ga:cve-check marker) and trivy is absent"
+      echo "         — there is no scanner at all, so there is no result to trust"
+      SBOM_STATUS="no-coverage"
+    elif trivy sbom --severity "$SEVERITY" --list-all-pkgs --format json \
          --output "$REPORT" "$GA_SBOM" >"$SCANLOG" 2>&1; then
 
       # How many packages did the scanner actually take into account?

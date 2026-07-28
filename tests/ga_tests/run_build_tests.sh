@@ -2917,6 +2917,43 @@ else
   _skip "CVE-SCAN-03: unmatchable-SBOM behaviour" "scripts/scan-cves.sh not found (no source tree)"
 fi
 
+# CVE-SCAN-05: the enriched-SBOM path. An SBOM carrying the `ga:cve-check`
+# marker is read natively (CycloneDX analysis.state), and an entry marked
+# exploitable at or above the severity threshold must fail — while a bare SBOM
+# without the marker must NOT be believed just because it has a
+# `vulnerabilities` array (Buildroot pre-seeds 17 _IGNORE_CVES entries).
+if [[ -f "${_cve_src}/scripts/scan-cves.sh" ]] && command -v jq >/dev/null 2>&1; then
+  _cve_tmp=$(mktemp -d)
+  # 2 components, both with cpe+version -> 100% coverage; one exploitable CRITICAL
+  cat > "${_cve_tmp}/enriched.json" <<'CVEEOF'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,
+ "metadata":{"component":{"type":"operating-system","name":"t"},
+             "properties":[{"name":"ga:cve-check","value":"2026-07-28T00:00:00+00:00"}]},
+ "components":[{"type":"library","name":"a","version":"1","cpe":"cpe:2.3:a:x:a:1:*:*:*:*:*:*:*"},
+               {"type":"library","name":"b","version":"2","cpe":"cpe:2.3:a:x:b:2:*:*:*:*:*:*:*"}],
+ "vulnerabilities":[
+   {"id":"CVE-2026-7777","analysis":{"state":"exploitable"},
+    "ratings":[{"severity":"critical"}],"affects":[{"ref":"a"}]},
+   {"id":"CVE-2026-6666","analysis":{"state":"resolved_with_pedigree"},
+    "ratings":[{"severity":"critical"}],"affects":[{"ref":"b"}]}]}
+CVEEOF
+  set +e
+  GA_SBOM="${_cve_tmp}/enriched.json" OUTPUT_DIR="${_cve_tmp}/out" GA_ENV=prod \
+    ALLOW_FILE="${_cve_tmp}/none" "${_cve_src}/scripts/scan-cves.sh" --sbom \
+    >"${_cve_tmp}/log" 2>&1
+  _cve_rc=$?
+  set -e
+  if [[ "$_cve_rc" -eq 1 ]] && grep -q 'CVE-2026-7777' "${_cve_tmp}/log" \
+     && ! grep -q 'CVE-2026-6666' "${_cve_tmp}/log"; then
+    _pass "CVE-SCAN-05: enriched SBOM — exploitable finding fails prod, resolved one does not"
+  else
+    _fail "CVE-SCAN-05: enriched-SBOM path returned ${_cve_rc} (expected 1, only CVE-2026-7777 reported)"
+  fi
+  rm -rf "$_cve_tmp"
+else
+  _skip "CVE-SCAN-05: enriched-SBOM path" "scan-cves.sh or jq not available"
+fi
+
 # CVE-SCAN-04: the allowlist exists and every active entry carries an expiry date
 _cve_allow="${_cve_src}/.cve-allowlist"
 if [[ -f "$_cve_allow" ]]; then
