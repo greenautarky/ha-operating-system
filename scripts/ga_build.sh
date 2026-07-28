@@ -1396,8 +1396,24 @@ enrich_sbom_with_cves() {
   # (offline builds) or when the mirror is already present and GA_NVD_OFFLINE=1.
   [[ "${GA_NVD_OFFLINE:-0}" == "1" ]] && nvd_args+=(--no-nvd-update)
 
+  # Debian 11 build container ships Python 3.9, which cannot even import
+  # cve-check (it annotates a return as `str | None`, evaluated eagerly before
+  # 3.10). Route through the shim on old interpreters; call directly on new
+  # ones so the stopgap disappears by itself once the image is upgraded.
+  local runner=(python3 "$cve_check")
+  if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
+    local shim="${SCRIPT_DIR:-/build/scripts}/run-cve-check.py"
+    if [[ -f "$shim" ]]; then
+      echo "  python3 $(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])') < 3.10 — using run-cve-check.py shim"
+      runner=(python3 "$shim" "$cve_check")
+    else
+      echo "WARN: python3 < 3.10 and no shim at ${shim} — cve-check cannot run"
+      return 0
+    fi
+  fi
+
   local enriched="${sbom}.enriched"
-  if python3 "$cve_check" -i "$sbom" "${nvd_args[@]}" -o "$enriched" 2>&1 | tail -20; then
+  if "${runner[@]}" -i "$sbom" "${nvd_args[@]}" -o "$enriched" 2>&1 | tail -20; then
     if [[ -s "$enriched" ]] && jq -e '.components' "$enriched" >/dev/null 2>&1; then
       # Stamp the marker so a bare SBOM can never be mistaken for a scanned one.
       jq --arg ts "$(date -Iseconds)" \
@@ -2208,15 +2224,24 @@ if [[ "$GA_ENV" == "prod" ]]; then
     fi
     echo "Scanning SBOM for CRITICAL/HIGH vulnerabilities..."
     _cve_rc=0
-    # GA_ENV must be passed EXPLICITLY: it is a plain shell variable here, not
-    # exported, so a child process would otherwise default to dev and silently
-    # downgrade real findings from "fail the prod build" to "report only".
+    # GA_ENV is already exported (set -a at the top, plus the explicit export at
+    # the GA_BUILD_TIMESTAMP line); passed again here so the dependency is
+    # visible at the call site rather than implied 1700 lines away.
+    #
+    # NO `|| true` on this pipeline: appending it makes `true` the last executed
+    # command, which RESETS PIPESTATUS to (0) — so `_cve_rc` read 0 even when
+    # scan-cves.sh exited 2, and the prod abort below never fired. Verified live
+    # on the 2026-07-28 bake: the log shows "Result: BROKEN SCAN (exit 2)"
+    # immediately followed by "CVE scan complete". `set +e` is the correct way
+    # to survive a non-zero exit while keeping PIPESTATUS intact.
+    set +e
     GA_SBOM="${OUT}/images/sbom-cyclonedx.json" \
     OUTPUT_DIR="${OUT}/images/reports" \
     GA_ENV="${GA_ENV:-dev}" \
       "${SCRIPT_DIR:-/build/scripts}/scan-cves.sh" --sbom --severity CRITICAL,HIGH \
-        2>&1 | tee "${OUT}/images/reports/cve-scan-sbom.txt" || true
+        2>&1 | tee "${OUT}/images/reports/cve-scan-sbom.txt"
     _cve_rc=${PIPESTATUS[0]}
+    set -e
     if [[ "$_cve_rc" -eq 2 ]]; then
       # Broken scan — never report this as clean.
       if [[ "${GA_ENV:-dev}" == "prod" ]]; then

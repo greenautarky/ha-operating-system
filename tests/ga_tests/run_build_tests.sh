@@ -2954,24 +2954,53 @@ else
   _skip "CVE-SCAN-05: enriched-SBOM path" "scan-cves.sh or jq not available"
 fi
 
-# CVE-SCAN-06: ga_build.sh must hand GA_ENV to scan-cves.sh explicitly.
-# GA_ENV is a plain shell variable in ga_build.sh (never exported), so a child
-# process defaults to `dev` and silently downgrades a prod gate to report-only.
-# The failure is invisible: the build still says "CVE scan complete".
+# CVE-SCAN-06: ga_build.sh hands GA_ENV to scan-cves.sh explicitly.
+# GA_ENV already reaches the child today (ga_build.sh runs `set -a` and also
+# exports it alongside GA_BUILD_TIMESTAMP), so this is belt-and-braces: a later
+# refactor that drops `set -a` would otherwise silently downgrade the prod gate
+# to report-only, and the build would still print "CVE scan complete".
 _cve_build="${_cve_src}/scripts/ga_build.sh"
 if [[ -f "$_cve_build" ]]; then
   # Extract the env-assignment block that precedes the delegation (from the
   # `_cve_rc=0` line up to the scan-cves.sh invocation) and require a real
   # GA_ENV assignment in it. Deliberately block-scoped, not a proximity grep:
   # the surrounding comment mentions GA_ENV and would satisfy a sloppy match.
-  if awk '/_cve_rc=0/{inblk=1} inblk && /^[[:space:]]*GA_ENV=/{found=1}
-          inblk && /scan-cves\.sh/{exit} END{exit !found}' "$_cve_build"; then
+  # Comments are stripped first: the explanatory comments around this call
+  # mention both GA_ENV and scan-cves.sh, and would otherwise satisfy (or
+  # prematurely terminate) the match. Three earlier versions of this test were
+  # useless for exactly that reason.
+  if sed 's/#.*//' "$_cve_build" \
+     | awk '/_cve_rc=0/{inblk=1} inblk && /^[[:space:]]*GA_ENV=/{found=1}
+            inblk && /scan-cves\.sh/{exit} END{exit !found}'; then
     _pass "CVE-SCAN-06: ga_build.sh passes GA_ENV to scan-cves.sh (prod gate stays armed)"
   else
     _fail "CVE-SCAN-06: GA_ENV not passed to scan-cves.sh — prod findings would silently not gate"
   fi
 else
   _skip "CVE-SCAN-06: GA_ENV propagation" "ga_build.sh not found (no source tree)"
+fi
+
+# CVE-SCAN-07: the scan-cves.sh pipeline must not be followed by `|| true`.
+# Appending it makes `true` the last executed command, which RESETS PIPESTATUS
+# to (0) — so `_cve_rc` reads 0 even when the scan exited 2, and the prod abort
+# never fires. Caught live on the 2026-07-28 bake: the build log shows
+# "Result: BROKEN SCAN (exit 2)" immediately followed by "CVE scan complete",
+# and the prod build carried on. `set +e` is the correct construct here.
+if [[ -f "$_cve_build" ]]; then
+  # Comments stripped: the comment above the call quotes '|| true' verbatim.
+  _cve_blk=$(sed 's/#.*//' "$_cve_build" \
+             | awk '/_cve_rc=0/{inblk=1} inblk{print} inblk && /_cve_rc=\$\{PIPESTATUS/{exit}')
+  if [[ -z "$_cve_blk" ]]; then
+    _skip "CVE-SCAN-07: PIPESTATUS integrity" "delegation block not found"
+  elif echo "$_cve_blk" | grep -qE '\|\|[[:space:]]*true'; then
+    _fail "CVE-SCAN-07: '|| true' on the scan pipeline resets PIPESTATUS — the prod gate cannot fire"
+  elif echo "$_cve_blk" | grep -q 'set +e'; then
+    _pass "CVE-SCAN-07: scan exit code survives to _cve_rc (set +e, no '|| true')"
+  else
+    _fail "CVE-SCAN-07: scan pipeline neither guarded by 'set +e' nor safe — exit code handling unclear"
+  fi
+else
+  _skip "CVE-SCAN-07: PIPESTATUS integrity" "ga_build.sh not found (no source tree)"
 fi
 
 # CVE-SCAN-04: the allowlist exists and every active entry carries an expiry date
