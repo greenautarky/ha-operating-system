@@ -669,11 +669,10 @@ fi
 
 # --- Additional rootfs checks ---
 
-# CFG-25: audio-setup masking handled by ga-overlay-init at runtime
-# Cannot mask at build time — Buildroot's preset phase fails on masked units.
-grep -q 'audio-setup' "${TARGET}/usr/sbin/ga-overlay-init" 2>/dev/null \
-  && _pass "CFG-25: ga-overlay-init masks audio-setup.service at runtime" \
-  || _fail "CFG-25: ga-overlay-init missing audio-setup masking"
+# (The audio-setup.service mask assertion that lived here moved to AUD-05 in
+# the "Audio capture disabled" section below. It was numbered CFG-25, which
+# was ALREADY taken by the /share signal-file test above — two different
+# checks shared one ID. Moving it into the AUD-* namespace resolves that.)
 
 # CFG-26: NM connectivity check configured
 grep -q 'checkonline.greenautarky.com' "${TARGET}/etc/NetworkManager/NetworkManager.conf" 2>/dev/null \
@@ -3071,6 +3070,76 @@ if [[ -f "$_cve_allow" ]]; then
   fi
 else
   _skip "CVE-SCAN-04: allowlist format" ".cve-allowlist not found (no source tree)"
+fi
+
+# =========================================================================
+# Audio capture disabled (GDPR evidence)
+# =========================================================================
+# GA BOS ships the Linux sound subsystem compiled OUT, so a device has no
+# audio capture path at all. This is the build-time gate for that claim; the
+# on-device counterpart is tests/ga_tests/audio_disabled/test.sh.
+#
+# It needs guarding because the BASE kernel config
+# (buildroot-ihost/board/sonoff/kernel-rockchip.config) explicitly ENABLES
+# sound — including CONFIG_SND_SOC_ROCKCHIP_PDM, the digital-microphone
+# controller. Sound is off only because board/sonoff/ihost/kernel.config is
+# merged LAST in BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES and overrides it.
+# Reorder that list and microphone capture comes back silently.
+echo ""
+echo "--- Audio capture disabled ---"
+
+# Prefer the archived artifact, fall back to the live build tree.
+_kcfg="${OUT}/images/configs/kernel.config"
+[[ -f "$_kcfg" ]] || _kcfg="$(ls -d "${OUT}"/build/linux-*/.config 2>/dev/null | head -n 1 || true)"
+
+if [[ -n "$_kcfg" && -f "$_kcfg" ]]; then
+  # AUD-01: sound subsystem positively declared off
+  grep -q '^# CONFIG_SOUND is not set' "$_kcfg" \
+    && _pass "AUD-01: kernel built with CONFIG_SOUND off" \
+    || _fail "AUD-01: CONFIG_SOUND is NOT disabled — device would gain an audio stack (GDPR)"
+
+  # AUD-02: no enabled SND symbol at all.
+  # Do NOT assert '# CONFIG_SND is not set': with CONFIG_SOUND off, Kconfig
+  # omits the CONFIG_SND line entirely instead of emitting an is-not-set
+  # comment. Absence of any ENABLED symbol is the correct assertion.
+  # This also covers CONFIG_SND_USB_AUDIO, i.e. a USB microphone dongle.
+  if grep -qE '^CONFIG_SND' "$_kcfg"; then
+    _fail "AUD-02: enabled CONFIG_SND* symbols found: $(grep -cE '^CONFIG_SND' "$_kcfg") — audio capture possible (GDPR)"
+  else
+    _pass "AUD-02: no CONFIG_SND* symbol enabled (covers onboard codec + USB audio)"
+  fi
+
+  # AUD-03: the PDM digital-microphone controller specifically
+  grep -qE '^CONFIG_SND_SOC_ROCKCHIP_PDM=' "$_kcfg" \
+    && _fail "AUD-03: CONFIG_SND_SOC_ROCKCHIP_PDM enabled — digital microphone controller is in the kernel" \
+    || _pass "AUD-03: PDM digital-microphone controller not built"
+else
+  _skip "AUD-01: kernel CONFIG_SOUND off" "no kernel .config found under $OUT"
+  _skip "AUD-02: no CONFIG_SND* enabled" "no kernel .config found under $OUT"
+  _skip "AUD-03: PDM controller not built" "no kernel .config found under $OUT"
+fi
+
+# AUD-04: nothing to modprobe back in. This is the difference between "off"
+# and "impossible" — with no snd module on disk, root cannot restore a capture
+# path, neither for the onboard codec nor for a plugged-in USB microphone.
+_snd_mods="$(find "${TARGET}/lib/modules" "${TARGET}/usr/lib/modules" -name 'snd*' 2>/dev/null | head -n 5)"
+if [[ -n "$_snd_mods" ]]; then
+  _fail "AUD-04: snd modules present in target module tree — capture can be modprobed back: $(echo "$_snd_mods" | tr '\n' ' ')"
+else
+  _pass "AUD-04: no snd modules in target module tree (modprobe cannot restore capture)"
+fi
+
+# AUD-05: the leftover playback unit stays masked.
+# Masked at build time via a rootfs-overlay symlink to /dev/null — a runtime
+# `ln` in ga-overlay-init failed on the read-only rootfs (observed 2026-05-11
+# on a v1.2 canary). Formerly CFG-25, which grepped ga-overlay-init for the
+# string 'audio-setup' and matched only the COMMENT left behind by that move,
+# so it could never fail. Assert the actual symlink.
+if [[ -L "${TARGET}/etc/systemd/system/audio-setup.service" \
+      && "$(readlink "${TARGET}/etc/systemd/system/audio-setup.service")" == "/dev/null" ]]; then
+  _pass "AUD-05: audio-setup.service masked (symlink -> /dev/null)"
+else
+  _fail "AUD-05: audio-setup.service NOT masked — expected /etc/systemd/system/audio-setup.service -> /dev/null"
 fi
 
 # =========================================================================
