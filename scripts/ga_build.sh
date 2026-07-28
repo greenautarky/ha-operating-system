@@ -1368,6 +1368,71 @@ CONTAINEREOF
 # Generate SBOMs:
 #   1) CycloneDX SBOM for Buildroot packages (standards-compliant, fast)
 #   2) Container image inventory (not covered by Buildroot's tooling)
+# Enrich a CycloneDX SBOM in place with NVD vulnerability analysis.
+#
+# Uses Buildroot's own `support/scripts/cve-check`, which is the tool built for
+# exactly this input: it matches on the `cpe` our SBOM carries (trivy keys on
+# `purl`, which Buildroot does not emit — that is why the old trivy step scanned
+# 0 of 208 packages), writes CycloneDX `analysis.state` (= VEX, natively), and
+# preserves the per-package `<PKG>_IGNORE_CVES` entries Buildroot pre-seeds.
+#
+# On success a `ga:cve-check` marker is written into metadata.properties so
+# downstream consumers can tell an ENRICHED SBOM from a bare one. Without that
+# marker scan-cves.sh treats the OS scan as having no coverage and fails closed.
+enrich_sbom_with_cves() {
+  local sbom="$1"
+  local cve_check="${BUILDROOT_DIR}/support/scripts/cve-check"
+  local nvd_path="${GA_NVD_PATH:-${BUILDROOT_DIR}/dl/buildroot-nvd}"
+
+  [[ -f "$sbom" ]] || return 0
+  if [[ ! -f "$cve_check" ]]; then
+    echo "WARN: cve-check not found at ${cve_check} — SBOM stays un-enriched"
+    return 0
+  fi
+
+  echo "Enriching SBOM with NVD vulnerability analysis (cve-check)..."
+  local nvd_args=(--nvd-path "$nvd_path")
+  # The NVD mirror is a git clone; skip the refresh when explicitly asked
+  # (offline builds) or when the mirror is already present and GA_NVD_OFFLINE=1.
+  [[ "${GA_NVD_OFFLINE:-0}" == "1" ]] && nvd_args+=(--no-nvd-update)
+
+  # Debian 11 build container ships Python 3.9, which cannot even import
+  # cve-check (it annotates a return as `str | None`, evaluated eagerly before
+  # 3.10). Route through the shim on old interpreters; call directly on new
+  # ones so the stopgap disappears by itself once the image is upgraded.
+  local runner=(python3 "$cve_check")
+  if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
+    local shim="${SCRIPT_DIR:-/build/scripts}/run-cve-check.py"
+    if [[ -f "$shim" ]]; then
+      echo "  python3 $(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])') < 3.10 — using run-cve-check.py shim"
+      runner=(python3 "$shim" "$cve_check")
+    else
+      echo "WARN: python3 < 3.10 and no shim at ${shim} — cve-check cannot run"
+      return 0
+    fi
+  fi
+
+  local enriched="${sbom}.enriched"
+  if "${runner[@]}" -i "$sbom" "${nvd_args[@]}" -o "$enriched" 2>&1 | tail -20; then
+    if [[ -s "$enriched" ]] && jq -e '.components' "$enriched" >/dev/null 2>&1; then
+      # Stamp the marker so a bare SBOM can never be mistaken for a scanned one.
+      jq --arg ts "$(date -Iseconds)" \
+         '.metadata.properties = ((.metadata.properties // [])
+            + [{name:"ga:cve-check", value:$ts}])' \
+         "$enriched" > "${enriched}.stamped" 2>/dev/null \
+        && mv "${enriched}.stamped" "$sbom" \
+        && rm -f "$enriched" \
+        && echo "  SBOM enriched: $(jq '[.vulnerabilities // [] | .[] | select(.analysis.state == "exploitable")] | length' "$sbom" 2>/dev/null) exploitable, $(jq '[.vulnerabilities // []] | flatten | length' "$sbom" 2>/dev/null) total entries" \
+        && return 0
+    fi
+    echo "WARN: cve-check produced no usable output — SBOM stays un-enriched"
+  else
+    echo "WARN: cve-check failed — SBOM stays un-enriched"
+  fi
+  rm -f "$enriched" "${enriched}.stamped"
+  return 0
+}
+
 generate_sbom() {
   echo "=== Generating Software Bill of Materials ==="
 
@@ -1419,6 +1484,7 @@ generate_sbom() {
         if command -v jq &>/dev/null; then
           jq . "$cyclonedx" > "${cyclonedx}.tmp" 2>/dev/null && mv "${cyclonedx}.tmp" "$cyclonedx"
         fi
+        enrich_sbom_with_cves "$cyclonedx"
       else
         echo "WARN: CycloneDX generator failed (see ${sbom_err}):"
         cat "$sbom_err" 2>/dev/null | head -20
@@ -2137,7 +2203,14 @@ if [[ "$GA_ENV" == "prod" ]]; then
   log_build_step "Generate SBOM"
   generate_sbom 2>&1 | tee -a "$BUILD_LOG"
 
-  # 11) CVE scan of SBOM (informational, non-blocking)
+  # 11) CVE scan of SBOM — coverage-verified, fail-closed on prod
+  #
+  # Delegated to scripts/scan-cves.sh so the coverage assertion lives in ONE
+  # place. Until 2026-07-28 this step ran trivy directly and printed "CVE scan
+  # complete" while scanning 0 of 208 OS packages (trivy has no matcher for
+  # `family="buildroot"`), and the empty report was shipped as release evidence.
+  # A scan without coverage now exits 2 and, on prod, fails the build — the same
+  # fail-closed rule as the root password (#239).
   mkdir -p "${OUT}/images/reports"
   if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]]; then
     log_build_step "CVE scan (SBOM)"
@@ -2150,10 +2223,37 @@ if [[ "$GA_ENV" == "prod" ]]; then
       sed -i 's/"type": "firmware"/"type": "operating-system"/' "${OUT}/images/sbom-cyclonedx.json"
     fi
     echo "Scanning SBOM for CRITICAL/HIGH vulnerabilities..."
-    if trivy sbom --severity CRITICAL,HIGH --format table "${OUT}/images/sbom-cyclonedx.json" 2>&1 | tee "${OUT}/images/reports/cve-scan-sbom.txt"; then
+    _cve_rc=0
+    # GA_ENV is already exported (set -a at the top, plus the explicit export at
+    # the GA_BUILD_TIMESTAMP line); passed again here so the dependency is
+    # visible at the call site rather than implied 1700 lines away.
+    #
+    # NO `|| true` on this pipeline: appending it makes `true` the last executed
+    # command, which RESETS PIPESTATUS to (0) — so `_cve_rc` read 0 even when
+    # scan-cves.sh exited 2, and the prod abort below never fired. Verified live
+    # on the 2026-07-28 bake: the log shows "Result: BROKEN SCAN (exit 2)"
+    # immediately followed by "CVE scan complete". `set +e` is the correct way
+    # to survive a non-zero exit while keeping PIPESTATUS intact.
+    set +e
+    GA_SBOM="${OUT}/images/sbom-cyclonedx.json" \
+    OUTPUT_DIR="${OUT}/images/reports" \
+    GA_ENV="${GA_ENV:-dev}" \
+      "${SCRIPT_DIR:-/build/scripts}/scan-cves.sh" --sbom --severity CRITICAL,HIGH \
+        2>&1 | tee "${OUT}/images/reports/cve-scan-sbom.txt"
+    _cve_rc=${PIPESTATUS[0]}
+    set -e
+    if [[ "$_cve_rc" -eq 2 ]]; then
+      # Broken scan — never report this as clean.
+      if [[ "${GA_ENV:-dev}" == "prod" ]]; then
+        echo "ERROR: OS CVE scan produced no coverage — refusing to build a prod image"
+        echo "       An empty CVE report must not ship as release evidence. See KB #172."
+        exit 1
+      fi
+      echo "WARN: OS CVE scan produced no coverage (non-prod build — continuing)"
+    elif [[ "$_cve_rc" -eq 0 ]]; then
       echo "CVE scan complete — results in ${OUT}/images/reports/cve-scan-sbom.txt"
     else
-      echo "WARN: SBOM CVE scan failed (non-blocking)"
+      echo "CVE scan found vulnerabilities — see ${OUT}/images/reports/cve-scan-sbom.txt"
     fi
 
     # 11b) Scan downloaded container image tars (covers private GHCR images)
@@ -2183,6 +2283,12 @@ if [[ "$GA_ENV" == "prod" ]]; then
       echo "" | tee -a "$_cve_scan_file"
       echo "Container image scan: ${_cve_img_clean} clean, ${_cve_img_findings} with findings (${_cve_img_total} total)" | tee -a "$_cve_scan_file"
     fi
+  elif [[ "${GA_ENV:-dev}" == "prod" ]]; then
+    # Fail closed: a prod release must not ship without a scanned SBOM.
+    command -v trivy &>/dev/null \
+      || { echo "ERROR: trivy not installed — a prod build cannot skip the CVE scan"; exit 1; }
+    echo "ERROR: no SBOM at ${OUT}/images/sbom-cyclonedx.json — a prod build must produce one"
+    exit 1
   else
     echo "Skipping CVE scan (trivy not installed or no SBOM)"
   fi

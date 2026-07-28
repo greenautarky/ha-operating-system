@@ -2843,6 +2843,237 @@ else
 fi
 
 # =========================================================================
+# CVE scan coverage — an empty report must never pass as a clean one
+#
+# Until 2026-07-28 the OS scan reported "CLEAN: no CRITICAL/HIGH" on every
+# build while evaluating 0 of 208 packages: trivy detects `family="buildroot"`,
+# declares it unsupported, and returns success. The empty report then shipped
+# in the release bundle as CVE evidence. These tests pin the fail-closed
+# behaviour that replaced it. See KB #172.
+# =========================================================================
+_cve_src="/build"
+[[ -d "${_cve_src}/scripts" ]] || _cve_src="$(cd "$(dirname "$0")/../.." && pwd)"
+_cve_sh="${_cve_src}/scripts/scan-cves.sh"
+if [[ -f "$_cve_sh" ]]; then
+  # CVE-SCAN-01: the coverage assertion exists and is wired to the fatal exit
+  if grep -q 'list-all-pkgs' "$_cve_sh" \
+     && grep -qE 'COVERAGE_MIN_PCT' "$_cve_sh" \
+     && grep -q 'SCAN_BROKEN=true' "$_cve_sh" \
+     && grep -qE '^[[:space:]]*exit 2$' "$_cve_sh"; then
+    _pass "CVE-SCAN-01: OS scan verifies coverage and exits 2 when it evaluated nothing"
+  else
+    _fail "CVE-SCAN-01: coverage assertion missing — a 0-package scan could pass as clean again"
+  fi
+
+  # CVE-SCAN-02: the known no-op signatures are detected, not ignored
+  if grep -q 'Unsupported os' "$_cve_sh" && grep -q 'No OS package is detected' "$_cve_sh"; then
+    _pass "CVE-SCAN-02: scanner no-op signatures ('Unsupported os') are treated as failure"
+  else
+    _fail "CVE-SCAN-02: no-op signature detection missing from scan-cves.sh"
+  fi
+
+  # CVE-SCAN-03: live decision logic. Drives scan-cves.sh with a stub scanner
+  # that reproduces the exact real-world no-op (logs "Unsupported os", writes an
+  # empty result set, exits 0) and asserts the script refuses to call that clean.
+  # Hermetic on purpose — needs no build output and no real trivy, so the
+  # regression guard also runs on-device and in plain CI.
+  if command -v jq >/dev/null 2>&1; then
+    _cve_tmp=$(mktemp -d)
+    mkdir -p "${_cve_tmp}/bin"
+    cat > "${_cve_tmp}/bin/trivy" <<'CVEEOF'
+#!/usr/bin/env bash
+# stub: reproduces trivy's silent no-op on a Buildroot CycloneDX SBOM
+_out=""; while [[ $# -gt 0 ]]; do [[ "$1" == "--output" ]] && _out="$2"; shift; done
+echo 'WARN  No OS package is detected.' >&2
+echo 'WARN  Unsupported os  family="buildroot"' >&2
+[[ -n "$_out" ]] && echo '{"Results":[]}' > "$_out"
+exit 0
+CVEEOF
+    chmod +x "${_cve_tmp}/bin/trivy"
+    cat > "${_cve_tmp}/sbom.json" <<'CVEEOF'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,
+ "metadata":{"component":{"type":"operating-system","name":"ga-os-test"}},
+ "components":[{"type":"library","name":"alpha","version":"1.0"},
+               {"type":"library","name":"beta","version":"2.0"}]}
+CVEEOF
+    set +e
+    PATH="${_cve_tmp}/bin:$PATH" GA_SBOM="${_cve_tmp}/sbom.json" \
+      OUTPUT_DIR="${_cve_tmp}/out" GA_ENV=dev ALLOW_FILE="${_cve_tmp}/none" \
+      "$_cve_sh" --sbom >"${_cve_tmp}/log" 2>&1
+    _cve_rc=$?
+    set -e
+    if [[ "$_cve_rc" -eq 2 ]]; then
+      _pass "CVE-SCAN-03: a scanner covering 0 packages exits 2 (broken), not 0 (clean)"
+    else
+      _fail "CVE-SCAN-03: zero-coverage scan returned ${_cve_rc}, expected 2 — fail-open regression"
+    fi
+    rm -rf "$_cve_tmp"
+  else
+    _skip "CVE-SCAN-03: zero-coverage behaviour" "jq not available"
+  fi
+else
+  _skip "CVE-SCAN-01: coverage assertion" "scripts/scan-cves.sh not found (no source tree)"
+  _skip "CVE-SCAN-02: no-op signature detection" "scripts/scan-cves.sh not found (no source tree)"
+  _skip "CVE-SCAN-03: unmatchable-SBOM behaviour" "scripts/scan-cves.sh not found (no source tree)"
+fi
+
+# CVE-SCAN-05: the enriched-SBOM path. An SBOM carrying the `ga:cve-check`
+# marker is read natively (CycloneDX analysis.state), and an entry marked
+# exploitable at or above the severity threshold must fail — while a bare SBOM
+# without the marker must NOT be believed just because it has a
+# `vulnerabilities` array (Buildroot pre-seeds 17 _IGNORE_CVES entries).
+if [[ -f "${_cve_src}/scripts/scan-cves.sh" ]] && command -v jq >/dev/null 2>&1; then
+  _cve_tmp=$(mktemp -d)
+  # 2 components, both with cpe+version -> 100% coverage; one exploitable CRITICAL
+  cat > "${_cve_tmp}/enriched.json" <<'CVEEOF'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,
+ "metadata":{"component":{"type":"operating-system","name":"t"},
+             "properties":[{"name":"ga:cve-check","value":"2026-07-28T00:00:00+00:00"}]},
+ "components":[{"type":"library","name":"a","version":"1","cpe":"cpe:2.3:a:x:a:1:*:*:*:*:*:*:*"},
+               {"type":"library","name":"b","version":"2","cpe":"cpe:2.3:a:x:b:2:*:*:*:*:*:*:*"}],
+ "vulnerabilities":[
+   {"id":"CVE-2026-7777","analysis":{"state":"exploitable"},
+    "ratings":[{"severity":"critical"}],"affects":[{"ref":"a"}]},
+   {"id":"CVE-2026-6666","analysis":{"state":"resolved_with_pedigree"},
+    "ratings":[{"severity":"critical"}],"affects":[{"ref":"b"}]}]}
+CVEEOF
+  set +e
+  GA_SBOM="${_cve_tmp}/enriched.json" OUTPUT_DIR="${_cve_tmp}/out" GA_ENV=prod \
+    ALLOW_FILE="${_cve_tmp}/none" "${_cve_src}/scripts/scan-cves.sh" --sbom \
+    >"${_cve_tmp}/log" 2>&1
+  _cve_rc=$?
+  set -e
+  if [[ "$_cve_rc" -eq 1 ]] && grep -q 'CVE-2026-7777' "${_cve_tmp}/log" \
+     && ! grep -q 'CVE-2026-6666' "${_cve_tmp}/log"; then
+    _pass "CVE-SCAN-05: enriched SBOM — exploitable finding fails prod, resolved one does not"
+  else
+    _fail "CVE-SCAN-05: enriched-SBOM path returned ${_cve_rc} (expected 1, only CVE-2026-7777 reported)"
+  fi
+  rm -rf "$_cve_tmp"
+else
+  _skip "CVE-SCAN-05: enriched-SBOM path" "scan-cves.sh or jq not available"
+fi
+
+# CVE-SCAN-06: ga_build.sh hands GA_ENV to scan-cves.sh explicitly.
+# GA_ENV already reaches the child today (ga_build.sh runs `set -a` and also
+# exports it alongside GA_BUILD_TIMESTAMP), so this is belt-and-braces: a later
+# refactor that drops `set -a` would otherwise silently downgrade the prod gate
+# to report-only, and the build would still print "CVE scan complete".
+_cve_build="${_cve_src}/scripts/ga_build.sh"
+if [[ -f "$_cve_build" ]]; then
+  # Extract the env-assignment block that precedes the delegation (from the
+  # `_cve_rc=0` line up to the scan-cves.sh invocation) and require a real
+  # GA_ENV assignment in it. Deliberately block-scoped, not a proximity grep:
+  # the surrounding comment mentions GA_ENV and would satisfy a sloppy match.
+  # Comments are stripped first: the explanatory comments around this call
+  # mention both GA_ENV and scan-cves.sh, and would otherwise satisfy (or
+  # prematurely terminate) the match. Three earlier versions of this test were
+  # useless for exactly that reason.
+  if sed 's/#.*//' "$_cve_build" \
+     | awk '/_cve_rc=0/{inblk=1} inblk && /^[[:space:]]*GA_ENV=/{found=1}
+            inblk && /scan-cves\.sh/{exit} END{exit !found}'; then
+    _pass "CVE-SCAN-06: ga_build.sh passes GA_ENV to scan-cves.sh (prod gate stays armed)"
+  else
+    _fail "CVE-SCAN-06: GA_ENV not passed to scan-cves.sh — prod findings would silently not gate"
+  fi
+else
+  _skip "CVE-SCAN-06: GA_ENV propagation" "ga_build.sh not found (no source tree)"
+fi
+
+# CVE-SCAN-07: the scan-cves.sh pipeline must not be followed by `|| true`.
+# Appending it makes `true` the last executed command, which RESETS PIPESTATUS
+# to (0) — so `_cve_rc` reads 0 even when the scan exited 2, and the prod abort
+# never fires. Caught live on the 2026-07-28 bake: the build log shows
+# "Result: BROKEN SCAN (exit 2)" immediately followed by "CVE scan complete",
+# and the prod build carried on. `set +e` is the correct construct here.
+if [[ -f "$_cve_build" ]]; then
+  # Comments stripped: the comment above the call quotes '|| true' verbatim.
+  _cve_blk=$(sed 's/#.*//' "$_cve_build" \
+             | awk '/_cve_rc=0/{inblk=1} inblk{print} inblk && /_cve_rc=\$\{PIPESTATUS/{exit}')
+  if [[ -z "$_cve_blk" ]]; then
+    _skip "CVE-SCAN-07: PIPESTATUS integrity" "delegation block not found"
+  elif echo "$_cve_blk" | grep -qE '\|\|[[:space:]]*true'; then
+    _fail "CVE-SCAN-07: '|| true' on the scan pipeline resets PIPESTATUS — the prod gate cannot fire"
+  elif echo "$_cve_blk" | grep -q 'set +e'; then
+    _pass "CVE-SCAN-07: scan exit code survives to _cve_rc (set +e, no '|| true')"
+  else
+    _fail "CVE-SCAN-07: scan pipeline neither guarded by 'set +e' nor safe — exit code handling unclear"
+  fi
+else
+  _skip "CVE-SCAN-07: PIPESTATUS integrity" "ga_build.sh not found (no source tree)"
+fi
+
+# =========================================================================
+# U-Boot: boot must not be interruptible on a shipped device (review finding #9)
+#
+# Any CONFIG_BOOTDELAY >= 0 opens a serial window in which a keypress drops to
+# the U-Boot prompt; from there bootargs can be edited (init=/bin/sh) and every
+# OS-level control is bypassed. With an unencrypted rootfs carrying fleet-shared
+# secrets that is a fleet compromise. U-Boot boot/Kconfig: "-2 = autoboot with
+# no delay and not check for abort".
+# =========================================================================
+_ub_cfg="${_cve_src}/buildroot-ihost/board/sonoff/ihost/uboot.config"
+if [[ -f "$_ub_cfg" ]]; then
+  # Last uncommented assignment wins in a kconfig fragment.
+  _ub_val=$(grep -E '^[[:space:]]*CONFIG_BOOTDELAY=' "$_ub_cfg" | tail -1 | cut -d= -f2 | tr -d ' ')
+  if [[ -z "$_ub_val" ]]; then
+    _pass "UBOOT-01: board config sets no BOOTDELAY (inherits HAOS default -2)"
+  elif [[ "$_ub_val" == "-2" ]]; then
+    _pass "UBOOT-01: CONFIG_BOOTDELAY=-2 — boot is not interruptible"
+  else
+    _fail "UBOOT-01: CONFIG_BOOTDELAY=${_ub_val} — interruptible boot = physical root via the U-Boot prompt"
+  fi
+else
+  _skip "UBOOT-01: bootdelay" "iHost uboot.config not found (no source tree)"
+fi
+# UBOOT-02: verify it survived into the generated U-Boot config, if one exists.
+_ub_built=$(ls -d "${OUT}"/build/uboot-*/.config 2>/dev/null | head -1 || true)
+if [[ -n "$_ub_built" && -f "$_ub_built" ]]; then
+  _ub_bval=$(grep -E '^CONFIG_BOOTDELAY=' "$_ub_built" | tail -1 | cut -d= -f2 | tr -d ' ')
+  if [[ "$_ub_bval" == "-2" ]]; then
+    _pass "UBOOT-02: built U-Boot .config carries BOOTDELAY=-2"
+  else
+    _fail "UBOOT-02: built U-Boot .config has BOOTDELAY=${_ub_bval:-unset} — the fragment did not take effect"
+  fi
+else
+  _skip "UBOOT-02: built U-Boot config" "no uboot build dir (source tree only)"
+fi
+
+# EMBA-01: the firmware analysis must fail closed too. EMBA is the coverage path
+# for the ~30% of shipped packages that carry no usable CPE (measured 2026-07-28:
+# NVD has no CPE for most of them, and several apparent matches are different
+# products). A run that produced no report must read as broken, not as clean —
+# same rule as the CVE scan. Comments stripped before matching: the rationale
+# comment quotes the strings being searched for.
+_emba_sh="${_cve_src}/scripts/run-emba.sh"
+if [[ -f "$_emba_sh" ]]; then
+  _emba_body=$(sed 's/#.*//' "$_emba_sh")
+  if echo "$_emba_body" | grep -q 'html-report/index.html' \
+     && echo "$_emba_body" | grep -qE 'BROKEN ANALYSIS' \
+     && echo "$_emba_body" | grep -qE '^[[:space:]]*exit 2$'; then
+    _pass "EMBA-01: run-emba.sh verifies a report exists and exits 2 when it does not"
+  else
+    _fail "EMBA-01: run-emba.sh does not verify its own output — a no-op run could read as clean"
+  fi
+else
+  _skip "EMBA-01: firmware analysis fail-closed" "scripts/run-emba.sh not found"
+fi
+
+# CVE-SCAN-04: the allowlist exists and every active entry carries an expiry date
+_cve_allow="${_cve_src}/.cve-allowlist"
+if [[ -f "$_cve_allow" ]]; then
+  _cve_bad=$(grep -vE '^[[:space:]]*(#|$)' "$_cve_allow" 2>/dev/null \
+             | grep -vcE '^[[:space:]]*CVE-[0-9]{4}-[0-9]+[[:space:]]+[^[:space:]]+[[:space:]]+[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]' || true)
+  if [[ "${_cve_bad:-0}" -eq 0 ]]; then
+    _pass "CVE-SCAN-04: every .cve-allowlist entry has an owner and an expiry date"
+  else
+    _fail "CVE-SCAN-04: ${_cve_bad} allowlist entr(ies) lack owner/expiry — they will not suppress"
+  fi
+else
+  _skip "CVE-SCAN-04: allowlist format" ".cve-allowlist not found (no source tree)"
+fi
+
+# =========================================================================
 # Summary
 # =========================================================================
 echo ""
