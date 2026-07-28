@@ -3003,6 +3003,26 @@ else
   _skip "CVE-SCAN-07: PIPESTATUS integrity" "ga_build.sh not found (no source tree)"
 fi
 
+# EMBA-01: the firmware analysis must fail closed too. EMBA is the coverage path
+# for the ~30% of shipped packages that carry no usable CPE (measured 2026-07-28:
+# NVD has no CPE for most of them, and several apparent matches are different
+# products). A run that produced no report must read as broken, not as clean —
+# same rule as the CVE scan. Comments stripped before matching: the rationale
+# comment quotes the strings being searched for.
+_emba_sh="${_cve_src}/scripts/run-emba.sh"
+if [[ -f "$_emba_sh" ]]; then
+  _emba_body=$(sed 's/#.*//' "$_emba_sh")
+  if echo "$_emba_body" | grep -q 'html-report/index.html' \
+     && echo "$_emba_body" | grep -qE 'BROKEN ANALYSIS' \
+     && echo "$_emba_body" | grep -qE '^[[:space:]]*exit 2$'; then
+    _pass "EMBA-01: run-emba.sh verifies a report exists and exits 2 when it does not"
+  else
+    _fail "EMBA-01: run-emba.sh does not verify its own output — a no-op run could read as clean"
+  fi
+else
+  _skip "EMBA-01: firmware analysis fail-closed" "scripts/run-emba.sh not found"
+fi
+
 # CVE-SCAN-04: the allowlist exists and every active entry carries an expiry date
 _cve_allow="${_cve_src}/.cve-allowlist"
 if [[ -f "$_cve_allow" ]]; then
