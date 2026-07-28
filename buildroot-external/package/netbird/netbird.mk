@@ -7,6 +7,10 @@
 # cannot swap the source under us (the git SHA is itself the content hash — no
 # .hash file needed for a git package). Update this SHA when bumping the version.
 # SHA of refs/tags/v0.71.4 (netbirdio/netbird), resolved 2026-07-27. [Vuln-11]
+# The upstream tag this SHA resolves to. Kept machine-readable so the
+# ga_build.sh pre-flight and the SRC-PIN-03 test can verify SHA-vs-tag
+# agreement WITHOUT network access. Bump both lines together.
+NETBIRD_UPSTREAM_TAG  = v0.71.4
 NETBIRD_VERSION       = 0358be23136da50e829ba99a83e54ef555071a7f
 NETBIRD_SITE          = https://github.com/netbirdio/netbird.git
 NETBIRD_SITE_METHOD   = git

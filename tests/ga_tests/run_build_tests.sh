@@ -2820,6 +2820,28 @@ else
   _skip "SRC-PIN-02: telegraf source hash" "telegraf.hash not found (no source tree)"
 fi
 
+# SRC-PIN-03: the netbird SHA pin and NETBIRD_TAG must agree. Pinning the SHA
+# (Vuln-11) broke the ga_build.sh pre-flight, which parsed the old refs/tags
+# form — every bake failed on it and NOTHING caught that until the rc36 train
+# (2026-07-28), because package pins were bake-verified only. This asserts the
+# same invariant at source level, so CI catches a drifting pair without a bake.
+_nb_mk="${SRC:-}/buildroot-external/package/netbird/netbird.mk"
+_nb_sh="${SRC:-}/scripts/ga_build.sh"
+if [[ -n "${SRC:-}" && -f "$_nb_mk" && -f "$_nb_sh" ]]; then
+  _nb_mk_tag=$(grep '^NETBIRD_UPSTREAM_TAG' "$_nb_mk" | sed 's/.*=[[:space:]]*v\?//' | tr -d '[:space:]')
+  _nb_sh_tag=$(grep -oE 'NETBIRD_TAG="\$\{NETBIRD_TAG:-v?[0-9.]+\}"' "$_nb_sh" \
+    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+  if [[ -z "$_nb_mk_tag" ]]; then
+    _fail "SRC-PIN-03: netbird.mk has no NETBIRD_UPSTREAM_TAG (pre-flight cannot verify the SHA pin)"
+  elif [[ "$_nb_mk_tag" == "$_nb_sh_tag" ]]; then
+    _pass "SRC-PIN-03: netbird SHA pin and NETBIRD_TAG agree ($_nb_mk_tag)"
+  else
+    _fail "SRC-PIN-03: netbird tag drift — ga_build.sh=$_nb_sh_tag but netbird.mk=$_nb_mk_tag"
+  fi
+else
+  _skip "SRC-PIN-03: netbird tag/SHA agreement" "no source tree"
+fi
+
 # =========================================================================
 # Summary
 # =========================================================================
