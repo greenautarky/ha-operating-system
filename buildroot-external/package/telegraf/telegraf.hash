@@ -1,5 +1,20 @@
-# Locally computed (sha256 of the GitHub release archive + LICENSE). Pins the
-# otherwise-mutable v1.38.0 tag: a moved/re-cut tag changes the archive and
-# FAILS the build instead of silently baking a swapped source. [Vuln-11]
-sha256  18e3d7ba0a8e8ac1c8e8b619a5d97a704cfc9ea3cb49903d3894f0259e2f4a1a  v1.38.0.tar.gz
+# Pins the otherwise-mutable v1.38.0 tag: a moved/re-cut tag fails the build
+# instead of silently baking a swapped source. [Vuln-11]
+#
+# NOTE which artefact this hashes. telegraf is a Go package, so buildroot sets
+# DOWNLOAD_POST_PROCESS = go (package/pkg-golang.mk): it fetches the upstream
+# archive, vendors the module graph into it and REPACKS. The hash below is of
+# that POST-PROCESSED archive — the only one buildroot ever verifies. The hash
+# of the raw GitHub archive is a different value and makes every build fail
+# (rc36 train, 2026-07-28).
+#
+# The upstream input was verified independently from two hosts before trusting
+# the post-processed result:
+#   curl -sL https://github.com/influxdata/telegraf/archive/refs/tags/v1.38.0.tar.gz | sha256sum
+#     -> 18e3d7ba0a8e8ac1c8e8b619a5d97a704cfc9ea3cb49903d3894f0259e2f4a1a  (5167359 bytes)
+#
+# To recompute when bumping: verify the upstream archive hash as above FIRST,
+# then run a bake and read the "got:" value buildroot reports. Deriving it from
+# a failing build is only safe because the upstream input was checked first.
+sha256  c1d79c22cf179799c348787107fea1f18e4e90669f960b1099580946feeda170  v1.38.0.tar.gz
 sha256  c435b0efb886c4b05a62c4416aba91c93e481ccf62828fa61ae04bdaa9ea0813  LICENSE
