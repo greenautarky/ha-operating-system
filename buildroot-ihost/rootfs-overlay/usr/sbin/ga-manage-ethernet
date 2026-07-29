@@ -27,8 +27,8 @@
 #                                      refusing it would block the on-site case
 #                                      without preventing anything.
 #
-#   /share/ga-ethernet-force           settable remotely via ga_manager, so it is
-#                                      the one that could silently override many
+#   <ga_manager addon /data>/          settable remotely via ga_manager, so it is
+#     ga-ethernet-force                the one that could silently override many
 #                                      devices at once. Honoured in production
 #                                      too — offices where we run the onboarding
 #                                      on the customer's behalf and Ethernet is
@@ -37,6 +37,19 @@
 #                                      OWN LABEL. A marker broadcast fleet-wide
 #                                      therefore does nothing, and the operator
 #                                      has to act per device.
+#
+#                                      NOT in /share: that is the addon<->host
+#                                      bridge and 11 add-ons on this image can
+#                                      write it, so any of them could flip the
+#                                      device's network exposure. The add-on's
+#                                      private /data dir is writable by
+#                                      ga_manager alone and readable from the
+#                                      host — the same channel the per-device
+#                                      Loki credential already travels
+#                                      (ga-fluent-bit-env reads
+#                                      addons/data/*_ga_manager/ga-fleet-loki.yaml).
+#                                      The slug prefix differs per device, hence
+#                                      the glob.
 #
 #   The device-bound check needs /mnt/data/ga-device-label to exist. If it does
 #   not, the remote override is refused — a device that cannot say who it is
@@ -49,7 +62,7 @@ GA_ENV_FILE="/mnt/data/ga-env.conf"
 SHARE_DIR="/mnt/data/supervisor/share"
 STATUS_FILE="$SHARE_DIR/ga-ethernet-status.json"
 FORCE_BOOT="/mnt/boot/ga-ethernet-force"
-FORCE_SHARE="$SHARE_DIR/ga-ethernet-force"
+ADDON_DATA_GLOB="/mnt/data/supervisor/addons/data/*_ga_manager"
 LABEL_FILE="/mnt/data/ga-device-label"
 LEGACY_KEY="GA_ETHERNET_DISABLED"
 ETH_IFACE="eth0"
@@ -96,16 +109,23 @@ override_source() {
     return 0
   fi
 
-  [ -e "$FORCE_SHARE" ] || return 0
+  # Remote marker lives in ga_manager's addon-private /data, not in /share.
+  # The slug prefix varies per device, so resolve the glob and take the first
+  # readable hit.
+  _remote=""
+  for _d in $ADDON_DATA_GLOB; do
+    [ -r "$_d/ga-ethernet-force" ] && { _remote="$_d/ga-ethernet-force"; break; }
+  done
+  [ -n "$_remote" ] || return 0
 
-  # Remote marker: must name THIS device, so a fleet-wide copy is inert.
+  # Must name THIS device, so a fleet-wide copy is inert.
   _label=""
   [ -r "$LABEL_FILE" ] && _label=$(tr -d ' \t\n\r' < "$LABEL_FILE")
   if [ -z "$_label" ]; then
     echo "ga-manage-ethernet: remote force marker present but this device has no label — refusing" >&2
     return 0
   fi
-  if ! grep -qF "$_label" "$FORCE_SHARE" 2>/dev/null; then
+  if ! grep -qF "$_label" "$_remote" 2>/dev/null; then
     echo "ga-manage-ethernet: remote force marker does not name $_label — refusing" >&2
     return 0
   fi
