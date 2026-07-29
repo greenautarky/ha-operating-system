@@ -1,0 +1,16 @@
+[Unit]
+Description=GA — publish the RAUC slot picture to /share for the ga_manager addon
+Documentation=file:/usr/libexec/ga-rauc-slots
+# rauc.service owns the D-Bus interface `rauc status` talks to. raucdb-update
+# seeds a fresh rauc.db and restarts rauc.service, so ordering after it keeps
+# the first published snapshot from being the pre-seed one.
+After=rauc.service raucdb-update.service mnt-data.mount
+Wants=rauc.service
+RequiresMountsFor=/mnt/boot /mnt/data
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/ga-rauc-slots
+# One D-Bus round trip plus jq. Bounded so a wedged rauc.service can never
+# hold the timer.
+TimeoutStartSec=30s

@@ -34,6 +34,7 @@ on:
 #   - scripts/*.sh                                — build + release glue
 #   - buildroot-ihost/rootfs-overlay/usr/sbin/ga-*  — on-device scripts
 #   - buildroot-ihost/board/sonoff/ihost/**.sh    — board hooks
+#   - buildroot-external/rootfs-overlay/usr/libexec/*  — /share bridge services
 #   - tests/ga_tests/**/*.sh                      — test runner + fixtures
 #   - .github/workflows/*.yml                     — actionlint
 
@@ -63,6 +64,11 @@ jobs:
             find buildroot-ihost/board/sonoff/ihost -type f -name '*.sh'
             find buildroot-ihost/rootfs-overlay/usr/sbin -type f -name 'ga-*' -not -name '*.bak'
             find buildroot-external/rootfs-overlay -type f -name '*.sh' 2>/dev/null || true
+            # Root services on the host<->addon /share bridge. They carry no
+            # .sh suffix, so the pattern above never saw them — including
+            # ga-share-publish, which exists to contain a privilege
+            # escalation. All of them pass at --severity=error today.
+            find buildroot-external/rootfs-overlay/usr/libexec -type f 2>/dev/null || true
             find tests/ga_tests -type f -name '*.sh'
           )
           echo "Scanning ${#targets[@]} shell scripts:"
@@ -98,3 +104,27 @@ jobs:
           # nits from existing workflows. Override to error-only so a single
           # source of truth governs what counts as a fail.
           ./actionlint -color -shellcheck 'shellcheck --severity=error'
+
+  # Host-runnable device-test suites. These need nothing but sh + jq, so they
+  # can gate every PR instead of waiting for a build or a bench device.
+  #
+  # They were previously unreachable from CI: the comment in run_all.sh pointed
+  # at a qemu-ci.yml lane that no longer exists, so `share_publish` — the
+  # regression suite for the /share symlink escalation (Vuln-2) — had not run
+  # automatically since that workflow was removed. Both suites exit non-zero on
+  # failure, so no extra parsing is needed.
+  host-suites:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq
+
+      - name: ga-share-publish (/share symlink hardening)
+        run: sh tests/ga_tests/share_publish/test.sh
+
+      - name: RAUC slot contract (parser + fail-closed)
+        run: sh tests/ga_tests/rauc_slots/test.sh
