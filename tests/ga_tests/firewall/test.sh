@@ -1,16 +1,16 @@
 #!/bin/sh
 # GA host-firewall test suite — runs ON the device.
-# Tests ga-firewall-gate: the prepared/default-OFF nftables gate that keeps
-# blocked services off the customer LAN while the NetBird mesh + loopback stay
-# reachable. See usr/libexec/ga-firewall-gate + ga_manager firewall_reconcile.
+# Tests ga-firewall-gate: the DEFAULT-ON nftables gate that exposes only SSH
+# and the Home Assistant UI on the customer LAN, keeping everything else on the
+# NetBird mesh / Tailscale. See usr/libexec/ga-firewall-gate.
 #
 # Three tiers:
 #   A. Control-plane / static  — always safe, run everywhere.
 #   B. Ruleset generation      — LOADS + FLUSHES real nft rules on-device to
 #      inspect what the gate generates for a given policy. Opt-in via
 #      GA_FW_ENFORCE_TEST=1; run on a BENCH device (serial-console recovery),
-#      never a remote canary. The test policy only ever blocks ssh + observer —
-#      NEVER the mesh / :8099 / :8123 — and always restores default-OFF at the end.
+#      never a remote canary. The mesh accepts are asserted before anything
+#      else, and the gate is re-run at the end to restore the real state.
 #   C. Reachability permutations — the full LAN-vs-mesh-vs-WiFi matrix. These
 #      need an EXTERNAL LAN prober + a mesh peer, so they are documented as
 #      skip_test here and driven by the E2E harness, not self-contained.
@@ -46,11 +46,14 @@ run_test "FW-13" "gate script is valid /bin/sh" \
 run_test "FW-14" "nft CLI present (BR2_PACKAGE_NFTABLES)" \
   "command -v nft"
 
-# The load-bearing default-OFF invariant: with no enable marker, no GA firewall
-# table is loaded → every port stays exposed exactly as before. (We do NOT
-# create a marker here — this asserts the shipped default on a normal device.)
-run_test "FW-15" "default OFF — no ga_firewall table loaded without a marker" \
-  "test -e $ENABLE_FLAG || test -e /mnt/boot/ga-firewall || ! nft list table $TABLE >/dev/null 2>&1"
+# The load-bearing invariant, now inverted: the firewall is the shipped
+# posture. Absent state is the SAFE state — a device that missed a provisioning
+# step must come up filtered, not open. Only the explicit off-marker disables it.
+run_test "FW-15" "default ON — ga_firewall table loaded unless the off-marker exists" \
+  "test -e /mnt/boot/ga-firewall-off || nft list table $TABLE >/dev/null 2>&1"
+
+run_test "FW-16" "off-marker is the only documented escape hatch" \
+  "grep -q 'ga-firewall-off' $GATE"
 
 # =========================================================================
 # B. Ruleset generation (opt-in, loads+flushes real rules — BENCH ONLY)
@@ -61,74 +64,62 @@ else
   echo ""
   echo "--- B. ruleset generation (BENCH — loading real nft rules) ---"
 
-  # Back up any real state so we restore default-OFF no matter what.
-  _had_flag=0; [ -e "$ENABLE_FLAG" ] && _had_flag=1
-  _bak="$(mktemp /tmp/ga-fw-policy.bak.XXXXXX)"
-  [ -r "$POLICY_FILE" ] && cp "$POLICY_FILE" "$_bak"
-
-  # Test policy: block ONLY ssh (host/input) + observer (container/forward).
-  # ga_manager(:8099) + ha_core(:8123) stay exposed = GACI/Companion invariant.
-  mkdir -p "$SHARE_DIR"
-  cat > "$POLICY_FILE" <<'JSON'
-{
-  "enabled": true,
-  "services": {
-    "ha_core": true,
-    "ga_manager": true,
-    "observer": false,
-    "ssh": false,
-    "influxdb": true,
-    "mqtt": true
-  }
-}
-JSON
-  : > "$ENABLE_FLAG"
+  # The gate takes no policy input any more: the allowlist is the shipped
+  # posture. Just run it and inspect what it produced.
   "$GATE" >/dev/null 2>&1
 
   run_test "FW-20" "ruleset loaded (ga_firewall table present)" \
     "nft list table $TABLE"
 
+  # --- invariants: these must hold or a device becomes unreachable --------
   run_test "FW-21" "mesh invariant — wt0 accepted in input" \
-    "nft list table $TABLE | grep -A20 'chain input' | grep -q 'wt0'"
+    "nft list table $TABLE | sed -n '/chain input/,/}/p' | grep -q 'wt0'"
 
   run_test "FW-22" "loopback invariant — lo accepted in input" \
     "nft list table $TABLE | grep -q 'iif \"lo\" accept'"
 
   run_test "FW-23" "mesh invariant — wt0 accepted in forward" \
-    "nft list table $TABLE | grep -A20 'chain forward' | grep -q 'wt0'"
+    "nft list table $TABLE | sed -n '/chain forward/,/}/p' | grep -q 'wt0'"
 
-  run_test "FW-24" "ssh (:22222) dropped on LAN via input" \
-    "nft list table $TABLE | grep -q 'tcp dport 22222 drop'"
+  # An inet table that drops ICMPv6 discovery kills IPv6 outright: no address
+  # resolution, and no router advertisement means no default route. This is the
+  # failure that looks fine on v4 and takes a day to find.
+  run_test "FW-24" "IPv6 stays usable — ND/RA accepted" \
+    "nft list table $TABLE | grep -q 'nd-router-advert'"
 
-  run_test "FW-25" "observer (:4357) dropped on LAN via forward (dnat-matched)" \
-    "nft list table $TABLE | grep -Eq 'dnat.*4357|4357.*drop'"
+  # --- the allowlist itself ----------------------------------------------
+  run_test "FW-25" "SSH (:22222) reachable from the LAN (host/input)" \
+    "nft list table $TABLE | sed -n '/chain input/,/}/p' | grep -Eq '22222.*accept'"
 
-  # GACI invariant: an un-blocked service must NOT get a drop rule.
-  run_test "FW-26" "ga_manager (:8099) NOT dropped (stays reachable)" \
-    "! nft list table $TABLE | grep -q '8099'"
+  run_test "FW-26" "HA UI (:8123) reachable from the LAN (container/forward)" \
+    "nft list table $TABLE | sed -n '/chain forward/,/}/p' | grep -Eq '8123.*accept'"
 
-  run_test "FW-27" "ha_core (:8123) NOT dropped (Companion/local UI stays open)" \
-    "! nft list table $TABLE | grep -q '8123'"
+  # --- default-deny -------------------------------------------------------
+  run_test "FW-27" "LAN ingress otherwise dropped (input)" \
+    "nft list table $TABLE | sed -n '/chain input/,/}/p' | grep -Eq 'eth0.*drop|drop.*eth0'"
 
-  run_test "FW-28" "status JSON reports enabled + blocked list" \
-    "grep -q '\"enabled\": true' $STATUS_FILE && grep -q 'ssh' $STATUS_FILE && grep -q 'observer' $STATUS_FILE"
+  run_test "FW-28" "LAN ingress to container ports otherwise dropped (forward)" \
+    "nft list table $TABLE | sed -n '/chain forward/,/}/p' | grep -Eq 'dnat.*drop'"
 
-  # Fail-open: a garbled policy must block nothing.
-  echo "not json {{{" > "$POLICY_FILE"
-  "$GATE" >/dev/null 2>&1
-  run_test "FW-29" "malformed policy → fail-open (no drops)" \
-    "! nft list table $TABLE 2>/dev/null | grep -q 'drop'"
+  # Container bridges must never be filtered here — a rule naming hassio or
+  # docker0 would break add-on traffic in a way that looks like a broken add-on.
+  run_test "FW-29" "container bridges untouched (no hassio/docker0 rule)" \
+    "! nft list table $TABLE | grep -Eq 'hassio|docker0|veth'"
 
-  # Restore default-OFF: remove marker, re-run gate (flushes table), restore policy.
-  rm -f "$ENABLE_FLAG"
-  "$GATE" >/dev/null 2>&1
-  run_test "FW-30" "disable (marker removed) → table flushed, ports reopen" \
-    "! nft list table $TABLE >/dev/null 2>&1"
+  run_test "FW-30" "status JSON reports the allowlist mode" \
+    "grep -q '\"enabled\": true' $STATUS_FILE && grep -q 'allowlist' $STATUS_FILE"
 
-  if [ "$_had_flag" = 1 ]; then : > "$ENABLE_FLAG"; fi
-  if [ -s "$_bak" ]; then cp "$_bak" "$POLICY_FILE"; else rm -f "$POLICY_FILE"; fi
-  rm -f "$_bak"
-  # Re-run the gate to reconcile back to the device's real desired state.
+  # --- escape hatch -------------------------------------------------------
+  _off=/mnt/boot/ga-firewall-off
+  _had_off=0; [ -e "$_off" ] && _had_off=1
+  : > "$_off" 2>/dev/null && {
+    "$GATE" >/dev/null 2>&1
+    run_test "FW-31" "off-marker → table flushed, ports reopen" \
+      "! nft list table $TABLE >/dev/null 2>&1"
+    [ "$_had_off" = 1 ] || rm -f "$_off"
+  }
+
+  # Reconcile back to the device's real desired state.
   "$GATE" >/dev/null 2>&1
 fi
 
