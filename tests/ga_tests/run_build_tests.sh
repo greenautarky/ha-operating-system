@@ -2703,13 +2703,47 @@ STAGE_LINK="${TARGET}/etc/systemd/system/sysinit.target.wants/ga-stage-vendored-
   && _pass "STAGE-03: stager enabled every boot (sysinit.target.wants symlink)" \
   || _fail "STAGE-03: stager NOT enabled (no sysinit.target.wants symlink)"
 
-# STAGE-04: stages the OS-vendored components into the addon-visible /share tree.
+# STAGE-04: source and both destinations are the expected paths.
+#
+# The defaults are now written as ${GA_STAGE_*:-...} so the host suite can
+# point the stager at a temp tree. Matching on the DEFAULT rather than the bare
+# assignment keeps this test about the shipped paths and not about the syntax.
 if [[ -f "$STAGE_BIN" ]] \
-   && grep -qF 'SRC="/usr/share/ga/custom_components"' "$STAGE_BIN" 2>/dev/null \
-   && grep -qF 'DST="/mnt/data/supervisor/share/ga-custom-components"' "$STAGE_BIN" 2>/dev/null; then
-  _pass "STAGE-04: stages /usr/share/ga -> /share/ga-custom-components (addon bridge)"
+   && grep -qF 'GA_STAGE_SRC:-/usr/share/ga/custom_components' "$STAGE_BIN" 2>/dev/null \
+   && grep -qF 'GA_STAGE_SHARE_DST:-/mnt/data/supervisor/share/ga-custom-components' "$STAGE_BIN" 2>/dev/null; then
+  _pass "STAGE-04: stages /usr/share/ga -> /share/ga-custom-components (compat bridge)"
 else
-  _fail "STAGE-04: stager SRC/DST paths not as expected"
+  _fail "STAGE-04: stager SRC/compat-DST paths not as expected"
+fi
+
+# STAGE-05: the TRUSTED destination exists — this is the security property.
+#
+# The staged tree is a CODE path: the ga_manager placer copies it into
+# /config/custom_components/ and Core imports every enabled component from
+# there. /share is writable by every add-on declaring `share:rw`, and the
+# manifest version-gate is a CHANGE gate, not a TRUST gate (the writer owns
+# both sides of the comparison). So the components must also be staged into the
+# add-on-private data dir, which the placer prefers from ga_manager 0.105.0.
+#
+# Pinned separately from STAGE-04 so that dropping the trusted destination and
+# keeping the compat one — which would look like a tidy-up — fails loudly.
+if [[ -f "$STAGE_BIN" ]] \
+   && grep -qF 'GA_STAGE_PRIV_GLOB:-/mnt/data/supervisor/addons/data/*_ga_manager' "$STAGE_BIN" 2>/dev/null \
+   && grep -qE 'stage_tree "\$priv_parent/ga-custom-components"' "$STAGE_BIN" 2>/dev/null; then
+  _pass "STAGE-05: also stages into the add-on-private dir (not add-on-writable)"
+else
+  _fail "STAGE-05: trusted (add-on-private) staging destination missing — /share would be the only source and it is add-on-writable"
+fi
+
+# STAGE-06: the compat copy must not be the ONLY thing a reader can rely on.
+# A stager that silently skips the trusted destination when the add-on data dir
+# is absent is correct (the add-on is not installed yet); one that skips it
+# without saying so is not, because the next boot's log is the only evidence.
+if [[ -f "$STAGE_BIN" ]] \
+   && grep -qF 'trusted staging skipped this boot' "$STAGE_BIN" 2>/dev/null; then
+  _pass "STAGE-06: a skipped trusted staging is logged, not silent"
+else
+  _fail "STAGE-06: stager can skip trusted staging without logging it"
 fi
 
 # --- push-ota.sh --ga-release path ---
