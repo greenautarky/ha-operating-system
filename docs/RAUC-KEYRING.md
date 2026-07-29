@@ -98,30 +98,31 @@ The trap: a device verifies a bundle against the keyring **in the slot it is
 running now**, not the one inside the bundle. So the new keyring has to arrive
 *inside* an update the old keyring already accepts.
 
-The load-bearing detail: **the keyring inside a bundle and the signature on that
-bundle are independent.** The signature decides who can *install* it; the
-keyring decides what the device trusts *afterwards*. So a single-anchor image
-can still be delivered to devices that have never seen the new anchor — sign
-that one bundle with the old key. The bridge lives in the signature, not in the
-keyring.
+There are two shapes, and which one you need depends entirely on whether
+existing devices are migrated over the air or replaced.
 
-That collapses the migration to one step:
+**Clean cut** — chosen 2026-07-29. Existing devices are swapped or reflashed by
+hand, so nothing has to be delivered to a device holding the old keyring. The
+new anchor and the new signing material land in a single edit; no bundle is
+ever signed with the old key. Simplest, and the risk is contained to bench
+devices you physically hold: only freshly flashed units carry the new keyring,
+so a rejected chain costs a reflash, not a fleet event.
 
-1. **Bridge release.** Build an image whose keyring contains the **new root CA
-   only**. Sign the bundle with the **old** key. Every device in the field
-   accepts it, and afterwards trusts exactly one anchor.
-2. **Cut over.** Every subsequent bundle is signed with the new signing cert.
-   Then destroy the old signing key, so only one usable key exists at all.
+**Bridge-forward** — needed if devices in the field must migrate over the air.
+The load-bearing detail there: *the keyring inside a bundle and the signature on
+that bundle are independent.* The signature decides who can install it; the
+keyring decides what the device trusts afterwards. So you build an image whose
+keyring holds the new root CA only, and sign **that bundle with the old key** —
+field devices accept it, and afterwards trust exactly one anchor. Every later
+bundle is signed with the new cert. A softer variant keeps new CA **+** old cert
+in the keyring for one release, which lets one bundle serve a mixed fleet at the
+cost of a temporary second anchor.
 
-The conservative variant — keyring = new CA **+** old signing cert, dropped one
-release later — buys a fallback window at the cost of a period with two
-anchors. Take it only if step 1 cannot be verified on hardware first.
-
-**Hard precondition either way:** prove on a real device that RAUC accepts the
-new signing chain *before* shipping an image whose keyring drops the old
-anchor. Afterwards that device trusts only the new root; if the chain turns out
-to be rejected, nothing you can sign will install and recovery is the manual
-raw slot write, once per device.
+**Hard precondition for either:** prove on real hardware that RAUC accepts the
+new signing chain *before* an image whose keyring drops the old anchor reaches
+anything you cannot physically touch. Afterwards such a device trusts only the
+new root; if the chain is rejected, nothing you can sign will install and
+recovery is the manual raw slot write, once per device.
 
 Skipping step 1 — signing with a new key the field does not trust yet — leaves
 every existing device unable to verify any future bundle. Recovery is then the
