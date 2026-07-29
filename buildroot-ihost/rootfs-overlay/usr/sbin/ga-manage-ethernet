@@ -139,6 +139,16 @@ link_up() {
     nmcli connection modify "$CONN" connection.autoconnect yes 2>/dev/null || true
     nmcli connection up "$CONN" 2>/dev/null || true
   fi
+  # NetworkManager activates asynchronously. Without this wait the status file
+  # written straight afterwards reads operstate as still down and reports
+  # link_state "unknown" on every enable — a status that is wrong more often
+  # than it is right. Bounded, and we proceed regardless if it never settles.
+  _i=0
+  while [ "$_i" -lt 10 ]; do
+    [ "$(cat "/sys/class/net/${ETH_IFACE}/operstate" 2>/dev/null)" = "up" ] && break
+    _i=$((_i + 1))
+    sleep 1
+  done
 }
 
 do_disable() {
