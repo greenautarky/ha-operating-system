@@ -30,11 +30,31 @@ NC='\033[0m'
 
 fail_count=0
 pass_count=0
+auth_count=0
+
+# Distinguish "image is genuinely missing" from "we are not allowed to look".
+#
+# Since 2026-07-29 the ga_manager packages are PRIVATE on GHCR (deliberate —
+# the artifact shipped the full addon source, see ADDON-IMAGE-DELIVERY.md).
+# An unauthenticated probe of a private image returns 401/403, which reads
+# exactly like "missing" to a naive check. Reporting that as FAIL would make
+# the build refuse to start over a healthy registry; reporting it as OK would
+# be a false green — the failure mode this repo keeps getting bitten by.
+# So it is its own outcome: AUTH, counted separately, exit code 2.
+#
+# To check private images, authenticate first:
+#   skopeo login ghcr.io -u <user> -p <read:packages token>
+# On ga-builder this is already covered by /root/.docker/config.json.
+_is_auth_error() {
+    # skopeo/registry wording varies by version; match the stable substrings.
+    grep -qiE 'unauthorized|authentication required|denied|403|401' <<<"$1"
+}
 
 check_image() {
     local image="$1"
     local tag="$2"
     local full="${image}:${tag}"
+    local err=""
 
     if command -v skopeo >/dev/null 2>&1; then
         if skopeo inspect --raw "docker://${full}" >/dev/null 2>&1; then
@@ -43,10 +63,15 @@ check_image() {
             return 0
         fi
         # Try with arch override for multi-arch images
-        if skopeo inspect --override-arch arm --override-variant v7 --raw "docker://${full}" >/dev/null 2>&1; then
+        if err=$(skopeo inspect --override-arch arm --override-variant v7 --raw "docker://${full}" 2>&1 >/dev/null); then
             printf "${GREEN}  OK${NC}  %s (multi-arch)\n" "$full"
             pass_count=$((pass_count + 1))
             return 0
+        fi
+        if _is_auth_error "$err"; then
+            printf "${YELLOW}AUTH${NC}  %s (private — not authenticated, existence UNVERIFIED)\n" "$full"
+            auth_count=$((auth_count + 1))
+            return 1
         fi
     else
         # Fallback: use Docker Hub/GHCR API via curl
@@ -65,8 +90,22 @@ check_image() {
                 ;;
         esac
 
-        local token
-        token=$(curl -s "https://ghcr.io/token?service=ghcr.io&scope=repository:${repo}:pull" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
+        # GHCR's token endpoint does NOT hand out an anonymous token for a
+        # private repository — it answers
+        #   {"errors":[{"code":"UNAUTHORIZED","message":"authentication required"}]}
+        # with no token field at all. So "private" has to be detected HERE, on
+        # the token response; by the time we have an empty token there is
+        # nothing left to distinguish it from a genuinely missing image.
+        # (Measured 2026-07-29 against ga_manager-armv7 right after it was
+        # switched to private.)
+        local token_resp token
+        token_resp=$(curl -s "https://ghcr.io/token?service=ghcr.io&scope=repository:${repo}:pull" 2>/dev/null || true)
+        if echo "$token_resp" | grep -qE '"code"[[:space:]]*:[[:space:]]*"(UNAUTHORIZED|DENIED|FORBIDDEN)"'; then
+            printf "${YELLOW}AUTH${NC}  %s (private — not authenticated, existence UNVERIFIED)\n" "$full"
+            auth_count=$((auth_count + 1))
+            return 1
+        fi
+        token=$(echo "$token_resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
 
         if [ -n "$token" ]; then
             local http_code
@@ -75,6 +114,14 @@ check_image() {
                 printf "${GREEN}  OK${NC}  %s\n" "$full"
                 pass_count=$((pass_count + 1))
                 return 0
+            fi
+            # The anonymous token endpoint hands out a token for private repos
+            # too — it just does not grant pull. 401/403 here means "private",
+            # not "gone".
+            if [ "$http_code" = "401" ] || [ "$http_code" = "403" ]; then
+                printf "${YELLOW}AUTH${NC}  %s (private — not authenticated, existence UNVERIFIED)\n" "$full"
+                auth_count=$((auth_count + 1))
+                return 1
             fi
         fi
     fi
@@ -213,13 +260,20 @@ fi
 # --- Summary ---
 echo ""
 echo "=== Summary ==="
-echo "Passed: ${pass_count}"
-echo "Failed: ${fail_count}"
+echo "Passed:       ${pass_count}"
+echo "Failed:       ${fail_count}"
+echo "Unverified:   ${auth_count} (private, no registry credentials)"
 
 if [ "$fail_count" -gt 0 ]; then
     echo ""
     printf "${RED}ERROR: ${fail_count} image(s) not found in registry. Fix before building.${NC}\n"
     exit 1
+elif [ "$auth_count" -gt 0 ]; then
+    echo ""
+    printf "${YELLOW}UNVERIFIED: ${auth_count} private image(s) could not be checked — no credentials.${NC}\n"
+    printf "${YELLOW}This is NOT a pass. The images may or may not exist.${NC}\n"
+    printf "${YELLOW}Authenticate first:  skopeo login ghcr.io -u <user> -p <read:packages token>${NC}\n"
+    exit 2
 else
     printf "${GREEN}All images available. Safe to build.${NC}\n"
     exit 0

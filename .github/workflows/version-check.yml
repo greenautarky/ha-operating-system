@@ -32,6 +32,14 @@ on:
 jobs:
   check-versions:
     runs-on: ubuntu-latest
+    # `packages: read` lets the built-in GITHUB_TOKEN pull the private
+    # ga_manager images. No PAT, nothing to rotate, nothing tied to a personal
+    # account. It works because the packages granted this repository Actions
+    # read access (package settings -> Manage Actions access), and both live in
+    # the greenautarky org.
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
 
@@ -39,6 +47,27 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq jq skopeo
+
+      # The ga_manager packages went PRIVATE on 2026-07-29 (the public image
+      # shipped the full addon source — see ADDON-IMAGE-DELIVERY.md), so an
+      # unauthenticated runner can no longer see them.
+      #
+      # SECURITY — why this step is gated on the PR not coming from a fork:
+      # this repository is PUBLIC, so anyone can open a pull request, and for
+      # `pull_request` events the workflow definition comes from the PR's own
+      # branch. Without the guard, a forked PR could edit this file to copy the
+      # private image somewhere else and have Actions authenticate for it.
+      # GitHub restricts a fork PR's GITHUB_TOKEN to read-only, which is
+      # exactly the permission that matters here, so "read-only" is no
+      # protection at all. Fork PRs therefore run unauthenticated and report
+      # the private images as UNVERIFIED (exit 2) — honest, and never a false
+      # green (retro 2026-07-27: the version badge stayed green through a real
+      # store/bake divergence for 21 minutes).
+      - name: Log in to GHCR (private addon images)
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "Logged in to ghcr.io as ${{ github.actor }}"
 
       - name: Run image availability check
         run: ./scripts/check-images.sh

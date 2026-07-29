@@ -86,6 +86,34 @@ fi
 # Store-reload already succeeded as the probe — no need to re-call.
 log "addon store cache refreshed (= /store/reload OK during readiness probe)"
 
+# Registry-credential preflight (2026-07-29).
+#
+# The ga_manager packages on GHCR are PRIVATE since 2026-07-29. A prime is a
+# real registry pull, so it needs Supervisor to hold ghcr.io credentials —
+# written by ga_manager's `ghcr-creds-write` + `docker-registry-ensure`
+# workers, which the fleet-manager drives after the device enrolls.
+#
+# A fresh flash does NOT need this: the addon images are baked into the data
+# partition at build time (hassio.mk -> fetch-addon-images.sh -> skopeo copy
+# -> dind-import-containers.sh), so the pinned version is already in the local
+# docker store and the prime is a no-op. The pull only happens when the store
+# has moved AHEAD of the bake pin — i.e. exactly in the window between the two
+# lockstep PRs.
+#
+# This is diagnostic, not a gate: we still attempt the prime (public addons
+# work without credentials), but a first-boot log that says "no registry
+# credentials" beats one that says "update failed".
+set +e
+REG_OUT=$(docker exec hassio_cli ha docker registries --raw-json 2>/dev/null)
+set -e
+if echo "$REG_OUT" | grep -q 'ghcr\.io'; then
+    log "registry credentials: ghcr.io present (private addon images pullable)"
+else
+    log "registry credentials: NO ghcr.io entry — private addon images are NOT pullable."
+    log "  If a prime below fails with an auth error, that is the cause."
+    log "  Fix: fleet-manager -> ga_manager job 'ghcr-creds-write' then 'docker-registry-ensure'."
+fi
+
 # Iterate prime conf
 FAIL=0
 while IFS= read -r SLUG; do
@@ -113,6 +141,15 @@ while IFS= read -r SLUG; do
         # has the trail.
         log "  → $SLUG: already at pinned version (no-op)"
         PRIMED_OK=1
+    elif echo "$UPDATE_OUT" | grep -qiE 'unauthorized|authentication required|denied|pull access'; then
+        # Private image + no registry credentials. Distinct from a generic
+        # failure because the fix is an ops action (push creds), not a retry —
+        # and the marker stays unwritten, so the prime self-heals on the next
+        # boot once the credentials land.
+        log "  → $SLUG: FAILED (registry auth) — private image, Supervisor has no credentials"
+        log "     run ga_manager jobs 'ghcr-creds-write' + 'docker-registry-ensure' on this device"
+        FAIL=$((FAIL + 1))
+        PRIMED_OK=0
     else
         log "  → $SLUG: FAILED — $(echo "$UPDATE_OUT" | head -1 | cut -c1-120)"
         FAIL=$((FAIL + 1))
