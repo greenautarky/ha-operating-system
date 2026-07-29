@@ -45,12 +45,19 @@
 # ------------------------------------------
 # This file is not a status readout — a pre-flight in the fleet-manager decides
 # from it whether a slot switch is permitted. So its INTEGRITY is the whole
-# point, and /share cannot carry it: eleven add-ons map `share:rw`, among them
-# File editor, Terminal & SSH, and Samba, which exports /share to the entire
-# customer LAN. Every one of those containers runs as host uid 0 (no userns
-# remap), so file permissions inside /share protect nothing.
+# point, and /share cannot carry it: every add-on that declares `share:rw` can
+# write there, as host uid 0 (no userns remap), so file permissions inside
+# /share protect nothing.
 #
-# An attacker on the household network could therefore hand-edit
+# On the current image that is three installed add-ons and all of them are
+# ours — nothing is exposed to the household LAN today, and an earlier draft of
+# this comment saying otherwise was wrong (it counted the add-on STORE, and
+# named a Samba export that is not part of the image). The objection is
+# structural rather than live: membership of that bus is not ours to control,
+# because a community add-on the customer installs joins it by declaring one
+# line of metadata.
+#
+# Whoever is on it could hand-edit
 # `rollback.possible: true` onto a device whose second slot is empty. The
 # pre-flight would clear the switch, the UI would render a confident green
 # "rollback available", and the operator would brick a customer device that
