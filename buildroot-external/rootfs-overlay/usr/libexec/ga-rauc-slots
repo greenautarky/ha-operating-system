@@ -1,5 +1,6 @@
 #!/bin/sh
-# ga-rauc-slots - publish the RAUC dual-slot picture to /share for ga_manager
+# ga-rauc-slots - publish the RAUC dual-slot picture to the ga_manager add-on
+#                 private data dir (NOT /share - see integrity note below)
 #
 # WHY (Odoo #561)
 # ---------------
@@ -40,6 +41,37 @@
 # Enabling the json option would mean a new library in the image for data
 # we can already read.
 #
+# WHY THE ADD-ON-PRIVATE DIR AND NOT /share
+# ------------------------------------------
+# This file is not a status readout — a pre-flight in the fleet-manager decides
+# from it whether a slot switch is permitted. So its INTEGRITY is the whole
+# point, and /share cannot carry it: eleven add-ons map `share:rw`, among them
+# File editor, Terminal & SSH, and Samba, which exports /share to the entire
+# customer LAN. Every one of those containers runs as host uid 0 (no userns
+# remap), so file permissions inside /share protect nothing.
+#
+# An attacker on the household network could therefore hand-edit
+# `rollback.possible: true` onto a device whose second slot is empty. The
+# pre-flight would clear the switch, the UI would render a confident green
+# "rollback available", and the operator would brick a customer device that
+# only an on-site re-flash brings back. Missing data is handled safely
+# everywhere downstream; FORGED data is a different problem, and the only real
+# fix is a channel the attacker cannot reach.
+#
+# `/mnt/data/supervisor/addons/data/<slug>/` is that channel: Supervisor gives
+# each add-on a private data dir, no other add-on maps it, and the ga_manager
+# container sees it as plain `/data`. Same channel the per-device Loki
+# credential, the GHCR creds and auth.token already use (ARCHITECTURE.md);
+# OS#280 + gm#175 moved the device identity the same way. Direction here is the
+# mirror image of those (host writes, add-on reads) — the dir works both ways.
+#
+# The slug carries a repository hash (`99f1cad4_ga_manager`, `local_ga_manager`,
+# …), so the target is a GLOB, the slug-tolerant form ga-bootstrap 1.2.5 uses.
+# If no dir matches, ga_manager is not installed yet: publish NOTHING rather
+# than creating a directory Supervisor did not make. The add-on then reports
+# "unknown" and the fleet-manager pre-flight warns instead of clearing — which
+# is the correct answer when there is genuinely nothing to read.
+#
 # OUTPUT (contract with ga_manager healthchecks/rauc_slots.py)
 #   {"ts": <epoch>, "compatible": str, "booted": "A"|"B"|null,
 #    "boot_primary": str|null,
@@ -56,10 +88,13 @@
 # Test hooks (used by tests/ga_tests/rauc_slots/parser_test.sh):
 #   GA_RAUC_SLOTS_INPUT  read `rauc status` output from this file instead
 #                        of talking to rauc
-#   GA_RAUC_SLOTS_OUT    publish here instead of the /share bridge
+#   GA_RAUC_SLOTS_OUT    publish to exactly this path instead of resolving
+#                        the add-on-private dir
 #   GA_RAUC_SLOTS_TS     fixed epoch for reproducible fixtures
 
-OUT="${GA_RAUC_SLOTS_OUT:-/mnt/data/supervisor/share/ga-rauc-slots.json}"
+# Add-on-private target. Glob because the slug carries a repository hash.
+ADDON_DATA_GLOB="/mnt/data/supervisor/addons/data/*_ga_manager"
+OUT_BASENAME="ga-rauc-slots.json"
 
 # `rauc status --detailed` is what adds the slot_status block (bundle version,
 # installed timestamp/count). Without --detailed the per-slot install history
@@ -87,15 +122,45 @@ to_kv() {
 		}'
 }
 
-publish() {
-	if [ -x /usr/libexec/ga-share-publish ] && [ -z "${GA_RAUC_SLOTS_OUT:-}" ]; then
-		/usr/libexec/ga-share-publish "$OUT"
-	else
-		# Test path (or an OS predating ga-share-publish): plain write. The
-		# /share symlink hardening only matters for the real bridge target.
-		mkdir -p "$(dirname "$OUT")" 2>/dev/null
-		cat >"$OUT"
+# Every existing add-on-private dir that belongs to ga_manager. Empty output
+# means the add-on is not installed — the caller must then publish nothing.
+# Deliberately no mkdir: creating a data dir Supervisor did not create would
+# leave a directory the add-on never sees.
+resolve_targets() {
+	if [ -n "${GA_RAUC_SLOTS_OUT:-}" ]; then
+		printf '%s\n' "$GA_RAUC_SLOTS_OUT"
+		return
 	fi
+	for d in $ADDON_DATA_GLOB; do
+		[ -d "$d" ] && printf '%s/%s\n' "$d" "$OUT_BASENAME"
+	done
+}
+
+# ga-share-publish is named for the bridge it was written for, but what it
+# does is generic and wanted here too: stage in a root-only dir on the same
+# filesystem, then rename() into place, so a symlink sitting at the target is
+# replaced rather than followed. /mnt/data/.ga-share-stage and the add-on data
+# dir are both on /mnt/data, so the rename stays atomic. Mode 0644: the file is
+# read by the add-on container (uid 0) and carries no secret.
+publish() {
+	targets=$(resolve_targets)
+	if [ -z "$targets" ]; then
+		echo "ga-rauc-slots: no ga_manager add-on data dir under" \
+		     "$ADDON_DATA_GLOB — add-on not installed, publishing nothing" >&2
+		cat >/dev/null
+		return 0
+	fi
+
+	payload=$(cat)
+	for target in $targets; do
+		if [ -x /usr/libexec/ga-share-publish ]; then
+			printf '%s\n' "$payload" | /usr/libexec/ga-share-publish "$target"
+		else
+			# Only reachable in tests / on an OS predating the helper.
+			mkdir -p "$(dirname "$target")" 2>/dev/null
+			printf '%s\n' "$payload" >"$target"
+		fi
+	done
 }
 
 emit_error() {

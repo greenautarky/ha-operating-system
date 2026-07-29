@@ -3212,19 +3212,33 @@ else
   _skip "SLOT-05b: rauc json config cross-check" "no .config at ${BR_CONFIG}"
 fi
 
-# SLOT-06: publishes through the symlink-safe /share bridge helper (Vuln-2),
-# not a bare redirect into the addon-writable directory.
+# SLOT-06: publishes through the symlink-safe helper (Vuln-2) rather than a
+# bare redirect. Named for /share, but what it does — stage in a root-only dir,
+# then rename() so a symlink at the target is replaced instead of followed — is
+# generic and wanted for the add-on data dir too.
 if col_code | grep -q 'ga-share-publish'; then
-  _pass "SLOT-06: publishes via ga-share-publish (symlink-safe /share write)"
+  _pass "SLOT-06: publishes via ga-share-publish (atomic, symlink-safe)"
 else
   _fail "SLOT-06: collector does not publish through ga-share-publish"
 fi
 
-# SLOT-07: the /share path the ga_manager addon reads.
-if col_code | grep -q '/mnt/data/supervisor/share/ga-rauc-slots.json'; then
-  _pass "SLOT-07: publishes to /share/ga-rauc-slots.json (ga_manager contract)"
+# SLOT-07: the add-on-private path the ga_manager addon reads as /data.
+# NOT /share: this file is the input to a rollback decision, and /share is
+# mapped rw by eleven add-ons — File editor, Terminal & SSH, and Samba, which
+# exports it to the customer LAN — all running as host uid 0. Anyone on the
+# household network could forge "rollback.possible: true" onto a device whose
+# second slot is empty and have an operator brick it. Same reasoning and same
+# channel as the per-device Loki credential and the device identity (OS#280).
+if col_code | grep -q '/mnt/data/supervisor/addons/data/\*_ga_manager'; then
+  _pass "SLOT-07a: publishes to the add-on-private data dir (slug-tolerant glob)"
 else
-  _fail "SLOT-07: collector output path is not /mnt/data/supervisor/share/ga-rauc-slots.json"
+  _fail "SLOT-07a: collector does not target /mnt/data/supervisor/addons/data/*_ga_manager"
+fi
+
+if col_code | grep -q 'supervisor/share'; then
+  _fail "SLOT-07b: collector writes the slot picture into the add-on-writable /share — forgeable by any share:rw add-on (Samba exports it to the customer LAN)"
+else
+  _pass "SLOT-07b: slot picture never written to the add-on-writable /share"
 fi
 
 # SLOT-08: rauc output is parsed, never executed. raucdb-update does

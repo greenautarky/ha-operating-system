@@ -107,7 +107,35 @@ run_test "SLOT-31b" "unparseable rauc output: error record, rollback not possibl
 rm -rf "$WORK"
 fi
 
-# --- static: rauc output is parsed, never executed --------------------------
+# --- static: where it publishes, and that it never executes rauc output ------
+# The published file is not a readout, it is the input to a rollback decision.
+# /share is writable by eleven add-ons (File editor, Terminal & SSH, Samba —
+# which exports it to the customer LAN), all running as host uid 0, so anyone
+# on the household network could forge "rollback.possible: true" onto a device
+# whose second slot is empty and have an operator brick it. The add-on-private
+# data dir is the only channel they cannot reach.
+run_test "SLOT-33a" "publishes into the add-on-private data dir" \
+  "grep -v '^[[:space:]]*#' '$COL' | grep -q '/mnt/data/supervisor/addons/data/\*_ga_manager'"
+
+run_test "SLOT-33b" "never writes the slot picture into the add-on-writable /share" \
+  "! grep -v '^[[:space:]]*#' '$COL' | grep -q 'supervisor/share'"
+
+# No add-on installed yet = no data dir. Publishing must be a no-op rather
+# than creating a directory Supervisor did not make.
+if command -v jq >/dev/null 2>&1; then
+  NODIR="$(mktemp -d 2>/dev/null || echo /tmp/rslots_nodir_$$)"
+  # No GA_RAUC_SLOTS_OUT: the collector resolves the real add-on glob, which
+  # matches nothing on a build host — exactly the not-yet-installed case.
+  GA_RAUC_SLOTS_TS=1753790000 \
+  GA_RAUC_SLOTS_INPUT="$FIX/dual-slot-healthy.shell" \
+  "$COL" >/dev/null 2>"$NODIR/err"
+  run_test "SLOT-34" "no add-on data dir: publishes nothing, exits clean" \
+    "[ ! -e '$NODIR/ga-rauc-slots.json' ] && grep -q 'publishing nothing' '$NODIR/err'"
+  rm -rf "$NODIR"
+else
+  skip_test "SLOT-34" "no-add-on-dir behaviour" "jq not available"
+fi
+
 # /usr/libexec/raucdb-update does `eval "$(rauc status ...)"`. This collector
 # deliberately does not: it runs as root and the habit is worth keeping out of
 # new code. Cheap static guard so it cannot creep back in.
@@ -117,15 +145,20 @@ run_test "SLOT-32" "collector never evals or sources rauc output" \
 # =========================================================================
 # Device-side wiring (skipped off-device)
 # =========================================================================
-if [ ! -d /mnt/data/supervisor/share ]; then
-  skip_test "SLOT-40..SLOT-44" "on-device collector wiring" "not running on a GA device"
+if [ ! -d /mnt/data/supervisor ]; then
+  skip_test "SLOT-40..SLOT-45" "on-device collector wiring" "not running on a GA device"
 else
   run_test "SLOT-40" "ga-rauc-slots.timer enabled" \
     "systemctl is-enabled ga-rauc-slots.timer"
 
-  SHARE_JSON="/mnt/data/supervisor/share/ga-rauc-slots.json"
-  run_test "SLOT-41" "slot snapshot published to the /share bridge" \
+  # Slug carries a repo hash, so resolve by glob (ga-bootstrap 1.2.5 form).
+  SHARE_JSON="$(ls -1 /mnt/data/supervisor/addons/data/*_ga_manager/ga-rauc-slots.json 2>/dev/null | head -1)"
+  [ -n "$SHARE_JSON" ] || SHARE_JSON=/nonexistent
+  run_test "SLOT-41" "slot snapshot published to the add-on-private data dir" \
     "test -s '$SHARE_JSON'"
+
+  run_test "SLOT-45" "slot snapshot is NOT in the add-on-writable /share" \
+    "[ ! -e /mnt/data/supervisor/share/ga-rauc-slots.json ]"
 
   if [ -s "$SHARE_JSON" ] && command -v jq >/dev/null 2>&1; then
     # The addon treats anything older than 3 missed 10min ticks as stale and

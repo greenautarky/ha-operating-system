@@ -108,8 +108,8 @@ No device or emulator needed — checks the build output tree directly.
 - SLOT-03: ga-rauc-slots.timer enabled (timers.target.wants symlink)
 - SLOT-04: collector calls `rauc status --detailed` (without it, install history is empty and every slot looks never-installed)
 - SLOT-05a/b: collector uses `--output-format=shell`, cross-checked against `BR2_PACKAGE_RAUC_JSON` in the build config (json is compiled out; asking for it aborts rauc)
-- SLOT-06: publishes through ga-share-publish (symlink-safe /share write)
-- SLOT-07: publishes to /share/ga-rauc-slots.json (ga_manager contract path)
+- SLOT-06: publishes through ga-share-publish (atomic, symlink-safe)
+- SLOT-07a/b: publishes to the **add-on-private** `/mnt/data/supervisor/addons/data/*_ga_manager/` and never to `/share` — the file is the input to a rollback decision, and `/share` is mapped rw by eleven add-ons (Samba exports it to the customer LAN), so a forged `rollback.possible: true` there would let an operator brick a device
 - SLOT-08: parses rauc output instead of eval'ing it
 
 ## Category 2: Emulation (`emu`)
@@ -149,6 +149,8 @@ published contract.
 - SLOT-30: booted from B — the rollback target is A (no A/B hardcoding)
 - SLOT-31a/b: rauc silent or unparseable — publishes an error record, never a bootable-looking one (fail closed)
 - SLOT-32: collector never evals/sources rauc output
+- SLOT-33a/b: publishes into the add-on-private data dir, never into the add-on-writable `/share`
+- SLOT-34: no add-on data dir (add-on not installed) — publishes nothing rather than creating a dir Supervisor did not make
 
 ## Category 3: Device (`device`)
 Must run on real iHost hardware. Needs network, Docker, HA running.
@@ -195,7 +197,8 @@ Must run on real iHost hardware. Needs network, Docker, HA running.
 
 ### From rauc_slots (needs a running device)
 - SLOT-40: ga-rauc-slots.timer enabled
-- SLOT-41: /share/ga-rauc-slots.json published
+- SLOT-41: snapshot published into the add-on-private data dir (slug-tolerant glob)
+- SLOT-45: snapshot is NOT in the add-on-writable /share
 - SLOT-42: snapshot inside the addon's 35min staleness window
 - SLOT-43: snapshot agrees with live `rauc status` on the booted slot
 - SLOT-44: reports this device's rollback target + verdict (informational)
