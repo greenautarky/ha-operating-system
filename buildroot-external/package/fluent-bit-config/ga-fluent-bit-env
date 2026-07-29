@@ -30,9 +30,15 @@ set -u
 ENV_FILE=/mnt/data/fluent-bit/env
 LABEL_FILE=/mnt/data/ga-device-label
 # Canonical per-device identity (ADR-0010): device_id + url_prefix, placed by
-# identity-write / the fleet-manager identity backfill. Host view of the addon's
-# /share. Used as the DEVICE_LABEL fallback below.
-IDENTITY_FILE=/mnt/data/supervisor/share/ga-identity.json
+# identity-write / the fleet-manager identity backfill. Read from the addon's
+# PRIVATE data dir, not /share: the share bridge is writable by every add-on
+# declaring `share:rw` — three installed ones today, all ours, but membership
+# of that bus grows with whatever the customer installs. Whoever writes there
+# dictates the label this device reports its logs and metrics under. The
+# private dir is writable by ga_manager alone — the same channel the Loki
+# credential below already travels. Used as the DEVICE_LABEL fallback.
+# shellcheck disable=SC2125  # expanded unquoted in find_identity(), by design
+IDENTITY_GLOB=/mnt/data/supervisor/addons/data/*_ga_manager/ga-identity.json
 UUID_FILE=/mnt/data/supervisor/homeassistant/.storage/core.uuid
 # shellcheck disable=SC2125  # expanded unquoted in find_cred(), by design
 CRED_GLOB=/mnt/data/supervisor/addons/data/*_ga_manager/ga-fleet-loki.yaml
@@ -59,10 +65,13 @@ LABEL=$(cat "$LABEL_FILE" 2>/dev/null)
 # file would otherwise ship device_label=unknown forever (observed on ~7 prod
 # devices, 2026-07-15). The addon cannot write /mnt/data/ga-device-label (no
 # mount), so the host-side env-builder heals it here instead.
-if [ -z "$LABEL" ] && [ -f "$IDENTITY_FILE" ]; then
-    LABEL=$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-            "$IDENTITY_FILE" 2>/dev/null | head -1)
-    [ -n "$LABEL" ] && log "DEVICE_LABEL derived from ga-identity.json: $LABEL"
+if [ -z "$LABEL" ]; then
+    for _idf in $IDENTITY_GLOB; do
+        [ -r "$_idf" ] || continue
+        LABEL=$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                "$_idf" 2>/dev/null | head -1)
+        [ -n "$LABEL" ] && { log "DEVICE_LABEL derived from ga-identity.json: $LABEL"; break; }
+    done
 fi
 
 # ── per-device Loki credential (ADR-0003 Step 3) ─────────────────────────────
