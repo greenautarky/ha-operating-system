@@ -59,9 +59,9 @@ LABEL=$(cat /mnt/data/ga-device-label 2>/dev/null)
 # Fallback (2026-07-15): derive from the canonical per-device identity when the
 # legacy /mnt/data/ga-device-label is absent — ADR-0010 single source of truth.
 # Same class + fix as ga-fluent-bit-env; keeps metrics + logs on the same label.
-# Read from the addon's PRIVATE data dir, not /share: eleven add-ons map the
-# share bridge and Samba exports it to the customer LAN, so anyone there could
-# dictate the label this device reports its metrics under.
+# Read from the addon's PRIVATE data dir, not /share: the share bridge is
+# writable by every add-on declaring `share:rw`, and whoever writes there
+# dictates the label this device reports its metrics under.
 if [ -z "$LABEL" ]; then
     for _idf in /mnt/data/supervisor/addons/data/*_ga_manager/ga-identity.json; do
         [ -r "$_idf" ] || continue
