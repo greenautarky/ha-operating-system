@@ -218,9 +218,17 @@ match when one exists.
 
 The bridge exists so that pre-rotation devices can still verify OTAs. Doing so
 requires signing a bundle **with the F13 key** — which the build pipeline does
-not have. Baking F13 into new images therefore delivers nothing to anyone: it
-only means that once a device has installed a *current* image, it trusts a
-retired, non-revocable CA that no legitimate party can sign with.
+not have. Baking F13 into new images therefore delivers nothing to *us*.
+
+And it is worse than dead weight. Per Odoo KB #171 (2026-07-27) the retired
+key's custody is loose: it was extracted from a device snapshot and a copy is
+recorded as sitting unencrypted in local checkouts. If that holds, removing F13
+is not hygiene — it closes a signing path that someone else can still walk while
+we cannot. Either way the action is the same, but the reason is stronger than
+"unused cert". The custody claim predates this work and has not been
+re-verified here; the fingerprints on ga-builder do not match it (`cert.pem`
+there is `5E:D6:AF…`, not F13), so treat the two records as inconsistent and
+worth reconciling.
 
 Consequence for the earlier reasoning, which was wrong: dropping the bridge does
 **not** depend on proving the field free of pre-rotation devices. Whether such
