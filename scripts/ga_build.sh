@@ -2331,12 +2331,13 @@ verify_build_integrity
 # image, not the ones rauc.sh intended to put there.
 #
 # Fail-closed on prod, same rule as the root password (#239) and the CVE scan
-# coverage assertion: a wrong keyring cannot be repaired in the field. The
-# rootfs is a read-only squashfs/erofs and /etc/rauc is not among the paths
-# bind-mounted from /mnt/overlay, so the only corrections are an OTA — which
-# the WRONG keyring must already accept — or a physical reflash. Exit 2 means
-# the audit could not run at all and is fatal everywhere; a green build must
-# never be able to mean "not checked". [Odoo #624]
+# coverage assertion. A wrong keyring is expensive to repair: /etc/rauc is not
+# overlay-backed, and `rauc install` verifies against the keyring the device
+# already runs — so the supported update path is precisely what a bad keyring
+# blocks. What is left is a manual raw write to the inactive slot over SSH,
+# once per device (docs/RAUC-KEYRING.md). Exit 2 means the audit could not run
+# at all and is fatal everywhere; a green build must never be able to mean
+# "not checked". [Odoo #624]
 keyring_audit="${SCRIPT_DIR}/verify-rauc-keyring.sh"
 if [[ -x "$keyring_audit" ]]; then
   log_build_step "RAUC keyring audit"

@@ -45,11 +45,52 @@ Consequences:
   and remounting rw is not possible on squashfs/erofs.
 - A runtime `mount --bind` over the file works until reboot, but the unit that
   would re-establish it would itself have to live on the read-only rootfs.
-- Therefore the trust set changes **only** by installing a new rootfs: an OTA,
-  or a physical reflash.
+- The trust set therefore changes only by installing a **new rootfs**.
 
-This is a desirable property — root SSH on one device cannot inject a fleet
-trust anchor — and it is exactly what makes the ordering below non-negotiable.
+### …but "new rootfs" does not have to mean OTA or physical reflash
+
+`rauc install` verifies the bundle signature against the running slot's keyring
+and cannot be told to skip it — so the *supported* update path (including
+`usr/sbin/ga-rauc-install`) is blocked by a keyring the device does not trust.
+Writing the inactive slot directly is not:
+
+```bash
+# on the laptop: unpack the bundle (verity format = squashfs at offset 0,
+# the signature only covers the verity root hash, so unpacking needs no trust)
+unsquashfs -d bundle/ gaos.raucb          # -> rootfs.img, kernel.img, boot.vfat, hook
+
+# stream onto the INACTIVE slot (/tmp is a 15 MB zram disk — never stage there)
+ssh <device> 'dd of=/dev/disk/by-partlabel/hassos-system1 bs=4M conv=fsync' < bundle/rootfs.img
+ssh <device> 'dd of=/dev/disk/by-partlabel/hassos-kernel1 bs=4M conv=fsync' < bundle/kernel.img
+ssh <device> 'rauc status mark-active other && reboot'
+```
+
+This bypasses signature verification entirely, because RAUC is never asked to
+verify anything. It is the fallback that keeps a botched key rotation from
+being a fleet-wide truck roll.
+
+What it costs, and what it does not cover:
+
+- **The running slot is untouched**, so a bad write falls back on the next boot.
+  That bound matters more since `CONFIG_BOOTDELAY=-2` (rc38) removed the U-Boot
+  escape hatch: RAUC rollback and reflash are the only recoveries left.
+- **`/mnt/boot` is shared, not A/B.** `boot.vfat` is installed by the
+  `install_boot` hook in `buildroot-external/ota/rauc-hook`, which preserves
+  `*.txt` and `grubenv`. Replicating it by hand touches state both slots boot
+  from. For a keyring-only change the kernel and bootloader are unchanged, so
+  skip that step — write rootfs (and kernel) only.
+- **It needs the device to be reachable.** A keyring mistake is a *soft*
+  failure — devices keep running and stay on the mesh, they just refuse
+  updates — so in that scenario reachability holds. It does not hold for the 56
+  devices that are live but not in the fleet-manager (Odoo #534).
+- **It is manual, per device, and moves a full rootfs over each uplink.**
+  Bounded-cost recovery, not a rollout mechanism.
+
+Security consequence, stated plainly: **root SSH on a device can install an
+unsigned OS image.** The RAUC signature protects the OTA *channel*; it is not a
+boundary against whoever holds root on the box. With a fleet-shared root SSH
+key that is a fleet-wide arbitrary-image path, and it belongs in the threat
+model alongside the rc38 U-Boot lockdown.
 
 ## Rotating the signing key
 
@@ -69,8 +110,9 @@ Correct order:
    and delete the old CA from the tree.
 
 Skipping step 1 — signing with a new key the field does not trust yet — leaves
-every existing device unable to verify any future bundle. There is then no
-software path back: recovery is a physical reflash of every device. This has
+every existing device unable to verify any future bundle. Recovery is then the
+manual raw-slot write above, once per device, for every device still in the
+field: laborious and reachability-dependent, but not a truck roll. This has
 already happened once here; the `GA_LEGACY_CA_BRIDGE` flag is the patch for it,
 and it re-trusts a retired CA fleet-wide as the price.
 

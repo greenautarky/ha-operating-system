@@ -28,11 +28,14 @@
 #   inputs, by SHA-256 fingerprint, and fails on any difference in either
 #   direction.
 #
-#   The trust anchor cannot be corrected in the field: the rootfs is a
-#   read-only squashfs/erofs and /etc/rauc is NOT one of the paths bind-mounted
-#   from /mnt/overlay (see usr/libexec/hassos-overlay). A wrong keyring ships
-#   until the next OTA — signed by a key that keyring must already trust — or a
-#   physical reflash. Getting it right at build time is the only cheap moment.
+#   A wrong trust anchor is expensive to correct. The rootfs is a read-only
+#   squashfs/erofs and /etc/rauc is NOT one of the paths bind-mounted from
+#   /mnt/overlay (see usr/libexec/hassos-overlay), so it cannot be edited in
+#   place; and `rauc install` verifies against the keyring the device already
+#   runs, so the supported update path is exactly what a bad keyring blocks.
+#   What remains is a manual raw write to the inactive slot over SSH, once per
+#   device (see docs/RAUC-KEYRING.md) — bounded, but reachability-dependent and
+#   per-device. Build time is the only cheap moment.
 #
 # Related: OS#241 (the GA_LEGACY_CA_BRIDGE gate), Odoo #624 (this audit),
 #          Odoo #534 (fleet inventory — the blocker for dropping the bridge).
