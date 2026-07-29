@@ -2327,6 +2327,38 @@ fi
 log_build_step "Build integrity checks"
 verify_build_integrity
 
+# RAUC keyring audit — assert the trust anchors that actually landed in the
+# image, not the ones rauc.sh intended to put there.
+#
+# Fail-closed on prod, same rule as the root password (#239) and the CVE scan
+# coverage assertion: a wrong keyring cannot be repaired in the field. The
+# rootfs is a read-only squashfs/erofs and /etc/rauc is not among the paths
+# bind-mounted from /mnt/overlay, so the only corrections are an OTA — which
+# the WRONG keyring must already accept — or a physical reflash. Exit 2 means
+# the audit could not run at all and is fatal everywhere; a green build must
+# never be able to mean "not checked". [Odoo #624]
+keyring_audit="${SCRIPT_DIR}/verify-rauc-keyring.sh"
+if [[ -x "$keyring_audit" ]]; then
+  log_build_step "RAUC keyring audit"
+  set +e
+  REPO_ROOT="${SCRIPT_DIR%/scripts}" GA_ENV="$GA_ENV" "$keyring_audit" "$OUT" 2>&1 | tee -a "$BUILD_LOG"
+  _kr_rc=${PIPESTATUS[0]}
+  set -e
+  if (( _kr_rc == 2 )); then
+    echo "ERROR: RAUC keyring audit could not run (exit 2) — refusing to ship an unverified trust set"
+    exit 1
+  elif (( _kr_rc != 0 )); then
+    if [[ "$GA_ENV" == "prod" ]]; then
+      echo "ERROR: RAUC keyring audit found a trust-anchor problem — a prod image must not ship it"
+      exit 1
+    fi
+    echo "WARNING: RAUC keyring audit findings above (non-fatal for GA_ENV=${GA_ENV}; a prod build WILL fail here)"
+  fi
+else
+  echo "ERROR: ${keyring_audit} missing or not executable — the keyring trust set would ship unverified"
+  exit 1
+fi
+
 # Run build-time test suite if available
 build_tests="/build/tests/ga_tests/run_build_tests.sh"
 if [[ -x "$build_tests" ]]; then

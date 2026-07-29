@@ -1601,6 +1601,53 @@ if [[ -n "$SRC" ]]; then
     _skip "SRC-16a..c" "frontend repo not found"
   fi
 
+  # SRC-17: the RAUC keyring audit exists and is wired fail-closed.
+  #
+  # These are SRC-prefixed on purpose: GitHub CI only gates on FAILs matching
+  # SRC-/VER-/XVER-, and the guard has to be un-removable from a PR. The audit
+  # itself needs a build output and runs as RAUC-KEYRING-01 on the builder.
+  KR_AUDIT="${SRC}/scripts/verify-rauc-keyring.sh"
+  if [[ -f "$KR_AUDIT" ]]; then
+    [[ -x "$KR_AUDIT" ]] \
+      && _pass "SRC-17a: verify-rauc-keyring.sh exists and is executable" \
+      || _fail "SRC-17a: verify-rauc-keyring.sh is not executable (ga_build.sh would skip it)"
+
+    bash -n "$KR_AUDIT" 2>/dev/null \
+      && _pass "SRC-17b: verify-rauc-keyring.sh parses (bash -n)" \
+      || _fail "SRC-17b: verify-rauc-keyring.sh has a syntax error (bash -n)"
+
+    # The pinned fingerprint must agree with the cert actually in the tree —
+    # otherwise the pin protects nothing and a swapped legacy CA rides along.
+    if [[ -f "${SRC}/buildroot-external/ota/legacy-signing-cert.pem" ]] && command -v openssl >/dev/null 2>&1; then
+      _kr_pin="$(grep -m1 '^LEGACY_FP_PINNED=' "$KR_AUDIT" | sed 's/.*="\(.*\)"/\1/')"
+      _kr_real="$(openssl x509 -in "${SRC}/buildroot-external/ota/legacy-signing-cert.pem" \
+                    -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//')"
+      if [[ -n "$_kr_pin" && "$_kr_pin" == "$_kr_real" ]]; then
+        _pass "SRC-17c: pinned legacy-CA fingerprint matches the in-tree cert"
+      else
+        _fail "SRC-17c: pinned legacy-CA fingerprint != in-tree cert (pin='${_kr_pin}' cert='${_kr_real}')"
+      fi
+    else
+      _skip "SRC-17c: legacy-CA fingerprint pin" "legacy cert or openssl not available"
+    fi
+  else
+    _fail "SRC-17a..c: scripts/verify-rauc-keyring.sh is MISSING — the shipped trust set would go unverified"
+  fi
+
+  # SRC-17d: ga_build.sh must invoke it AND abort on prod. A build that logs the
+  # audit but ships anyway is the same failure mode as the CVE scan that printed
+  # "complete" while covering 0 of 208 packages (#249).
+  if [[ -f "${SRC}/scripts/ga_build.sh" ]]; then
+    if grep -q 'verify-rauc-keyring.sh' "${SRC}/scripts/ga_build.sh" \
+       && grep -qE '_kr_rc' "${SRC}/scripts/ga_build.sh"; then
+      _pass "SRC-17d: ga_build.sh runs the keyring audit and inspects its exit code"
+    else
+      _fail "SRC-17d: ga_build.sh does not run the keyring audit fail-closed (missing call or unchecked exit code)"
+    fi
+  else
+    _skip "SRC-17d: ga_build.sh wiring" "ga_build.sh not found"
+  fi
+
   # SRC-09: Global stale reference scan across all functional source
   STALE_COUNT=0
   for dir in "${SRC}/buildroot-external/package" "${SRC}/buildroot-external/rootfs-overlay" "${SRC}/scripts"; do
@@ -2828,6 +2875,32 @@ if [[ -f "${_lca_src}/buildroot-external/meta" ]]; then
     || _fail "RAUC-LEGACY-02: meta does not declare GA_LEGACY_CA_BRIDGE (gate default would be off/implicit)"
 else
   _skip "RAUC-LEGACY-02: meta declares flag" "meta not found (source tree only)"
+fi
+
+# =========================================================================
+# RAUC keyring CONTENTS — what actually shipped, not what rauc.sh intended
+# =========================================================================
+# RAUC-LEGACY-01 above proves the gate FUNCTION honours the flag against a
+# scratch file; RAUC-LEGACY-02 only proves the flag is declared. Neither looks
+# at the image. This one does: it runs the audit over ${TARGET}/etc/rauc/
+# keyring.pem and compares every trust anchor, by SHA-256 fingerprint, against
+# the certificates the build declared. It is the only check that notices a
+# FOURTH certificate — e.g. the self-signed cert install_rauc_certs() appends
+# without comment whenever /build/cert.pem does not verify against dev-ca.pem.
+# [Odoo #624]
+_kr_script="${SRC:-}/scripts/verify-rauc-keyring.sh"
+if [[ -x "$_kr_script" && -f "${TARGET}/etc/rauc/keyring.pem" ]]; then
+  _kr_out="$(REPO_ROOT="${SRC}" GA_ENV="${GA_ENV:-dev}" "$_kr_script" "$OUT" 2>&1)"
+  _kr_rc=$?
+  case "$_kr_rc" in
+    0) _pass "RAUC-KEYRING-01: shipped keyring holds exactly the declared trust anchors" ;;
+    2) _fail "RAUC-KEYRING-01: keyring audit could not run (exit 2) — trust set UNVERIFIED$(printf '\n%s' "$_kr_out" | sed 's/^/      /')" ;;
+    *) _fail "RAUC-KEYRING-01: keyring audit found trust-anchor problem(s)$(printf '\n%s' "$_kr_out" | sed 's/^/      /')" ;;
+  esac
+elif [[ ! -x "$_kr_script" ]]; then
+  _fail "RAUC-KEYRING-01: scripts/verify-rauc-keyring.sh missing/not executable"
+else
+  _skip "RAUC-KEYRING-01: shipped keyring contents" "no ${TARGET}/etc/rauc/keyring.pem (source tree only)"
 fi
 
 # =========================================================================
