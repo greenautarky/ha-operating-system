@@ -1,125 +1,205 @@
 #!/bin/sh
-# ga-manage-ethernet — Enable/disable Ethernet interface via NetworkManager
+# ga-manage-ethernet — enable/disable the Ethernet interface via NetworkManager
 #
 # Usage:
-#   ga-manage-ethernet disable   # Set flag + disable eth0 now
-#   ga-manage-ethernet enable    # Clear flag + enable eth0 now
-#   ga-manage-ethernet status    # Print current state
-#   ga-manage-ethernet apply     # Read flag from ga-env.conf, apply (used by systemd)
+#   ga-manage-ethernet enable     # persist "on"  + bring eth0 up now
+#   ga-manage-ethernet disable    # persist "off" + take eth0 down now
+#   ga-manage-ethernet status     # print current state
+#   ga-manage-ethernet apply      # reconcile from persisted state (systemd, boot)
 #
-# The disable state persists across reboots via GA_ETHERNET_DISABLED=true
-# in /mnt/data/ga-env.conf. The ga-ethernet-guard.service calls "apply" at boot.
+# STATE — absent is OFF
 #
-# Re-enable remotely: ssh -p 22222 root@<vpn-ip> 'ga-manage-ethernet enable'
+#   GA_ETHERNET_ENABLED=true in /mnt/data/ga-env.conf turns the interface on.
+#   Anything else — key absent, file absent, garbled — means OFF.
 #
+#   This is the inverse of the previous GA_ETHERNET_DISABLED key. That one made
+#   "absent" mean ON, so a device that missed provisioning, was flashed by hand,
+#   or had its data partition wiped came up with the interface live. The safe
+#   state must not depend on a tool having run.
+#
+# OVERRIDE — bench/test installations, never a tenant device
+#
+#   Either marker forces the interface ON regardless of the persisted state:
+#     /mnt/boot/ga-ethernet-force                       (operator, survives wipe)
+#     /mnt/data/supervisor/share/ga-ethernet-force      (fleet, via ga_manager)
+#
+#   Both are GATED on GA_ENV being a non-production environment, and the gate is
+#   FAIL-CLOSED: a missing or unreadable GA_ENV counts as production and refuses.
+#   Forcing a resident's interface up from the fleet is exactly what the
+#   onboarding step exists to prevent — same reasoning as the telemetry-consent
+#   worker in ga_manager, which refuses on production for the same reason.
+#
+# Re-enable remotely: ssh -p 22222 root@<mesh-ip> 'ga-manage-ethernet enable'
 set -e
 
 GA_ENV_FILE="/mnt/data/ga-env.conf"
+SHARE_DIR="/mnt/data/supervisor/share"
+STATUS_FILE="$SHARE_DIR/ga-ethernet-status.json"
+FORCE_BOOT="/mnt/boot/ga-ethernet-force"
+FORCE_SHARE="$SHARE_DIR/ga-ethernet-force"
+LEGACY_KEY="GA_ETHERNET_DISABLED"
 ETH_IFACE="eth0"
+PROD_ENVS="prod production"
 
 # Find the NM connection name for eth0 (active or inactive)
 find_eth_connection() {
-  # First try active connections
-  local conn
   conn=$(nmcli -t -f NAME,DEVICE connection show 2>/dev/null | grep ":${ETH_IFACE}$" | head -1 | cut -d: -f1)
   if [ -n "$conn" ]; then
     echo "$conn"
     return
   fi
-  # Fallback: search all connections by type (ethernet) — picks up inactive ones
   nmcli -t -f NAME,TYPE connection show 2>/dev/null | grep ':802-3-ethernet$' | head -1 | cut -d: -f1
 }
 
-# Check if eth0 is currently connected
 is_eth_connected() {
   nmcli -t -f DEVICE,STATE device status 2>/dev/null | grep -q "^${ETH_IFACE}:connected"
 }
 
-# Read the flag from ga-env.conf
-is_flag_set() {
-  [ -f "$GA_ENV_FILE" ] && grep -q "^GA_ETHERNET_DISABLED=true" "$GA_ENV_FILE" 2>/dev/null
+is_enabled_flag() {
+  [ -f "$GA_ENV_FILE" ] && grep -q "^GA_ETHERNET_ENABLED=true" "$GA_ENV_FILE" 2>/dev/null
 }
 
-# Set GA_ETHERNET_DISABLED=true in ga-env.conf
-set_flag() {
+set_enabled() { # $1 = true|false
   if [ ! -f "$GA_ENV_FILE" ]; then
-    echo "GA_ETHERNET_DISABLED=true" > "$GA_ENV_FILE"
+    echo "GA_ETHERNET_ENABLED=$1" > "$GA_ENV_FILE"
     return
   fi
-  if grep -q "^GA_ETHERNET_DISABLED=" "$GA_ENV_FILE" 2>/dev/null; then
-    sed -i 's/^GA_ETHERNET_DISABLED=.*/GA_ETHERNET_DISABLED=true/' "$GA_ENV_FILE"
+  if grep -q "^GA_ETHERNET_ENABLED=" "$GA_ENV_FILE" 2>/dev/null; then
+    sed -i "s/^GA_ETHERNET_ENABLED=.*/GA_ETHERNET_ENABLED=$1/" "$GA_ENV_FILE"
   else
-    echo "GA_ETHERNET_DISABLED=true" >> "$GA_ENV_FILE"
+    echo "GA_ETHERNET_ENABLED=$1" >> "$GA_ENV_FILE"
   fi
+  # The old key would be read by nothing now; drop it so a device does not
+  # carry two contradictory statements about the same thing.
+  sed -i "/^${LEGACY_KEY}=/d" "$GA_ENV_FILE" 2>/dev/null || true
 }
 
-# Remove GA_ETHERNET_DISABLED from ga-env.conf
-clear_flag() {
-  [ -f "$GA_ENV_FILE" ] && sed -i '/^GA_ETHERNET_DISABLED=/d' "$GA_ENV_FILE"
+# --- override gate ---------------------------------------------------------
+# Echoes the override source, or nothing. Fail-closed on GA_ENV.
+override_source() {
+  [ -e "$FORCE_BOOT" ] || [ -e "$FORCE_SHARE" ] || return 0
+
+  _env=""
+  [ -r "$GA_ENV_FILE" ] && _env=$(sed -n 's/^GA_ENV=//p' "$GA_ENV_FILE" | head -1)
+  if [ -z "$_env" ]; then
+    echo "ga-manage-ethernet: force marker present but GA_ENV is unset — refusing (fail-closed)" >&2
+    return 0
+  fi
+  for _p in $PROD_ENVS; do
+    if [ "$_env" = "$_p" ]; then
+      echo "ga-manage-ethernet: force marker present but GA_ENV=$_env is production — refusing" >&2
+      return 0
+    fi
+  done
+
+  if [ -e "$FORCE_BOOT" ]; then echo "force-boot"; else echo "force-config"; fi
+}
+
+# --- status ----------------------------------------------------------------
+# link_state is deliberately "unknown" while the interface is down: the carrier
+# file is unreadable then (EINVAL), so we must not claim to know whether a cable
+# is plugged in.
+write_status() { # $1 = enabled(true/false) $2 = source
+  [ -d "$SHARE_DIR" ] || return 0
+  _link="unknown"
+  if [ "$(cat "/sys/class/net/${ETH_IFACE}/operstate" 2>/dev/null)" = "up" ]; then
+    _link=$(tr -d '\n' < "/sys/class/net/${ETH_IFACE}/carrier" 2>/dev/null)
+    case "$_link" in 1) _link="carrier" ;; 0) _link="no-carrier" ;; *) _link="unknown" ;; esac
+  fi
+  tmp="$STATUS_FILE.tmp.$$"
+  cat > "$tmp" <<EOF
+{
+  "schema_version": 1,
+  "enabled": $1,
+  "source": "$2",
+  "link_state": "$_link",
+  "interface": "$ETH_IFACE"
+}
+EOF
+  mv -f "$tmp" "$STATUS_FILE" 2>/dev/null || rm -f "$tmp"
+}
+
+# --- actions ---------------------------------------------------------------
+link_down() {
+  CONN=$(find_eth_connection)
+  if [ -n "$CONN" ]; then
+    nmcli connection modify "$CONN" connection.autoconnect no 2>/dev/null || true
+    nmcli connection down "$CONN" 2>/dev/null || true
+  fi
+  # Always finish with the interface administratively down. Without this the
+  # NM path and the no-profile path meant two different things: `connection
+  # down` can leave the link up (carrier asserted, L2 reachable, just no IP).
+  ip link set "$ETH_IFACE" down 2>/dev/null || true
+}
+
+link_up() {
+  CONN=$(find_eth_connection)
+  ip link set "$ETH_IFACE" up 2>/dev/null || true
+  if [ -n "$CONN" ]; then
+    nmcli connection modify "$CONN" connection.autoconnect yes 2>/dev/null || true
+    nmcli connection up "$CONN" 2>/dev/null || true
+  fi
 }
 
 do_disable() {
-  CONN=$(find_eth_connection)
-  if [ -n "$CONN" ]; then
-    echo "Disabling Ethernet: connection='$CONN' interface='$ETH_IFACE'"
-    nmcli connection modify "$CONN" connection.autoconnect no 2>/dev/null || true
-    nmcli connection down "$CONN" 2>/dev/null || true
-  else
-    echo "No NM connection found for $ETH_IFACE — bringing interface down directly"
-    ip link set "$ETH_IFACE" down 2>/dev/null || true
-  fi
-  set_flag
-  echo "Ethernet disabled. Flag set in $GA_ENV_FILE"
+  echo "Disabling Ethernet on $ETH_IFACE"
+  link_down
+  set_enabled false
+  write_status false onboarding
+  echo "Ethernet disabled (GA_ETHERNET_ENABLED=false)"
 }
 
 do_enable() {
-  CONN=$(find_eth_connection)
-  if [ -n "$CONN" ]; then
-    echo "Enabling Ethernet: connection='$CONN' interface='$ETH_IFACE'"
-    nmcli connection modify "$CONN" connection.autoconnect yes 2>/dev/null || true
-    nmcli connection up "$CONN" 2>/dev/null || true
-  else
-    echo "No NM connection found for $ETH_IFACE — bringing interface up directly"
-    ip link set "$ETH_IFACE" up 2>/dev/null || true
-  fi
-  clear_flag
-  echo "Ethernet enabled. Flag cleared from $GA_ENV_FILE"
+  echo "Enabling Ethernet on $ETH_IFACE"
+  link_up
+  set_enabled true
+  write_status true onboarding
+  echo "Ethernet enabled (GA_ETHERNET_ENABLED=true)"
 }
 
 do_status() {
-  if is_flag_set; then
-    FLAG="true"
-  else
-    FLAG="false"
+  src=$(override_source)
+  if [ -n "$src" ]; then eff=true; else
+    if is_enabled_flag; then eff=true; src=onboarding; else eff=false; src=default; fi
   fi
-
-  if is_eth_connected; then
-    STATE="connected"
-  else
-    STATE="disconnected"
-  fi
-
-  CONN=$(find_eth_connection)
-  echo "ethernet_disabled=${FLAG}"
-  echo "ethernet_state=${STATE}"
-  echo "ethernet_connection=${CONN:-none}"
-  echo "ethernet_operstate=$(cat /sys/class/net/${ETH_IFACE}/operstate 2>/dev/null || echo 'unknown')"
+  echo "ethernet_enabled=${eff}"
+  echo "ethernet_source=${src}"
+  echo "ethernet_state=$(is_eth_connected && echo connected || echo disconnected)"
+  echo "ethernet_connection=$(find_eth_connection || echo none)"
+  echo "ethernet_operstate=$(cat "/sys/class/net/${ETH_IFACE}/operstate" 2>/dev/null || echo unknown)"
 }
 
 do_apply() {
-  if is_flag_set; then
-    echo "GA_ETHERNET_DISABLED=true found — disabling Ethernet"
-    CONN=$(find_eth_connection)
-    if [ -n "$CONN" ]; then
-      nmcli connection modify "$CONN" connection.autoconnect no 2>/dev/null || true
-      nmcli connection down "$CONN" 2>/dev/null || true
-      echo "Ethernet disabled on boot"
-    else
-      ip link set "$ETH_IFACE" down 2>/dev/null || true
-      echo "Ethernet interface brought down (no NM connection found)"
-    fi
+  # One-time carry-over. A device upgrading from the old GA_ETHERNET_DISABLED
+  # scheme has no GA_ETHERNET_ENABLED key, which under the new rule means OFF —
+  # so an OTA would silently take a working uplink down. If the old key is
+  # absent (= was enabled) and the link is currently up, record that intent
+  # once instead of reversing it behind the operator's back.
+  if [ -f "$GA_ENV_FILE" ] \
+     && ! grep -q "^GA_ETHERNET_ENABLED=" "$GA_ENV_FILE" 2>/dev/null \
+     && ! grep -q "^${LEGACY_KEY}=true" "$GA_ENV_FILE" 2>/dev/null \
+     && [ "$(cat "/sys/class/net/${ETH_IFACE}/operstate" 2>/dev/null)" = "up" ]; then
+    echo "carrying over pre-upgrade state: interface is up, recording GA_ETHERNET_ENABLED=true"
+    set_enabled true
   fi
-  # If flag is not set, do nothing — default is Ethernet enabled
+
+  src=$(override_source)
+  if [ -n "$src" ]; then
+    echo "override active ($src) — enabling Ethernet"
+    link_up
+    write_status true "$src"
+    return
+  fi
+
+  if is_enabled_flag; then
+    echo "GA_ETHERNET_ENABLED=true — enabling Ethernet"
+    link_up
+    write_status true onboarding
+  else
+    echo "no enable flag — keeping Ethernet down"
+    link_down
+    write_status false default
+  fi
 }
 
 case "${1:-}" in
