@@ -1,7 +1,7 @@
 #!/bin/sh
 # ga-stage-vendored-components — stage the OS-vendored Home Assistant
 # custom_components from the read-only rootfs into the persistent, addon-
-# visible /share tree, on EVERY boot, idempotently.
+# readable trees, on EVERY boot, idempotently.
 #
 # WHY THIS EXISTS (the OTA-converge gap, layer 1 of 2)
 # ----------------------------------------------------
@@ -9,18 +9,45 @@
 # custom_components/ (laid out by scripts/sync-components.sh at build time).
 # The ga_manager addon CANNOT read the host rootfs — it only maps /share,
 # /config, /ssl, /addon_configs — so a host-side step must copy the rootfs
-# trees into /share/ga-custom-components/, from where the addon's `converge`
-# worker (and its steady-state reconcile) places them into
-# /config/custom_components/ and enables them (layer 2).
+# trees somewhere the addon can see, from where its `converge` worker (and its
+# steady-state reconcile) places them into /config/custom_components/ and
+# enables them (layer 2).
 #
 # Historically this staging was assumed to be done by `ga-bootstrap`, but that
 # service is first-boot-only (ConditionPathExists=!/mnt/data/.ga-bootstrapped,
 # a marker on persistent /mnt/data that survives an OS OTA). So a component
 # NEWLY shipped or version-bumped in an OTA was never re-staged on already-
-# provisioned devices: /share kept its first-boot contents and the new
-# integration silently never appeared. This oneshot closes that gap by running
-# on every boot with NO marker gate — the host-side twin of ga_manager's
-# steady-state vendored-component reconcile.
+# provisioned devices: the staging tree kept its first-boot contents and the
+# new integration silently never appeared. This oneshot closes that gap by
+# running on every boot with NO marker gate — the host-side twin of
+# ga_manager's steady-state vendored-component reconcile.
+#
+# WHERE IT STAGES, AND WHY TWO PLACES
+# -----------------------------------
+# THIS IS A CODE PATH, not a status file. Whatever ends up in
+# /config/custom_components/<an enabled component>/ is imported and executed by
+# Home Assistant Core, with Core's access to /config (including .storage) and
+# to the Supervisor API. So the question for the staging tree is not who can
+# read it, but who can write it.
+#
+#   1. addons/data/*_ga_manager/ga-custom-components  — TRUSTED, preferred.
+#      The add-on's private data dir. No other add-on is given a path to it,
+#      so what the placer reads is what the OS wrote. Same trust channel the
+#      per-device Loki credential and the device identity already use.
+#
+#   2. /share/ga-custom-components  — COMPATIBILITY ONLY.
+#      /share is the addon<->host bridge, writable by every add-on that
+#      declares `share:rw`. ga_manager < 0.105.0 reads only this path, so it
+#      is still written; from 0.105.0 the placer prefers (1) and this copy is
+#      vestigial. It can be dropped once no supported addon reads it.
+#
+# Note what the version-gate below does NOT do. It compares manifest.json to
+# skip unchanged trees — that is a CHANGE gate, not a TRUST gate. Anyone who
+# can write a staging tree can write its version string too, so a tampered
+# tree that bumps its version reads as "newly released" and is copied out,
+# while one that keeps the version reads as "unchanged" and is left alone. No
+# arrangement of this comparison detects tampering, which is why the fix is a
+# location the attacker cannot write rather than a check on the content.
 #
 # SAFETY: best-effort — this must NEVER block boot (it is ordered
 # Before=hassos-supervisor.service). Every failure is logged and swallowed;
@@ -29,58 +56,95 @@
 
 set -u
 
-SRC="/usr/share/ga/custom_components"
+# The three paths are overridable so the host suite
+# (tests/ga_tests/stage_components) can exercise this against a temp tree.
+# Nothing on a device sets them.
+SRC="${GA_STAGE_SRC:-/usr/share/ga/custom_components}"
 # Host path for the Supervisor "share" folder; the ga_manager addon sees this
 # same directory mounted as /share.
-DST="/mnt/data/supervisor/share/ga-custom-components"
+SHARE_DST="${GA_STAGE_SHARE_DST:-/mnt/data/supervisor/share/ga-custom-components}"
+# The addon's private data dir. The slug carries a per-device repository hash
+# prefix, hence the glob.
+PRIV_PARENT_GLOB="${GA_STAGE_PRIV_GLOB:-/mnt/data/supervisor/addons/data/*_ga_manager}"
 
 log() { echo "ga-stage-vendored-components: $*"; }
+
+# stage_tree <dst_root> <label> — mirror every component under $SRC into
+# <dst_root>. Returns non-zero only when <dst_root> is unusable.
+stage_tree() {
+	dst_root="$1"
+	label="$2"
+
+	# $dst_root may live in a container-writable tree. If it has been replaced
+	# by a symlink to e.g. /mnt/data, the `rm -rf` / `cp -a` below would
+	# delete+write an arbitrary root-owned tree ("$dst_root/$name" resolving
+	# outside it). Refuse to operate through a symlinked staging dir.
+	# [Vuln-2 hardening]
+	if [ -L "$dst_root" ]; then
+		rm -f "$dst_root" 2>/dev/null || {
+			log "WARN $label: $dst_root is a symlink and could not be removed — skipping"
+			return 1
+		}
+	fi
+	if ! mkdir -p "$dst_root" 2>/dev/null; then
+		log "WARN $label: could not create $dst_root — skipping"
+		return 1
+	fi
+	if [ -L "$dst_root" ] || [ ! -d "$dst_root" ]; then
+		log "WARN $label: $dst_root is not a real directory — skipping"
+		return 1
+	fi
+
+	staged=0
+	current=0
+	for comp in "$SRC"/*/; do
+		[ -d "$comp" ] || continue
+		name=$(basename "$comp")
+		# Only stage real integrations (a directory with a manifest.json). This
+		# also skips VENDORED.md and any stray non-component file.
+		[ -f "$comp/manifest.json" ] || continue
+		dst="$dst_root/$name"
+		# Version-gate: a released component bumps its manifest.json version, so
+		# an identical manifest is a reliable proxy for "unchanged" and lets us
+		# skip the rm+cp (no eMMC write on a steady-state boot). Matches the
+		# addon-side _place_components version-gate. See the header for why this
+		# is a change gate and not a trust gate.
+		if [ -f "$dst/manifest.json" ] && cmp -s "$comp/manifest.json" "$dst/manifest.json"; then
+			current=$((current + 1))
+			continue
+		fi
+		if rm -rf "$dst" && cp -a "$comp" "$dst"; then
+			staged=$((staged + 1))
+		else
+			log "WARN $label: failed to stage $name — leaving previous copy in place"
+		fi
+	done
+
+	log "$label: staged=$staged already-current=$current into $dst_root"
+	return 0
+}
 
 if [ ! -d "$SRC" ]; then
 	log "no vendored source at $SRC — OS staged none; nothing to do"
 	exit 0
 fi
 
-# $DST is in the container-writable /share bridge. If a hostile addon replaces
-# it with a symlink to e.g. /mnt/data, the `rm -rf "$dst"` / `cp -a` below would
-# delete+write an arbitrary root-owned tree ("$DST/$name" resolving outside
-# /share). Refuse to operate through a symlinked staging dir. [Vuln-2 hardening]
-if [ -L "$DST" ]; then
-	rm -f "$DST" 2>/dev/null || { log "WARN $DST is a symlink and could not be removed — skipping (boot not blocked)"; exit 0; }
-fi
-if ! mkdir -p "$DST" 2>/dev/null; then
-	log "WARN could not create $DST — skipping (boot not blocked)"
-	exit 0
-fi
-if [ -L "$DST" ] || [ ! -d "$DST" ]; then
-	log "WARN $DST is not a real directory — skipping (boot not blocked)"
-	exit 0
-fi
-
-staged=0
-current=0
-for comp in "$SRC"/*/; do
-	[ -d "$comp" ] || continue
-	name=$(basename "$comp")
-	# Only stage real integrations (a directory with a manifest.json). This
-	# also skips VENDORED.md and any stray non-component file.
-	[ -f "$comp/manifest.json" ] || continue
-	dst="$DST/$name"
-	# Version-gate: a released component bumps its manifest.json version, so an
-	# identical manifest is a reliable proxy for "unchanged" and lets us skip
-	# the rm+cp (no eMMC write on a steady-state boot). Matches the addon-side
-	# _place_components version-gate for consistency.
-	if [ -f "$dst/manifest.json" ] && cmp -s "$comp/manifest.json" "$dst/manifest.json"; then
-		current=$((current + 1))
-		continue
-	fi
-	if rm -rf "$dst" && cp -a "$comp" "$dst"; then
-		log "staged $name"
-		staged=$((staged + 1))
-	else
-		log "WARN failed to stage $name — leaving previous copy in place"
-	fi
+# 1. Trusted destination first, so a device whose addon is new enough never has
+#    to fall back. Absent when ga_manager has not been installed yet — the glob
+#    then matches nothing, and the addon reads the compat copy until the next
+#    boot. That is the pre-existing behaviour, so this is no worse than before;
+#    it is also not a state an attacker can induce, since nothing outside this
+#    script and the addon itself can write the addon's data dir.
+priv_found=0
+# shellcheck disable=SC2086  # PRIV_PARENT_GLOB must word-split to expand
+for priv_parent in $PRIV_PARENT_GLOB; do
+	[ -d "$priv_parent" ] || continue
+	priv_found=1
+	stage_tree "$priv_parent/ga-custom-components" "trusted"
 done
+[ "$priv_found" -eq 1 ] || log "no ga_manager data dir yet — trusted staging skipped this boot"
 
-log "done — staged=$staged already-current=$current into $DST"
+# 2. Compatibility destination for addons older than 0.105.0.
+stage_tree "$SHARE_DST" "compat"
+
 exit 0
