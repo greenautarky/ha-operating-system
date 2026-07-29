@@ -247,7 +247,9 @@ echo "  Results: ${findings} finding(s), ${warns} warning(s)"
 if (( findings > 0 )); then
   echo ""
   echo "  A keyring finding is not cosmetic: the trust set ships read-only in the"
-  echo "  rootfs and cannot be corrected over SSH. See docs/RAUC-KEYRING.md."
+  echo "  rootfs, and 'rauc install' verifies against the keyring the device already"
+  echo "  runs — so the supported update path is what a bad keyring blocks. Correcting"
+  echo "  it means a manual raw slot write per device. See docs/RAUC-KEYRING.md."
   exit 1
 fi
 echo "=== RAUC keyring audit passed ==="

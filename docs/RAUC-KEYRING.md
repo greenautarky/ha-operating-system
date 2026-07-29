@@ -142,7 +142,46 @@ Do not use `openssl x509 -in keyring.pem`: the bundle is written with
 command reads only the **first** certificate — and reports success. That is how
 an extra anchor stays invisible.
 
+## The 2026 CA (generated 2026-07-29, not yet in use)
+
+`scripts/ops/gen-ota-ca.sh` mints the replacement hierarchy. Run on ga-builder
+as root; it refuses to overwrite existing key material.
+
+```bash
+scp scripts/ops/gen-ota-ca.sh ga-builder:/tmp/
+ssh ga-builder 'bash /tmp/gen-ota-ca.sh'      # -> /root/ga-ota-ca-<date>/
+```
+
+| Artefact | Role | SHA-256 | Valid to |
+|---|---|---|---|
+| `ga-ota-root-ca.pem` | keyring anchor → `ota/rel-ca.pem` | `C1:B7:57:33:1C:AE:F8:C1:36:40:81:C3:39:CE:34:80:FD:C6:9E:42:D0:ED:73:2F:CA:C0:AA:9F:0F:6A:83:17` | 2041-07-28 |
+| `ga-ota-signing.pem` | signs bundles → `cert.pem` | `AF:E9:CE:76:AA:18:C7:6D:21:19:E9:B3:80:52:D9:FA:70:88:F9:8D:30:A2:1E:B7:DC:AB:8A:AC:F8:E9:CD:35` | 2029-07-28 |
+
+Both RSA-4096/SHA-256. The signing cert **chains to the root** — that is the
+change that matters, and `install_rauc_certs()` therefore stops appending it to
+the keyring. The root key belongs in the password manager, **not** on the
+builder; it is only needed to issue the next signing cert.
+
+Why two tiers: until now the trust anchor *was* the signing certificate, so
+rotating the signing key meant migrating the fleet's trust anchor — which is
+the hole `GA_LEGACY_CA_BRIDGE` exists to patch. With a root CA in the keyring,
+a signing-key rotation is a build-server change the fleet never sees.
+
 ## Current state (2026-07-29)
+
+Measured on the last prod build output on ga-builder (2026-07-29 16:20), the
+shipped keyring holds **three** anchors — one of them undeclared:
+
+| SHA-256 | Subject | How it got there |
+|---|---|---|
+| `FE:4E:81:…:92:06` | `CN = iHost RAUC Dev CA` | `ota/rel-ca.pem` — declared. Signs nothing; **inert** |
+| `5E:D6:AF:…:FD:00` | `O=HassOS, CN=HassOS Self-signed Development Certificate` | `/build/cert.pem`, appended by source 2. **Undeclared — and it is what actually signs the bundles** |
+| `01:E7:CE:…:BC:F7` | `O=HassOS, CN=HassOS Self-signed Development Certificate` | retired F13 CA, declared via the gate |
+
+So the effective trust anchor in production today is a self-signed certificate
+straight out of `generate-signing-key.sh`, and the CA that is supposed to be
+the anchor validates nothing. `KEYRING-02` reports exactly this against a real
+build; it is the reason the 2026 CA above exists.
 
 - `GA_LEGACY_CA_BRIDGE="true"` in `buildroot-external/meta` — every production
   image still trusts the retired pre-2026-03-27 CA, fingerprint
