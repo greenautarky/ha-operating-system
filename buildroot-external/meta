@@ -16,4 +16,4 @@ DEPLOYMENT="production"
 # must stay "true". Flip to "false" (and delete ota/legacy-signing-cert.pem)
 # ONLY after a field audit confirms no pre-rotation device remains. See KB
 # "Fleet migration: retired trust anchors". [Vuln-3]
-GA_LEGACY_CA_BRIDGE="true"
+GA_LEGACY_CA_BRIDGE="false"
