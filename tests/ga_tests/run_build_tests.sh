@@ -2831,6 +2831,94 @@ else
 fi
 
 # =========================================================================
+# RAUC keyring — what this image will actually accept an OTA from
+# =========================================================================
+# The CI-side suite (tests/ga_tests/rauc_trust) pins the certificates that are
+# IN the repository. It cannot see dev-ca.pem / rel-ca.pem, which .gitignore
+# excludes and which live only on the build host — so the assembled keyring is
+# only checkable here, after a build.
+#
+# Fingerprints, not subjects. Measured on rc39: the retired pre-2026-03-27 CA
+# carries the SAME subject as the ordinary HassOS development certificate
+# ("O = HassOS, CN = HassOS Self-signed Development Certificate"), so by subject
+# the keyring reads as two harmless dev certs. Only the fingerprint tells them
+# apart.
+_KR="${TARGET}/etc/rauc/keyring.pem"
+_FP_LEGACY_F13="01:E7:CE:81:49:6B:75:43:22:3C:8B:31:29:4C:78:AB:D3:02:7F:FE:62:7A:B5:B6:28:AF:73:83:E1:21:BC:F7"
+_FP_IHOST_CA="FE:4E:81:8A:4D:3E:8A:9B:C8:C2:56:0B:DC:F3:37:5B:36:5C:66:D3:D0:84:69:50:B6:4B:AE:DA:A1:D3:92:06"
+
+if [[ -f "$_KR" ]] && command -v openssl >/dev/null 2>&1; then
+  _krtmp="$(mktemp -d)"
+  awk '/BEGIN CERT/,/END CERT/' "$_KR" > "${_krtmp}/all.pem"
+  ( cd "$_krtmp" && csplit -sz -f c_ all.pem '/BEGIN CERTIFICATE/' '{*}' 2>/dev/null ) || true
+  _fps=""
+  for _c in "${_krtmp}"/c_*; do
+    [[ -f "$_c" ]] || continue
+    _fps="${_fps} $(openssl x509 -in "$_c" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)"
+  done
+  _n=$(echo "$_fps" | wc -w)
+
+  # RAUC-KEYRING-01: the check must have looked at something. An empty keyring
+  # trivially satisfies every assertion below, which is the failure shape this
+  # whole file exists to avoid.
+  [[ "$_n" -ge 1 ]] \
+    && _pass "RAUC-KEYRING-01: keyring parsed (${_n} certificate(s))" \
+    || _fail "RAUC-KEYRING-01: keyring has NO parseable certificate — the device would trust nothing, or the parse broke"
+
+  # RAUC-KEYRING-02: no duplicates. A cert appearing twice means two code paths
+  # added it and one of them is not the one anybody is reasoning about.
+  _uniq=$(echo "$_fps" | tr ' ' '\n' | grep -c . || true)
+  _dedup=$(echo "$_fps" | tr ' ' '\n' | grep . | sort -u | wc -l)
+  [[ "$_uniq" -eq "$_dedup" ]] \
+    && _pass "RAUC-KEYRING-02: no duplicate certificate in the keyring" \
+    || _fail "RAUC-KEYRING-02: keyring contains the same certificate more than once (${_uniq} entries, ${_dedup} distinct)"
+
+  # RAUC-KEYRING-03: the gate actually took. The flag says what should happen;
+  # this says what DID happen. Those are different claims and only the second
+  # one is evidence.
+  _has_legacy=0
+  echo "$_fps" | grep -qF "$_FP_LEGACY_F13" && _has_legacy=1
+  _bridge=$(sed -nE 's/^GA_LEGACY_CA_BRIDGE="?([^"]*)"?.*/\1/p' "${BR2EXT}/meta" 2>/dev/null | head -1)
+  if [[ "$_bridge" == "true" && "$_has_legacy" == "1" ]] || [[ "$_bridge" != "true" && "$_has_legacy" == "0" ]]; then
+    _pass "RAUC-KEYRING-03: legacy CA presence matches GA_LEGACY_CA_BRIDGE=${_bridge:-unset} (present=${_has_legacy})"
+  else
+    _fail "RAUC-KEYRING-03: GA_LEGACY_CA_BRIDGE=${_bridge:-unset} but legacy CA present=${_has_legacy} — the flag and the image disagree"
+  fi
+
+  # RAUC-KEYRING-04: the retirement gate. Off by default so it does not fail
+  # while the bridge is a deliberate, temporary state; the release build sets
+  # GA_REQUIRE_LEGACY_CA_RETIRED=1 and then "the old keys are retired" stops
+  # being a claim and becomes a checked property of the artefact.
+  if [[ "${GA_REQUIRE_LEGACY_CA_RETIRED:-0}" == "1" ]]; then
+    [[ "$_has_legacy" == "0" ]] \
+      && _pass "RAUC-KEYRING-04: retired pre-2026-03-27 CA is NOT in the keyring" \
+      || _fail "RAUC-KEYRING-04: GA_REQUIRE_LEGACY_CA_RETIRED=1 but the retired CA is still baked — this image accepts old-key bundles"
+  else
+    _skip "RAUC-KEYRING-04: legacy-CA retirement" "GA_REQUIRE_LEGACY_CA_RETIRED not set (bridge still deliberate)"
+  fi
+
+  # RAUC-KEYRING-05: the documented anchor is present. If dev-ca.pem is ever
+  # swapped, this is the line that notices.
+  echo "$_fps" | grep -qF "$_FP_IHOST_CA" \
+    && _pass "RAUC-KEYRING-05: the iHost RAUC Dev CA anchor is present" \
+    || _fail "RAUC-KEYRING-05: expected anchor ${_FP_IHOST_CA:0:17}... absent — dev-ca.pem/rel-ca.pem changed"
+
+  # Report every fingerprint. The build cert is host-specific and legitimately
+  # varies, so it is listed rather than pinned — but it is listed, so a release
+  # build has a written record of exactly who could sign for it.
+  for _f in $_fps; do
+    case "$_f" in
+      "$_FP_LEGACY_F13") echo "        keyring: ${_f:0:17}... (RETIRED pre-2026-03-27 CA)" ;;
+      "$_FP_IHOST_CA")   echo "        keyring: ${_f:0:17}... (iHost RAUC Dev CA)" ;;
+      *)                 echo "        keyring: ${_f:0:17}... (build-host signing cert)" ;;
+    esac
+  done
+  rm -rf "$_krtmp"
+else
+  _skip "RAUC-KEYRING-01..05: assembled keyring" "no ${_KR} or no openssl (source tree only)"
+fi
+
+# =========================================================================
 # Package source pinning — mutable tags -> immutable SHAs / hashes (Vuln-11)
 # =========================================================================
 _nb_mk="${SRC:-}/buildroot-external/package/netbird/netbird.mk"

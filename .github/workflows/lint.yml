@@ -131,3 +131,9 @@ jobs:
 
       - name: ga-stage-vendored-components (trusted staging root)
         run: sh tests/ga_tests/stage_components/test.sh
+
+      # Trust anchors decide who may replace the OS on every device in the
+      # fleet. Runs on every PR so adding or swapping one is a red test that
+      # has to be argued for, not a binary blob nobody diffs.
+      - name: RAUC trust anchors (fingerprint pins)
+        run: sh tests/ga_tests/rauc_trust/test.sh
