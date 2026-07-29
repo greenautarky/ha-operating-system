@@ -17,17 +17,30 @@
 #   or had its data partition wiped came up with the interface live. The safe
 #   state must not depend on a tool having run.
 #
-# OVERRIDE — bench/test installations, never a tenant device
+# OVERRIDE — two markers, two different authorisations
 #
-#   Either marker forces the interface ON regardless of the persisted state:
-#     /mnt/boot/ga-ethernet-force                       (operator, survives wipe)
-#     /mnt/data/supervisor/share/ga-ethernet-force      (fleet, via ga_manager)
+#   /mnt/boot/ga-ethernet-force        physical access IS the authorisation.
+#                                      Whoever set this stood at the device or
+#                                      had the card in a reader, and it can only
+#                                      ever affect that one device. Honoured in
+#                                      every environment, production included:
+#                                      refusing it would block the on-site case
+#                                      without preventing anything.
 #
-#   Both are GATED on GA_ENV being a non-production environment, and the gate is
-#   FAIL-CLOSED: a missing or unreadable GA_ENV counts as production and refuses.
-#   Forcing a resident's interface up from the fleet is exactly what the
-#   onboarding step exists to prevent — same reasoning as the telemetry-consent
-#   worker in ga_manager, which refuses on production for the same reason.
+#   /share/ga-ethernet-force           settable remotely via ga_manager, so it is
+#                                      the one that could silently override many
+#                                      devices at once. Honoured in production
+#                                      too — offices where we run the onboarding
+#                                      on the customer's behalf and Ethernet is
+#                                      the only uplink need exactly this — but
+#                                      only if the file CONTAINS THIS DEVICE'S
+#                                      OWN LABEL. A marker broadcast fleet-wide
+#                                      therefore does nothing, and the operator
+#                                      has to act per device.
+#
+#   The device-bound check needs /mnt/data/ga-device-label to exist. If it does
+#   not, the remote override is refused — a device that cannot say who it is
+#   must not accept an instruction addressed to a name.
 #
 # Re-enable remotely: ssh -p 22222 root@<mesh-ip> 'ga-manage-ethernet enable'
 set -e
@@ -37,9 +50,9 @@ SHARE_DIR="/mnt/data/supervisor/share"
 STATUS_FILE="$SHARE_DIR/ga-ethernet-status.json"
 FORCE_BOOT="/mnt/boot/ga-ethernet-force"
 FORCE_SHARE="$SHARE_DIR/ga-ethernet-force"
+LABEL_FILE="/mnt/data/ga-device-label"
 LEGACY_KEY="GA_ETHERNET_DISABLED"
 ETH_IFACE="eth0"
-PROD_ENVS="prod production"
 
 # Find the NM connection name for eth0 (active or inactive)
 find_eth_connection() {
@@ -75,24 +88,29 @@ set_enabled() { # $1 = true|false
 }
 
 # --- override gate ---------------------------------------------------------
-# Echoes the override source, or nothing. Fail-closed on GA_ENV.
+# Echoes the override source, or nothing.
 override_source() {
-  [ -e "$FORCE_BOOT" ] || [ -e "$FORCE_SHARE" ] || return 0
-
-  _env=""
-  [ -r "$GA_ENV_FILE" ] && _env=$(sed -n 's/^GA_ENV=//p' "$GA_ENV_FILE" | head -1)
-  if [ -z "$_env" ]; then
-    echo "ga-manage-ethernet: force marker present but GA_ENV is unset — refusing (fail-closed)" >&2
+  # Physical marker: authorised by presence, scoped to this one device.
+  if [ -e "$FORCE_BOOT" ]; then
+    echo "force-boot"
     return 0
   fi
-  for _p in $PROD_ENVS; do
-    if [ "$_env" = "$_p" ]; then
-      echo "ga-manage-ethernet: force marker present but GA_ENV=$_env is production — refusing" >&2
-      return 0
-    fi
-  done
 
-  if [ -e "$FORCE_BOOT" ]; then echo "force-boot"; else echo "force-config"; fi
+  [ -e "$FORCE_SHARE" ] || return 0
+
+  # Remote marker: must name THIS device, so a fleet-wide copy is inert.
+  _label=""
+  [ -r "$LABEL_FILE" ] && _label=$(tr -d ' \t\n\r' < "$LABEL_FILE")
+  if [ -z "$_label" ]; then
+    echo "ga-manage-ethernet: remote force marker present but this device has no label — refusing" >&2
+    return 0
+  fi
+  if ! grep -qF "$_label" "$FORCE_SHARE" 2>/dev/null; then
+    echo "ga-manage-ethernet: remote force marker does not name $_label — refusing" >&2
+    return 0
+  fi
+
+  echo "force-config"
 }
 
 # --- status ----------------------------------------------------------------
