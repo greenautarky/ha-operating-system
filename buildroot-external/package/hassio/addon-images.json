@@ -26,7 +26,7 @@
     },
     "ga_manager": {
       "image": "ghcr.io/greenautarky/ga_manager-{arch}",
-      "version": "0.100.0"
+      "version": "0.105.0"
     }
   }
 }
