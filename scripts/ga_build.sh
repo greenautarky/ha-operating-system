@@ -2092,7 +2092,14 @@ if [[ "$MODE" == "full" || "$MODE" == "partial" || ( "$MODE" == "update" && "$GA
     echo "=== Pre-flight: checking container image availability + vibe_addons lock-step ==="
     if [[ -f "${SCRIPT_DIR}/check-images.sh" ]]; then
       set +e
-      "${SCRIPT_DIR}/check-images.sh"
+      # STRICT here and only here. An add-on source repo that has just merged a
+      # bump legitimately leads the pin until its image finishes publishing, so
+      # source drift is advisory in the PR check — but a build turns this tree
+      # into an image someone flashes, and shipping a pin that is behind its
+      # source is how five ga_manager releases became undeliverable
+      # (2026-07-29). Override with GA_SOURCE_DRIFT_STRICT=0 for a deliberate
+      # build of an older pin.
+      GA_SOURCE_DRIFT_STRICT="${GA_SOURCE_DRIFT_STRICT:-1}" "${SCRIPT_DIR}/check-images.sh"
       _img_rc=$?
       set -e
       case "$_img_rc" in

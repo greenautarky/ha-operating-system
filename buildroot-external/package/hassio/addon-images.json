@@ -2,7 +2,7 @@
   "addons": {
     "mosquitto": {
       "image": "ghcr.io/greenautarky/ga_mosquitto-{arch}",
-      "version": "7.1.1"
+      "version": "7.1.2"
     },
     "ga_tailscale": {
       "image": "ghcr.io/greenautarky/ga_tailscale-{arch}",
@@ -14,7 +14,7 @@
     },
     "ga_influxdbv1": {
       "image": "ghcr.io/greenautarky/ga_influxdbv1-{arch}",
-      "version": "0.0.3"
+      "version": "0.0.4"
     },
     "ga_zigbee2mqtt": {
       "image": "ghcr.io/greenautarky/ga_zigbee2mqtt-{arch}",
@@ -26,7 +26,7 @@
     },
     "ga_manager": {
       "image": "ghcr.io/greenautarky/ga_manager-{arch}",
-      "version": "0.100.0"
+      "version": "0.105.0"
     }
   }
 }

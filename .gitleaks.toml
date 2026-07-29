@@ -1,0 +1,63 @@
+# gitleaks configuration for ha-operating-system.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# The secret scan sweeps the full history on every push to master, so a secret
+# that was ever committed keeps the job red forever — long after the credential
+# has been revoked. That is worse than it sounds: a gate that is permanently red
+# stops being read. On 2026-07-29 this job had been failing since at least
+# 07-28 and nobody looked, which is the same blindness that let five ga_manager
+# releases sit unpinned behind a green version check.
+#
+# So known, dead findings are recorded here by fingerprint, with the reason and
+# the revocation date. Red then means "something NEW", which is the only state
+# worth alerting on.
+#
+# RULES FOR ADDING AN ENTRY — all three, no exceptions:
+#   1. The credential is REVOKED, not merely rotated out of the working tree.
+#      Deleting the line from HEAD does nothing; the history is public.
+#   2. The entry names what it was, when it was revoked, and how that was
+#      verified. "Looks unused" is not a revocation.
+#   3. It pins exact fingerprints. Never a path or a rule — that would silence
+#      every future secret in the same file.
+
+title = "ha-operating-system"
+
+[extend]
+# Keep every upstream rule; this file only adds allowlist entries.
+useDefault = true
+
+[[allowlists]]
+description = """
+Central InfluxDB v1 credential for the `device_metrics` database
+(user `device_writer`), committed in plaintext to
+buildroot-external/package/telegraf/telegraf.conf on 2026-02-03 and removed
+from the working tree later. This repository is PUBLIC, so the value must be
+treated as disclosed for the whole window it was in history.
+
+REVOKED 2026-07-27: the `device_writer` account was DROPPED on the central
+InfluxDB host as the fix for Vuln-1 of the 2026-07-27 security review — it had
+ALL PRIVILEGES on `device_metrics` while only a handful of canaries ever wrote
+centrally. Post-drop telemetry was verified intact, so the account is gone
+rather than merely unused, and these four findings can no longer authenticate
+anything.
+
+Not rewritten out of history on purpose: the value was public for months, so a
+rewrite would not un-disclose it, and it would invalidate every commit hash in
+the release records, RAUC bundles and Odoo tickets that reference them. The
+mitigation for a disclosed secret is revocation, which happened.
+
+STILL OPEN — carried in the report, not closed by this entry: whether that
+password was reused for any other InfluxDB user or service. Revoking one
+account does not cover reuse.
+"""
+commits = [
+  "1c0c2ba533e453ba13263110132dfd95f2813831",
+  "8616eb2aa83a00d27586d6df4b75ba0ee370c745",
+  "fc10924baa494bab9156efafffb4a382e9e0bea4",
+  "fcf3690042a53fc809271f444a797d5e86a73b90",
+]
+paths = ['''^buildroot-external/package/telegraf/telegraf\.conf$''']
+# Both conditions must hold before a finding is suppressed, so a NEW secret in
+# this same file — or this same commit touching another file — still fails.
+condition = "AND"

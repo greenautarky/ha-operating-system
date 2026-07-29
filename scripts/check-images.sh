@@ -257,12 +257,84 @@ if [ -f "$ADDON_IMAGES_JSON" ] && command -v git >/dev/null 2>&1; then
     fi
 fi
 
+# --- source-of-truth drift (the axis the lockstep check cannot see) ---
+#
+# The check above compares the bake pin to the add-on store. Both can be stale
+# TOGETHER and it stays green: on 2026-07-29 addon-images.json and vibe_addons
+# both said ga_manager 0.100.0 while the source repo was at 0.105.0. Five
+# releases — including a fleet credential-rotation fix and three security
+# changes — were built, published, and undeliverable, behind a green badge.
+#
+# The missing edge is source -> pin. This compares the pinned version against
+# the version declared in the add-on's OWN repository, which is what the
+# publish workflow builds from. Advisory by design: a source repo that has just
+# merged a bump is EXPECTED to lead the pin for as long as the image takes to
+# publish, so failing here would make every publish window red. It prints a
+# WARN and a one-line instruction, which is what was missing — nobody was ever
+# told.
+#
+# GA_SOURCE_DRIFT_STRICT=1 turns the warning into a failure. The release
+# workflow sets it: leading the pin is fine on a Tuesday afternoon, not in the
+# build that becomes an image.
+if [ -f "$ADDON_IMAGES_JSON" ] && command -v git >/dev/null 2>&1; then
+    echo ""
+    echo "--- source-of-truth drift (pinned vs the add-on's own repo) ---"
+    # key -> "owner/repo:path-to-config". Only add-ons whose source we own and
+    # whose repo is readable with the CI token; anything absent is simply not
+    # checked and says so, rather than silently counting as agreement.
+    SRC_MAP="ga_manager=greenautarky/ga_manager:ga_manager/config.yaml"
+    drift_seen=0
+    drift_fatal=0
+    for entry in $SRC_MAP; do
+        key="${entry%%=*}"
+        rest="${entry#*=}"
+        repo="${rest%%:*}"
+        cfg_path="${rest#*:}"
+        pinned=$(jq -r ".addons.\"${key}\".version // empty" "$ADDON_IMAGES_JSON")
+        [ -z "$pinned" ] && continue
+        src_tmp=$(mktemp -d)
+        if git clone --depth=1 --quiet "https://github.com/${repo}" "$src_tmp/r" 2>/dev/null; then
+            src_ver=$(_read_addon_field "$src_tmp/r/$cfg_path" version)
+        else
+            src_ver=""
+        fi
+        rm -rf "$src_tmp"
+        if [ -z "$src_ver" ]; then
+            printf "${YELLOW}SKIP${NC}: %s — could not read %s from %s (not counted as agreement)\n" \
+                "$key" "$cfg_path" "$repo"
+            continue
+        fi
+        if [ "$src_ver" = "$pinned" ]; then
+            printf "${GREEN}OK${NC}: %s pinned %s == source %s\n" "$key" "$pinned" "$src_ver"
+        else
+            drift_seen=$((drift_seen + 1))
+            printf "${YELLOW}DRIFT${NC}: %s pinned %s but %s declares %s — the published image is not reachable by any device until the pin follows\n" \
+                "$key" "$pinned" "$repo" "$src_ver"
+            printf "        fix: bump addon-images.json AND the vibe_addons store entry to %s in one change set\n" "$src_ver"
+        fi
+    done
+    if [ "$drift_seen" -gt 0 ] && [ "${GA_SOURCE_DRIFT_STRICT:-0}" = "1" ]; then
+        # Deliberately NOT folded into fail_count: that counter's summary line
+        # says "image(s) not found in registry", and the image here exists —
+        # it is the pin that is behind. A wrong reason sends the next person
+        # looking at the registry instead of at the pin.
+        drift_fatal=1
+    fi
+fi
+
 # --- Summary ---
 echo ""
 echo "=== Summary ==="
 echo "Passed:       ${pass_count}"
 echo "Failed:       ${fail_count}"
 echo "Unverified:   ${auth_count} (private, no registry credentials)"
+
+if [ "${drift_fatal:-0}" = "1" ]; then
+    echo ""
+    printf "${RED}ERROR: add-on(s) pinned behind their source repo (GA_SOURCE_DRIFT_STRICT=1).${NC}\n"
+    printf "${RED}The images exist — the pin does not point at them. Bump the pin, not the registry.${NC}\n"
+    exit 1
+fi
 
 if [ "$fail_count" -gt 0 ]; then
     echo ""
