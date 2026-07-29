@@ -38,10 +38,12 @@
 #                                      therefore does nothing, and the operator
 #                                      has to act per device.
 #
-#                                      NOT in /share: that is the addon<->host
-#                                      bridge and 11 add-ons on this image can
-#                                      write it, so any of them could flip the
-#                                      device's network exposure. The add-on's
+#                                      NOT in /share: that bridge is writable
+#                                      by every add-on declaring `share:rw`
+#                                      (three installed today, all ours — but
+#                                      the customer can add to that set), so
+#                                      any of them could flip the device's
+#                                      network exposure. The add-on's
 #                                      private /data dir is writable by
 #                                      ga_manager alone and readable from the
 #                                      host — the same channel the per-device
