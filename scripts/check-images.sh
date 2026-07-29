@@ -265,52 +265,70 @@ fi
 # releases — including a fleet credential-rotation fix and three security
 # changes — were built, published, and undeliverable, behind a green badge.
 #
-# The missing edge is source -> pin. This compares the pinned version against
-# the version declared in the add-on's OWN repository, which is what the
-# publish workflow builds from. Advisory by design: a source repo that has just
-# merged a bump is EXPECTED to lead the pin for as long as the image takes to
-# publish, so failing here would make every publish window red. It prints a
-# WARN and a one-line instruction, which is what was missing — nobody was ever
-# told.
+# The missing edge is published -> pin, and it is asked of the REGISTRY rather
+# than of the source repository. The first version of this check cloned each
+# add-on's repo and read its declared version. Two things were wrong with that:
 #
-# GA_SOURCE_DRIFT_STRICT=1 turns the warning into a failure. The release
-# workflow sets it: leading the pin is fine on a Tuesday afternoon, not in the
-# build that becomes an image.
-if [ -f "$ADDON_IMAGES_JSON" ] && command -v git >/dev/null 2>&1; then
+#   1. For mosquitto, zigbee2mqtt and tailscale the default branch is NOT the
+#      source. They publish from long-lived `ga-build/**` branches, and their
+#      default branch still names the UPSTREAM image version — `MQTT` master
+#      says 6.4.1 while we ship 7.1.2. A repo-based check reports "pin AHEAD of
+#      source", i.e. noise pointing the wrong way, which is how a check earns
+#      being ignored. Fixing that needs a hand-maintained per-add-on ref, and a
+#      hand-maintained constant is how this goes stale again.
+#   2. It could not run where it matters most. The build executes inside a
+#      container with registry credentials but no GitHub token, so every private
+#      add-on came out SKIP — honest, but useless exactly at build time.
+#
+# The registry answers both. `skopeo list-tags` uses the same credentials the
+# build already requires to pull these images, so it works in the container, it
+# needs no map, and it covers every add-on rather than the one that happened to
+# be listed. It also asks the question we actually care about: an image exists
+# that no device can reach.
+#
+# Advisory by design — a canary image published for testing legitimately leads
+# the pin, and failing on that would make the check noise again.
+# GA_SOURCE_DRIFT_STRICT=1 turns it fatal; ga_build.sh sets that, because
+# leading the pin is fine on a Tuesday afternoon and not in the build that
+# becomes an image. Set GA_SOURCE_DRIFT_STRICT=0 for a deliberate older pin.
+if [ -f "$ADDON_IMAGES_JSON" ] && command -v skopeo >/dev/null 2>&1; then
     echo ""
-    echo "--- source-of-truth drift (pinned vs the add-on's own repo) ---"
-    # key -> "owner/repo:path-to-config". Only add-ons whose source we own and
-    # whose repo is readable with the CI token; anything absent is simply not
-    # checked and says so, rather than silently counting as agreement.
-    SRC_MAP="ga_manager=greenautarky/ga_manager:ga_manager/config.yaml"
+    echo "--- delivery drift (pinned vs newest tag actually published) ---"
     drift_seen=0
     drift_fatal=0
-    for entry in $SRC_MAP; do
-        key="${entry%%=*}"
-        rest="${entry#*=}"
-        repo="${rest%%:*}"
-        cfg_path="${rest#*:}"
+    for key in $(jq -r '.addons | keys[]' "$ADDON_IMAGES_JSON"); do
+        image=$(jq -r ".addons.\"${key}\".image" "$ADDON_IMAGES_JSON" | sed "s/{arch}/${ARCH}/")
         pinned=$(jq -r ".addons.\"${key}\".version // empty" "$ADDON_IMAGES_JSON")
         [ -z "$pinned" ] && continue
-        src_tmp=$(mktemp -d)
-        if git clone --depth=1 --quiet "https://github.com/${repo}" "$src_tmp/r" 2>/dev/null; then
-            src_ver=$(_read_addon_field "$src_tmp/r/$cfg_path" version)
-        else
-            src_ver=""
-        fi
-        rm -rf "$src_tmp"
-        if [ -z "$src_ver" ]; then
-            printf "${YELLOW}SKIP${NC}: %s — could not read %s from %s (not counted as agreement)\n" \
-                "$key" "$cfg_path" "$repo"
+        # Only add-ons we publish ourselves — an upstream vendor's newest tag is
+        # not something this repo is behind on.
+        case "$image" in *ghcr.io/greenautarky/*) : ;; *) continue ;; esac
+
+        newest=$(skopeo list-tags "docker://${image}" 2>/dev/null \
+            | jq -r '.Tags[]?' 2>/dev/null \
+            | grep -E '^[0-9]+([.][0-9]+)+' \
+            | sort -V | tail -1)
+
+        if [ -z "$newest" ]; then
+            # Not agreement. Say so.
+            printf "${YELLOW}SKIP${NC}: %s — could not list tags for %s (not counted as agreement)\n" \
+                "$key" "$image"
             continue
         fi
-        if [ "$src_ver" = "$pinned" ]; then
-            printf "${GREEN}OK${NC}: %s pinned %s == source %s\n" "$key" "$pinned" "$src_ver"
+        if [ "$newest" = "$pinned" ]; then
+            printf "${GREEN}OK${NC}: %s pinned %s == newest published\n" "$key" "$pinned"
+        elif [ "$(printf '%s\n%s\n' "$pinned" "$newest" | sort -V | tail -1)" = "$pinned" ]; then
+            # Pin ahead of anything published. check_image above already fails
+            # if the pinned tag is missing outright, so this is the narrower
+            # case of a tag that exists but sorts below the pin — worth a line,
+            # not a failure.
+            printf "${YELLOW}NOTE${NC}: %s pinned %s is ahead of the newest listed tag %s\n" \
+                "$key" "$pinned" "$newest"
         else
             drift_seen=$((drift_seen + 1))
-            printf "${YELLOW}DRIFT${NC}: %s pinned %s but %s declares %s — the published image is not reachable by any device until the pin follows\n" \
-                "$key" "$pinned" "$repo" "$src_ver"
-            printf "        fix: bump addon-images.json AND the vibe_addons store entry to %s in one change set\n" "$src_ver"
+            printf "${YELLOW}DRIFT${NC}: %s pinned %s but %s is published — that image is not reachable by any device until the pin follows\n" \
+                "$key" "$pinned" "$newest"
+            printf "        fix: bump addon-images.json AND the vibe_addons store entry to %s in one change set\n" "$newest"
         fi
     done
     if [ "$drift_seen" -gt 0 ] && [ "${GA_SOURCE_DRIFT_STRICT:-0}" = "1" ]; then
