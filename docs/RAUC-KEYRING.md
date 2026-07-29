@@ -98,16 +98,30 @@ The trap: a device verifies a bundle against the keyring **in the slot it is
 running now**, not the one inside the bundle. So the new keyring has to arrive
 *inside* an update the old keyring already accepts.
 
-Correct order:
+The load-bearing detail: **the keyring inside a bundle and the signature on that
+bundle are independent.** The signature decides who can *install* it; the
+keyring decides what the device trusts *afterwards*. So a single-anchor image
+can still be delivered to devices that have never seen the new anchor — sign
+that one bundle with the old key. The bridge lives in the signature, not in the
+keyring.
 
-1. **Bridge release.** Build an image whose keyring contains **old CA + new CA**.
-   Sign the bundle with the **old** key. Every device in the field accepts it,
-   and afterwards trusts both.
-2. **Prove adoption.** Confirm *every* device is running the bridge image —
-   by enumerating devices, not by sampling. Until then, step 3 is unsafe.
-3. **Cut over.** Start signing with the new key. Devices accept it because of
-   step 1. Build an image whose keyring contains the **new CA only**, ship it,
-   and delete the old CA from the tree.
+That collapses the migration to one step:
+
+1. **Bridge release.** Build an image whose keyring contains the **new root CA
+   only**. Sign the bundle with the **old** key. Every device in the field
+   accepts it, and afterwards trusts exactly one anchor.
+2. **Cut over.** Every subsequent bundle is signed with the new signing cert.
+   Then destroy the old signing key, so only one usable key exists at all.
+
+The conservative variant — keyring = new CA **+** old signing cert, dropped one
+release later — buys a fallback window at the cost of a period with two
+anchors. Take it only if step 1 cannot be verified on hardware first.
+
+**Hard precondition either way:** prove on a real device that RAUC accepts the
+new signing chain *before* shipping an image whose keyring drops the old
+anchor. Afterwards that device trusts only the new root; if the chain turns out
+to be rejected, nothing you can sign will install and recovery is the manual
+raw slot write, once per device.
 
 Skipping step 1 — signing with a new key the field does not trust yet — leaves
 every existing device unable to verify any future bundle. Recovery is then the
@@ -187,10 +201,41 @@ build; it is the reason the 2026 CA above exists.
   image still trusts the retired pre-2026-03-27 CA, fingerprint
   `01:E7:CE:81:…:BC:F7`, valid until 2035-09-18, `CA:TRUE`, no `check-crl` in
   `system.conf` and therefore **no revocation path**.
-- Flipping it to `"false"` requires proving no pre-rotation device remains in
-  the field. That is blocked on the fleet inventory gap (Odoo #534): 65 live
-  devices, 9 in the fleet-manager. An audit cannot clear devices it cannot
-  enumerate.
+
+### The F13 bridge cannot do what it was added to do
+
+Checked on ga-builder 2026-07-29 by comparing public-key hashes of every
+`*.pem`/`*.key` under `/home/builder` and `/root` against each certificate.
+Positive control: `key.pem` matches `cert.pem`, so the comparison does detect a
+match when one exists.
+
+| Certificate | Private key on the builder? |
+|---|---|
+| `cert.pem` (`5E:D6:AF…`) | **yes** — `key.pem` |
+| `rel-ca.pem` (`FE:4E:81…`, iHost RAUC Dev CA) | **no** |
+| `legacy-signing-cert.pem` (`01:E7:CE…`, F13) | **no** |
+
+The bridge exists so that pre-rotation devices can still verify OTAs. Doing so
+requires signing a bundle **with the F13 key** — which the build pipeline does
+not have. Baking F13 into new images therefore delivers nothing to anyone: it
+only means that once a device has installed a *current* image, it trusts a
+retired, non-revocable CA that no legitimate party can sign with.
+
+Consequence for the earlier reasoning, which was wrong: dropping the bridge does
+**not** depend on proving the field free of pre-rotation devices. Whether such
+devices exist changes nothing about the value of F13 in a new image — it is
+zero either way. `GA_LEGACY_CA_BRIDGE` can go to `"false"` now. Odoo #534 still
+blocks the separate question of how pre-rotation devices get recovered at all
+(reflash, or the raw slot write above), which is not a keyring question.
+
+Caveat: only ga-builder was searched. The key could exist on an old build host
+or a backup. That would not change the conclusion — a key absent from the
+machine that builds and signs cannot be part of any delivery path — but it does
+mean "destroyed" is unproven, so treat F13 as *retired and unusable by us*, not
+as *provably gone*.
+
+Likewise `rel-ca.pem`'s own key is absent, so the current "CA" could never issue
+anything even if someone wanted it to. It is inert in the strongest sense.
 - The audit script accepts the current state (the bridge is declared, so it is
   expected) and accepts the post-migration state (`false`, legacy absent). It
   fails on the divergence between them — which is the case nothing covered
