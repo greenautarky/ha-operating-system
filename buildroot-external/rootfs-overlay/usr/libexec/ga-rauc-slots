@@ -1,0 +1,276 @@
+#!/bin/sh
+# ga-rauc-slots - publish the RAUC dual-slot picture to the ga_manager add-on
+#                 private data dir (NOT /share - see integrity note below)
+#
+# WHY (Odoo #561)
+# ---------------
+# The only slot fact anything upstream ever had was Supervisor /os/info's
+# `boot` field - a single letter naming the ACTIVE slot. Nothing knew the
+# state of the OTHER slot, which is the only one that matters for the
+# question an operator actually asks before a rollback: "is there something
+# to roll back TO?"
+#
+# That gap is not theoretical. A device flashed from SD has an INACTIVE slot
+# full of zeros, and RAUC still reports `boot status: good` for it, because
+# boot_status only reflects the bootloader's try-counter (u-boot BOOT_x_LEFT),
+# not whether the partition holds an image. Marking that slot active and
+# rebooting is an endless reboot loop recoverable only by re-flashing - and
+# since rc38 (BOOTDELAY=-2) there is not even a U-Boot prompt left, so
+# recovery is physical. See finding 2026-07-28.
+#
+# Hence the field this file exists for: `ever_installed` - did RAUC ever
+# write a bundle into that slot. That, not boot_status, is what gates a
+# rollback. `bootable` = ever_installed AND boot_status == good (or: it is
+# the slot we are demonstrably booted from).
+#
+# ever_installed is keyed on the slot's `installed.timestamp`, NOT on its
+# recorded bundle.version, and that distinction is load-bearing:
+# /usr/libexec/raucdb-update seeds a fresh rauc.db from /etc/os-release with
+# `bundle.version` for the CURRENT slot only, and writes no timestamp. So a
+# bundle.version can exist on a slot no RAUC install ever touched, while
+# `installed.timestamp` is written only by an actual `rauc install`.
+#
+# WHY --output-format=shell AND NOT json
+# --------------------------------------
+# `BR2_PACKAGE_RAUC_JSON` is NOT set in our defconfig (verified in
+# ga_output/.config), so rauc is built with -Djson=disabled and
+# `--output-format=json` hits `g_error("json support is disabled")` -
+# it ABORTS, it does not degrade. The shell formatter needs no json-glib,
+# is compiled in unconditionally, and carries every field we need
+# (RAUC_SLOT_* per slot index, see rauc src/main.c r_status_formatter_shell).
+# Enabling the json option would mean a new library in the image for data
+# we can already read.
+#
+# WHY THE ADD-ON-PRIVATE DIR AND NOT /share
+# ------------------------------------------
+# This file is not a status readout — a pre-flight in the fleet-manager decides
+# from it whether a slot switch is permitted. So its INTEGRITY is the whole
+# point, and /share cannot carry it: eleven add-ons map `share:rw`, among them
+# File editor, Terminal & SSH, and Samba, which exports /share to the entire
+# customer LAN. Every one of those containers runs as host uid 0 (no userns
+# remap), so file permissions inside /share protect nothing.
+#
+# An attacker on the household network could therefore hand-edit
+# `rollback.possible: true` onto a device whose second slot is empty. The
+# pre-flight would clear the switch, the UI would render a confident green
+# "rollback available", and the operator would brick a customer device that
+# only an on-site re-flash brings back. Missing data is handled safely
+# everywhere downstream; FORGED data is a different problem, and the only real
+# fix is a channel the attacker cannot reach.
+#
+# `/mnt/data/supervisor/addons/data/<slug>/` is that channel: Supervisor gives
+# each add-on a private data dir, no other add-on maps it, and the ga_manager
+# container sees it as plain `/data`. Same channel the per-device Loki
+# credential, the GHCR creds and auth.token already use (ARCHITECTURE.md);
+# OS#280 + gm#175 moved the device identity the same way. Direction here is the
+# mirror image of those (host writes, add-on reads) — the dir works both ways.
+#
+# The slug carries a repository hash (`99f1cad4_ga_manager`, `local_ga_manager`,
+# …), so the target is a GLOB, the slug-tolerant form ga-bootstrap 1.2.5 uses.
+# If no dir matches, ga_manager is not installed yet: publish NOTHING rather
+# than creating a directory Supervisor did not make. The add-on then reports
+# "unknown" and the fleet-manager pre-flight warns instead of clearing — which
+# is the correct answer when there is genuinely nothing to read.
+#
+# OUTPUT (contract with ga_manager healthchecks/rauc_slots.py)
+#   {"ts": <epoch>, "compatible": str, "booted": "A"|"B"|null,
+#    "boot_primary": str|null,
+#    "slots": [{bootname, slot, device, state, boot_status, booted,
+#               installed_version, installed_timestamp, installed_count,
+#               ever_installed, bootable, members}],
+#    "rollback": {current, target, possible, reason},
+#    "error": null|str}
+#
+# A consumer that finds the file missing, unparseable or stale MUST degrade
+# to "unknown" and must NOT treat unknown as "rollback is fine" - absence of
+# evidence is not evidence of a bootable slot.
+#
+# Test hooks (used by tests/ga_tests/rauc_slots/parser_test.sh):
+#   GA_RAUC_SLOTS_INPUT  read `rauc status` output from this file instead
+#                        of talking to rauc
+#   GA_RAUC_SLOTS_OUT    publish to exactly this path instead of resolving
+#                        the add-on-private dir
+#   GA_RAUC_SLOTS_TS     fixed epoch for reproducible fixtures
+
+# Add-on-private target. Glob because the slug carries a repository hash.
+ADDON_DATA_GLOB="/mnt/data/supervisor/addons/data/*_ga_manager"
+OUT_BASENAME="ga-rauc-slots.json"
+
+# `rauc status --detailed` is what adds the slot_status block (bundle version,
+# installed timestamp/count). Without --detailed the per-slot install history
+# is omitted entirely and every slot would look never-installed.
+collect_status() {
+	if [ -n "${GA_RAUC_SLOTS_INPUT:-}" ]; then
+		cat "$GA_RAUC_SLOTS_INPUT"
+		return $?
+	fi
+	rauc status --detailed --output-format=shell 2>/dev/null
+}
+
+# RAUC emits `KEY='value'` lines (g_shell_quote). Deliberately parsed, never
+# eval'd or sourced: this is external command output landing in a root
+# service, and `.`-ing it would be arbitrary code execution by construction.
+# Emit KEY<TAB>VALUE for jq.
+to_kv() {
+	awk -v q="'" '
+		/^[A-Z0-9_]+=/ {
+			k = substr($0, 1, index($0, "=") - 1)
+			v = substr($0, index($0, "=") + 1)
+			if (substr(v, 1, 1) == q) { v = substr(v, 2) }
+			if (length(v) > 0 && substr(v, length(v), 1) == q) { v = substr(v, 1, length(v) - 1) }
+			printf "%s\t%s\n", k, v
+		}'
+}
+
+# Every existing add-on-private dir that belongs to ga_manager. Empty output
+# means the add-on is not installed — the caller must then publish nothing.
+# Deliberately no mkdir: creating a data dir Supervisor did not create would
+# leave a directory the add-on never sees.
+resolve_targets() {
+	if [ -n "${GA_RAUC_SLOTS_OUT:-}" ]; then
+		printf '%s\n' "$GA_RAUC_SLOTS_OUT"
+		return
+	fi
+	for d in $ADDON_DATA_GLOB; do
+		[ -d "$d" ] && printf '%s/%s\n' "$d" "$OUT_BASENAME"
+	done
+}
+
+# ga-share-publish is named for the bridge it was written for, but what it
+# does is generic and wanted here too: stage in a root-only dir on the same
+# filesystem, then rename() into place, so a symlink sitting at the target is
+# replaced rather than followed. /mnt/data/.ga-share-stage and the add-on data
+# dir are both on /mnt/data, so the rename stays atomic. Mode 0644: the file is
+# read by the add-on container (uid 0) and carries no secret.
+publish() {
+	targets=$(resolve_targets)
+	if [ -z "$targets" ]; then
+		echo "ga-rauc-slots: no ga_manager add-on data dir under" \
+		     "$ADDON_DATA_GLOB — add-on not installed, publishing nothing" >&2
+		cat >/dev/null
+		return 0
+	fi
+
+	payload=$(cat)
+	for target in $targets; do
+		if [ -x /usr/libexec/ga-share-publish ]; then
+			printf '%s\n' "$payload" | /usr/libexec/ga-share-publish "$target"
+		else
+			# Only reachable in tests / on an OS predating the helper.
+			mkdir -p "$(dirname "$target")" 2>/dev/null
+			printf '%s\n' "$payload" >"$target"
+		fi
+	done
+}
+
+emit_error() {
+	jq -n --argjson ts "$TS" --arg err "$1" \
+		'{ts: $ts, compatible: null, booted: null, boot_primary: null,
+		  slots: [], rollback: {current: null, target: null, possible: false,
+		  reason: "RAUC status unavailable - slot state unknown"}, error: $err}' \
+		| publish
+}
+
+main() {
+	TS="${GA_RAUC_SLOTS_TS:-$(date +%s)}"
+
+	raw=$(collect_status)
+	if [ -z "$raw" ]; then
+		emit_error "rauc status produced no output (rauc.service down or not installed)"
+		return 0
+	fi
+
+	kv=$(printf '%s\n' "$raw" | to_kv)
+	if [ -z "$kv" ]; then
+		emit_error "could not parse rauc status output (unexpected format)"
+		return 0
+	fi
+
+	printf '%s\n' "$kv" | jq -R -s --argjson ts "$TS" '
+		# --- shell KEY<TAB>VALUE lines -> flat lookup object ---
+		(split("\n")
+		 | map(select(length > 0) | split("\t") | {key: .[0], value: (.[1:] | join("\t"))})
+		 | from_entries) as $f
+
+		# "" is how the shell formatter spells "unset" - normalise to null so
+		# consumers never have to distinguish the two.
+		| def nz($k): ($f[$k] // "") | if . == "" then null else . end;
+
+		  (($f["RAUC_SYSTEM_SLOTS"] // "") | split(" ") | map(select(length > 0))) as $names
+
+		# Every slot, flat. Index is 1-based and follows RAUC_SYSTEM_SLOTS
+		# order (both lists come from the same hash-table walk in rauc).
+		| [ range(0; ($names | length))
+		    | . as $i
+		    | (($i + 1) | tostring) as $n
+		    | {
+		        name: $names[$i],
+		        class: nz("RAUC_SLOT_CLASS_" + $n),
+		        device: nz("RAUC_SLOT_DEVICE_" + $n),
+		        bootname: nz("RAUC_SLOT_BOOTNAME_" + $n),
+		        parent: nz("RAUC_SLOT_PARENT_" + $n),
+		        state: nz("RAUC_SLOT_STATE_" + $n),
+		        boot_status: nz("RAUC_SLOT_BOOT_STATUS_" + $n),
+		        bundle_version: nz("RAUC_SLOT_STATUS_BUNDLE_VERSION_" + $n),
+		        installed_timestamp: nz("RAUC_SLOT_STATUS_INSTALLED_TIMESTAMP_" + $n),
+		        installed_count: ((nz("RAUC_SLOT_STATUS_INSTALLED_COUNT_" + $n) // "0") | tonumber? // 0)
+		      } ] as $all
+
+		# A bootable unit is the slot carrying the bootname (kernel.N) PLUS
+		# its children (rootfs.N, parent=kernel.N). RAUC records the install
+		# metadata per slot, so the group is what answers "was anything ever
+		# written here" - checking the kernel slot alone would miss a bundle
+		# whose install info only landed on the rootfs child.
+		| [ $all[]
+		    | select(.bootname != null)
+		    | . as $s
+		    | ([$s] + [$all[] | select(.parent == $s.name)]) as $group
+		    | ($group | map(select(.installed_timestamp != null)) | length > 0) as $ever
+		    | {
+		        bootname: $s.bootname,
+		        slot: $s.name,
+		        device: $s.device,
+		        state: $s.state,
+		        boot_status: $s.boot_status,
+		        booted: ($s.state == "booted"),
+		        installed_version: ($group | map(.bundle_version) | map(select(. != null)) | .[0]),
+		        installed_timestamp: ($group | map(.installed_timestamp) | map(select(. != null)) | .[0]),
+		        installed_count: ($group | map(.installed_count) | max),
+		        # ever_installed, NOT boot_status, is the honest rollback gate:
+		        # an SD-flashed empty slot reports boot_status "good".
+		        ever_installed: $ever,
+		        # The booted slot is bootable by demonstration - we are
+		        # running out of it - even on an SD-flashed device where
+		        # RAUC has no install record for it at all.
+		        bootable: ($s.state == "booted" or ($ever and $s.boot_status == "good")),
+		        members: ($group | map(.name))
+		      } ]
+		  | sort_by(.bootname) as $slots
+
+		| ($slots | map(select(.booted)) | .[0]) as $cur
+		| ($slots | map(select(.booted | not)) | .[0]) as $tgt
+		| {
+		    ts: $ts,
+		    compatible: nz("RAUC_SYSTEM_COMPATIBLE"),
+		    booted: (nz("RAUC_SYSTEM_BOOTED_BOOTNAME") // ($cur.bootname // null)),
+		    boot_primary: nz("RAUC_BOOT_PRIMARY"),
+		    slots: $slots,
+		    rollback: {
+		      current: ($cur.bootname // null),
+		      target: ($tgt.bootname // null),
+		      possible: ($tgt.bootable // false),
+		      reason: (
+		        if $tgt == null then
+		          "no second bootable slot on this device"
+		        elif ($tgt.ever_installed | not) then
+		          "slot \($tgt.bootname) never received an OTA install (RAUC records no bundle) - it is an SD-flash empty slot; booting it is an endless reboot loop recoverable only by re-flashing"
+		        elif $tgt.boot_status != "good" then
+		          "slot \($tgt.bootname) is marked \($tgt.boot_status // "unknown") by the bootloader"
+		        else null end
+		      )
+		    },
+		    error: null
+		  }' | publish
+}
+
+main "$@"

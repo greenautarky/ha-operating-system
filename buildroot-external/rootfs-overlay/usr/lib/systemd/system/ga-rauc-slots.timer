@@ -1,0 +1,15 @@
+[Unit]
+Description=GA — RAUC slot picture every 10min (ga_manager health bridge)
+Documentation=file:/usr/libexec/ga-rauc-slots
+
+[Timer]
+# Slot state only changes on install, mark-active and boot — all of which are
+# either followed by a reboot (OnBootSec covers it) or hours apart. 10min is
+# already far more often than the data changes; it exists so a stale file is
+# unambiguous evidence the collector stopped, not that nothing happened.
+OnBootSec=90s
+OnUnitActiveSec=10min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

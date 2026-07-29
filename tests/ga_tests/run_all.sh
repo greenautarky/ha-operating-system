@@ -20,13 +20,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Test suites by category
 # - emu    = safe to run in QEMU / emulation (no real hardware needed).
-#            qemu CI lane (.github/workflows/qemu-ci.yml) runs exactly these
-#            via tests/qemu-ci/runner.py.
+#            NB: the qemu CI lane this comment used to name (qemu-ci.yml)
+#            no longer exists. The subset of these that need nothing but
+#            sh + jq (share_publish, rauc_slots) is gated per-PR by the
+#            `host-suites` job in .github/workflows/lint.yml instead.
 # - device = needs real iHost hardware, network, Docker, HA running.
 # - all    = union; used when no category is specified.
-SUITES_EMU="environment crash_detection boot_timing disk_guard supervisor_health share_publish"
-SUITES_DEVICE="health telemetry network ping config_verify dns_config onboarding ga_frontend_bundle provisioning tailscale watchdog stress idle_perf telemetry_buffering hardware openstick ota_update connectivity_recorder rc19_device firewall audio_disabled"
-SUITES_ALL="crash_detection health telemetry environment network ping boot_timing disk_guard watchdog config_verify dns_config stress idle_perf onboarding ga_frontend_bundle provisioning tailscale telemetry_buffering hardware openstick ota_update supervisor_health connectivity_recorder rc19_device firewall share_publish audio_disabled"
+SUITES_EMU="environment crash_detection boot_timing disk_guard supervisor_health share_publish rauc_slots"
+SUITES_DEVICE="health telemetry network ping config_verify dns_config onboarding ga_frontend_bundle provisioning tailscale watchdog stress idle_perf telemetry_buffering hardware openstick ota_update connectivity_recorder rc19_device firewall audio_disabled rauc_slots"
+SUITES_ALL="crash_detection health telemetry environment network ping boot_timing disk_guard watchdog config_verify dns_config stress idle_perf onboarding ga_frontend_bundle provisioning tailscale telemetry_buffering hardware openstick ota_update supervisor_health connectivity_recorder rc19_device firewall share_publish audio_disabled rauc_slots"
 
 # Parse arguments
 CATEGORY=""

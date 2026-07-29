@@ -3143,6 +3143,113 @@ else
 fi
 
 # =========================================================================
+# RAUC slot visibility (Odoo #561) — the /share bridge that lets ga_manager
+# and the fleet-manager see BOTH slots, not just the active letter that
+# Supervisor /os/info reports.
+# =========================================================================
+echo ""
+echo "--- RAUC slot visibility ---"
+
+COL="${TARGET}/usr/libexec/ga-rauc-slots"
+# Match against CODE only. The collector's header documents why it does NOT
+# use --output-format=json; grepping the whole file would read that comment as
+# the thing it warns about.
+col_code() { grep -v '^[[:space:]]*#' "$COL" 2>/dev/null; }
+
+# SLOT-01: collector present + executable
+if [[ -x "$COL" ]]; then
+  _pass "SLOT-01: ga-rauc-slots collector present + executable"
+else
+  _fail "SLOT-01: ga-rauc-slots collector missing or not executable at /usr/libexec/ga-rauc-slots"
+fi
+
+# SLOT-02: both units shipped
+if [[ -f "${TARGET}/usr/lib/systemd/system/ga-rauc-slots.service" \
+      && -f "${TARGET}/usr/lib/systemd/system/ga-rauc-slots.timer" ]]; then
+  _pass "SLOT-02: ga-rauc-slots service + timer units present"
+else
+  _fail "SLOT-02: ga-rauc-slots.service / .timer missing from /usr/lib/systemd/system"
+fi
+
+# SLOT-03: timer actually enabled — a shipped-but-unenabled timer publishes
+# nothing, and the addon would report slot state as permanently unknown.
+if [[ -L "${TARGET}/etc/systemd/system/timers.target.wants/ga-rauc-slots.timer" ]]; then
+  _pass "SLOT-03: ga-rauc-slots.timer enabled (timers.target.wants symlink)"
+else
+  _fail "SLOT-03: ga-rauc-slots.timer NOT enabled — no timers.target.wants symlink"
+fi
+
+# SLOT-04: --detailed is load-bearing. Without it rauc omits every
+# slot_status block, so installed_timestamp is absent for BOTH slots and
+# every slot looks never-installed — i.e. rollback would be reported
+# impossible on healthy devices.
+if col_code | grep -q -- '--detailed'; then
+  _pass "SLOT-04: collector calls rauc status --detailed (install history)"
+else
+  _fail "SLOT-04: collector missing --detailed — slot install history would be empty"
+fi
+
+# SLOT-05: the json output format is compiled OUT of our rauc
+# (BR2_PACKAGE_RAUC_JSON not set) and calling it aborts the process, so the
+# collector must use the shell formatter. Cross-checked against the actual
+# build config when it is readable.
+if col_code | grep -q -- '--output-format=shell'; then
+  _pass "SLOT-05a: collector uses rauc's shell output format"
+else
+  _fail "SLOT-05a: collector does not use --output-format=shell"
+fi
+
+BR_CONFIG="${OUT}/.config"
+if [[ -f "$BR_CONFIG" ]]; then
+  if grep -q '^BR2_PACKAGE_RAUC_JSON=y' "$BR_CONFIG"; then
+    _pass "SLOT-05b: rauc json support is built in (collector may use either format)"
+  elif col_code | grep -q -- '--output-format=json'; then
+    _fail "SLOT-05b: collector asks rauc for json but BR2_PACKAGE_RAUC_JSON is not set — rauc aborts with 'json support is disabled'"
+  else
+    _pass "SLOT-05b: rauc json disabled in config and collector does not request it"
+  fi
+else
+  _skip "SLOT-05b: rauc json config cross-check" "no .config at ${BR_CONFIG}"
+fi
+
+# SLOT-06: publishes through the symlink-safe helper (Vuln-2) rather than a
+# bare redirect. Named for /share, but what it does — stage in a root-only dir,
+# then rename() so a symlink at the target is replaced instead of followed — is
+# generic and wanted for the add-on data dir too.
+if col_code | grep -q 'ga-share-publish'; then
+  _pass "SLOT-06: publishes via ga-share-publish (atomic, symlink-safe)"
+else
+  _fail "SLOT-06: collector does not publish through ga-share-publish"
+fi
+
+# SLOT-07: the add-on-private path the ga_manager addon reads as /data.
+# NOT /share: this file is the input to a rollback decision, and /share is
+# mapped rw by eleven add-ons — File editor, Terminal & SSH, and Samba, which
+# exports it to the customer LAN — all running as host uid 0. Anyone on the
+# household network could forge "rollback.possible: true" onto a device whose
+# second slot is empty and have an operator brick it. Same reasoning and same
+# channel as the per-device Loki credential and the device identity (OS#280).
+if col_code | grep -q '/mnt/data/supervisor/addons/data/\*_ga_manager'; then
+  _pass "SLOT-07a: publishes to the add-on-private data dir (slug-tolerant glob)"
+else
+  _fail "SLOT-07a: collector does not target /mnt/data/supervisor/addons/data/*_ga_manager"
+fi
+
+if col_code | grep -q 'supervisor/share'; then
+  _fail "SLOT-07b: collector writes the slot picture into the add-on-writable /share — forgeable by any share:rw add-on (Samba exports it to the customer LAN)"
+else
+  _pass "SLOT-07b: slot picture never written to the add-on-writable /share"
+fi
+
+# SLOT-08: rauc output is parsed, never executed. raucdb-update does
+# `eval "$(rauc status ...)"`; new root services should not copy that.
+if col_code | grep -Eq '(^|[^[:alnum:]_])(eval|source)[[:space:]]|^[[:space:]]*\.[[:space:]]'; then
+  _fail "SLOT-08: collector evals/sources command output — root code-execution surface"
+else
+  _pass "SLOT-08: collector parses rauc output instead of eval'ing it"
+fi
+
+# =========================================================================
 # Summary
 # =========================================================================
 echo ""

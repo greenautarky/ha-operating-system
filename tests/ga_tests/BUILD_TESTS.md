@@ -102,6 +102,16 @@ No device or emulator needed — checks the build output tree directly.
 - BLD-09: Data partition generated
 - BLD-10: os-release has GA fields
 
+### RAUC slot visibility (from rauc_slots, Odoo #561)
+- SLOT-01: ga-rauc-slots collector present + executable
+- SLOT-02: ga-rauc-slots service + timer units shipped
+- SLOT-03: ga-rauc-slots.timer enabled (timers.target.wants symlink)
+- SLOT-04: collector calls `rauc status --detailed` (without it, install history is empty and every slot looks never-installed)
+- SLOT-05a/b: collector uses `--output-format=shell`, cross-checked against `BR2_PACKAGE_RAUC_JSON` in the build config (json is compiled out; asking for it aborts rauc)
+- SLOT-06: publishes through ga-share-publish (atomic, symlink-safe)
+- SLOT-07a/b: publishes to the **add-on-private** `/mnt/data/supervisor/addons/data/*_ga_manager/` and never to `/share` — the file is the input to a rollback decision, and `/share` is mapped rw by eleven add-ons (Samba exports it to the customer LAN), so a forged `rollback.possible: true` there would let an operator brick a device
+- SLOT-08: parses rauc output instead of eval'ing it
+
 ## Category 2: Emulation (`emu`)
 Can run in QEMU or container without real hardware.
 Needs a booted system image but no physical iHost.
@@ -127,6 +137,20 @@ Needs a booted system image but no physical iHost.
 - DG-04: State file format valid
 - DG-13: Timer triggers after boot
 - DG-14: Script handles missing paths gracefully
+
+### From rauc_slots (host-side parser, no device needed)
+Runs anywhere with `sh` + `jq`; gated per-PR by the `host-suites` job in
+`.github/workflows/lint.yml`. Feeds captured `rauc status --detailed
+--output-format=shell` fixtures through the collector and asserts the
+published contract.
+- SLOT-21..24: healthy dual-slot device — valid JSON, rollback target, per-slot version, kernel+rootfs grouping
+- SLOT-25..28: fresh SD flash — rollback blocked, and specifically: the empty slot still reports `boot_status=good`, which is why `ever_installed` (not `boot_status`) is the gate
+- SLOT-29: slot marked bad by the bootloader — rollback blocked
+- SLOT-30: booted from B — the rollback target is A (no A/B hardcoding)
+- SLOT-31a/b: rauc silent or unparseable — publishes an error record, never a bootable-looking one (fail closed)
+- SLOT-32: collector never evals/sources rauc output
+- SLOT-33a/b: publishes into the add-on-private data dir, never into the add-on-writable `/share`
+- SLOT-34: no add-on data dir (add-on not installed) — publishes nothing rather than creating a dir Supervisor did not make
 
 ## Category 3: Device (`device`)
 Must run on real iHost hardware. Needs network, Docker, HA running.
@@ -170,6 +194,14 @@ Must run on real iHost hardware. Needs network, Docker, HA running.
 
 ### From disk_guard (needs real fs)
 - DG-05 through DG-12
+
+### From rauc_slots (needs a running device)
+- SLOT-40: ga-rauc-slots.timer enabled
+- SLOT-41: snapshot published into the add-on-private data dir (slug-tolerant glob)
+- SLOT-45: snapshot is NOT in the add-on-writable /share
+- SLOT-42: snapshot inside the addon's 35min staleness window
+- SLOT-43: snapshot agrees with live `rauc status` on the booted slot
+- SLOT-44: reports this device's rollback target + verdict (informational)
 
 ### From config_verify (needs running services)
 - CFG-04, CFG-05, CFG-10, CFG-12, CFG-17, CFG-18
