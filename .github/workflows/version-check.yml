@@ -40,6 +40,31 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq jq skopeo
 
+      # The ga_manager packages went PRIVATE on 2026-07-29 (the public image
+      # shipped the full addon source — see ADDON-IMAGE-DELIVERY.md). An
+      # unauthenticated runner can no longer see them, so check-images.sh would
+      # report them UNVERIFIED (exit 2) and this job would go permanently
+      # yellow-then-red for a perfectly healthy registry.
+      #
+      # GHCR_READ_TOKEN = a read:packages-only token. It grants nothing but
+      # pulling greenautarky images; it must NOT be a repo-scoped PAT.
+      # Without the secret the job still runs and fails loudly rather than
+      # skipping the check — a false green here is worse than a red one
+      # (retro 2026-07-27: the version badge stayed green through a real
+      # store/bake divergence for 21 minutes).
+      - name: Log in to GHCR (private addon images)
+        env:
+          GHCR_USER: ${{ secrets.GHCR_READ_USER }}
+          GHCR_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+        run: |
+          if [ -z "${GHCR_TOKEN:-}" ]; then
+            echo "::error::GHCR_READ_TOKEN secret is not set — private addon images cannot be verified."
+            echo "Add a read:packages-only token as repo secrets GHCR_READ_USER + GHCR_READ_TOKEN."
+            exit 1
+          fi
+          echo "$GHCR_TOKEN" | skopeo login ghcr.io -u "${GHCR_USER:-x-access-token}" --password-stdin
+          echo "Logged in to ghcr.io as ${GHCR_USER:-x-access-token}"
+
       - name: Run image availability check
         run: ./scripts/check-images.sh
 

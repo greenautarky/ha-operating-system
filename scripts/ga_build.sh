@@ -2091,14 +2091,33 @@ if [[ "$MODE" == "full" || "$MODE" == "partial" || ( "$MODE" == "update" && "$GA
     echo ""
     echo "=== Pre-flight: checking container image availability + vibe_addons lock-step ==="
     if [[ -f "${SCRIPT_DIR}/check-images.sh" ]]; then
-      if "${SCRIPT_DIR}/check-images.sh"; then
-        echo "Pre-flight passed."
-      else
-        echo "ERROR: Pre-flight image check failed. Fix missing images / version drift before building." >&2
-        echo "  Run: ./scripts/check-images.sh   (for details)" >&2
-        echo "  Or set GA_SKIP_IMAGE_CHECK=1 if the registry is only transiently unreachable." >&2
-        exit 1
-      fi
+      set +e
+      "${SCRIPT_DIR}/check-images.sh"
+      _img_rc=$?
+      set -e
+      case "$_img_rc" in
+        0)
+          echo "Pre-flight passed."
+          ;;
+        2)
+          # Private image could not be verified for lack of credentials. Since
+          # 2026-07-29 the ga_manager packages are private; the builder pulls
+          # them via /root/.docker/config.json. Exit 2 means that credential is
+          # gone or expired — the build WOULD fail later at `skopeo copy`, just
+          # 20 minutes deeper in. Stop here instead.
+          echo "ERROR: Pre-flight could not verify private image(s) — no registry credentials." >&2
+          echo "  The build would fail later at skopeo copy. Log in first:" >&2
+          echo "    skopeo login ghcr.io -u <user> -p <read:packages token>" >&2
+          echo "  Run: ./scripts/check-images.sh   (for details)" >&2
+          exit 1
+          ;;
+        *)
+          echo "ERROR: Pre-flight image check failed. Fix missing images / version drift before building." >&2
+          echo "  Run: ./scripts/check-images.sh   (for details)" >&2
+          echo "  Or set GA_SKIP_IMAGE_CHECK=1 if the registry is only transiently unreachable." >&2
+          exit 1
+          ;;
+      esac
     else
       echo "WARNING: check-images.sh not found, skipping pre-flight image check."
     fi
