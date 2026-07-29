@@ -40,12 +40,15 @@
 #   wt0 / tailscale0   management mesh, always open.
 #   hassio / docker0 / veth*   container bridges, never filtered here.
 #
-# HOST vs CONTAINER: dropbear SSH (:22222) is a HOST process → `input` hook.
-# HA Core (:8123), ga_manager (:8099), the Supervisor observer (:4357),
-# Mosquitto and device-local InfluxDB are Docker containers with PUBLISHED
-# ports → their inbound traffic is DNAT'd and traverses `forward`, NOT `input`.
-# Both chains are therefore needed; an input-only filter silently misses every
-# container port.
+# HOST vs CONTAINER — measured, not assumed:
+# Docker here runs with userland-proxy at its default (enabled), so a published
+# container port is terminated by a docker-proxy process ON THE HOST. That
+# traffic hits the `input` hook and is never DNAT'd forward traffic. The
+# allowlist therefore lives in `input` and covers both the host port (dropbear
+# :22222) and the container port (HA Core :8123).
+# The `forward` chain is kept as defence in depth for the case where
+# userland-proxy is turned off — then the same connections really do arrive as
+# DNAT'd forward traffic and would otherwise be unfiltered.
 #
 # Consumer of the status file: ga_manager healthchecks/ga_specific.check_firewall
 # reads /share/ga-firewall-status.json (= this file over the share map).
@@ -131,7 +134,13 @@ RULES="$(mktemp /tmp/ga-firewall.XXXXXX)" || {
 	# DHCP/DHCPv6 client replies arrive before conntrack has a flow.
 	echo "    udp sport 67 udp dport 68 accept"
 	echo "    udp sport 547 udp dport 546 accept"
-	echo "    iifname { $LAN_IFACES } tcp dport { $HOST_ALLOW_TCP } accept"
+	# Both allowlisted ports are accepted HERE, including the container one.
+	# Docker runs with userland-proxy enabled (the default), so a published
+	# container port is terminated by docker-proxy ON THE HOST: that traffic
+	# reaches the input hook and never becomes DNAT'd forward traffic. An
+	# allowlist that only whitelisted container ports in `forward` would
+	# therefore blackhole the HA UI while looking correct on paper.
+	echo "    iifname { $LAN_IFACES } tcp dport { $HOST_ALLOW_TCP, $CONTAINER_ALLOW_TCP } accept"
 	echo "    iifname { $LAN_IFACES } drop"
 	echo "  }"
 

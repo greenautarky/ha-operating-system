@@ -91,8 +91,12 @@ else
   run_test "FW-25" "SSH (:22222) reachable from the LAN (host/input)" \
     "nft list table $TABLE | sed -n '/chain input/,/}/p' | grep -Eq '22222.*accept'"
 
-  run_test "FW-26" "HA UI (:8123) reachable from the LAN (container/forward)" \
-    "nft list table $TABLE | sed -n '/chain forward/,/}/p' | grep -Eq '8123.*accept'"
+  # In the input chain, not just forward: HA Core listens on the HOST
+  # (0.0.0.0:8123, host networking), and published add-on ports are terminated
+  # by docker-proxy on the host too. A forward-only allowlist blackholes the UI
+  # while reading as correct — measured on a bench device 2026-07-29.
+  run_test "FW-26" "HA UI (:8123) reachable from the LAN (input chain)" \
+    "nft list table $TABLE | sed -n '/chain input/,/}/p' | grep -Eq '8123.*accept'"
 
   # --- default-deny -------------------------------------------------------
   run_test "FW-27" "LAN ingress otherwise dropped (input)" \
