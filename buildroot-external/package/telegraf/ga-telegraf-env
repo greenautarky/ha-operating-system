@@ -59,9 +59,16 @@ LABEL=$(cat /mnt/data/ga-device-label 2>/dev/null)
 # Fallback (2026-07-15): derive from the canonical per-device identity when the
 # legacy /mnt/data/ga-device-label is absent — ADR-0010 single source of truth.
 # Same class + fix as ga-fluent-bit-env; keeps metrics + logs on the same label.
-if [ -z "$LABEL" ] && [ -f /mnt/data/supervisor/share/ga-identity.json ]; then
-    LABEL=$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-            /mnt/data/supervisor/share/ga-identity.json 2>/dev/null | head -1)
+# Read from the addon's PRIVATE data dir, not /share: eleven add-ons map the
+# share bridge and Samba exports it to the customer LAN, so anyone there could
+# dictate the label this device reports its metrics under.
+if [ -z "$LABEL" ]; then
+    for _idf in /mnt/data/supervisor/addons/data/*_ga_manager/ga-identity.json; do
+        [ -r "$_idf" ] || continue
+        LABEL=$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                "$_idf" 2>/dev/null | head -1)
+        [ -n "$LABEL" ] && break
+    done
 fi
 GW=$(ip route 2>/dev/null | grep '^default' | head -1 | awk '{print $3}')
 
