@@ -10,12 +10,12 @@
 #
 # Two modes:
 #
-#   ./ota-cleanup.sh --ota-server [--retain N] [--dry-run]
+#   ./ota-cleanup.sh --ota-server [--retain N] [--archive-retain M] [--dry-run]
 #       Run on ga-tools (= /data/ota/ owner). Prunes /data/ota/releases/
 #       to the most-recent N HAOS-version directories. Older dirs are
 #       archived to /data/ota/_archive/<timestamp>/<version>/.
 #
-#   ./ota-cleanup.sh --builder [--retain N] [--dry-run]
+#   ./ota-cleanup.sh --builder [--retain N] [--archive-retain M] [--dry-run]
 #       Run on ga-builder LXC. Prunes
 #       /home/builder/ha-operating-system/ga_output/images/bos_ihost-*
 #       artifacts to the most-recent N per HAOS-version (= multiple
@@ -24,25 +24,47 @@
 #
 # Defaults:
 #   --retain 3 — keep last 3 HAOS-versions (= ~1 release / week, ~3 weeks of history)
+#   --archive-retain 0 — archive expiry OFF unless asked for (see below)
 #   Older "stable" releases (= future Option B with -rcN/-devN suffix
 #   distinction) get the same N treatment for now; the per-suffix-class
 #   age-out can be added once the naming convention is in active use.
 #
-# Safety: never deletes; always archives first. To physically free disk,
-# run a separate `rm -rf /data/ota/_archive/older-than-30-days`.
+# Safety: the release/bake pruning above NEVER deletes — it always archives
+# first, so anything it touches stays recoverable under the _archive/ sidecar.
+#
+# But an archive that only ever grows is just a slower disk-full. Each weekly
+# run lands ~10 GB of superseded dev bakes in the sidecar, so on 2026-07-27
+# ga-builder hit 81% with 62 GB of never-pruned snapshots going back six weeks.
+#
+#   --archive-retain M
+#       Physically delete archive snapshots beyond the M most recent. This is
+#       the ONLY place this script deletes data, which is why it is opt-in and
+#       defaults to 0 (= off, historical behaviour).
+#
+#       Counting note: retention runs AFTER this run's own snapshot was
+#       created, so that fresh snapshot occupies one of the M slots. M=1
+#       therefore keeps only what this run just archived and expires the
+#       previous week immediately; M=2 is the floor for a real one-week
+#       fallback (previous snapshot + current). The weekly builder cron uses
+#       M=2 → ~2 snapshots ≈ 20-25 GB steady state.
+#
+#       Released bundles live on the OTA server regardless, so the
+#       builder-side sidecar is a convenience net, not the system of record.
 
 set -euo pipefail
 
 MODE=""
 RETAIN=3
+ARCHIVE_RETAIN=0
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --ota-server) MODE="ota-server"; shift ;;
-        --builder)    MODE="builder";    shift ;;
-        --retain)     RETAIN="$2";       shift 2 ;;
-        --dry-run)    DRY_RUN=true;      shift ;;
+        --ota-server)     MODE="ota-server"; shift ;;
+        --builder)        MODE="builder";    shift ;;
+        --retain)         RETAIN="$2";       shift 2 ;;
+        --archive-retain) ARCHIVE_RETAIN="$2"; shift 2 ;;
+        --dry-run)        DRY_RUN=true;      shift ;;
         -h|--help)
             sed -n '2,/^set -/p' "$0" | sed 's/^# //' | head -n -1
             exit 0
@@ -54,6 +76,7 @@ done
 [[ -z "$MODE" ]] && { echo "ERROR: specify --ota-server or --builder"; exit 1; }
 [[ "$RETAIN" =~ ^[0-9]+$ ]] || { echo "ERROR: --retain must be a positive integer"; exit 1; }
 (( RETAIN >= 1 )) || { echo "ERROR: --retain must be >= 1"; exit 1; }
+[[ "$ARCHIVE_RETAIN" =~ ^[0-9]+$ ]] || { echo "ERROR: --archive-retain must be a non-negative integer"; exit 1; }
 
 TS="$(date -u +%Y%m%d-%H%M%S)"
 
@@ -66,9 +89,56 @@ run() {
     fi
 }
 
+# Expire archive snapshots beyond the M most recent. The ONLY deleting path
+# in this script — see the --archive-retain note in the header.
+prune_archive_root() {
+    local root="$1" keep="$2"
+
+    (( keep > 0 )) || return 0
+    [[ -d "$root" ]] || return 0
+
+    echo
+    echo "Archive retention → $root"
+
+    # Empty snapshot dirs carry no data. Drop them, and — critically — keep
+    # them out of the retention count: an empty dir occupying a keep-slot
+    # would push a REAL snapshot past the cutoff and delete it instead.
+    local d
+    for d in "$root"/*/; do
+        [[ -d "$d" ]] || continue
+        [[ -n "$(ls -A "$d" 2>/dev/null)" ]] && continue
+        echo "  dropping empty snapshot $(basename "${d%/}")"
+        run "rmdir \"${d%/}\""
+    done
+
+    # Snapshot dirs are named %Y%m%d-%H%M%S, so a lexical sort IS chronological.
+    # Preferred over mtime, which a later `mv` into the dir would bump.
+    local snaps=()
+    mapfile -t snaps < <(
+        find "$root" -mindepth 1 -maxdepth 1 -type d -not -empty -printf '%f\n' 2>/dev/null | sort -r
+    )
+    local total=${#snaps[@]}
+
+    echo "  found ${total} non-empty snapshot(s); keeping the ${keep} most-recent."
+    if (( total <= keep )); then
+        echo "  Nothing to expire."
+        return 0
+    fi
+
+    local i s size
+    for (( i = keep; i < total; i++ )); do
+        s="${snaps[$i]}"
+        size="$(du -sh "$root/$s" 2>/dev/null | awk '{print $1}')"
+        echo "  expiring $s (${size:-?})..."
+        run "rm -rf \"$root/$s\""
+    done
+    $DRY_RUN || echo "  archive now: $(du -sh "$root" 2>/dev/null | cut -f1)"
+}
+
 if [[ "$MODE" == "ota-server" ]]; then
     RELEASES_DIR="/data/ota/releases"
-    ARCHIVE_DIR="/data/ota/_archive/${TS}"
+    ARCHIVE_ROOT="/data/ota/_archive"
+    ARCHIVE_DIR="${ARCHIVE_ROOT}/${TS}"
     [[ -d "$RELEASES_DIR" ]] || { echo "ERROR: $RELEASES_DIR missing — wrong host?"; exit 1; }
 
     echo "OTA-server cleanup → retain=${RETAIN} dry-run=${DRY_RUN}"
@@ -90,22 +160,29 @@ if [[ "$MODE" == "ota-server" ]]; then
     echo "  found ${TOTAL} version(s); keeping the ${RETAIN} most-recent."
     echo
 
-    [[ $TOTAL -le $RETAIN ]] && { echo "  Nothing to prune."; exit 0; }
+    if [[ $TOTAL -le $RETAIN ]]; then
+        # Nothing new to archive, but the sidecar may still need expiring —
+        # so fall through to prune_archive_root instead of exiting here.
+        echo "  Nothing to prune."
+    else
+        run "mkdir -p \"$ARCHIVE_DIR\""
+        for ((i=RETAIN; i<TOTAL; i++)); do
+            v="${VERSIONS[$i]}"
+            size=$(du -sh "$RELEASES_DIR/$v" 2>/dev/null | awk '{print $1}')
+            echo "  archiving $v (${size})..."
+            run "mv \"$RELEASES_DIR/$v\" \"$ARCHIVE_DIR/$v\""
+        done
+        echo
+        echo "  archive @ $ARCHIVE_DIR"
+        $DRY_RUN || du -sh "$ARCHIVE_DIR" 2>/dev/null
+    fi
 
-    mkdir -p "$ARCHIVE_DIR"
-    for ((i=RETAIN; i<TOTAL; i++)); do
-        v="${VERSIONS[$i]}"
-        size=$(du -sh "$RELEASES_DIR/$v" 2>/dev/null | awk '{print $1}')
-        echo "  archiving $v (${size})..."
-        run "mv \"$RELEASES_DIR/$v\" \"$ARCHIVE_DIR/$v\""
-    done
-    echo
-    echo "  archive @ $ARCHIVE_DIR"
-    $DRY_RUN || du -sh "$ARCHIVE_DIR" 2>/dev/null
+    prune_archive_root "$ARCHIVE_ROOT" "$ARCHIVE_RETAIN"
 
 elif [[ "$MODE" == "builder" ]]; then
     IMAGES_DIR="/home/builder/ha-operating-system/ga_output/images"
-    ARCHIVE_DIR="/home/builder/ga-build-archive/${TS}"
+    ARCHIVE_ROOT="/home/builder/ga-build-archive"
+    ARCHIVE_DIR="${ARCHIVE_ROOT}/${TS}"
     [[ -d "$IMAGES_DIR" ]] || { echo "ERROR: $IMAGES_DIR missing — wrong host?"; exit 1; }
 
     echo "ga-builder cleanup → retain=${RETAIN} per HAOS-version dry-run=${DRY_RUN}"
@@ -141,7 +218,7 @@ elif [[ "$MODE" == "builder" ]]; then
             "$v:" "$total" "$RETAIN" "$((total - RETAIN))"
 
         if ! $archived_any; then
-            mkdir -p "$ARCHIVE_DIR"
+            run "mkdir -p \"$ARCHIVE_DIR\""
             archived_any=true
         fi
         for ((i=RETAIN; i<total; i++)); do
@@ -161,6 +238,8 @@ elif [[ "$MODE" == "builder" ]]; then
     elif ! $archived_any; then
         echo "  Nothing to prune."
     fi
+
+    prune_archive_root "$ARCHIVE_ROOT" "$ARCHIVE_RETAIN"
 fi
 
 echo
