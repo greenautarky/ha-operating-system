@@ -336,6 +336,8 @@ rm -f ga_output/build/hassio-1.0.0/.stamp_target_installed 2>/dev/null || true
 rm -f ga_output/build/hassio-1.0.0/.stamp_installed 2>/dev/null || true
 docker run -d --privileged \\
     -v \\\$(pwd):/build -v /home/builder/hassos-cache:/cache -v /dev:/dev \\
+    -v /home/builder/secrets:/secrets:ro \\
+    -v /root/.docker/config.json:/root/.docker/config.json:ro \\
     --name ga-build \\
     hassos:local bash -c "export FORCE_UNSAFE_CONFIGURE=1 && cd /build && ./scripts/ga_build.sh update prod"
 echo "Bake kicked. Container: ga-build"
