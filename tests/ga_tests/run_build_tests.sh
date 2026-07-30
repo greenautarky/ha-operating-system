@@ -2049,12 +2049,35 @@ if [[ -n "$SRC" ]]; then
   echo ""
   echo "--- Cross-repo version alignment ---"
 
-  # V1.2-clean WIP: fetch the version source from the release/v1.2-rebuild
-  # branch's stable.json (stock Core image + version, GA supervisor). This
-  # is the SAME branch the OS build itself reads — see hassio.mk
-  # HASSIO_VERSION_URL. Revert to main/ when release/v1.2-rebuild is merged
-  # at the V1.2 promote (mirror the hassio.mk comment when you do).
-  STABLE_JSON="$(curl -sf 'https://raw.githubusercontent.com/greenautarky/haos-version/release/v1.2-rebuild/stable.json' 2>/dev/null || true)"
+  # DERIVE the URL from hassio.mk instead of repeating it.
+  #
+  # This block used to hardcode the release/v1.2-rebuild branch, with a comment
+  # saying "this is the SAME branch the OS build itself reads — see hassio.mk
+  # HASSIO_VERSION_URL". True when written. Then #295 moved hassio.mk to main/
+  # (the old branch had been dead since 2026-06-01 and was serving supervisor
+  # 2025.11.4.5 against a version.yaml pin of 2025.11.4.6 — the first-boot store
+  # lock) and this copy was not moved with it.
+  #
+  # The result was XVER-07 failing with
+  #   "build version.json supervisor (2025.11.4.6) != stable.json (2025.11.4.5)"
+  # which read exactly like a broken version chain and was in fact the test
+  # comparing the new build against the dead branch. A false alarm that looks
+  # identical to the real thing is worse than no test: the next person spends
+  # the afternoon on the fleet-wide channel file instead of the two lines that
+  # actually disagree.
+  #
+  # So the coupling is now mechanical. Two places that MUST agree should not be
+  # two places. If the URL cannot be read from hassio.mk this FAILS rather than
+  # falling back to a guess — a guess is what created this.
+  _HASSIO_MK="$(dirname "${BASH_SOURCE[0]}")/../../buildroot-external/package/hassio/hassio.mk"
+  _VER_BASE="$(sed -n 's/^HASSIO_VERSION_URL[[:space:]]*?\?=[[:space:]]*"\([^"]*\)".*/\1/p' "$_HASSIO_MK" 2>/dev/null | head -1)"
+  if [[ -z "$_VER_BASE" ]]; then
+    _fail "XVER-00: cannot read HASSIO_VERSION_URL from hassio.mk — the version chain cannot be checked against the source the build actually uses"
+    STABLE_JSON=""
+  else
+    _pass "XVER-00: version source derived from hassio.mk: ${_VER_BASE}"
+    STABLE_JSON="$(curl -sf "${_VER_BASE}stable.json" 2>/dev/null || true)"
+  fi
 
   if [[ -n "$STABLE_JSON" ]]; then
     STABLE_CORE="$(echo "$STABLE_JSON" | jq -r '.core // "unknown"')"
