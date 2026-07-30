@@ -3,22 +3,35 @@
 # WHY THIS EXISTS
 # ---------------
 # This repository is PUBLIC. On 2026-07-30 a day's worth of PRs put internal
-# mesh addresses and one open, unfixed infrastructure finding into commit
-# messages here. PR bodies were editable and got fixed; commit messages on a
-# public default branch cannot be. The disclosure is permanent.
+# mesh addresses and one infrastructure finding into commit messages here. PR
+# bodies were editable and got fixed; commit messages on a public default
+# branch cannot be. The disclosure is permanent.
 #
 # The cost asymmetry is the whole argument for this gate: catching it in review
 # costs a rename, catching it afterwards costs nothing less than "plan around
 # it being public forever".
 #
-# WHAT IT CHECKS
-# --------------
-# Only ADDED lines in the pull request's own diff. Deliberately not the whole
-# tree: this repo already carries internal addresses in files that need them
-# (ga-services.conf ships them to devices, and removing them would break the
-# product). Blocking on pre-existing content would make the gate un-passable
-# and it would be switched off within a week — the failure mode this file
-# exists to avoid.
+# WHAT IT CHECKS — three surfaces, not one
+# ----------------------------------------
+# The first version of this file scanned only the diff. That is the one surface
+# the incident did NOT go through, so the gate scored zero on the corpus it was
+# written for. What actually lands on master is decided by the repo's merge
+# settings, which are:
+#
+#     squash_merge_commit_title:   COMMIT_OR_PR_TITLE
+#     squash_merge_commit_message: COMMIT_MESSAGES
+#
+# so a squash merge publishes the PR title (or sole commit subject) and the
+# CONCATENATED COMMIT MESSAGES of the branch. Both are scanned here, alongside
+# the added lines of the diff. Miss any one of the three and the gate is
+# decoration.
+#
+# Added lines only, deliberately not the whole tree: this repo already carries
+# internal addresses in files that need them (ga-services.conf ships them to
+# devices, and removing them would break the product). Blocking on pre-existing
+# content would make the gate un-passable and it would be switched off within a
+# week — the failure mode this file exists to avoid. Commit messages and the
+# title are scanned in full, because there the PR IS the whole content.
 #
 # WHAT IT DOES *NOT* CLAIM
 # ------------------------
@@ -29,6 +42,14 @@ name: Disclosure check
 
 on:
   pull_request:
+    # `edited` matters twice over. Without it the override cannot work as
+    # documented — adding DISCLOSURE-REVIEWED after a red run does not
+    # re-trigger, and a manual re-run replays the ORIGINAL payload, so the old
+    # body is what gets read. It also closes the reverse hole: open with the
+    # token, go green, then delete the token and the check would never look
+    # again, leaving a green result attached to a PR whose body no longer
+    # carries the justification the override is supposed to record.
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
@@ -41,66 +62,137 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Scan added lines for internal addresses and open findings
+      - name: Scan diff, commit messages and title for disclosures
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           set -uo pipefail
 
-          # Added lines only, and only real additions (drop the +++ header).
-          git diff "$BASE...$HEAD" | grep '^+' | grep -v '^+++' > /tmp/added.txt || true
-          echo "Scanning $(wc -l < /tmp/added.txt) added lines."
+          # --- fail closed on a broken range --------------------------------
+          # "Could not look" and "nothing to see" must never be the same
+          # result. A rewritten base, a shallow fetch or an unreachable sha
+          # all yield an empty diff that reads exactly like a clean PR.
+          for _ref in "$BASE" "$HEAD"; do
+            git cat-file -e "${_ref}^{commit}" 2>/dev/null || {
+              echo "::error::commit ${_ref} is not reachable - the scan could not run. This is NOT a clean result."
+              exit 1
+            }
+          done
+
+          if ! git diff "$BASE...$HEAD" > /tmp/rawdiff.txt; then
+            echo "::error::git diff failed - the scan could not run. This is NOT a clean result."
+            exit 1
+          fi
+
+          _ncommits="$(git rev-list --count "$BASE..$HEAD")" || _ncommits=0
+          if [ "$_ncommits" -eq 0 ]; then
+            echo "::error::no commits between base and head - nothing was scanned. This is NOT a clean result."
+            exit 1
+          fi
+
+          # --- the three surfaces -------------------------------------------
+          # 1. added lines (the file content the PR introduces)
+          grep '^+' /tmp/rawdiff.txt | grep -v '^+++' > /tmp/s_diff.txt || true
+          # 2. commit messages - these BECOME the squash body on merge
+          git log --format='%B' "$BASE..$HEAD" > /tmp/s_commits.txt
+          # 3. the title - becomes the squash subject
+          printf '%s\n' "${PR_TITLE:-}" > /tmp/s_title.txt
+
+          echo "Scanning $(wc -l < /tmp/s_diff.txt) added lines, ${_ncommits} commit message(s) and the title."
+
+          # --- allowlisted public constants ---------------------------------
+          # These are documented, published constants, not this network. They
+          # appear throughout the test harness and the Supervisor integration,
+          # and flagging them would make the gate fire on unrelated work until
+          # someone switches it off. Neutralised BEFORE matching, so a line
+          # carrying a constant AND a real address still fails on the real one.
+          #   10.0.2.2         Android emulator's fixed host gateway
+          #   172.30.32.x      Home Assistant Supervisor docker bridge
+          #   172.30.232.x     Supervisor bridge subnet (daemon.json bip)
+          #   192.168.1.100    the placeholder used in usage examples
+          ALLOW='s#10\.0\.2\.2#<emulator-gateway>#g; s#172\.30\.(32|232)\.[0-9]{1,3}#<supervisor-bridge>#g; s#172\.30\.0\.0#<supervisor-bridge>#g; s#192\.168\.1\.100#<doc-placeholder>#g'
+          for f in /tmp/s_diff.txt /tmp/s_commits.txt /tmp/s_title.txt; do
+            sed -E "$ALLOW" "$f" > "${f}.clean" && mv "${f}.clean" "$f"
+          done
 
           fail=0
 
-          # --- internal address ranges -------------------------------------
-          # 100.64/10 is the CGNAT range the mesh uses; 172.16/12 and 10/8 are
-          # the benches and the server LAN. A public repo should not gain new
-          # ones: an address plus a description of its state is an inventory.
-          ADDR='(^|[^0-9.])(100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}|10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})([^0-9.]|$)'
-          if grep -nEq "$ADDR" /tmp/added.txt; then
-            echo ""
-            echo "::error::Added lines contain internal IP addresses."
-            grep -nE "$ADDR" /tmp/added.txt | head -20
-            fail=1
-          fi
+          # --- internal address ranges --------------------------------------
+          # 100.64/10 is the CGNAT range the mesh uses; 172.16/12, 10/8 and
+          # 192.168/16 are the benches and the server LAN. A public repo should
+          # not gain new ones: an address plus a description of its state is an
+          # inventory. 192.168/16 was missing from the first version and is the
+          # range this repo's own tooling reaches for most.
+          ADDR='(^|[^0-9.])(100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}|10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}|fd[0-9a-f]{2}:[0-9a-f:]{4,})'
 
-          # --- open, unfixed findings --------------------------------------
+          # --- open, unfixed findings ---------------------------------------
           # The phrasing that turns a fix description into a to-do list for
           # someone else. A FIXED finding described as fixed is fine and must
           # stay allowed, so these patterns target the still-broken tense.
-          OPEN='(still (open|running|answering|vulnerable|reachable)|remains (open|vulnerable|exploitable)|stays red and open|not (yet )?(fixed|closed|patched|revoked|destroyed)|no revocation path|certificate (has )?expired|currently exploitable|unfixed)'
-          if grep -niEq "$OPEN" /tmp/added.txt; then
-            echo ""
-            echo "::error::Added lines describe an OPEN, unfixed finding."
-            grep -niE "$OPEN" /tmp/added.txt | head -20
-            fail=1
-          fi
+          # The first version required the adjective IMMEDIATELY after "still",
+          # so "still, as of today, open" walked through; the gap is now
+          # bounded rather than zero, and the verb set covers the words an
+          # engineer actually writes (listening, live, exposed, unpatched).
+          OPEN='(still([[:space:],]+[A-Za-z]+){0,3}[[:space:],]+(open|running|answering|answers|vulnerable|reachable|exposed|unpatched|listening|live|accepts|accepting|responds|responding)|remains([[:space:],]+[A-Za-z]+){0,2}[[:space:],]+(open|vulnerable|exploitable|exposed|unpatched|reachable)|stays red and open|not (yet )?(fixed|closed|patched|revoked|destroyed|rotated|removed|mitigated|remediated)|(has|have|is|are) not been (fixed|patched|revoked|rotated|removed|closed)|no fix( yet| available)?|fix (is )?pending|awaiting (a )?(fix|remediation|patch)|mitigation (is )?pending|workaround pending|no revocation path|certificate (has )?expired|currently exploitable|unfixed)'
 
-          # --- credential shapes -------------------------------------------
+          # --- credential shapes --------------------------------------------
           # gitleaks (secret-scan.yml) is the real secret gate and runs full
           # history. This is a cheap second net for the shapes that gitleaks'
-          # provider patterns miss — the credential that leaked into this
+          # provider patterns miss - the credential that leaked into this
           # repo's history was a plain user/password pair, which no provider
           # pattern would ever have matched.
-          CRED='(-----BEGIN [A-Z ]*PRIVATE KEY-----|password[[:space:]]*=[[:space:]]*["'"'"'][^"'"'"']{6,}|passwd[[:space:]]*=[[:space:]]*["'"'"'][^"'"'"']{6,}|token[[:space:]]*=[[:space:]]*["'"'"'][A-Za-z0-9_-]{20,})'
-          if grep -nEq "$CRED" /tmp/added.txt; then
+          #
+          # Matched case-insensitively (the first version was not, so PASSWORD=
+          # was invisible) and with the colon delimiter (JSON and YAML are the
+          # two most common serialisations of exactly the pair that leaked).
+          # The optional quote after the key name is what makes the JSON form
+          # `"password": "..."` match at all - without it the closing quote
+          # sits between the key and the colon and the pattern slides off.
+          CRED='(-----BEGIN [A-Z ]*PRIVATE KEY( BLOCK)?-----|(password|passwd|pass|pwd|secret|token|apikey|api_key|access_key|credential)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:]]{8,})'
+
+          # A value that is plainly a reference or a placeholder is not a
+          # credential. Without this the gate fires on every workflow line that
+          # says `token: ${{ secrets.* }}` and gets switched off within a week.
+          PLACEHOLDER='(\$\{|\$\(|\$[A-Za-z_]|<[A-Za-z_-]+>|secrets\.|vars\.|env\.|REDACTED|redacted|CHANGEME|changeme|xxxx|\*\*\*|example|placeholder|your[-_])'
+
+          scan() {
+            local file="$1" surface="$2" pattern="$3" label="$4" nocase="$5" filter="$6"
+            local gflags="-nE"
+            [ "$nocase" = "i" ] && gflags="-niE"
+            local hits
+            hits="$(grep $gflags -- "$pattern" "$file" 2>/dev/null || true)"
+            if [ -n "$filter" ] && [ -n "$hits" ]; then
+              hits="$(printf '%s\n' "$hits" | grep -vE -- "$filter" || true)"
+            fi
+            [ -z "$hits" ] && return 0
             echo ""
-            echo "::error::Added lines look like they contain a credential."
-            grep -nE "$CRED" /tmp/added.txt | sed -E 's/(=[[:space:]]*["'"'"']).*/\1<redacted>/' | head -10
+            echo "::error::${surface}: ${label}"
+            printf '%s\n' "$hits" | sed -E 's/([:=][[:space:]]*["'"'"']?)[^"'"'"' ]{8,}/\1<redacted>/' | head -10
             fail=1
-          fi
+          }
+
+          scan /tmp/s_diff.txt    "added lines"     "$ADDR" "contain internal IP addresses"       ""  ""
+          scan /tmp/s_commits.txt "COMMIT MESSAGES" "$ADDR" "contain internal IP addresses"       ""  ""
+          scan /tmp/s_title.txt   "PR TITLE"        "$ADDR" "contains an internal IP address"     ""  ""
+
+          scan /tmp/s_diff.txt    "added lines"     "$OPEN" "describe an OPEN, unfixed finding"   "i" ""
+          scan /tmp/s_commits.txt "COMMIT MESSAGES" "$OPEN" "describe an OPEN, unfixed finding"   "i" ""
+          scan /tmp/s_title.txt   "PR TITLE"        "$OPEN" "describes an OPEN, unfixed finding"  "i" ""
+
+          scan /tmp/s_diff.txt    "added lines"     "$CRED" "look like they contain a credential" "i" "$PLACEHOLDER"
+          scan /tmp/s_commits.txt "COMMIT MESSAGES" "$CRED" "look like they contain a credential" "i" "$PLACEHOLDER"
 
           if [ "$fail" -eq 0 ]; then
-            echo "No internal addresses, open findings or credential shapes in the added lines."
+            echo "Clean: no internal addresses, open findings or credential shapes in the diff, the commit messages or the title."
             exit 0
           fi
 
           # The override lives HERE, not in a later `if: failure()` step. A failed
           # step fails the job whatever runs after it, so an override in a
-          # separate step would look like a control and be decoration — the exact
+          # separate step would look like a control and be decoration - the exact
           # class of defect this repo spent 2026-07-30 removing.
           if printf '%s' "${PR_BODY:-}" | grep -q 'DISCLOSURE-REVIEWED'; then
             echo "::warning::Overridden by DISCLOSURE-REVIEWED in the PR body:"
@@ -119,8 +211,11 @@ jobs:
           echo "Those belong in ga-ihost-docs (private) or the tracker, and the"
           echo "public artefact references them without repeating them."
           echo ""
-          echo "Commit messages on the default branch CANNOT be edited afterwards."
-          echo "That is why this runs before the merge and not after."
+          echo "If the match is in a COMMIT MESSAGE or the TITLE, fix it BEFORE"
+          echo "merging: this repo squashes with COMMIT_MESSAGES, so the branch's"
+          echo "commit messages become the published commit body, and they cannot"
+          echo "be edited once they are on the default branch. Reword with"
+          echo "'git rebase -i' and force-push the PR branch."
           echo ""
           echo "If a match is a false positive - an example address in documentation,"
           echo "a fixed finding phrased in the past tense - put the string"
