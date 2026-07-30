@@ -1637,6 +1637,38 @@ if [[ -n "$SRC" ]]; then
   # These are SRC-prefixed on purpose: GitHub CI only gates on FAILs matching
   # SRC-/VER-/XVER-, and the guard has to be un-removable from a PR. The audit
   # itself needs a build output and runs as RAUC-KEYRING-01 on the builder.
+  # SRC-18: no PRIVATE key may ship in the rootfs.
+  #
+  # This suite audits the keyring's public anchors in detail and says nothing
+  # about the opposite direction. The asymmetry matters because the two failures
+  # are not equally recoverable: a wrong trust anchor blocks OTA and is annoying;
+  # a LEAKED signing key means every device accepts attacker-built bundles
+  # forever, and the keyring ships read-only in the rootfs, so it cannot be
+  # rotated without touching each device physically. There is no remote recovery
+  # from that, which is exactly why it deserves a build-time check rather than a
+  # review habit.
+  #
+  # Nothing in the build is supposed to copy key.pem into the target — but "not
+  # supposed to" is what a rootfs-overlay addition, a stray cp in a hook, or a
+  # future package can quietly change. The check is cheap; the failure is not.
+  #
+  # SRC- prefix so GitHub CI gates on it and it cannot be dropped from a PR.
+  if [[ -d "${TARGET}" ]]; then
+    _leaked=""
+    while IFS= read -r _f; do
+      grep -qE -- "-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----" "$_f" 2>/dev/null \
+        && _leaked+="${_f#"${TARGET}"} "
+    done < <(find "${TARGET}" -type f \( -name "*.pem" -o -name "*.key" -o -name "*.p12" \
+               -o -name "*.pfx" -o -name "id_rsa" -o -name "id_ecdsa" -o -name "id_ed25519" \) 2>/dev/null)
+    if [[ -z "$_leaked" ]]; then
+      _pass "SRC-18: no private key in the shipped rootfs"
+    else
+      _fail "SRC-18: PRIVATE KEY(S) IN THE SHIPPED ROOTFS: ${_leaked}— a leaked OTA signing key cannot be rotated remotely (read-only keyring); treat as an incident, not a build failure"
+    fi
+  else
+    _skip "SRC-18: private-key leak scan" "no target tree in this run"
+  fi
+
   KR_AUDIT="${SRC}/scripts/verify-rauc-keyring.sh"
   if [[ -f "$KR_AUDIT" ]]; then
     [[ -x "$KR_AUDIT" ]] \
