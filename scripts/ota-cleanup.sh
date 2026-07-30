@@ -80,7 +80,32 @@ done
 
 TS="$(date -u +%Y%m%d-%H%M%S)"
 
+# Paths this script must never touch, whatever it is asked to prune.
+#
+# Release evidence is filed per build under the builder's release-evidence dir
+# because images/configs/ is a FIXED path that every build overwrites — the
+# previous build's provenance is gone the moment the next one starts, which is
+# sooner than any retention policy. Pruning the evidence would delete the only
+# durable record of what a shipped version was built from, and the CRA support
+# period is years while this script's retention is two builds.
+#
+# Deliberately a REFUSAL and not a comment. The first version of this was a
+# variable named EVIDENCE_DIR_EXEMPT that was set and never read — a note that
+# looked like a control. Anything that cannot fail is documentation.
+PROTECTED_PATHS="/build/release-evidence /home/builder/release-evidence"
+
 run() {
+    local _cmd="$*" _p
+    for _p in $PROTECTED_PATHS; do
+        case "$_cmd" in
+            *"$_p"*)
+                echo "REFUSING: '$_cmd' targets protected path ${_p}." >&2
+                echo "          Release evidence is the only durable record of what a" >&2
+                echo "          shipped version was built from. It is never pruned here." >&2
+                exit 1
+                ;;
+        esac
+    done
     if $DRY_RUN; then
         printf "  [dry-run] %s\n" "$*"
     else
