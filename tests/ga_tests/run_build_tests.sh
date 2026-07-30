@@ -351,6 +351,37 @@ grep -qE 'storage\.total_limit_size\s+300M' "${TARGET}/etc/fluent-bit/fluent-bit
   && _pass "CFG-24b: ga-ethernet-guard.service enabled at boot" \
   || _fail "CFG-24b: ga-ethernet-guard.service NOT enabled"
 
+# CFG-49: ga-ethernet-force shipped ON by default (operator decision 2026-07-30)
+# Provisioning runs over Ethernet, not a WLAN per bench, so the image carries the
+# override. Asserted on the real artifact ($OUT/images/boot), not on the board
+# hook's source — a hook that is present but never runs would pass a grep.
+#
+# The second half matters more than the first. Shipping the marker moves the
+# safety from "presence proves physical access" (no longer true) to "the
+# provisioner removes it before the unit leaves". So the exit gate is asserted
+# too: without it, a unit could ship with an interface up that its owner never
+# agreed to, and nothing in the build would notice.
+_ETHF_BOOT="${OUT}/images/boot/ga-ethernet-force"
+if [[ -d "${OUT}/images/boot" ]]; then
+  [[ -f "$_ETHF_BOOT" ]] \
+    && _pass "CFG-49a: /mnt/boot/ga-ethernet-force present in boot artifact (provisioning default)" \
+    || _fail "CFG-49a: ethernet-force marker MISSING from boot artifact — provisioning would have no uplink"
+else
+  # Fall back to the hook source so a target-only run still says something.
+  if grep -q 'BOOT_DATA}/ga-ethernet-force' \
+       "$(dirname "${BASH_SOURCE[0]}")/../../buildroot-ihost/board/sonoff/ihost/hassos-hook.sh" 2>/dev/null; then
+    _pass "CFG-49a: board hook writes the ethernet-force marker (source check — no boot artifact in this run)"
+  else
+    _fail "CFG-49a: board hook does not write the ethernet-force marker"
+  fi
+fi
+
+if [[ -x "$(dirname "${BASH_SOURCE[0]}")/ethernet_force/test.sh" ]]; then
+  _pass "CFG-49b: the shipping gate exists (tests/ga_tests/ethernet_force)"
+else
+  _fail "CFG-49b: shipping gate MISSING — nothing would catch a unit shipping with the override still on"
+fi
+
 # CFG-28/29: removed — ga-dns-inject replaced by Supervisor fork DNS handling
 
 # CFG-30: OpenStick auto-connect
