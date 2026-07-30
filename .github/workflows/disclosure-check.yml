@@ -1,0 +1,130 @@
+# Disclosure check — stop N21 violations at the PR, not in the postmortem.
+#
+# WHY THIS EXISTS
+# ---------------
+# This repository is PUBLIC. On 2026-07-30 a day's worth of PRs put internal
+# mesh addresses and one open, unfixed infrastructure finding into commit
+# messages here. PR bodies were editable and got fixed; commit messages on a
+# public default branch cannot be. The disclosure is permanent.
+#
+# The cost asymmetry is the whole argument for this gate: catching it in review
+# costs a rename, catching it afterwards costs nothing less than "plan around
+# it being public forever".
+#
+# WHAT IT CHECKS
+# --------------
+# Only ADDED lines in the pull request's own diff. Deliberately not the whole
+# tree: this repo already carries internal addresses in files that need them
+# (ga-services.conf ships them to devices, and removing them would break the
+# product). Blocking on pre-existing content would make the gate un-passable
+# and it would be switched off within a week — the failure mode this file
+# exists to avoid.
+#
+# WHAT IT DOES *NOT* CLAIM
+# ------------------------
+# It is a pattern match, not a judgment. It cannot tell a genuine disclosure
+# from a false positive, so it names what it found and how to proceed rather
+# than pretending certainty. An override exists and is deliberately explicit.
+name: Disclosure check
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  disclosure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan added lines for internal addresses and open findings
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -uo pipefail
+
+          # Added lines only, and only real additions (drop the +++ header).
+          git diff "$BASE...$HEAD" | grep '^+' | grep -v '^+++' > /tmp/added.txt || true
+          echo "Scanning $(wc -l < /tmp/added.txt) added lines."
+
+          fail=0
+
+          # --- internal address ranges -------------------------------------
+          # 100.64/10 is the CGNAT range the mesh uses; 172.16/12 and 10/8 are
+          # the benches and the server LAN. A public repo should not gain new
+          # ones: an address plus a description of its state is an inventory.
+          ADDR='(^|[^0-9.])(100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}|10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})([^0-9.]|$)'
+          if grep -nEq "$ADDR" /tmp/added.txt; then
+            echo ""
+            echo "::error::Added lines contain internal IP addresses."
+            grep -nE "$ADDR" /tmp/added.txt | head -20
+            fail=1
+          fi
+
+          # --- open, unfixed findings --------------------------------------
+          # The phrasing that turns a fix description into a to-do list for
+          # someone else. A FIXED finding described as fixed is fine and must
+          # stay allowed, so these patterns target the still-broken tense.
+          OPEN='(still (open|running|answering|vulnerable|reachable)|remains (open|vulnerable|exploitable)|stays red and open|not (yet )?(fixed|closed|patched|revoked|destroyed)|no revocation path|certificate (has )?expired|currently exploitable|unfixed)'
+          if grep -niEq "$OPEN" /tmp/added.txt; then
+            echo ""
+            echo "::error::Added lines describe an OPEN, unfixed finding."
+            grep -niE "$OPEN" /tmp/added.txt | head -20
+            fail=1
+          fi
+
+          # --- credential shapes -------------------------------------------
+          # gitleaks (secret-scan.yml) is the real secret gate and runs full
+          # history. This is a cheap second net for the shapes that gitleaks'
+          # provider patterns miss — the credential that leaked into this
+          # repo's history was a plain user/password pair, which no provider
+          # pattern would ever have matched.
+          CRED='(-----BEGIN [A-Z ]*PRIVATE KEY-----|password[[:space:]]*=[[:space:]]*["'"'"'][^"'"'"']{6,}|passwd[[:space:]]*=[[:space:]]*["'"'"'][^"'"'"']{6,}|token[[:space:]]*=[[:space:]]*["'"'"'][A-Za-z0-9_-]{20,})'
+          if grep -nEq "$CRED" /tmp/added.txt; then
+            echo ""
+            echo "::error::Added lines look like they contain a credential."
+            grep -nE "$CRED" /tmp/added.txt | sed -E 's/(=[[:space:]]*["'"'"']).*/\1<redacted>/' | head -10
+            fail=1
+          fi
+
+          if [ "$fail" -eq 0 ]; then
+            echo "No internal addresses, open findings or credential shapes in the added lines."
+            exit 0
+          fi
+
+          # The override lives HERE, not in a later `if: failure()` step. A failed
+          # step fails the job whatever runs after it, so an override in a
+          # separate step would look like a control and be decoration — the exact
+          # class of defect this repo spent 2026-07-30 removing.
+          if printf '%s' "${PR_BODY:-}" | grep -q 'DISCLOSURE-REVIEWED'; then
+            echo "::warning::Overridden by DISCLOSURE-REVIEWED in the PR body:"
+            printf '%s' "$PR_BODY" | grep -A3 'DISCLOSURE-REVIEWED'
+            exit 0
+          fi
+
+          echo ""
+          echo "------------------------------------------------------------------"
+          echo "This repository is PUBLIC."
+          echo ""
+          echo "What belongs here:  the CAUSE and the FIX."
+          echo "What does not:      addresses, host state, device serials, and any"
+          echo "                    finding that is still open."
+          echo ""
+          echo "Those belong in ga-ihost-docs (private) or the tracker, and the"
+          echo "public artefact references them without repeating them."
+          echo ""
+          echo "Commit messages on the default branch CANNOT be edited afterwards."
+          echo "That is why this runs before the merge and not after."
+          echo ""
+          echo "If a match is a false positive - an example address in documentation,"
+          echo "a fixed finding phrased in the past tense - put the string"
+          echo "DISCLOSURE-REVIEWED in the PR body. State there WHY it is safe; the"
+          echo "sentence is the point, not the token."
+          echo "------------------------------------------------------------------"
+          exit 1

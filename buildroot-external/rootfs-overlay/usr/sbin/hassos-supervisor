@@ -100,13 +100,13 @@ if [ -z "${SUPERVISOR_CONTAINER_ID}" ]; then
     # mounted, so both lookups failed inside the container and the plugin fell
     # back to a HARDCODED address — dns.py:429, _GA_HARDCODED_FALLBACK_IP.
     #
-    # Measured on K31 2026-07-30:
+    # Measured on a bench device 2026-07-30:
     #   docker exec hassio_supervisor ls /etc/ga-services.conf -> No such file
-    #   supervisor.plugins.dns: "GA services IP: 100.126.142.217, GA OTA IP: 100.126.142.217"
-    # while the HOST resolved the same names to 100.126.129.116 via /etc/hosts.
-    # 100.126.142.217 is a superseded NetBird peer whose certificate expired
-    # 2026-06-30, so every container doing HTTPS to a GA name hit a TLS failure
-    # (curl exit 60) that a lenient probe would have called healthy.
+    #   supervisor.plugins.dns logged the hardcoded fallback, not the configured
+    #   address, while the HOST resolved the same names correctly via /etc/hosts.
+    # The fallback pointed at a superseded endpoint, so every container doing
+    # HTTPS to a GA name hit a TLS failure (curl exit 60) that a lenient probe
+    # would have called healthy. Addresses and host state: see ga-ihost-docs.
     #
     # Mounting the file is deliberately preferred over correcting the hardcoded
     # constant: the constant would be correct until the next server move, and
