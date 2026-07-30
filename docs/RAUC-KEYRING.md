@@ -6,9 +6,19 @@ attacker-signed OTA. This document describes how it is assembled, why it cannot
 be repaired in the field, and the one ordering that makes a key rotation
 survivable.
 
-Guarded by `scripts/verify-rauc-keyring.sh` (`KEYRING-01..05`), which runs
-fail-closed on every prod build, plus `SRC-17a..d` and `RAUC-KEYRING-01` in
-`tests/ga_tests/run_build_tests.sh`.
+Guarded by `scripts/verify-rauc-keyring.sh` (`KEYRING-02`, `-03`, `-05`, `-06`),
+which runs fail-closed on every prod build, plus `SRC-17a/b`, `SRC-21` and
+`RAUC-KEYRING-01` in `tests/ga_tests/run_build_tests.sh`.
+
+> **Updated 2026-07-30 — the retired-CA bridge is GONE, not switched off.**
+> `GA_LEGACY_CA_BRIDGE`, `ota/legacy-signing-cert.pem` and
+> `add_legacy_ca_if_enabled()` were all deleted (OS#309). `KEYRING-01`,
+> `KEYRING-04` and `SRC-17c` went with them — they existed only to audit the
+> bridge. `KEYRING-06` and `SRC-21` replace them and assert the bridge's
+> **absence**, which is a stronger property than "the flag says false".
+> Passages below that describe the bridge as live are historical; they are kept
+> because the reasoning that led to the cut is worth reading, and marked where
+> they are no longer current.
 
 ## How the keyring is assembled
 
@@ -19,7 +29,7 @@ three independent sources:
 |---|--------|-----------|
 | 1 | `buildroot-external/ota/rel-ca.pem` (or `dev-ca.pem`) | always; `DEPLOYMENT` in `buildroot-external/meta` selects which |
 | 2 | the local signing cert `/build/cert.pem` | **appended silently** whenever it does not verify against `dev-ca.pem` |
-| 3 | `buildroot-external/ota/legacy-signing-cert.pem` | when `GA_LEGACY_CA_BRIDGE="true"` |
+| ~~3~~ | ~~`buildroot-external/ota/legacy-signing-cert.pem`~~ | **removed 2026-07-30** — source, flag and bake function all deleted |
 
 Source 2 is the one to watch. On any machine that lacks the real signing key,
 `prepare_rauc_signing()` generates a throwaway self-signed certificate and
@@ -27,9 +37,15 @@ source 2 promotes it to a fleet trust anchor — with no warning in the build lo
 beyond one line. `rel-ca.pem` is gitignored and lives only on the build server,
 so "did the real key get used" is not answerable from the repository.
 
-`rel-ca.pem` / `dev-ca.pem` are not in git (`.gitignore`: `*.pem`, with an
-explicit exception for `legacy-signing-cert.pem`). They are staged on
-ga-builder; `docs/REPRODUCIBILITY.md` documents the copy step.
+`rel-ca.pem` / `dev-ca.pem` are not in git (`.gitignore`: `*.pem`). The former
+exception for `legacy-signing-cert.pem` was removed with the bridge. They are
+staged on ga-builder; `docs/REPRODUCIBILITY.md` documents the copy step.
+
+⚠️ `dev-ca.pem` is a **symlink to `rel-ca.pem`**, and `prepare_rauc_signing()`
+uses `/build/key.pem` unconditionally. So a `dev` build is signed with the
+PRODUCTION key against the PRODUCTION anchor: dev and prod are not separated in
+trust, and a dev bundle is one every production device accepts. Do not treat
+`dev` as a safety boundary. Tracked as a follow-up.
 
 ## The keyring cannot be fixed over SSH
 
@@ -198,7 +214,7 @@ straight out of `generate-signing-key.sh`, and the CA that is supposed to be
 the anchor validates nothing. `KEYRING-02` reports exactly this against a real
 build; it is the reason the 2026 CA above exists.
 
-- `GA_LEGACY_CA_BRIDGE="true"` in `buildroot-external/meta` — every production
+- ~~`GA_LEGACY_CA_BRIDGE="true"`~~ (**historical** — deleted 2026-07-30) in `buildroot-external/meta` — every production
   image still trusts the retired pre-2026-03-27 CA, fingerprint
   `01:E7:CE:81:…:BC:F7`, valid until 2035-09-18, `CA:TRUE`, no `check-crl` in
   `system.conf` and therefore **no revocation path**.
@@ -233,7 +249,10 @@ worth reconciling.
 Consequence for the earlier reasoning, which was wrong: dropping the bridge does
 **not** depend on proving the field free of pre-rotation devices. Whether such
 devices exist changes nothing about the value of F13 in a new image — it is
-zero either way. `GA_LEGACY_CA_BRIDGE` can go to `"false"` now. Odoo #534 still
+zero either way. **Outcome 2026-07-30: the flag did not go to `"false"` — it was
+deleted outright, together with the certificate and the bake function, because
+keeping the material next to its own switch left the fleet one line away from
+re-trusting it.** Odoo #534 still
 blocks the separate question of how pre-rotation devices get recovered at all
 (reflash, or the raw slot write above), which is not a keyring question.
 
