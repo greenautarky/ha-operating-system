@@ -156,6 +156,22 @@ done
 [[ -n "$_CLI_ENV" ]] && GA_ENV="$_CLI_ENV"
 MODE="${MODE:-full}"
 GA_ENV="${GA_ENV:-dev}"
+
+# GA_ENV decides which signing key, which trust anchor, whether an SBOM is
+# produced and how strict the CVE gate is. Every consumer compares it to the
+# literal "prod", so ANY other spelling silently means dev — including
+# "production", which reads like it worked and is the obvious thing to type.
+# The CLI parser above already rejects a bad positional argument; this closes
+# the same hole for `GA_ENV=production ./scripts/ga_build.sh full`.
+case "$GA_ENV" in
+  dev|prod) ;;
+  *)
+    echo "ERROR: GA_ENV='$GA_ENV' is not a valid environment." >&2
+    echo "       Use exactly 'dev' or 'prod'. Anything else would silently" >&2
+    echo "       build as dev with dev signing material." >&2
+    exit 1
+    ;;
+esac
 echo "Building with MODE=$MODE GA_ENV=$GA_ENV"
 
 # ---- Paths inside container ----
@@ -354,27 +370,49 @@ fi
 echo "Pre-build validation passed."
 echo ""
 
-ensure_dev_ca_from_rel_ca() {
-  mkdir -p "$OTA_DIR"
-
-  if [[ -f "$DEV_CA_PEM" ]]; then
-    echo "dev-ca.pem present: $DEV_CA_PEM"
-    return 0
+# Refuse to build without the trust anchor this environment is supposed to use,
+# and refuse to build if the two anchors are the same file.
+#
+# This replaces ensure_dev_ca_from_rel_ca(), which created dev-ca.pem as a
+# SYMLINK to rel-ca.pem whenever it was missing. That is exactly the defect the
+# 2026-07-30 clean cut removed elsewhere: it made a dev image ship the
+# PRODUCTION root CA while every log line said "dev". Both *.pem files are
+# gitignored, so a fresh checkout on a new builder has neither — and the old
+# function turned that ordinary state into a silent trust merge.
+#
+# Auto-creating signing trust material is never the right recovery. The keys
+# live in /home/builder/secrets on the build host; if one is not there, the
+# operator has to say which key this image should be installable with.
+require_base_ca() {
+  local _want _other
+  if [[ "$GA_ENV" == "prod" ]]; then
+    _want="$REL_CA_PEM"; _other="$DEV_CA_PEM"
+  else
+    _want="$DEV_CA_PEM"; _other="$REL_CA_PEM"
   fi
 
-  if [[ ! -f "$REL_CA_PEM" ]]; then
-    echo "ERROR: rel-ca.pem not found at $REL_CA_PEM" >&2
-    echo "Create it or place it there, otherwise post-build will fail." >&2
+  if [[ ! -f "$_want" ]]; then
+    echo "ERROR: GA_ENV=$GA_ENV needs $_want and it is not there." >&2
+    echo "       Place the correct root CA (it is gitignored on purpose)." >&2
+    echo "       Do NOT substitute the other environment's CA — that is how a" >&2
+    echo "       dev image ends up installable with the production key." >&2
     exit 1
   fi
 
-  # Prefer symlink; fallback to copy if symlink is not supported
-  if ln -sf "$REL_CA_PEM" "$DEV_CA_PEM" 2>/dev/null; then
-    echo "Created symlink: $DEV_CA_PEM -> $REL_CA_PEM"
-  else
-    cp -f "$REL_CA_PEM" "$DEV_CA_PEM"
-    echo "Symlink failed; copied: $REL_CA_PEM -> $DEV_CA_PEM"
+  # A symlink, a hardlink or a byte-identical copy all collapse the dev/prod
+  # trust separation while looking like two distinct files in `ls`.
+  if [[ -f "$_other" ]] && [[ "$(readlink -f "$_want")" == "$(readlink -f "$_other")" ]]; then
+    echo "ERROR: $DEV_CA_PEM and $REL_CA_PEM resolve to the SAME file." >&2
+    echo "       dev and prod would share one trust anchor. Refusing." >&2
+    exit 1
   fi
+  if [[ -f "$_other" ]] && cmp -s "$_want" "$_other"; then
+    echo "ERROR: $DEV_CA_PEM and $REL_CA_PEM are byte-identical." >&2
+    echo "       dev and prod would share one trust anchor. Refusing." >&2
+    exit 1
+  fi
+
+  echo "Base CA for GA_ENV=$GA_ENV: $_want"
 }
 
 # Global build timestamp (compact format for filenames, set once at script start)
@@ -2178,8 +2216,9 @@ run_logged() {
 cd "$BUILDROOT_DIR"
 DEFCONFIG="ga_ihost_full_defconfig"
 
-# Ensure dev-ca.pem exists for post-build script (link/copy from rel-ca.pem)
-ensure_dev_ca_from_rel_ca
+# Fail closed if this environment's trust anchor is missing, or if dev and prod
+# resolve to the same file. Never auto-create one from the other.
+require_base_ca
 
 # Pre-flight: verify all container images exist in registries AND that the
 # vibe_addons store versions are in lock-step with addon-images.json before
