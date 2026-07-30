@@ -3092,8 +3092,32 @@ fi
 # without comment whenever /build/cert.pem does not verify against dev-ca.pem.
 # [Odoo #624]
 _kr_script="${SRC:-}/scripts/verify-rauc-keyring.sh"
-if [[ -x "$_kr_script" && -f "${TARGET}/etc/rauc/keyring.pem" ]]; then
-  _kr_out="$(REPO_ROOT="${SRC}" GA_ENV="${GA_ENV:-dev}" "$_kr_script" "$OUT" 2>&1)"
+
+# Which environment is this image? The audit picks its pinned fingerprint from
+# that answer, so getting it from the ambient shell was wrong twice over:
+#
+#   * it made the result depend on who ran the suite. A prod image checked from
+#     a normal shell defaulted to dev, was measured against the DEV pin, and
+#     KEYRING-07 failed on a perfectly good image. That is also why the failure
+#     injection harness could never start: it aborts on a red baseline.
+#   * it meant the one check standing between a mis-signed image and the fleet
+#     could be silenced by an environment variable.
+#
+# ENV-02 already read the value the build stamped into the image. Use it, and
+# CROSS-CHECK it against an explicitly passed GA_ENV rather than letting either
+# one win silently. Two independent sources that must agree is stronger than
+# either alone: the image cannot quietly claim to be dev, and the caller cannot
+# quietly assert prod over a dev artefact.
+_kr_env="${GA_ENV:-${GA_ENV_VAL:-dev}}"
+if [[ -n "${GA_ENV:-}" && -n "${GA_ENV_VAL:-}" && "$GA_ENV" != "$GA_ENV_VAL" ]]; then
+  _fail "RAUC-KEYRING-01: caller says GA_ENV=$GA_ENV but the image says GA_ENV=$GA_ENV_VAL — refusing to guess which trust anchor this image is supposed to carry"
+  _kr_env=""
+fi
+
+if [[ -z "$_kr_env" ]]; then
+  : # already failed above; do not run the audit against an unknown expectation
+elif [[ -x "$_kr_script" && -f "${TARGET}/etc/rauc/keyring.pem" ]]; then
+  _kr_out="$(REPO_ROOT="${SRC}" GA_ENV="$_kr_env" "$_kr_script" "$OUT" 2>&1)"
   _kr_rc=$?
   case "$_kr_rc" in
     0) _pass "RAUC-KEYRING-01: shipped keyring holds exactly the declared trust anchors" ;;
