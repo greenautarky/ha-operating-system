@@ -80,15 +80,23 @@ copy_source() {
             return 1
         }
     done
-    # Belt and braces: if a key ever moves into one of those directories, this
-    # is where it stops. A copy of signing material in /tmp is not acceptable
-    # even for a second.
-    local leaked
-    leaked="$(find "$dest" \( -name '*.pem' -o -name '*.key' \) -print -quit 2>/dev/null)"
-    if [[ -n "$leaked" ]]; then
-        find "$dest" \( -name '*.pem' -o -name '*.key' \) -delete
-        echo "  note: removed key material from the scratch copy (${leaked##*/})"
-    fi
+    # Belt and braces: if a PRIVATE key ever moves into one of those
+    # directories, this is where it stops. A copy of signing material in /tmp is
+    # not acceptable even for a second.
+    #
+    # By CONTENT, not by extension. The first version swept every *.pem, which
+    # also removed ota/dev-ca.pem — a public X.509 certificate, not a secret,
+    # and the baseline RAUC-KEYRING-01 derives its expected trust set from.
+    # Every mutated run therefore failed that check as well, on all six
+    # mutations, for a reason that had nothing to do with the mutation. This
+    # script's own rule says a mutation tripping several checks measures noise
+    # rather than the guard, so the safety measure was quietly degrading the
+    # signal it exists to protect.
+    local swept=0 f
+    while IFS= read -r f; do
+        if grep -qs 'PRIVATE KEY' "$f"; then rm -f "$f"; swept=$((swept+1)); fi
+    done < <(find "$dest" -type f \( -name '*.pem' -o -name '*.key' \) 2>/dev/null)
+    (( swept > 0 )) && echo "  note: removed ${swept} private key file(s) from the scratch copy"
     return 0
 }
 
@@ -153,6 +161,31 @@ if [[ "$base_fail" -ne 0 ]]; then
     exit 2
 fi
 echo -e "${GREEN}baseline${RESET}  0 failures on the unmutated build — injected failures will be unambiguous"
+
+# Second baseline: the noise floor of the SCRATCH COPY itself.
+#
+# The copy is deliberately partial — it holds target/, images/boot and
+# images/configs, not the disk image or the full build tree — so checks that
+# read anything else fail on it no matter what is mutated. Reporting those as
+# side effects of every mutation makes the output read as though each defect
+# tripped four checks, which is the noise this harness is supposed to
+# distinguish itself from.
+#
+# Measure it once rather than hardcoding a list: a hardcoded exclusion would
+# silently grow stale and start hiding real side effects.
+_nf_work="$(mktemp -d)"; WORKDIRS+=("$_nf_work")
+mkdir -p "$_nf_work/images" "$_nf_work/target"
+cp -a "$SRC_OUT/target" "$_nf_work/" 2>/dev/null
+cp -a "$SRC_OUT/images/boot" "$_nf_work/images/" 2>/dev/null
+cp -a "$SRC_OUT/images/configs" "$_nf_work/images/" 2>/dev/null
+touch "$_nf_work/images/rootfs.erofs"
+NOISE="$("$SUITE" "$_nf_work" 2>/dev/null | grep -E '^\s+FAIL' \
+         | sed -E 's/^[[:space:]]+FAIL[[:space:]]+([A-Za-z0-9-]+):.*/\1/' | sort -u | tr '\n' ' ')"
+rm -rf "$_nf_work"
+if [[ -n "${NOISE// /}" ]]; then
+    echo -e "${YELLOW}noise floor${RESET}  the scratch copy cannot satisfy: ${NOISE}"
+    echo "             (partial copy by design — these are subtracted from side effects below)"
+fi
 echo
 
 not_caught=0
@@ -180,10 +213,16 @@ while IFS='|' read -r name expect desc; do
     # suite reads the real tree and every source mutation reports "not caught"
     # while the guard is in fact fine.
     out="$(GA_SRC_ROOT="$srcwork/repo" "$srcwork/repo/tests/ga_tests/run_build_tests.sh" "$work" 2>/dev/null)"
-    fails="$(printf '%s' "$out" | grep -E '^\s+FAIL' | sed -E 's/^\s+FAIL\s+([A-Z0-9-]+):.*/\1/' | sort -u | tr '\n' ' ')"
+    # [A-Za-z0-9-] not [A-Z0-9-]: check ids are not all upper case (CFG-49a),
+    # and a failed substitution leaves the whole FAIL line in the id list,
+    # which then reads as a bizarre extra "check".
+    fails="$(printf '%s' "$out" | grep -E '^\s+FAIL' \
+             | sed -E 's/^[[:space:]]+FAIL[[:space:]]+([A-Za-z0-9-]+):.*/\1/' | sort -u | tr '\n' ' ')"
 
     if printf '%s' "$fails" | grep -qw "$expect"; then
-        extra="$(printf '%s' "$fails" | tr ' ' '\n' | grep -v "^${expect}$" | grep -v '^$' | tr '\n' ' ')"
+        # Side effects = what this mutation broke BEYOND the noise floor.
+        extra="$(printf '%s' "$fails" | tr ' ' '\n' | grep -v "^${expect}$" | grep -v '^$' \
+                 | grep -vxF -f <(printf '%s\n' $NOISE) 2>/dev/null | tr '\n' ' ')"
         if [[ -n "$extra" ]]; then
             echo -e "${GREEN}CAUGHT${RESET} $name -> $expect  ${YELLOW}(also: $extra)${RESET}"
         else
