@@ -39,10 +39,21 @@ run_test "SUP-02" "ha core info exits 0" \
 # image (= upstream stable.json key missing for our machine), this fails.
 # We don't check WHICH registry — that's a policy concern handled by
 # check-images.sh at build time, not on-device.
-run_test "SUP-03" "version.json has non-null Core image" \
-  "VJ=/usr/share/hassio/version.json; \
-   [ -f \"\$VJ\" ] && \
-   IMG=\$(jq -r '.images.core' \"\$VJ\" 2>/dev/null) && \
+# Measured 2026-07-30: /usr/share/hassio/version.json exists NOWHERE on the
+# device — `find / -xdev -name version.json` returns nothing. The hassio package
+# builds it at $(@D)/version.json and hands it to the image pre-pull script; it
+# is never installed into the target. So this assertion could not pass on any
+# device, ever, and had been red for however long that has been true. A check
+# that cannot pass is as uninformative as one that cannot fail.
+#
+# The build-time half of this concern is already covered where the file actually
+# exists: hassio.mk rejects a null/`latest` Core image and a wrong registry
+# during CONFIGURE_CMDS (and the build ABORTS, not warns).
+#
+# On-device, the equivalent question is "does the Supervisor have a resolvable
+# Core image", and `ha core info` is the authority that answers it.
+run_test "SUP-03" "Supervisor reports a non-null Core image" \
+  "IMG=\$(ha core info --raw-json 2>/dev/null | jq -r '.data.image' 2>/dev/null); \
    [ -n \"\$IMG\" ] && [ \"\$IMG\" != 'null' ]"
 
 # SUP-04 — Supervisor auto_update is OFF by default.
@@ -83,7 +94,7 @@ run_test "SUP-06" "GA_RELEASE field in /etc/os-release" \
 # so that a future SUP-03 failure on the bench has an immediate breadcrumb
 # without needing to ssh into the device again.
 run_test_show "SUP-07" "Resolved Core image:tag" \
-  "jq -r '.images.core + \":\" + (.core // \"unknown\")' /usr/share/hassio/version.json 2>/dev/null"
+  "ha core info --raw-json 2>/dev/null | jq -r '.data.image + \":\" + (.data.version // \"unknown\")' 2>/dev/null"
 
 # SUP-08 — Supervisor self-reports as healthy.
 # `ha supervisor info` is the canonical view; a 'landingpage' Core or a

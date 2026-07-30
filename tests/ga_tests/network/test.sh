@@ -102,7 +102,23 @@ fi
 run_test "NET-16a" "Supervisor resolves ota.greenautarky.com" \
   "docker exec hassio_supervisor sh -c 'getent hosts ota.greenautarky.com' >/dev/null 2>&1"
 
-run_test "NET-16b" "OTA endpoint reachable from device" \
-  "curl -sfk --connect-timeout 10 https://ota.greenautarky.com/index.txt 2>/dev/null | grep -q 'OTA'"
+# Split, because the old single check conflated two different failures and
+# reported the wrong one. It asserted that /index.txt contains "OTA" and called
+# a miss "endpoint unreachable" — so a served-but-empty manifest and a dead
+# network looked identical. Measured on K31 2026-07-30: the endpoint answered
+# HTTP 404 in 0.33 s over the public IP AND over the mesh IP, i.e. DNS, routing
+# and TLS all worked, and the test still said unreachable.
+#
+# A 404 proves reachability. Same lesson as the fleet-manager /healthz probe,
+# where a 404 is the normal response and still evidences a live service.
+run_test "NET-16b" "OTA endpoint reachable from device (any HTTP response)" \
+  "CODE=\$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 10 -m 20 https://ota.greenautarky.com/ 2>/dev/null); \
+   [ -n \"\$CODE\" ] && [ \"\$CODE\" != '000' ]"
+
+# The manifest content is a SEPARATE claim: reachable but not serving a manifest
+# is a real problem, and it must be visible as itself rather than disguised as a
+# network fault.
+run_test "NET-16c" "OTA manifest served (index.txt names OTA)" \
+  "curl -sfk --connect-timeout 10 -m 20 https://ota.greenautarky.com/index.txt 2>/dev/null | grep -q 'OTA'"
 
 suite_end

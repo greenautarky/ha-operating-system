@@ -26,8 +26,13 @@ INFLUX_CRED="$SHARE/ga-fleet-influx.yaml"
 
 # ----- /etc/ga-release marker -----
 if [ -f /etc/ga-release ]; then
-  run_test "RC19-01" "/etc/ga-release is a BOSv1.2.21-rc* marker" \
-    "grep -qE 'BOSv1[.]2[.]21-rc[0-9]+' /etc/ga-release"
+  # Was pinned to BOSv1.2.21-rc*, which went stale the moment the release line
+  # moved on: the device now ships BOSv1.3.0-rc1 and this failed while nothing
+  # was wrong. The property worth asserting is that the marker is a well-formed
+  # BOS release string — not WHICH release, because that is what version.yaml
+  # decides and a test that duplicates it just breaks on every bump.
+  run_test "RC19-01" "/etc/ga-release is a well-formed BOS release marker" \
+    "grep -qE '^BOSv[0-9]+[.][0-9]+[.][0-9]+(-rc[0-9]+)?$' /etc/ga-release"
 else
   skip_test "RC19-01" "/etc/ga-release marker" "no /etc/ga-release (host run)"
 fi
