@@ -1050,20 +1050,36 @@ archive_build_configs() {
   # -------------------------------------------------------------------------
   echo "[5/8] Pinning Git repositories..."
 
-  local git_pins=""
+  # git refuses to read a repository owned by another uid ("detected dubious
+  # ownership", safe.directory). The build container runs as root over a
+  # builder-owned mount, so EVERY rev-parse below failed, get_git_info emitted
+  # nothing, and the provenance record came out empty — reported only as a WARN.
+  # `-c safe.directory=` and GIT_CONFIG_* are deliberately ignored for this
+  # setting (otherwise the protection would be trivially bypassable), so a
+  # global config entry is the only mechanism that works. Verified in the
+  # container: -c fails, env fails, global config succeeds.
+  local _repo_root="${SCRIPT_DIR%/scripts}"
+  for _sd in "$_repo_root" "$BUILDROOT_DIR" "$BR2EXT_IHOST" "$BR2EXT_NETBIRD"; do
+    [[ -n "$_sd" ]] && git config --global --add safe.directory "$_sd" 2>/dev/null || true
+  done
 
-  # Helper to get git info as JSON
+  # Helper to get git info as JSON. Returns non-zero and says so when it cannot
+  # read the repo — the old version returned success while emitting nothing,
+  # which is how the separator ended up without an entry beside it.
   get_git_info() {
     local repo_path="$1"
     local repo_name="$2"
     local commit branch remote_url dirty
 
-    if [[ -d "$repo_path/.git" ]] || git -C "$repo_path" rev-parse --git-dir &>/dev/null; then
-      commit="$(git -C "$repo_path" rev-parse HEAD 2>/dev/null || echo "unknown")"
-      branch="$(git -C "$repo_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")"
-      remote_url="$(git -C "$repo_path" remote get-url origin 2>/dev/null || echo "unknown")"
-      dirty="$(git -C "$repo_path" status --porcelain 2>/dev/null | wc -l)"
-      cat <<GITEOF
+    if ! git -C "$repo_path" rev-parse --git-dir &>/dev/null; then
+      echo "WARN: ${repo_name} (${repo_path}) is not a readable git repository — provenance for it will be MISSING" >&2
+      return 1
+    fi
+    commit="$(git -C "$repo_path" rev-parse HEAD 2>/dev/null || echo "unknown")"
+    branch="$(git -C "$repo_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")"
+    remote_url="$(git -C "$repo_path" remote get-url origin 2>/dev/null || echo "unknown")"
+    dirty="$(git -C "$repo_path" status --porcelain 2>/dev/null | wc -l)"
+    cat <<GITEOF
     "${repo_name}": {
       "path": "${repo_path}",
       "commit": "${commit}",
@@ -1072,6 +1088,21 @@ archive_build_configs() {
       "dirty_files": ${dirty}
     }
 GITEOF
+  }
+
+  # Emit the separator only once an entry actually exists. The old code decided
+  # the comma from "the directory is present" and then called a helper that
+  # could produce nothing, which is what made the JSON invalid.
+  GA_PINS_ENTRIES=""
+  add_repo_pin() {
+    local _j
+    _j="$(get_git_info "$1" "$2")" || return 0
+    [[ -n "$_j" ]] || return 0
+    if [[ -z "$GA_PINS_ENTRIES" ]]; then
+      GA_PINS_ENTRIES="$_j"
+    else
+      GA_PINS_ENTRIES="${GA_PINS_ENTRIES},
+${_j}"
     fi
   }
 
@@ -1082,28 +1113,12 @@ GITEOF
     echo '  "build_id": "'${GA_BUILD_TIMESTAMP}'",'
     echo '  "repositories": {'
 
-    local first=true
+    [[ -d "$_repo_root" ]]     && add_repo_pin "$_repo_root"     "ha-operating-system"
+    [[ -d "$BUILDROOT_DIR" ]]  && add_repo_pin "$BUILDROOT_DIR"  "buildroot"
+    [[ -d "$BR2EXT_IHOST" ]]   && add_repo_pin "$BR2EXT_IHOST"   "buildroot-ihost"
+    [[ -d "$BR2EXT_NETBIRD" ]] && add_repo_pin "$BR2EXT_NETBIRD" "buildroot-external"
 
-    # Buildroot
-    if [[ -d "$BUILDROOT_DIR" ]]; then
-      [[ "$first" == "true" ]] || echo ","
-      first=false
-      get_git_info "$BUILDROOT_DIR" "buildroot"
-    fi
-
-    # External tree: ihost
-    if [[ -d "$BR2EXT_IHOST" ]]; then
-      [[ "$first" == "true" ]] || echo ","
-      first=false
-      get_git_info "$BR2EXT_IHOST" "buildroot-ihost"
-    fi
-
-    # External tree: netbird/external
-    if [[ -d "$BR2EXT_NETBIRD" ]]; then
-      [[ "$first" == "true" ]] || echo ","
-      first=false
-      get_git_info "$BR2EXT_NETBIRD" "buildroot-external"
-    fi
+    printf '%s\n' "$GA_PINS_ENTRIES"
 
     echo "  },"
 
@@ -1114,41 +1129,59 @@ GITEOF
 
     echo '  "packages": ['
 
-    # Parse Buildroot's download directory for all tarballs
-    local dl_dir="${BUILDROOT_DIR}/dl"
-    [[ -d "$dl_dir" ]] || dl_dir="${OUT}/dl"
-
+    # Buildroot keeps .hash files next to each package RECIPE
+    # (package/<name>/<name>.hash), NOT in the download directory. The previous
+    # version searched $(BUILDROOT_DIR)/dl and $(OUT)/dl for "*.hash" — measured
+    # 2026-07-30: zero matches in either, and zero in the real BR2_DL_DIR
+    # (/cache/dl) too, which holds 528 downloaded files and no .hash at all.
+    # So this list has always been emitted empty. It was not a wrong path; the
+    # premise about where hashes live was wrong.
+    #
+    # This reports its own COVERAGE rather than silently emitting []. A
+    # provenance list that cannot say how much of the build it covers is not
+    # evidence — same lesson as the CVE scan that reported 0/208 packages and
+    # was accepted as a clean result.
     local pkg_first=true
-    if [[ -d "$dl_dir" ]]; then
-      # Find all .hash files and extract info
-      # Use process substitution to avoid subshell variable scope issues
-      while read -r hashfile; do
-        local pkg_name
-        pkg_name="$(basename "$(dirname "$hashfile")")"
+    local _matched=0 _unmatched=0
+    while read -r bdir; do
+      [[ -n "$bdir" ]] || continue
+      local _full _name _hash=""
+      _full="$(basename "$bdir")"
+      # Strip trailing version-looking segments ("gcc-final-13.4.0" -> "gcc-final")
+      _name="$_full"
+      while [[ "$_name" == *-* && "${_name##*-}" =~ ^[0-9] ]]; do _name="${_name%-*}"; done
+      for _cand in "${BUILDROOT_DIR}/package/${_name}/${_name}.hash" \
+                   "${BUILDROOT_DIR}/package/${_name#host-}/${_name#host-}.hash" \
+                   "${BR2EXT_IHOST}/package/${_name}/${_name}.hash" \
+                   "${BR2EXT_NETBIRD}/package/${_name}/${_name}.hash"; do
+        [[ -f "$_cand" ]] && { _hash="$_cand"; break; }
+      done
 
-        # Read hash file content (format: algo  hash  filename)
+      if [[ -n "$_hash" ]]; then
+        _matched=$((_matched+1))
         while IFS= read -r line; do
           [[ "$line" =~ ^# ]] && continue
           [[ -z "$line" ]] && continue
-
           local algo hash filename
           read -r algo hash filename <<< "$line"
           [[ -z "$hash" ]] && continue
-
           [[ "$pkg_first" == "true" ]] || echo ","
           pkg_first=false
-
           cat <<PKGEOF
     {
-      "package": "${pkg_name}",
+      "package": "${_name}",
+      "build_dir": "${_full}",
       "filename": "${filename}",
       "algorithm": "${algo}",
       "hash": "${hash}"
     }
 PKGEOF
-        done < "$hashfile"
-      done < <(find "$dl_dir" -name "*.hash" -type f 2>/dev/null | sort) || true
-    fi
+        done < "$_hash"
+      else
+        _unmatched=$((_unmatched+1))
+      fi
+    done < <(find "${OUT}/build" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort) || true
+    echo "Package hash coverage: ${_matched} matched, ${_unmatched} without a declared .hash (git-sourced packages have none by design)" >&2
 
     # Also capture any packages built from git (check stamps)
     if [[ -d "${OUT}/build" ]]; then
@@ -1214,16 +1247,42 @@ PKGEOF
     echo "}"
   } > "$pins_file"
 
-  # Validate JSON if jq is available
-  if command -v jq &>/dev/null; then
-    if jq . "$pins_file" > "${pins_file}.tmp" 2>/dev/null; then
-      mv "${pins_file}.tmp" "$pins_file"
-      echo "Source pins validated: $pins_file"
-    else
-      echo "WARN: JSON validation failed for source-pins.json"
-      rm -f "${pins_file}.tmp"
-    fi
+  # Validate the provenance record — FAIL CLOSED.
+  #
+  # This used to print "WARN: JSON validation failed" and carry on, so an
+  # unparseable provenance record shipped as release evidence. It did: the
+  # 2026-07-30 build emitted `"repositories": {\n,\n,\n}` — bare commas, no
+  # entries — and the build reported success. A record nobody can parse proves
+  # nothing about what went into the image, and the point of the file is to be
+  # the answer to "what was this built from".
+  #
+  # jq missing is also a failure, not a pass: it means the check did not run,
+  # and "did not run" must never read like "passed".
+  if ! command -v jq &>/dev/null; then
+    echo "ERROR: jq not available — the provenance record CANNOT BE VERIFIED." >&2
+    echo "       A build whose source-pins.json was never validated is not release evidence." >&2
+    return 1
   fi
+  if ! jq . "$pins_file" > "${pins_file}.tmp" 2>/dev/null; then
+    echo "ERROR: source-pins.json is not valid JSON — the provenance record is unusable." >&2
+    echo "       First 20 lines:" >&2
+    head -20 "$pins_file" | sed 's/^/         /' >&2
+    rm -f "${pins_file}.tmp"
+    return 1
+  fi
+  mv "${pins_file}.tmp" "$pins_file"
+
+  # Valid JSON is not the same as populated JSON. An empty repositories object
+  # parses fine and still records nothing.
+  local _nrepos
+  _nrepos="$(jq -r '.repositories | length' "$pins_file" 2>/dev/null || echo 0)"
+  if [[ "${_nrepos:-0}" -lt 1 ]]; then
+    echo "ERROR: source-pins.json records ZERO source repositories." >&2
+    echo "       Valid JSON, no content — this is the failure mode that hid for months." >&2
+    echo "       Most likely cause: git cannot read the trees (safe.directory)." >&2
+    return 1
+  fi
+  echo "Source pins validated: $pins_file (${_nrepos} repositories)"
 
   # -------------------------------------------------------------------------
   # Create reproducibility manifest
