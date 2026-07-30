@@ -115,10 +115,32 @@ run_test "NET-16b" "OTA endpoint reachable from device (any HTTP response)" \
   "CODE=\$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 10 -m 20 https://ota.greenautarky.com/ 2>/dev/null); \
    [ -n \"\$CODE\" ] && [ \"\$CODE\" != '000' ]"
 
-# The manifest content is a SEPARATE claim: reachable but not serving a manifest
-# is a real problem, and it must be visible as itself rather than disguised as a
-# network fault.
-run_test "NET-16c" "OTA manifest served (index.txt names OTA)" \
-  "curl -sfk --connect-timeout 10 -m 20 https://ota.greenautarky.com/index.txt 2>/dev/null | grep -q 'OTA'"
+# NET-16c asserts what the OTA path actually depends on: a bundle is fetchable
+# with STRICT TLS.
+#
+# I first wrote this as "/index.txt contains OTA", inheriting that from the old
+# NET-16b. Then I checked, and nothing in this repo, ga_manager or
+# ga-fleet-manager reads index.txt — it exists only on the decommissioned host
+# (100.126.142.217) and 404s on the current one. So it was a test with no
+# consumer, asserting a legacy artifact.
+#
+# What OTA genuinely needs is what ga-rauc-install does: fetch
+# /releases/<version>/haos_ihost-<version>.raucb with `curl --fail` and NO -k.
+# The TLS strictness is the load-bearing part — measured 2026-07-30, the
+# decommissioned host still serves that path but its certificate expired
+# 2026-06-30, so a lenient probe reports success (HTTP 200 with -k) where the
+# real installer fails (exit 60, ssl_verify=10). A check that is more forgiving
+# than the code it guards is worse than none.
+#
+# -I so this stays a HEAD request: the bundle is ~240 MB and the point is
+# reachability + trust, not a download.
+_OTA_VER="$(sed -n 's/^VERSION_ID=//p' /etc/os-release 2>/dev/null | tr -d '"')"
+if [ -n "$_OTA_VER" ]; then
+  run_test "NET-16c" "OTA bundle for $_OTA_VER fetchable with STRICT TLS (as ga-rauc-install does)" \
+    "curl -sf -I --connect-timeout 10 -m 25 -o /dev/null \
+       https://ota.greenautarky.com/releases/${_OTA_VER}/haos_ihost-${_OTA_VER}.raucb"
+else
+  skip_test "NET-16c" "OTA bundle fetch" "cannot read VERSION_ID from /etc/os-release"
+fi
 
 suite_end
