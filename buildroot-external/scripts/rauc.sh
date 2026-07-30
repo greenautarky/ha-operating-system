@@ -33,11 +33,48 @@ set -e
 # whose blast radius is one bench, not the fleet.
 function ga_is_prod() { [ "${GA_ENV:-dev}" = "prod" ]; }
 
+# Signing material comes from /secrets, a dedicated read-only mount — NOT from
+# /build.
+#
+# /build is the bind-mounted source checkout. Keeping the OTA signing keys there
+# put them inside a directory that a --privileged container gets wholesale, that
+# `git clean -xdf` walks, and that the CI runner's own user can rename or
+# replace. The keys being gitignored stopped them being committed; it never
+# stopped any of that. A separate mount is the actual boundary.
+#
+# The fallback to /build is deliberate, temporary, and LOUD. It exists so this
+# change can land and be proven by a real build before the originals are
+# removed — not so that the old path keeps quietly working. Rule: a fallback
+# you cannot hear is a configuration error that becomes an outage nobody sees.
+GA_SECRETS_DIR="${GA_SECRETS_DIR:-/secrets}"
+
+# $1 = path under /secrets   $2 = legacy path under /build
+function _ga_secret_path() {
+    local want="${GA_SECRETS_DIR}/$1" legacy="$2"
+    if [ -f "${want}" ]; then
+        echo "${want}"
+        return 0
+    fi
+    if [ -f "${legacy}" ]; then
+        echo "WARNING: signing material read from ${legacy} — the bind-mounted" >&2
+        echo "         source checkout. Expected ${want}. The build host is" >&2
+        echo "         missing the read-only secrets mount; fix that rather" >&2
+        echo "         than relying on this path." >&2
+        echo "${legacy}"
+        return 0
+    fi
+    # Neither: emit the EXPECTED path. prepare_rauc_signing() refuses on a
+    # missing prod key, and a non-existent path is what makes it refuse.
+    echo "${want}"
+}
+
 function ga_signing_key() {
-    if ga_is_prod; then echo "/build/key.pem"; else echo "/build/dev-key.pem"; fi
+    if ga_is_prod; then _ga_secret_path "key.pem"                 "/build/key.pem"
+    else                _ga_secret_path "dev-ca/dev-signing.key"  "/build/dev-key.pem"; fi
 }
 function ga_signing_cert() {
-    if ga_is_prod; then echo "/build/cert.pem"; else echo "/build/dev-cert.pem"; fi
+    if ga_is_prod; then _ga_secret_path "cert.pem"                "/build/cert.pem"
+    else                _ga_secret_path "dev-ca/dev-signing.pem"  "/build/dev-cert.pem"; fi
 }
 function ga_base_ca() {
     if ga_is_prod; then
