@@ -1337,8 +1337,16 @@ fi
 echo ""
 echo "--- Source file consistency ---"
 
-# Determine source root (container: /build, host: parent of output dir)
-if [[ -d "/build/buildroot-external" ]]; then
+# Determine source root (container: /build, host: parent of output dir).
+#
+# An explicit GA_SRC_ROOT wins. Without it these checks always read /build when
+# it exists, which means failure injection cannot reach them: mutate.sh works on
+# a COPY of the tree, the suite reads the real one, and every source mutation
+# comes back "not caught" while the guard is in fact fine. A check that cannot
+# be tested is a check nobody can trust.
+if [[ -n "${GA_SRC_ROOT:-}" ]]; then
+  SRC="$GA_SRC_ROOT"
+elif [[ -d "/build/buildroot-external" ]]; then
   SRC="/build"
 elif [[ -d "${OUT}/../buildroot-external" ]]; then
   SRC="$(cd "${OUT}/.." && pwd)"
@@ -3058,7 +3066,9 @@ fi
 # that exercises a gate is now the wrong shape — the property to assert is
 # ABSENCE, and re-adding the bridge must have to delete a check rather than flip
 # a value.
-_lca_src="/build"
+# GA_SRC_ROOT first, for the same reason as the SRC block above: hardcoding
+# /build here made this check unreachable by failure injection.
+_lca_src="${GA_SRC_ROOT:-/build}"
 [[ -d "${_lca_src}/buildroot-external" ]] || _lca_src="$(cd "$(dirname "$0")/../.." && pwd)"
 _lca_residue=""
 [[ -f "${_lca_src}/buildroot-external/ota/legacy-signing-cert.pem" ]] && _lca_residue+="ota/legacy-signing-cert.pem "

@@ -82,15 +82,29 @@ jobs:
             }
           done
 
-          # This file is excluded from the DIFF scan only, and only itself.
-          # It defines the patterns, so it necessarily contains them along with
-          # the documented bypass examples — a PR editing the gate would always
-          # fail the gate. A permanently self-blocking check trains people to
-          # reach for the override without reading, which costs more than the
-          # narrow risk of someone hiding a disclosure inside the gate's own
-          # definition. Commit messages and the title are still scanned in
-          # full, including for PRs that touch this file.
-          if ! git diff "$BASE...$HEAD" -- . ':(exclude).github/workflows/disclosure-check.yml' > /tmp/rawdiff.txt; then
+          # Two exclusions from the DIFF scan, both narrow and both necessary:
+          #
+          #   this file          it DEFINES the patterns, so it necessarily
+          #                      contains them plus the documented bypass
+          #                      examples — a PR editing the gate would always
+          #                      fail the gate
+          #   .../must-fail/     the self-test fixtures are deliberately-bad
+          #                      inputs whose entire purpose is to be flagged
+          #
+          # A permanently self-blocking check trains people to reach for the
+          # override without reading, which costs more than the narrow risk of
+          # someone hiding a disclosure in the gate's own definition or in a
+          # file whose name says it is a known-bad test input.
+          #
+          # must-pass fixtures are deliberately NOT excluded. They assert that
+          # this gate stays quiet on legitimate content, so the gate running
+          # over them in CI is the assertion, not an accident.
+          #
+          # Commit messages and the title are always scanned in full, for every
+          # PR, including ones that touch these paths.
+          if ! git diff "$BASE...$HEAD" -- . \
+               ':(exclude).github/workflows/disclosure-check.yml' \
+               ':(exclude)tests/gates/*/must-fail/*' > /tmp/rawdiff.txt; then
             echo "::error::git diff failed - the scan could not run. This is NOT a clean result."
             exit 1
           fi
