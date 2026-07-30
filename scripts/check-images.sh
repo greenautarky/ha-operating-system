@@ -304,10 +304,24 @@ if [ -f "$ADDON_IMAGES_JSON" ] && command -v skopeo >/dev/null 2>&1; then
         # not something this repo is behind on.
         case "$image" in *ghcr.io/greenautarky/*) : ;; *) continue ;; esac
 
+        # `|| newest=""` is load-bearing, not defensive noise. This script runs
+        # under `set -euo pipefail`, and this pipeline fails in two ordinary
+        # situations: skopeo cannot list a PRIVATE package (no registry
+        # credential on a GitHub-hosted runner), and grep exits 1 when an
+        # add-on has no numeric tags at all. Under pipefail either one makes
+        # the assignment fail, and `set -e` then aborts the whole script — so
+        # the SKIP branch three lines below, written precisely for "could not
+        # list tags", was structurally unreachable.
+        #
+        # The effect was not a missing message. It was a required status check
+        # dying mid-loop with a bare `exit 1`: every add-on after the first
+        # private one went unexamined, and the log gave no reason. Found when
+        # ga_manager became private and the job started failing on every PR
+        # while master's last run was still green.
         newest=$(skopeo list-tags "docker://${image}" 2>/dev/null \
             | jq -r '.Tags[]?' 2>/dev/null \
             | grep -E '^[0-9]+([.][0-9]+)+' \
-            | sort -V | tail -1)
+            | sort -V | tail -1) || newest=""
 
         if [ -z "$newest" ]; then
             # Not agreement. Say so.
