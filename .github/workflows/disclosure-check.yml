@@ -82,7 +82,15 @@ jobs:
             }
           done
 
-          if ! git diff "$BASE...$HEAD" > /tmp/rawdiff.txt; then
+          # This file is excluded from the DIFF scan only, and only itself.
+          # It defines the patterns, so it necessarily contains them along with
+          # the documented bypass examples — a PR editing the gate would always
+          # fail the gate. A permanently self-blocking check trains people to
+          # reach for the override without reading, which costs more than the
+          # narrow risk of someone hiding a disclosure inside the gate's own
+          # definition. Commit messages and the title are still scanned in
+          # full, including for PRs that touch this file.
+          if ! git diff "$BASE...$HEAD" -- . ':(exclude).github/workflows/disclosure-check.yml' > /tmp/rawdiff.txt; then
             echo "::error::git diff failed - the scan could not run. This is NOT a clean result."
             exit 1
           fi

@@ -10,12 +10,21 @@ ga_output*/
 .br2-external.*
 
 # Certificates
+# No negation here on purpose. The retired signing CA used to be re-included
+# by an explicit `!` line so every build baked it into the rauc keyring; that
+# bridge was removed on 2026-07-30 and KEYRING-06 / SRC-21 now fail the build
+# if the certificate or its gate reappears. Trust material belongs on the build
+# host, never in this tree.
 *.pem
-# F13 (2026-06-05): legacy signing cert is committed intentionally —
-# public X.509 only, no private key — so all future builds bake it
-# into the rauc keyring. See buildroot-external/scripts/rauc.sh
-# install_rauc_certs().
 buildroot-ihost/rootfs-overlay/etc/shadow
+
+# Release evidence — SBOM, source pins, manifests.
+# /build inside the build container IS this checkout (scripts/release.sh bind
+# mounts the repo root), so the collector's default destination lands here. It
+# is a complete inventory of the private toolchain, including component
+# versions and the source SHAs of the private repos. One `git add -A` on the
+# build host would publish all of it to a PUBLIC repository.
+/release-evidence/
 
 # Local build secrets — ignore files inside (NOT the dir itself, so
 # .example template files can be re-included via the !secrets/*.example

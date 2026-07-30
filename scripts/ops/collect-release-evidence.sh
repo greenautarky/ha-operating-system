@@ -113,8 +113,27 @@ dirty="$(_jq '[.repositories | to_entries[] | select(.value.dirty_files > 0) | "
 # --- checksums, including the artefacts NOT stored here -------------------
 # The images and the legal-info tarball are too large for git. Their sha256 is
 # recorded so a copy found later can be proven to be the one this release shipped.
+#
+# Checksum the DECLARED artefacts, never a glob. $DEST is mkdir -p'd rather
+# than created fresh, so a glob also swallows whatever was already sitting
+# there — a re-run's leftovers, a stray note, a file someone dropped in the
+# checkout — and signs it into the manifest as though it were evidence this
+# script produced. The REQUIRED/EXPECTED arrays already say exactly what
+# belongs here; use them.
 : > "${DEST}/SHA256SUMS"
-( cd "$DEST" && sha256sum -- *.json *.txt 2>/dev/null >> SHA256SUMS ) || true
+for name in "${!REQUIRED[@]}" "${!EXPECTED[@]}"; do
+  [[ -f "${DEST}/${name}" ]] || continue
+  ( cd "$DEST" && sha256sum -- "$name" ) >> "${DEST}/SHA256SUMS"
+done
+# Anything else in the directory is named but NOT vouched for, so a reader can
+# see the difference between "this release produced it" and "it was lying here".
+undeclared=""
+while IFS= read -r f; do
+  case " ${!REQUIRED[*]} ${!EXPECTED[*]} SHA256SUMS EVIDENCE.md " in
+    *" ${f} "*) ;;
+    *) undeclared+="${f} " ;;
+  esac
+done < <(cd "$DEST" && find . -maxdepth 1 -type f -printf '%P\n' | sort)
 big_recorded=""
 for f in "${IMAGES}"/*.img.xz "${IMAGES}"/*.raucb "${IMAGES}"/legal-info/legal-info-full.tar.xz; do
   [[ -f "$f" ]] || continue
@@ -166,6 +185,13 @@ done
     echo
   else
     echo "Nothing expected was missing."
+    echo
+  fi
+  if [[ -n "$undeclared" ]]; then
+    echo "⚠️ **Present but NOT produced by this collector** — not checksummed,"
+    echo "not vouched for, and not evidence of anything:"
+    echo
+    for u in $undeclared; do echo "- \`${u}\`"; done
     echo
   fi
   echo "## Verifying this later"

@@ -1650,17 +1650,41 @@ if [[ -n "$SRC" ]]; then
   #
   # `rauc info --keyring=X bundle` is the exact question a device asks at install
   # time, so this asks it here, where it costs a second.
+  # The bundle must be THIS build's bundle. rename_images_with_build_id() gives
+  # every bundle a unique name, so images/ accumulates them across builds until
+  # the periodic cleanup runs. `ls -t | head -1` would happily pick a PREVIOUS
+  # build's bundle and verify it against the NEW keyring — a green result about
+  # an artefact nobody is shipping. Anchor on the rootfs: the bundle wraps it,
+  # so a bundle older than the rootfs cannot be the one this build produced.
   _rauc_bin="$(find "${OUT}/host" -name rauc -type f -perm -u+x 2>/dev/null | head -1)"
   _bundle="$(ls -t "${OUT}"/images/*.raucb 2>/dev/null | head -1)"
   _kr="${TARGET}/etc/rauc/keyring.pem"
-  if [[ -n "$_rauc_bin" && -n "$_bundle" && -f "$_kr" ]]; then
+  _rootfs="${OUT}/images/rootfs.erofs"
+  if [[ -n "$_bundle" && -f "$_rootfs" && ! "$_bundle" -nt "$_rootfs" ]]; then
+    _fail "RAUC-SIG-01: the newest bundle ($(basename "$_bundle")) is OLDER than rootfs.erofs — it is left over from an earlier build. This run produced no bundle to verify."
+  elif [[ -n "$_rauc_bin" && -n "$_bundle" && -f "$_kr" ]]; then
     if _sig_out="$("$_rauc_bin" info --keyring="$_kr" "$_bundle" 2>&1)"; then
       _signer="$(printf '%s' "$_sig_out" | sed -n "s/.*Verified inline signature by '\([^']*\)'.*/\1/p" | head -1)"
-      _pass "RAUC-SIG-01: the bundle verifies against the shipped keyring (signer: ${_signer:-unnamed})"
+      # Deciding purely on exit status makes this a negative assertion: if the
+      # output format ever changes, the parse yields nothing and the check still
+      # passes, reporting "signer: unnamed". Requiring a named signer turns it
+      # into a positive one — we assert what verified, not merely that nothing
+      # went wrong.
+      if [[ -n "$_signer" ]]; then
+        _pass "RAUC-SIG-01: the bundle verifies against the shipped keyring (signer: ${_signer})"
+      else
+        _fail "RAUC-SIG-01: rauc info exited 0 but named no signer — the output could not be parsed, so this is NOT evidence the bundle verified. Check the rauc version's output format."
+        printf '%s\n' "$_sig_out" | head -4 | sed 's/^/        /'
+      fi
     else
       _fail "RAUC-SIG-01: the bundle does NOT verify against the keyring this image ships — a device with this keyring would REJECT this update. Signing key and trust anchor disagree."
       printf '%s\n' "$_sig_out" | head -4 | sed 's/^/        /'
     fi
+  elif [[ "${GA_ENV:-dev}" == "prod" ]]; then
+    # On prod a skip is not an acceptable outcome. The one check standing
+    # between a mis-signed bundle and a fleet that cannot install it must not
+    # be allowed to quietly not run.
+    _fail "RAUC-SIG-01: could not run on a PROD build (rauc binary, bundle or keyring missing) — a prod release may not ship without this evidence."
   else
     _skip "RAUC-SIG-01: bundle verifies against its own keyring" "no rauc binary, bundle or keyring in this run"
   fi
