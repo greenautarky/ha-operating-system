@@ -215,6 +215,38 @@ else
   _bad "KEYRING-06: retired CA bridge RESIDUE present: ${_bridge_residue}— the 2026-07-30 hard cut is incomplete, and a one-line change re-trusts a CA with no revocation path"
 fi
 
+# --- KEYRING-07: the anchor is the one this deployment is SUPPOSED to have -
+# Pinned constants, never derived from the tree (N2). KEYRING-02/03 prove the
+# shipped set matches the DECLARED inputs; that is a consistency check and it
+# stays green if someone swaps rel-ca.pem for another CA. This asserts identity:
+# a production image must carry the production root and nothing else.
+#
+# It is also what makes the dev/prod split real. Until 2026-07-30 dev-ca.pem was
+# a symlink to rel-ca.pem, so "dev" and "prod" shipped the same anchor and a dev
+# bundle installed on any production device. With both fingerprints pinned here,
+# collapsing them back is a test failure rather than an invisible symlink.
+PROD_ROOT_FP="C1:B7:57:33:1C:AE:F8:C1:36:40:81:C3:39:CE:34:80:FD:C6:9E:42:D0:ED:73:2F:CA:C0:AA:9F:0F:6A:83:17"
+DEV_ROOT_FP="29:4A:C7:AE:4D:12:0B:BB:F7:50:2B:E9:39:4D:09:1B:6C:81:5D:9B:F7:35:08:15:BC:00:BC:51:61:F1:59:88"
+
+if [[ "${GA_ENV:-dev}" == "prod" ]]; then
+  _want="$PROD_ROOT_FP"; _wantname="production root CA"
+  _forbid="$DEV_ROOT_FP"; _forbidname="DEV root CA"
+else
+  _want="$DEV_ROOT_FP"; _wantname="dev root CA"
+  _forbid="$PROD_ROOT_FP"; _forbidname="production root CA"
+fi
+
+if [[ -n "${SHIPPED_SUBJ[$_want]:-}" ]]; then
+  _ok "KEYRING-07: the shipped keyring carries the pinned ${_wantname}"
+else
+  _bad "KEYRING-07: pinned ${_wantname} (${_want:0:17}...) is NOT in the shipped keyring — this image trusts something else"
+fi
+if [[ -n "${SHIPPED_SUBJ[$_forbid]:-}" ]]; then
+  _bad "KEYRING-07b: the shipped keyring carries the ${_forbidname} on a ${GA_ENV:-dev} build — dev and prod trust must not overlap"
+else
+  _ok "KEYRING-07b: no ${_forbidname} in a ${GA_ENV:-dev} keyring"
+fi
+
 # --- KEYRING-05: an expired anchor bricks OTA for the whole fleet ---------
 now_s=$(date +%s)
 for fp in "${!SHIPPED_END[@]}"; do
