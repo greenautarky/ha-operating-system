@@ -46,7 +46,6 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 # The retired pre-2026-03-27 signing CA, pinned. Documented in rauc.sh; pinned
 # here so swapping the file in-tree is a build failure, not a silent re-trust.
-LEGACY_FP_PINNED="01:E7:CE:81:49:6B:75:43:22:3C:8B:31:29:4C:78:AB:D3:02:7F:FE:62:7A:B5:B6:28:AF:73:83:E1:21:BC:F7"
 
 # Subject that scripts/generate-signing-key.sh stamps on a throwaway dev key.
 DEV_SUBJECT_CN="HassOS Self-signed Development Certificate"
@@ -123,7 +122,6 @@ fi
 
 # --- declared inputs ------------------------------------------------------
 DEPLOYMENT="$(sed -n 's/^DEPLOYMENT="\?\([^"]*\)"\?.*/\1/p' "$META" | head -1)"
-LEGACY_GATE="$(sed -n 's/^GA_LEGACY_CA_BRIDGE="\?\([^"]*\)"\?.*/\1/p' "$META" | head -1)"
 : "${DEPLOYMENT:=production}"
 : "${LEGACY_GATE:=unset}"
 GA_ENV="${GA_ENV:-dev}"
@@ -133,9 +131,8 @@ if [[ "$DEPLOYMENT" == "development" ]]; then
 else
   BASE_CA="${OTA_DIR}/rel-ca.pem"
 fi
-LEGACY_CERT="${OTA_DIR}/legacy-signing-cert.pem"
 
-echo "  Deployment: ${DEPLOYMENT}   GA_ENV: ${GA_ENV}   GA_LEGACY_CA_BRIDGE: ${LEGACY_GATE}"
+echo "  Deployment: ${DEPLOYMENT}   GA_ENV: ${GA_ENV}   retired-CA bridge: removed 2026-07-30"
 echo ""
 
 # rel-ca.pem / dev-ca.pem are gitignored — they live on the build server only.
@@ -148,26 +145,6 @@ declare -A EXPECTED_LABEL=()
 while IFS=$'\t' read -r fp _subj _end; do
   [[ -n "$fp" ]] && EXPECTED_LABEL["$fp"]="base CA ($(basename "$BASE_CA"))"
 done < <(cert_records "$BASE_CA")
-
-legacy_fp=""
-if [[ "$LEGACY_GATE" == "true" ]]; then
-  if [[ -f "$LEGACY_CERT" ]]; then
-    legacy_fp="$(fp_of_file "$LEGACY_CERT")"
-    EXPECTED_LABEL["$legacy_fp"]="retired F13 CA (GA_LEGACY_CA_BRIDGE=true)"
-  else
-    _bad "GA_LEGACY_CA_BRIDGE=true but ${LEGACY_CERT} is missing — the bake is inconsistent"
-  fi
-fi
-
-# --- KEYRING-01: the in-tree legacy cert is the one we audited -------------
-if [[ -f "$LEGACY_CERT" ]]; then
-  actual_legacy_fp="$(fp_of_file "$LEGACY_CERT")"
-  if [[ "$actual_legacy_fp" == "$LEGACY_FP_PINNED" ]]; then
-    _ok "KEYRING-01: in-tree legacy cert matches the pinned fingerprint"
-  else
-    _bad "KEYRING-01: legacy-signing-cert.pem was SWAPPED — ${actual_legacy_fp} != pinned ${LEGACY_FP_PINNED}"
-  fi
-fi
 
 # --- the shipped set ------------------------------------------------------
 shipped_total=0
@@ -213,43 +190,29 @@ for fp in "${!EXPECTED_LABEL[@]}"; do
 done
 (( missing == 0 )) && _ok "KEYRING-03: every declared anchor is present in the shipped keyring"
 
-# --- KEYRING-04: the legacy bridge matches the gate, in the ARTIFACT ------
-# RAUC-LEGACY-01 proves the function honours the flag. This proves the image does.
-if [[ -n "$legacy_fp" || -f "$LEGACY_CERT" ]]; then
-  probe_fp="${legacy_fp:-$LEGACY_FP_PINNED}"
-  legacy_in_image=false
-  [[ -n "${SHIPPED_SUBJ[$probe_fp]:-}" ]] && legacy_in_image=true
-  if [[ "$LEGACY_GATE" == "true" && "$legacy_in_image" == true ]]; then
-    _ok "KEYRING-04: retired F13 CA present, as GA_LEGACY_CA_BRIDGE=true declares (expected while pre-rotation devices remain — Odoo #534)"
-  elif [[ "$LEGACY_GATE" != "true" && "$legacy_in_image" == false ]]; then
-    _ok "KEYRING-04: retired F13 CA absent, as GA_LEGACY_CA_BRIDGE=${LEGACY_GATE} declares"
-  elif [[ "$LEGACY_GATE" != "true" && "$legacy_in_image" == true ]]; then
-    _bad "KEYRING-04: retired F13 CA is IN the image although GA_LEGACY_CA_BRIDGE=${LEGACY_GATE} — the gate did not hold"
-  else
-    _bad "KEYRING-04: GA_LEGACY_CA_BRIDGE=true but the retired F13 CA is NOT in the image — the bake diverged from the declaration"
-  fi
-fi
-
-# --- KEYRING-06: the clean cut must be defended, not merely declared -----
-# KEYRING-04 above checks that the image MATCHES the declaration. It cannot
-# check that the declaration is right: it derives the expected anchor set FROM
-# GA_LEGACY_CA_BRIDGE, so flipping that flag back to "true" makes the retired
-# CA "expected" and KEYRING-04 reports it as OK. The whole audit then stays
-# green while every shipped device trusts the key the 2026-07-29 rotation
-# retired — a one-line change to meta, with the cert already sitting next to it
-# in the tree, and nothing that says no.
+# --- KEYRING-06: the retired CA bridge must be GONE, not merely off --------
+# Until 2026-07-30 this checked that GA_LEGACY_CA_BRIDGE was not "true" on a prod
+# build. That was a guard around a flag, with the retired cert still sitting next
+# to it in the tree — one line from re-trusting a non-revocable CA:TRUE root
+# valid to 2035, on every device, with no revocation path.
 #
-# The 2026-07-29 rotation was commissioned as a CLEAN CUT: exactly one anchor,
-# no bridge, no dual trust. So on a production build the bridge being ON is a
-# finding by itself, independent of what the image contains. Turning it back on
-# for a genuine migration then requires deleting this check on purpose — which
-# is the point. A trust decision should cost a deliberate act, not a flag.
-if [[ "$GA_ENV" == "prod" || "$DEPLOYMENT" == "production" ]]; then
-  if [[ "$LEGACY_GATE" == "true" ]]; then
-    _bad "KEYRING-06: GA_LEGACY_CA_BRIDGE=true on a PRODUCTION build — the retired pre-2026-07-29 signing CA would be trusted fleet-wide. The rotation was a clean cut; if a bridge release is genuinely intended, remove this check in the same commit that explains why."
-  else
-    _ok "KEYRING-06: clean cut holds — GA_LEGACY_CA_BRIDGE=${LEGACY_GATE} on a production build"
-  fi
+# Operator decision 2026-07-30: hard cut. The remaining pre-cut devices are being
+# swapped, not bridged, so the flag, the cert and the bake function were deleted.
+# This check now asserts that ABSENCE, which is a stronger property than "the
+# flag says false": re-introducing the bridge has to reintroduce all three parts
+# and delete this check, and that is not something anyone does by accident.
+#
+# Bridge-FORWARD is unaffected and deliberately preserved: signing a NEW image
+# with the OLD KEY (archived off the builder, not destroyed) never required the
+# retired cert to be in anybody's keyring.
+_bridge_residue=""
+[[ -f "${OTA_DIR}/legacy-signing-cert.pem" ]] && _bridge_residue+="ota/legacy-signing-cert.pem "
+grep -q '^GA_LEGACY_CA_BRIDGE=' "$META" 2>/dev/null && _bridge_residue+="GA_LEGACY_CA_BRIDGE-in-meta "
+grep -rq 'function add_legacy_ca_if_enabled' "$(dirname "$META")/scripts" 2>/dev/null && _bridge_residue+="add_legacy_ca_if_enabled() "
+if [[ -z "$_bridge_residue" ]]; then
+  _ok "KEYRING-06: retired CA bridge fully removed (no cert, no flag, no bake function)"
+else
+  _bad "KEYRING-06: retired CA bridge RESIDUE present: ${_bridge_residue}— the 2026-07-30 hard cut is incomplete, and a one-line change re-trusts a CA with no revocation path"
 fi
 
 # --- KEYRING-05: an expired anchor bricks OTA for the whole fleet ---------

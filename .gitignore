@@ -15,7 +15,6 @@ ga_output*/
 # public X.509 only, no private key — so all future builds bake it
 # into the rauc keyring. See buildroot-external/scripts/rauc.sh
 # install_rauc_certs().
-!buildroot-external/ota/legacy-signing-cert.pem
 buildroot-ihost/rootfs-overlay/etc/shadow
 
 # Local build secrets — ignore files inside (NOT the dir itself, so
