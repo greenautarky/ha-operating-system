@@ -177,7 +177,10 @@ jobs:
 
           # A value that is plainly a reference or a placeholder is not a
           # credential. Without this the gate fires on every workflow line that
-          # says `token: ${{ secrets.* }}` and gets switched off within a week.
+          # says `token: <a secrets context reference>` and gets switched off
+          # within a week. (Written out in words on purpose: GitHub interpolates
+          # expressions anywhere in a run block, comments included, so the
+          # literal syntax here would be evaluated rather than read.)
           PLACEHOLDER='(\$\{|\$\(|\$[A-Za-z_]|<[A-Za-z_-]+>|secrets\.|vars\.|env\.|REDACTED|redacted|CHANGEME|changeme|xxxx|\*\*\*|example|placeholder|your[-_])'
 
           scan() {
