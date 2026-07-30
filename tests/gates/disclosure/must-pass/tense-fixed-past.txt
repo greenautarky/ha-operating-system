@@ -1,0 +1,1 @@
+the anonymous bind was closed on 2026-07-28 and the key was revoked

@@ -1,0 +1,1 @@
+./tests/run_device_tests.sh --ssh root@192.168.1.100 --port 22222

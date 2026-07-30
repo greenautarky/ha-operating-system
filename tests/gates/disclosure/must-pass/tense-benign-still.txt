@@ -1,0 +1,1 @@
+the marker is still written at build time and survives a reboot

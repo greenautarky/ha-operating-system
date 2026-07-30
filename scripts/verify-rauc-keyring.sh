@@ -126,10 +126,21 @@ DEPLOYMENT="$(sed -n 's/^DEPLOYMENT="\?\([^"]*\)"\?.*/\1/p' "$META" | head -1)"
 : "${LEGACY_GATE:=unset}"
 GA_ENV="${GA_ENV:-dev}"
 
-if [[ "$DEPLOYMENT" == "development" ]]; then
-  BASE_CA="${OTA_DIR}/dev-ca.pem"
-else
+# The baseline follows GA_ENV, NOT DEPLOYMENT.
+#
+# DEPLOYMENT is read from buildroot-external/meta, where it is hardcoded
+# "production" and does not change between a dev and a prod build — the same
+# dead selector that made the signing-key choice inert until 2026-07-30. Keying
+# the baseline off it meant this audit derived a PRODUCTION expectation and
+# compared it against a DEV artefact, so it was red on every dev build for a
+# reason that was a bug in the audit. A check that is permanently red teaches
+# people to ignore its colour, which costs more than not having it.
+#
+# install_rauc_certs() picks the anchor by GA_ENV; so must the audit of it.
+if [[ "$GA_ENV" == "prod" ]]; then
   BASE_CA="${OTA_DIR}/rel-ca.pem"
+else
+  BASE_CA="${OTA_DIR}/dev-ca.pem"
 fi
 
 echo "  Deployment: ${DEPLOYMENT}   GA_ENV: ${GA_ENV}   retired-CA bridge: removed 2026-07-30"
