@@ -156,9 +156,9 @@ run_test "SUP-14" "Supervisor systemd unit (hassos-supervisor.service) exists" \
 #
 # This is the check that was missing when the Supervisor fork spent four weeks
 # injecting a superseded service IP into CoreDNS. Nothing compared the two
-# views: the host resolved GA names to 100.126.129.116 via /etc/hosts while
-# every add-on resolved them to 100.126.142.217 via CoreDNS, whose certificate
-# had expired. Both halves looked fine in isolation.
+# views: the host resolved GA names correctly via /etc/hosts while every add-on
+# resolved them, via CoreDNS, to a superseded endpoint. Both halves looked fine
+# in isolation. (Addresses and host state: ga-ihost-docs, not this public repo.)
 #
 # SUP-12 asserts the mechanism (the Supervisor can read its config), SUP-13
 # asserts the OUTCOME (host and add-on agree). The outcome check is the one that

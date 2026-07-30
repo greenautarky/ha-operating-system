@@ -120,9 +120,9 @@ run_test "NET-16b" "OTA endpoint reachable from device (any HTTP response)" \
 #
 # I first wrote this as "/index.txt contains OTA", inheriting that from the old
 # NET-16b. Then I checked, and nothing in this repo, ga_manager or
-# ga-fleet-manager reads index.txt — it exists only on the decommissioned host
-# (100.126.142.217) and 404s on the current one. So it was a test with no
-# consumer, asserting a legacy artifact.
+# ga-fleet-manager reads index.txt — it exists only on a decommissioned host and
+# 404s on the current one. So it was a test with no consumer, asserting a legacy
+# artifact.
 #
 # What OTA genuinely needs is what ga-rauc-install does: fetch
 # /releases/<version>/haos_ihost-<version>.raucb with `curl --fail` and NO -k.
