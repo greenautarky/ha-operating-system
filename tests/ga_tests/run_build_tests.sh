@@ -1637,6 +1637,58 @@ if [[ -n "$SRC" ]]; then
   # These are SRC-prefixed on purpose: GitHub CI only gates on FAILs matching
   # SRC-/VER-/XVER-, and the guard has to be un-removable from a PR. The audit
   # itself needs a build output and runs as RAUC-KEYRING-01 on the builder.
+  # RAUC-SIG-01: the bundle must verify against the keyring THIS image ships.
+  #
+  # This is the check that would have caught the 2026-07-30 genimage bug on the
+  # build server instead of on a device. The trust anchor and the signing key are
+  # selected in two different files — install_rauc_certs() picks the keyring,
+  # genimage picks the key — and nothing compared them. A mismatch produces a
+  # perfectly well-formed bundle that no device carrying that keyring can
+  # install, and every other check stays green: the image boots, the keyring is
+  # correct, the bundle exists and is signed. It is simply signed by the wrong
+  # authority.
+  #
+  # `rauc info --keyring=X bundle` is the exact question a device asks at install
+  # time, so this asks it here, where it costs a second.
+  _rauc_bin="$(find "${OUT}/host" -name rauc -type f -perm -u+x 2>/dev/null | head -1)"
+  _bundle="$(ls -t "${OUT}"/images/*.raucb 2>/dev/null | head -1)"
+  _kr="${TARGET}/etc/rauc/keyring.pem"
+  if [[ -n "$_rauc_bin" && -n "$_bundle" && -f "$_kr" ]]; then
+    if _sig_out="$("$_rauc_bin" info --keyring="$_kr" "$_bundle" 2>&1)"; then
+      _signer="$(printf '%s' "$_sig_out" | sed -n "s/.*Verified inline signature by '\([^']*\)'.*/\1/p" | head -1)"
+      _pass "RAUC-SIG-01: the bundle verifies against the shipped keyring (signer: ${_signer:-unnamed})"
+    else
+      _fail "RAUC-SIG-01: the bundle does NOT verify against the keyring this image ships — a device with this keyring would REJECT this update. Signing key and trust anchor disagree."
+      printf '%s\n' "$_sig_out" | head -4 | sed 's/^/        /'
+    fi
+  else
+    _skip "RAUC-SIG-01: bundle verifies against its own keyring" "no rauc binary, bundle or keyring in this run"
+  fi
+
+  # SRC-22: the bundle signing key must not be hardcoded in the genimage config.
+  #
+  # The RAUC bundle is signed by genimage, not by rauc.sh, and until 2026-07-30
+  # both raucb configs carried a literal `key = "/build/key.pem"`. So every dev
+  # build signed with the PRODUCTION key regardless of what the rest of the
+  # build believed it was doing — and after the dev/prod trust split it would
+  # have produced a bundle that cannot verify against its own keyring, with the
+  # failure appearing only at install time on a device.
+  #
+  # Checkable without a build, which is the point: a literal here is invisible
+  # in a green build and only shows up on hardware.
+  _gi_bad=""
+  for _cfg in "${SRC:-.}"/buildroot-external/genimage/image-raucb-*.cfg; do
+    [[ -f "$_cfg" ]] || continue
+    if grep -qE '^[[:space:]]*(key|cert)[[:space:]]*=[[:space:]]*"/' "$_cfg"; then
+      _gi_bad+="$(basename "$_cfg") "
+    fi
+  done
+  if [[ -z "$_gi_bad" ]]; then
+    _pass "SRC-22: raucb genimage configs take the signing material from the build mode, not a literal path"
+  else
+    _fail "SRC-22: hardcoded signing key/cert path in: ${_gi_bad}— a dev build would sign with production material"
+  fi
+
   # SRC-20: the Supervisor must be able to SEE /etc/ga-services.conf.
   #
   # Its DNS plugin reads that file to learn which host serves GA services and

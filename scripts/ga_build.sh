@@ -292,12 +292,24 @@ PREFLIGHT_FAIL=0
   echo "FAIL: Buildroot utils/config not found: ${BUILDROOT_DIR}/utils/config" >&2; PREFLIGHT_FAIL=1;
 }
 
-# CA certificates for RAUC bundle signing
-[[ -f "/build/cert.pem" ]] || [[ -f "cert.pem" ]] || {
-  echo "FAIL: RAUC signing cert (cert.pem) not found" >&2; PREFLIGHT_FAIL=1;
+# Signing material for RAUC bundles — which pair depends on the build mode.
+#
+# A dev build must NOT reach for the production key. Before 2026-07-30 it did:
+# rauc.sh used /build/key.pem unconditionally and ota/dev-ca.pem was a symlink
+# to ota/rel-ca.pem, so a dev build produced a bundle every production device
+# would install. The preflight below now asks for the pair that will actually
+# be used, so a missing dev key fails here rather than silently falling through
+# to the production one.
+if [[ "$GA_ENV" == "prod" ]]; then
+  _sign_cert="cert.pem"; _sign_key="key.pem"
+else
+  _sign_cert="dev-cert.pem"; _sign_key="dev-key.pem"
+fi
+[[ -f "/build/${_sign_cert}" ]] || [[ -f "${_sign_cert}" ]] || {
+  echo "FAIL: RAUC signing cert (${_sign_cert}) not found for GA_ENV=${GA_ENV}" >&2; PREFLIGHT_FAIL=1;
 }
-[[ -f "/build/key.pem" ]] || [[ -f "key.pem" ]] || {
-  echo "FAIL: RAUC signing key (key.pem) not found" >&2; PREFLIGHT_FAIL=1;
+[[ -f "/build/${_sign_key}" ]] || [[ -f "${_sign_key}" ]] || {
+  echo "FAIL: RAUC signing key (${_sign_key}) not found for GA_ENV=${GA_ENV}" >&2; PREFLIGHT_FAIL=1;
 }
 
 # Secrets required for build
