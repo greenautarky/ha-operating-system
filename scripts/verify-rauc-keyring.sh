@@ -230,6 +230,28 @@ if [[ -n "$legacy_fp" || -f "$LEGACY_CERT" ]]; then
   fi
 fi
 
+# --- KEYRING-06: the clean cut must be defended, not merely declared -----
+# KEYRING-04 above checks that the image MATCHES the declaration. It cannot
+# check that the declaration is right: it derives the expected anchor set FROM
+# GA_LEGACY_CA_BRIDGE, so flipping that flag back to "true" makes the retired
+# CA "expected" and KEYRING-04 reports it as OK. The whole audit then stays
+# green while every shipped device trusts the key the 2026-07-29 rotation
+# retired — a one-line change to meta, with the cert already sitting next to it
+# in the tree, and nothing that says no.
+#
+# The 2026-07-29 rotation was commissioned as a CLEAN CUT: exactly one anchor,
+# no bridge, no dual trust. So on a production build the bridge being ON is a
+# finding by itself, independent of what the image contains. Turning it back on
+# for a genuine migration then requires deleting this check on purpose — which
+# is the point. A trust decision should cost a deliberate act, not a flag.
+if [[ "$GA_ENV" == "prod" || "$DEPLOYMENT" == "production" ]]; then
+  if [[ "$LEGACY_GATE" == "true" ]]; then
+    _bad "KEYRING-06: GA_LEGACY_CA_BRIDGE=true on a PRODUCTION build — the retired pre-2026-07-29 signing CA would be trusted fleet-wide. The rotation was a clean cut; if a bridge release is genuinely intended, remove this check in the same commit that explains why."
+  else
+    _ok "KEYRING-06: clean cut holds — GA_LEGACY_CA_BRIDGE=${LEGACY_GATE} on a production build"
+  fi
+fi
+
 # --- KEYRING-05: an expired anchor bricks OTA for the whole fleet ---------
 now_s=$(date +%s)
 for fp in "${!SHIPPED_END[@]}"; do
