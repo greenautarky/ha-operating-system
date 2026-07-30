@@ -1637,6 +1637,60 @@ if [[ -n "$SRC" ]]; then
   # These are SRC-prefixed on purpose: GitHub CI only gates on FAILs matching
   # SRC-/VER-/XVER-, and the guard has to be un-removable from a PR. The audit
   # itself needs a build output and runs as RAUC-KEYRING-01 on the builder.
+  # SRC-19: nothing may be written into target/ after the rootfs is sealed.
+  #
+  # buildroot builds rootfs.erofs and then ga_build.sh keeps writing files into
+  # $OUT/target. Anything written after the seal is DEAD: it never reaches the
+  # device, and the code that wrote it looks like it works. Measured 2026-07-30
+  # on a real build — six such files, every one of them something somebody
+  # intended to ship:
+  #
+  #   /etc/ga-sbom-cyclonedx.json          <- the SBOM. Not on the device.
+  #   /etc/ga-sbom-containers.json         <- the container SBOM. Not on the device.
+  #   /etc/ga-build/source-pins.json       <- build provenance
+  #   /etc/ga-build/hardware-config-summary.txt
+  #   /etc/ga-build/MANIFEST.txt
+  #   /etc/ga-build/LICENSE-SUMMARY.txt
+  #
+  # Confirmed absent on K31 after a fresh flash of that exact build. The SBOM one
+  # matters beyond tidiness: an SBOM that is supposed to be answerable ON the
+  # device is a plausible CRA/EN 18031 expectation, and it silently is not there.
+  #
+  # This does NOT pretend the six are fine. They are listed explicitly, so the
+  # guard fails the moment a SEVENTH appears — growth is blocked today, and the
+  # backlog is named rather than hidden. Fixing them means moving that work
+  # before image assembly, which is a real change and not one to make in the
+  # same hour as a release build.
+  #
+  # /etc/ga-build-id is the counter-example that proves the mechanism: it is
+  # written BEFORE the seal (10:09:50 vs 10:11:28) and it IS on the device.
+  if [[ -f "${OUT}/images/rootfs.erofs" && -d "${TARGET}" ]]; then
+    _known_dead=(
+      "/etc/ga-sbom-cyclonedx.json"
+      "/etc/ga-sbom-containers.json"
+      "/etc/ga-build/source-pins.json"
+      "/etc/ga-build/hardware-config-summary.txt"
+      "/etc/ga-build/MANIFEST.txt"
+      "/etc/ga-build/LICENSE-SUMMARY.txt"
+    )
+    _new_dead=""
+    while IFS= read -r _f; do
+      [[ -n "$_f" ]] || continue
+      _rel="${_f#"${TARGET}"}"
+      _hit=0
+      for _k in "${_known_dead[@]}"; do [[ "$_rel" == "$_k" ]] && { _hit=1; break; }; done
+      (( _hit )) || _new_dead+="${_rel} "
+    done < <(find "${TARGET}" -newer "${OUT}/images/rootfs.erofs" -type f 2>/dev/null)
+
+    if [[ -z "$_new_dead" ]]; then
+      _pass "SRC-19: no NEW file written into target/ after the rootfs was sealed (${#_known_dead[@]} known-dead files tracked, see comment)"
+    else
+      _fail "SRC-19: file(s) written into target/ AFTER rootfs.erofs was sealed — they will NOT reach the device: ${_new_dead}"
+    fi
+  else
+    _skip "SRC-19: post-seal target writes" "no rootfs.erofs or target tree in this run"
+  fi
+
   # SRC-18: no PRIVATE key may ship in the rootfs.
   #
   # This suite audits the keyring's public anchors in detail and says nothing
