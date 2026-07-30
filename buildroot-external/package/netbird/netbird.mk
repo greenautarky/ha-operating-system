@@ -28,13 +28,47 @@ NETBIRD_GO_ENV       += GOARM=7
 NETBIRD_GO_ENV       += CGO_ENABLED=0
 NETBIRD_GO_ENV       += GOPROXY=https://proxy.golang.org,direct
 
+# Persist the Go module cache across builds.
+#
+# Without this, every build re-downloads the full module graph (~500 MB) from
+# proxy.golang.org, so every build is freshly exposed to a flaky path. That is
+# not hypothetical: on 2026-07-30 two consecutive full builds died here, ~45 min
+# apart, with `stream error: … INTERNAL_ERROR; received from peer` — an HTTP/2
+# symptom, on two DIFFERENT modules (pion/transport, then docker/docker). A
+# direct retry of the same download afterwards succeeded, with and without h2,
+# so nothing was broken upstream and nothing was wrong with the pin. The build
+# was simply re-rolling the dice on a large transfer, every time.
+#
+# $(DL_DIR) is the right home for it: it is the download cache by definition,
+# already persistent, and already the /cache mount on ga-builder (31 GB of
+# buildroot tarballs live there). Using it needs no new mount and still works
+# for a local build with no cache volume at all.
+NETBIRD_GO_ENV       += GOMODCACHE=$(DL_DIR)/gomod
+
 # Small binary (CGO disabled => effectively static)
 # Embed version so "netbird version" shows the release tag, not "development"
 NETBIRD_LDFLAGS       = -s -w -X github.com/netbirdio/netbird/version.version=0.71.4
 
 # --------------- Configure ----------------------
+# `go mod vendor` is the one step in this package that must reach the network.
+# Retry it, because a single dropped stream should not cost a 45-minute build.
+#
+# The retry deliberately does NOT swallow a real outage: each attempt is logged,
+# and the explicit vendor/ check after the loop fails the build loudly. Without
+# that check a three-times-failed vendor would slide into NETBIRD_BUILD_CMDS and
+# surface as a confusing -mod=vendor error several steps later, which is exactly
+# the kind of misdirection that makes a transient fault look like a code fault.
 define NETBIRD_CONFIGURE_CMDS
-	cd $(@D); $(TARGET_MAKE_ENV) $(NETBIRD_GO_ENV) $(GO_BIN) mod vendor
+	cd $(@D); \
+	for attempt in 1 2 3; do \
+		$(TARGET_MAKE_ENV) $(NETBIRD_GO_ENV) $(GO_BIN) mod vendor && break; \
+		echo "netbird: 'go mod vendor' failed (attempt $$attempt/3) — retrying in 15s"; \
+		sleep 15; \
+	done
+	test -d $(@D)/vendor || { \
+		echo "netbird: 'go mod vendor' failed 3 times — module fetch is genuinely down, not flaky"; \
+		exit 1; \
+	}
 endef
 
 # --------------- Build (client) -----------------
