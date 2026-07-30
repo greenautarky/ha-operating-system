@@ -1,0 +1,1 @@
+the fleet-manager moved to 192.168.1.102 on the ops LAN

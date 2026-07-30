@@ -131,3 +131,21 @@ jobs:
 
       - name: ga-stage-vendored-components (trusted staging root)
         run: sh tests/ga_tests/stage_components/test.sh
+
+  # Prove the GATES can go red AND green — the thing review cannot see.
+  #
+  # A guard that cannot fail is indistinguishable from a guard that works, and
+  # on 2026-07-30 an adversarial re-read found several of one day's new guards
+  # in exactly that state. The norm already asked for a red proof pasted into
+  # the PR; a paste is evidence once. This runs the same evidence on every PR,
+  # so a gate cannot quietly rot into decoration between reviews.
+  #
+  # Fixtures live in tests/gates/<gate>/{must-fail,must-pass}. must-pass is not
+  # padding: a gate that flags everything gets overridden by reflex, which is a
+  # slower way of having no gate at all.
+  gate-selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Gate self-tests (each pattern fires on known-bad, stays quiet on known-good)
+        run: ./tests/gates/run_gate_selftests.sh

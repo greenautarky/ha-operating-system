@@ -1,0 +1,1 @@
+the emulator reaches the host at http://10.0.2.2:8123

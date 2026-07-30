@@ -1,0 +1,1 @@
+ota.greenautarky.com resolves to the bridge IP 172.30.32.1

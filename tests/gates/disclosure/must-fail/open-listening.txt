@@ -1,0 +1,1 @@
+the MQTT broker is still listening on 1883 with anonymous access
