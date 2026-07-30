@@ -1,10 +1,17 @@
 #!/bin/sh
 # Ethernet force-marker: the shipping gate.
 #
-# Provisioning runs over Ethernet via /mnt/boot/ga-ethernet-force, written at
-# flash time by `verify-sd.sh --flash --ethernet-force`. The marker overrides the
-# onboarding consent state, so a device that still carries it has a network
-# interface up that its owner never agreed to.
+# Provisioning runs over Ethernet via /mnt/boot/ga-ethernet-force. Since #298 the
+# IMAGE BUILD writes it (board hassos-hook.sh), so every freshly flashed card
+# carries it — an earlier version of this comment said it came from
+# `verify-sd.sh --flash --ethernet-force`, which is now only the way to re-add it
+# after an OTA has dropped it.
+#
+# That change is why this suite matters more than it did when it was written.
+# While the marker arrived at flash time, its presence at least meant somebody
+# had handled the card. Now it means nothing but "factory image", so the ONLY
+# thing standing between a customer and a network interface they never agreed to
+# is the provisioner's removal step — and this suite checking it.
 #
 # THIS SUITE IS THE EXIT TEST. Run it on the device after the provisioner has
 # removed the marker and before the unit is packed. It fails while the marker is
