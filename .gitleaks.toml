@@ -13,13 +13,22 @@
 # the revocation date. Red then means "something NEW", which is the only state
 # worth alerting on.
 #
-# RULES FOR ADDING AN ENTRY — all three, no exceptions:
+# RULES FOR ADDING AN ENTRY — all four, no exceptions:
 #   1. The credential is REVOKED, not merely rotated out of the working tree.
 #      Deleting the line from HEAD does nothing; the history is public.
 #   2. The entry names what it was, when it was revoked, and how that was
 #      verified. "Looks unused" is not a revocation.
-#   3. It pins exact fingerprints. Never a path or a rule — that would silence
-#      every future secret in the same file.
+#   3. It is bounded to the SPECIFIC historical findings and cannot absorb a
+#      future one. Two shapes do that: `fingerprints`, or — as below —
+#      `commits` AND `paths` together with `condition = "AND"`. What is
+#      forbidden is a bare `paths` or a bare `rules` entry: either would
+#      silence every future secret in that file or of that kind, which is how
+#      an allowlist quietly becomes a hole. A new secret lands in a NEW commit,
+#      so an entry pinned to a closed set of commits cannot cover it.
+#   4. Never add an entry for a LIVE credential. An allowlist entry in a public
+#      repository is a signpost: it names the file and the commits to look in.
+#      That is acceptable for a value that can no longer authenticate anything
+#      and unacceptable for one that can. Revoke first, suppress second.
 
 title = "ha-operating-system"
 
