@@ -116,6 +116,7 @@ fi
 
 # Iterate prime conf
 FAIL=0
+SKIPPED=0
 while IFS= read -r SLUG; do
     # strip comments + whitespace
     SLUG="${SLUG%%#*}"
@@ -141,6 +142,28 @@ while IFS= read -r SLUG; do
         # has the trail.
         log "  → $SLUG: already at pinned version (no-op)"
         PRIMED_OK=1
+    elif echo "$UPDATE_OUT" | grep -qiE 'does not exist|not installed'; then
+        # FRESH SD FLASH. Measured on K31, 2026-07-30: this service primes at
+        # T+0:10 and ga-bootstrap installs the add-on at T+0:33 — 22 seconds
+        # LATER. So on every freshly flashed device the add-on genuinely does
+        # not exist yet, `ha addons update` says so, and the old code counted
+        # that as a prime failure: exit 1, a permanently red systemd unit on a
+        # device where nothing is wrong. IDLE-08 flagged it, correctly.
+        #
+        # There is nothing to prime here and there never will be on this boot:
+        # ga-bootstrap installs the BAKE-PINNED version, which is by definition
+        # what priming would have produced. Priming means "ensure the add-on is
+        # at the pinned version", and an absent add-on is not at the wrong
+        # version — it is not yet the subject of the question.
+        #
+        # Deliberately NOT a failure and deliberately NOT a success either:
+        # SKIPPED is counted separately so the marker stays unwritten and the
+        # service still runs next boot. That keeps the post-OTA case — the one
+        # this service exists for — fully intact, while a fresh flash stops
+        # reporting a failure it does not have.
+        log "  → $SLUG: not installed yet (ga-bootstrap installs it later this boot) — nothing to prime, skipping"
+        SKIPPED=$((SKIPPED + 1))
+        PRIMED_OK=0
     elif echo "$UPDATE_OUT" | grep -qiE 'unauthorized|authentication required|denied|pull access'; then
         # Private image + no registry credentials. Distinct from a generic
         # failure because the fix is an ops action (push creds), not a retry —
@@ -182,6 +205,16 @@ done < "$PRIME_CONF"
 if [ "$FAIL" -gt 0 ]; then
     log "ERROR: $FAIL addon(s) failed to prime — marker NOT written, service will retry next boot"
     exit 1
+fi
+
+if [ "$SKIPPED" -gt 0 ]; then
+    # Not an error: the add-on is not installed yet (fresh flash). No marker, so
+    # the service re-runs next boot; exit 0, so systemd does not show a failed
+    # unit for a device in a perfectly normal state. The distinction matters —
+    # a red unit that is always red on a fresh device teaches operators to
+    # ignore red units.
+    log "$SKIPPED addon(s) not installed yet — nothing primed, marker NOT written, will run again next boot"
+    exit 0
 fi
 
 log "all addons primed — writing marker $MARKER"
