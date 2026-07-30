@@ -9,11 +9,24 @@ HASSIO_LICENSE = Apache License 2.0
 # HASSIO_LICENSE_FILES = $(BR2_EXTERNAL_HASSOS_PATH)/../LICENSE
 HASSIO_SITE = $(BR2_EXTERNAL_HASSOS_PATH)/package/hassio
 HASSIO_SITE_METHOD = local
-# V1.2-clean WIP: point at the release/v1.2-rebuild branch's stable.json
-# (stock Core image + supervisor 2025.11.4.4 with cherry-picked upstream
-# #6355 aiodocker auth fix). Revert to main/ when release/v1.2-rebuild is
-# merged at the V1.2 promote.
-HASSIO_VERSION_URL ?= "https://raw.githubusercontent.com/greenautarky/haos-version/release/v1.2-rebuild/"
+# The channel the BUILD bakes from. This MUST be the same branch the devices
+# poll, or every freshly flashed unit bricks its own provisioning — see below.
+#
+# It used to point at release/v1.2-rebuild, a "V1.2-clean WIP" pointer whose own
+# comment said "revert to main/ at the V1.2 promote". That promote never
+# happened (v1.2 reached rc40 without ever being released), the branch went
+# stale on 2026-06-01, and the temporary pointer became permanent.
+#
+# What that cost, measured on K31 2026-07-30: the branch pins supervisor
+# 2025.11.4.5, so the build baked 4.5, while devices poll main and see 4.6.
+# Supervisor therefore reports update_available=true on first boot, which trips
+# its `supervisor_updated` job condition and BLOCKS StoreManager.add_repository.
+# ga-bootstrap cannot register the vibe_addons store, no add-on installs,
+# ga_manager never runs, the device never finishes provisioning — and nothing
+# reports an error. The device boots, answers on serial, and is inert.
+#
+# Keep this pointing where the fleet points.
+HASSIO_VERSION_URL ?= "https://raw.githubusercontent.com/greenautarky/haos-version/main/"
 ifeq ($(BR2_PACKAGE_HASSIO_CHANNEL_STABLE),y)
 HASSIO_VERSION_CHANNEL = "stable"
 else ifeq ($(BR2_PACKAGE_HASSIO_CHANNEL_BETA),y)
@@ -48,8 +61,17 @@ define HASSIO_CONFIGURE_CMDS
 	if [ "$$TINKER" = "latest" ] || [ -z "$$TINKER" ]; then echo "ERROR: version.json tinker='$$TINKER' (must be pinned version)"; FAIL=1; fi; \
 	if ! echo "$$SUP_IMG" | grep -q greenautarky; then echo "ERROR: version.json supervisor image='$$SUP_IMG' (must use greenautarky)"; FAIL=1; fi; \
 	if ! echo "$$CORE_IMG" | grep -qE '^ghcr\.io/home-assistant/'; then echo "ERROR: version.json core image='$$CORE_IMG' (V1.2-clean: Core must be stock ghcr.io/home-assistant/*)"; FAIL=1; fi; \
+	PIN=$$(sed -nE 's/^[[:space:]]*homeassistant_supervisor:[[:space:]]*"?([^"[:space:]#]+)"?.*/\1/p' $(BR2_EXTERNAL_HASSOS_PATH)/../version.yaml | head -1); \
+	if [ -n "$$PIN" ] && [ "$$SUP" != "$$PIN" ]; then \
+	  echo "ERROR: version.json supervisor='$$SUP' but version.yaml pins '$$PIN'"; \
+	  echo "       The BAKED supervisor would differ from the pin. A device whose"; \
+	  echo "       supervisor is older than the channel sets update_available=true,"; \
+	  echo "       which blocks StoreManager and leaves the device unprovisionable."; \
+	  echo "       Check HASSIO_VERSION_URL points at the branch the fleet polls."; \
+	  FAIL=1; \
+	fi; \
 	if [ $$FAIL -ne 0 ]; then echo "FATAL: version.json validation failed — check haos-version stable.json"; exit 1; fi; \
-	echo "version.json validated: supervisor=$$SUP core=$$CORE tinker=$$TINKER"
+	echo "version.json validated: supervisor=$$SUP core=$$CORE tinker=$$TINKER (pin=$$PIN)"
 endef
 
 define HASSIO_BUILD_CMDS
