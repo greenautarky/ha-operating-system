@@ -29,31 +29,6 @@ function write_rauc_config() {
 }
 
 
-# add_legacy_ca_if_enabled <keyring> <legacy-cert>
-# Bake the retired pre-2026-03-27 ("F13") signing CA into <keyring>, but ONLY
-# when GA_LEGACY_CA_BRIDGE=true (see buildroot-external/meta). That cert is a
-# self-signed CA:TRUE root that stays valid until 2035, and system.conf has no
-# check-crl, so trusting it fleet-wide has NO revocation path — it effectively
-# un-does the 2026-03-27 key rotation. It is therefore an explicit, auditable
-# opt-in kept only while pre-rotation devices may still be in the field (as of
-# 2026-07-27 the mesh still shows >=16 active legacy-OS devices). Secure default:
-# unset/anything-but-true => NOT baked. See KB "Fleet migration: retired trust
-# anchors (legacy RAUC CA + shared SSH key)". [Vuln-3]
-function add_legacy_ca_if_enabled() {
-    local keyring="$1" legacy="$2"
-    if [ "${GA_LEGACY_CA_BRIDGE:-false}" != "true" ]; then
-        echo "Legacy CA bridge NOT baked (GA_LEGACY_CA_BRIDGE=${GA_LEGACY_CA_BRIDGE:-unset}) — retired signing CA not trusted."
-        return 0
-    fi
-    if [ ! -f "${legacy}" ]; then
-        echo "WARN: GA_LEGACY_CA_BRIDGE=true but ${legacy} missing — nothing baked."
-        return 0
-    fi
-    echo "Adding legacy (pre-2026-03-27) signing cert to keyring (F13 bridge; GA_LEGACY_CA_BRIDGE=true)."
-    openssl x509 -in "${legacy}" -text >> "${keyring}"
-}
-
-
 function install_rauc_certs() {
     local cert="/build/cert.pem"
 
@@ -71,17 +46,24 @@ function install_rauc_certs() {
         openssl x509 -in "${cert}" -text >> "${TARGET_DIR}/etc/rauc/keyring.pem"
     fi
 
-    # F13 legacy CA bridge (2026-06-05) — GATED behind GA_LEGACY_CA_BRIDGE.
-    # Re-trusts the retired pre-2026-03-27 signing CA fleet-wide (no revocation
-    # path). Without it, a device provisioned before the ga-builder cert
-    # rotation cannot verify OTAs signed by the current key (the build cert and
-    # its baked-in keyring share only a CN, not a key). Keep enabled only while
-    # such devices remain in the field; the goal is to drop it after a field
-    # audit. Legacy cert fingerprint:
-    # 01:E7:CE:81:49:6B:75:43:22:3C:8B:31:29:4C:78:AB:D3:02:7F:FE:62:7A:B5:B6:28:AF:73:83:E1:21:BC:F7
-    add_legacy_ca_if_enabled \
-        "${TARGET_DIR}/etc/rauc/keyring.pem" \
-        "${BR2_EXTERNAL_HASSOS_PATH}/ota/legacy-signing-cert.pem"
+    # The retired pre-2026-03-27 ("F13") signing CA is DELETED, not gated.
+    #
+    # It used to be re-added here behind GA_LEGACY_CA_BRIDGE so pre-rotation
+    # devices could still verify current OTAs. That cert is a self-signed
+    # CA:TRUE root valid until 2035 and system.conf has no check-crl, so
+    # trusting it fleet-wide had no revocation path — it effectively un-did the
+    # rotation. Operator decision 2026-07-30: the remaining pre-cut devices are
+    # being swapped, not bridged, so the material goes away entirely.
+    #
+    # Deleting beats keeping-it-off: a flag can be flipped by anyone who finds
+    # the cert sitting next to it, and KEYRING-06 only defended the PROD path.
+    # With no cert and no flag, re-trusting the retired CA takes a deliberate act
+    # that has to reintroduce both.
+    #
+    # This does NOT remove the bridge-FORWARD path for old devices. That works
+    # the other way round — sign a new image with the OLD KEY, which is archived
+    # off the builder (2026-07-30) and deliberately not destroyed. It never
+    # needed this cert in the keyring.
 }
 
 

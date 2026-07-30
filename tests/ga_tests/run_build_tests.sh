@@ -1758,22 +1758,8 @@ if [[ -n "$SRC" ]]; then
       && _pass "SRC-17b: verify-rauc-keyring.sh parses (bash -n)" \
       || _fail "SRC-17b: verify-rauc-keyring.sh has a syntax error (bash -n)"
 
-    # The pinned fingerprint must agree with the cert actually in the tree —
-    # otherwise the pin protects nothing and a swapped legacy CA rides along.
-    if [[ -f "${SRC}/buildroot-external/ota/legacy-signing-cert.pem" ]] && command -v openssl >/dev/null 2>&1; then
-      _kr_pin="$(grep -m1 '^LEGACY_FP_PINNED=' "$KR_AUDIT" | sed 's/.*="\(.*\)"/\1/')"
-      _kr_real="$(openssl x509 -in "${SRC}/buildroot-external/ota/legacy-signing-cert.pem" \
-                    -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//')"
-      if [[ -n "$_kr_pin" && "$_kr_pin" == "$_kr_real" ]]; then
-        _pass "SRC-17c: pinned legacy-CA fingerprint matches the in-tree cert"
-      else
-        _fail "SRC-17c: pinned legacy-CA fingerprint != in-tree cert (pin='${_kr_pin}' cert='${_kr_real}')"
-      fi
-    else
-      _skip "SRC-17c: legacy-CA fingerprint pin" "legacy cert or openssl not available"
-    fi
   else
-    _fail "SRC-17a..c: scripts/verify-rauc-keyring.sh is MISSING — the shipped trust set would go unverified"
+    _fail "SRC-17a..b: scripts/verify-rauc-keyring.sh is MISSING — the shipped trust set would go unverified"
   fi
 
   # SRC-17d: ga_build.sh must invoke it AND abort on prod. A build that logs the
@@ -3003,43 +2989,28 @@ else
 fi
 
 # =========================================================================
-# Legacy RAUC CA bridge — must stay GATED behind GA_LEGACY_CA_BRIDGE (Vuln-3)
+# Retired RAUC CA bridge — must be GONE (operator decision 2026-07-30)
 # =========================================================================
+# RAUC-LEGACY-01/02 used to exercise the gate both ways: the retired pre-2026-03-27
+# CA had to be baked ONLY when GA_LEGACY_CA_BRIDGE=true. Good tests for a gated
+# bridge — but the bridge itself was the liability. That cert is a self-signed
+# CA:TRUE root valid to 2035, system.conf has no check-crl, so trusting it
+# fleet-wide had no revocation path and un-did the key rotation.
+#
+# Hard cut: the flag, the cert and add_legacy_ca_if_enabled() are deleted. A test
+# that exercises a gate is now the wrong shape — the property to assert is
+# ABSENCE, and re-adding the bridge must have to delete a check rather than flip
+# a value.
 _lca_src="/build"
 [[ -d "${_lca_src}/buildroot-external" ]] || _lca_src="$(cd "$(dirname "$0")/../.." && pwd)"
-_lca_rauc="${_lca_src}/buildroot-external/scripts/rauc.sh"
-_lca_cert="${_lca_src}/buildroot-external/ota/legacy-signing-cert.pem"
-if [[ -f "$_lca_rauc" && -f "$_lca_cert" ]] && command -v openssl >/dev/null 2>&1; then
-  # Source rauc.sh in a subshell (it runs `set -e`; contain it) and exercise the
-  # gate both ways against a scratch keyring: the retired CA must be baked ONLY
-  # when GA_LEGACY_CA_BRIDGE=true.
-  _lca_res=$(
-    # shellcheck disable=SC1090  # dynamic path to the in-tree rauc.sh
-    . "$_lca_rauc" >/dev/null 2>&1 || true   # rauc.sh runs `set -e`; neutralise it
-    set +e
-    _off=$(mktemp); _on=$(mktemp)
-    GA_LEGACY_CA_BRIDGE=false add_legacy_ca_if_enabled "$_off" "$_lca_cert" >/dev/null 2>&1
-    GA_LEGACY_CA_BRIDGE=true  add_legacy_ca_if_enabled "$_on"  "$_lca_cert" >/dev/null 2>&1
-    _c_off=$(grep -c 'BEGIN CERTIFICATE' "$_off" 2>/dev/null)   # always one number
-    _c_on=$(grep -c 'BEGIN CERTIFICATE' "$_on" 2>/dev/null)
-    rm -f "$_off" "$_on"
-    printf '%s %s' "${_c_off:-0}" "${_c_on:-0}"
-  )
-  _lca_off=${_lca_res% *}; _lca_on=${_lca_res#* }
-  if [[ "${_lca_off:-x}" == "0" && "${_lca_on:-0}" -ge 1 ]]; then
-    _pass "RAUC-LEGACY-01: legacy CA baked ONLY when GA_LEGACY_CA_BRIDGE=true (off=${_lca_off} on=${_lca_on})"
-  else
-    _fail "RAUC-LEGACY-01: legacy-CA gate broken (off=${_lca_off} on=${_lca_on}) — retired CA not correctly gated"
-  fi
+_lca_residue=""
+[[ -f "${_lca_src}/buildroot-external/ota/legacy-signing-cert.pem" ]] && _lca_residue+="ota/legacy-signing-cert.pem "
+grep -q '^GA_LEGACY_CA_BRIDGE=' "${_lca_src}/buildroot-external/meta" 2>/dev/null && _lca_residue+="GA_LEGACY_CA_BRIDGE-in-meta "
+grep -q 'function add_legacy_ca_if_enabled' "${_lca_src}/buildroot-external/scripts/rauc.sh" 2>/dev/null && _lca_residue+="add_legacy_ca_if_enabled() "
+if [[ -z "$_lca_residue" ]]; then
+  _pass "SRC-21: retired CA bridge fully removed (no cert, no flag, no bake function)"
 else
-  _skip "RAUC-LEGACY-01: legacy-CA gate" "rauc.sh / legacy cert / openssl not available (source tree only)"
-fi
-if [[ -f "${_lca_src}/buildroot-external/meta" ]]; then
-  grep -q '^GA_LEGACY_CA_BRIDGE=' "${_lca_src}/buildroot-external/meta" \
-    && _pass "RAUC-LEGACY-02: buildroot-external/meta declares GA_LEGACY_CA_BRIDGE explicitly" \
-    || _fail "RAUC-LEGACY-02: meta does not declare GA_LEGACY_CA_BRIDGE (gate default would be off/implicit)"
-else
-  _skip "RAUC-LEGACY-02: meta declares flag" "meta not found (source tree only)"
+  _fail "SRC-21: retired CA bridge RESIDUE: ${_lca_residue}— one line from re-trusting a CA with no revocation path, fleet-wide"
 fi
 
 # =========================================================================
