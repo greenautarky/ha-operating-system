@@ -72,7 +72,14 @@ fi
 OPER=$(cat /sys/class/net/eth0/operstate 2>/dev/null)
 if [ -n "$OPER" ]; then
     printf '        eth0 operstate=%s\n' "$OPER"
-    if grep -q '^GA_ETHERNET_ENABLED=true' /mnt/data/ga-env.conf 2>/dev/null; then
+    if [ -e "$FORCE_BOOT" ]; then
+        # My own test double-reported: with the marker present, eth0 being up is
+        # the EXPECTED consequence, and ETHF-01/03 above already fail for it with
+        # the actionable message. Failing a third time here adds no information
+        # and pads the failure count, which is how a run stops being read.
+        # Measured on K31 2026-07-30: three reds for one cause.
+        skip_test "ETHF-04" "link state — the boot marker is present, ETHF-01/03 already report it"
+    elif grep -q '^GA_ETHERNET_ENABLED=true' /mnt/data/ga-env.conf 2>/dev/null; then
         skip_test "ETHF-04" "link state — consent is granted, up is correct"
     else
         run_test "ETHF-04" "eth0 down while consent is absent" "[ \"$OPER\" = down ]"

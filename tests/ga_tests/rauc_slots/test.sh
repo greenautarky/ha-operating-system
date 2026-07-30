@@ -65,8 +65,15 @@ F="$WORK/fresh-sd-flash.json"
 run_test "SLOT-25" "fresh flash: rollback is NOT possible (slot B never installed)" \
   "jq -e '.rollback.possible == false and .rollback.target == \"B\"' '$F'"
 
+# grep, not jq's test(): the SHIPPED jq is built without Oniguruma, so
+# test()/match()/sub() do not exist on the device and every such assertion fails
+# with "jq was compiled without ONIGURUMA regex library" — a FAIL that looks
+# exactly like a false assertion. Measured on K31 2026-07-30; this suite passed
+# on the build host and failed on the device with an identical collector (same
+# md5), which is what made it look like a real regression for an hour.
 run_test "SLOT-26" "fresh flash: reason names the empty slot + the reflash consequence" \
-  "jq -e '.rollback.reason | test(\"never received an OTA install\") and test(\"re-flash\")' '$F'"
+  "jq -r '.rollback.reason' '$F' | grep -q 'never received an OTA install' && \
+   jq -r '.rollback.reason' '$F' | grep -q 're-flash'"
 
 # Regression guard for the actual trap: boot_status is STILL 'good' on the
 # empty slot. If a future refactor gates rollback on boot_status alone, this
@@ -82,7 +89,8 @@ parse_fixture slot-b-marked-bad
 B="$WORK/slot-b-marked-bad.json"
 
 run_test "SLOT-29" "marked-bad: rollback blocked, reason names the bootloader" \
-  "jq -e '.rollback.possible == false and (.rollback.reason | test(\"marked bad by the bootloader\"))' '$B'"
+  "jq -e '.rollback.possible == false' '$B' >/dev/null && \
+   jq -r '.rollback.reason' '$B' | grep -q 'marked bad by the bootloader'"
 
 # --- booted from B: nothing may hardcode A as the current slot --------------
 parse_fixture booted-from-b
@@ -123,7 +131,14 @@ run_test "SLOT-33b" "never writes the slot picture into the add-on-writable /sha
 
 # No add-on installed yet = no data dir. Publishing must be a no-op rather
 # than creating a directory Supervisor did not make.
-if command -v jq >/dev/null 2>&1; then
+# On a DEVICE with ga_manager installed the real glob matches, so the collector
+# correctly publishes and this negative case cannot be constructed. Asserting it
+# anyway made it fail on every provisioned device — a red check that says nothing
+# about the device. It stays a real test on the build host, where the glob is
+# genuinely empty.
+if ls -d /mnt/data/supervisor/addons/data/*_ga_manager >/dev/null 2>&1; then
+  skip_test "SLOT-34" "no-add-on-dir behaviour" "ga_manager IS installed here — the not-yet-installed case cannot be constructed on a live device"
+elif command -v jq >/dev/null 2>&1; then
   NODIR="$(mktemp -d 2>/dev/null || echo /tmp/rslots_nodir_$$)"
   # No GA_RAUC_SLOTS_OUT: the collector resolves the real add-on glob, which
   # matches nothing on a build host — exactly the not-yet-installed case.
