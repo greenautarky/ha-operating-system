@@ -1,22 +1,24 @@
 name: Lint (shellcheck + actionlint)
 
+# NO `paths:` filter, deliberately.
+#
+# On 2026-07-30 shellcheck, actionlint and gate-selftest became REQUIRED status
+# checks on master. A required check combined with a path filter is a deadlock:
+# GitHub does not mark a filtered-out check as skipped-and-satisfied, it simply
+# never reports, and the pull request stays "Expected — waiting for status" for
+# ever. It was hit within the hour by a PR touching only .gitleaks.toml, which
+# no path here matched.
+#
+# The filter was saving nothing worth having: these three jobs finish in about
+# forty seconds in total on a GitHub-hosted runner and never touch the builder.
+# The alternative — a companion job that reports success when the real one is
+# skipped — buys the same result by asserting a green that nothing produced,
+# which is the failure class this repo spent the day removing.
 on:
   push:
     branches: [master]
-    paths:
-      - 'scripts/**'
-      - 'buildroot-ihost/**'
-      - 'buildroot-external/**'
-      - 'tests/ga_tests/**'
-      - '.github/workflows/**'
   pull_request:
     branches: [master]
-    paths:
-      - 'scripts/**'
-      - 'buildroot-ihost/**'
-      - 'buildroot-external/**'
-      - 'tests/ga_tests/**'
-      - '.github/workflows/**'
   workflow_dispatch:
 
 # Why this exists:
