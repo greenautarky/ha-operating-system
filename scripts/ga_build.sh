@@ -1042,8 +1042,6 @@ archive_build_configs() {
   echo "Hardware config summary created: $hw_summary"
 
   # Also copy to target for runtime inspection
-  mkdir -p "${OUT}/target/etc/ga-build"
-  cp "$hw_summary" "${OUT}/target/etc/ga-build/"
 
   # -------------------------------------------------------------------------
   # 5) Git repository pinning (all source trees)
@@ -1311,9 +1309,6 @@ PKGEOF
   } > "$manifest"
 
   # Also copy configs into target rootfs for runtime inspection
-  mkdir -p "${OUT}/target/etc/ga-build"
-  cp "$pins_file" "${OUT}/target/etc/ga-build/"
-  cp "$manifest" "${OUT}/target/etc/ga-build/"
 
   # -------------------------------------------------------------------------
   # 7) Container image digest lockfile (pin by SHA256, not just tag)
@@ -1621,10 +1616,22 @@ generate_sbom() {
   fi
   echo "Container inventory generated: $containers_file"
 
-  # Install to target rootfs
-  mkdir -p "${OUT}/target/etc"
-  [[ -f "$cyclonedx" ]] && cp "$cyclonedx" "${OUT}/target/etc/ga-sbom-cyclonedx.json"
-  cp "$containers_file" "${OUT}/target/etc/ga-sbom-containers.json"
+  # NOT installed into the target rootfs, on purpose.
+  #
+  # These used to be copied to /etc/ga-sbom-*.json. They never arrived: the copy
+  # runs ~2 minutes AFTER rootfs.erofs is sealed (measured 2026-07-30, confirmed
+  # absent on K31 after a fresh flash), so the code looked like it shipped an SBOM
+  # and did not.
+  #
+  # Fixing the ordering was the obvious move and it is the wrong one. The SBOM's
+  # home is $(OUT)/images — the artifact directory, next to configs/, legal-info/
+  # and reports/ — and that copy was always intact. Shipping a second copy on the
+  # device would add a component-and-version inventory to a read-only 300 MB
+  # system partition, readable by anyone with filesystem access to a unit sitting
+  # in a customer's home, to answer a question /etc/ga-build-id and GA_RELEASE
+  # already answer precisely.
+  #
+  # So the dead copy is deleted rather than repaired. Operator decision 2026-07-30.
 
   echo "=== SBOM generation complete ==="
 }
@@ -2018,8 +2025,6 @@ archive_legal_info() {
   echo "License summary created: $license_summary"
 
   # Also copy to target for runtime inspection
-  mkdir -p "${OUT}/target/etc/ga-build"
-  cp "$license_summary" "${OUT}/target/etc/ga-build/"
 
   echo "=== Legal-info archiving complete ==="
   ls -la "$archive_dir"
