@@ -152,4 +152,39 @@ run_test "SUP-13" "ga-bootstrap.service Requires= the real supervisor unit" \
 run_test "SUP-14" "Supervisor systemd unit (hassos-supervisor.service) exists" \
   "systemctl list-unit-files hassos-supervisor.service 2>/dev/null | grep -q hassos-supervisor"
 
+# SUP-12/13 — the SEAM between host and containers.
+#
+# This is the check that was missing when the Supervisor fork spent four weeks
+# injecting a superseded service IP into CoreDNS. Nothing compared the two
+# views: the host resolved GA names to 100.126.129.116 via /etc/hosts while
+# every add-on resolved them to 100.126.142.217 via CoreDNS, whose certificate
+# had expired. Both halves looked fine in isolation.
+#
+# SUP-12 asserts the mechanism (the Supervisor can read its config), SUP-13
+# asserts the OUTCOME (host and add-on agree). The outcome check is the one that
+# matters: it stays true no matter how the mapping is delivered, so it survives
+# the planned move to an internal resolver.
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^hassio_supervisor$'; then
+  run_test "SUP-12" "Supervisor can read /etc/ga-services.conf (else it uses a hardcoded IP)" \
+    "docker exec hassio_supervisor test -f /etc/ga-services.conf"
+
+  _ADDON="$(docker ps --format '{{.Names}}' 2>/dev/null | grep '_ga_manager$' | head -1)"
+  if [ -n "$_ADDON" ]; then
+    _HOST_IP="$(getent hosts ota.greenautarky.com 2>/dev/null | awk '{print $1}' | head -1)"
+    _ADDON_IP="$(docker exec "$_ADDON" getent hosts ota.greenautarky.com 2>/dev/null | awk '{print $1}' | head -1)"
+    printf '        host=%s addon=%s\n' "${_HOST_IP:-?}" "${_ADDON_IP:-?}"
+    if [ -n "$_HOST_IP" ] && [ -n "$_ADDON_IP" ]; then
+      run_test "SUP-13" "host and add-on resolve ota.greenautarky.com to the SAME IP" \
+        "[ \"$_HOST_IP\" = \"$_ADDON_IP\" ]"
+    else
+      run_test "SUP-13" "host and add-on resolve ota.greenautarky.com to the SAME IP" "false"
+      printf '        one side did not resolve at all — that is not agreement\n'
+    fi
+  else
+    skip_test "SUP-13" "host/add-on resolution agreement" "ga_manager add-on not running"
+  fi
+else
+  skip_test "SUP-12..13" "Supervisor config visibility + resolution agreement" "hassio_supervisor not running"
+fi
+
 suite_end

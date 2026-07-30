@@ -1637,6 +1637,31 @@ if [[ -n "$SRC" ]]; then
   # These are SRC-prefixed on purpose: GitHub CI only gates on FAILs matching
   # SRC-/VER-/XVER-, and the guard has to be un-removable from a PR. The audit
   # itself needs a build output and runs as RAUC-KEYRING-01 on the builder.
+  # SRC-20: the Supervisor must be able to SEE /etc/ga-services.conf.
+  #
+  # Its DNS plugin reads that file to learn which host serves GA services and
+  # injects influx/loki/ota.greenautarky.com into CoreDNS for containers and
+  # add-ons. The file was never mounted, so the read failed inside the container
+  # and the plugin fell back to a HARDCODED address (dns.py:429) that had been
+  # superseded four weeks earlier and whose certificate had expired — every
+  # add-on doing HTTPS to a GA name got a TLS failure, and the only trace was
+  # one INFO line.
+  #
+  # The mount is one line in hassos-supervisor and easy to lose in a rebase, so
+  # it gets a guard. SRC- prefix: GitHub CI gates on these, so it cannot be
+  # dropped from a PR.
+  _SUP_LAUNCH="${TARGET}/usr/sbin/hassos-supervisor"
+  if [[ -f "$_SUP_LAUNCH" ]]; then
+    if grep -q 'GA_SERVICES_MOUNT' "$_SUP_LAUNCH" && \
+       grep -q '/etc/ga-services.conf:/etc/ga-services.conf:ro' "$_SUP_LAUNCH"; then
+      _pass "SRC-20: Supervisor container gets /etc/ga-services.conf mounted (read-only)"
+    else
+      _fail "SRC-20: hassos-supervisor does NOT mount /etc/ga-services.conf — the DNS plugin will silently use its hardcoded fallback IP"
+    fi
+  else
+    _skip "SRC-20: Supervisor ga-services.conf mount" "hassos-supervisor not in target tree"
+  fi
+
   # SRC-19: nothing may be written into target/ after the rootfs is sealed.
   #
   # buildroot builds rootfs.erofs and then ga_build.sh keeps writing files into
