@@ -7,6 +7,9 @@
 # Options:
 #   --sha        Verify image SHA256 checksum (file integrity only, no SD needed)
 #   --diff       Diff boot partition files between image and SD card
+#   --ethernet-force  After flashing, write /ga-ethernet-force onto hassos-boot so
+#                     provisioning runs over Ethernet. MUST be removed before the
+#                     device ships — see the block in the flash section.
 #   --flash      Flash image to SD card (DESTRUCTIVE)
 #   --all        Run sha + diff + prompt for flash
 #   --device     SD card device (default: /dev/mmcblk0)
@@ -38,7 +41,7 @@ _step()  { echo -e "\n${BOLD}=== $* ===${NC}"; }
 FAILURES=0
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
-DO_SHA=false; DO_DIFF=false; DO_FLASH=false; DRY_RUN=false
+DO_SHA=false; DO_DIFF=false; DO_FLASH=false; DRY_RUN=false; ETH_FORCE=false
 IMAGE=""; DEVICE="/dev/mmcblk0"
 
 usage() {
@@ -53,6 +56,7 @@ while [[ $# -gt 0 ]]; do
     --sha)     DO_SHA=true ;;
     --diff)    DO_DIFF=true ;;
     --flash)   DO_FLASH=true ;;
+    --ethernet-force) ETH_FORCE=true ;;
     --all)     DO_SHA=true; DO_DIFF=true; DO_FLASH=true ;;
     --device)  DEVICE="$2"; shift ;;
     --dry-run) DRY_RUN=true ;;
@@ -228,6 +232,63 @@ if $DO_FLASH; then
       _flash_operator="$(whoami)@$(hostname)"
       echo "${_flash_date},$(basename "$IMAGE"),${_flash_sha},${DEVICE},${DEVICE_MODEL},${DEVICE_GB},${_flash_operator}" >> "$FLASH_LOG"
       _info "Flash recorded in $FLASH_LOG"
+
+      # ── --ethernet-force: provisioning-time Ethernet override ───────────────
+      # Provisioning runs over Ethernet, not WiFi: no customer credentials exist
+      # yet and a cable is faster and more predictable than 2.4 GHz on a bench.
+      # `ga-manage-ethernet` reads /mnt/boot/ga-ethernet-force and brings eth0 up
+      # regardless of the onboarding consent state.
+      #
+      # WHY HERE AND NOT BAKED INTO THE IMAGE
+      # The marker is honoured unconditionally, production included, and the
+      # reason is written into ga-manage-ethernet: "physical access IS the
+      # authorisation — whoever set this stood at the device or had the card in a
+      # reader, and it can only ever affect that one device."
+      #
+      # Baking it would make that false. The image would carry a consent
+      # override for every unit built from it, and an image that leaks would
+      # carry it too. Written at flash time, the sentence stays literally true:
+      # this file exists because someone had THIS card in THIS reader.
+      #
+      # THE PROVISIONER MUST REMOVE IT BEFORE THE DEVICE SHIPS.
+      #   on-device:  rm -f /mnt/boot/ga-ethernet-force && reboot
+      #   assert:     test ! -e /mnt/boot/ga-ethernet-force
+      #   effective:  cat /mnt/data/supervisor/share/ga-ethernet-status.json
+      #               -> "source" must NOT be "force-boot"
+      # Assert the second one in the exit test; a device that still reports
+      # force-boot has an interface up that its owner never agreed to.
+      #
+      # It is also self-limiting in one direction: the RAUC install_boot hook
+      # reinstalls the boot partition and preserves only *.txt and grubenv, so
+      # the first OTA drops this marker. Convenient, NOT a substitute for
+      # removing it — a device that ships before its first OTA still has it.
+      if $ETH_FORCE; then
+        _eth_mnt="$(mktemp -d)"
+        sudo partprobe "$DEVICE" 2>/dev/null || true
+        _eth_boot=""
+        for _p in "${DEVICE}"*; do
+          [[ -b "$_p" ]] || continue
+          [[ "$(lsblk -no LABEL "$_p" 2>/dev/null | xargs)" == "hassos-boot" ]] && { _eth_boot="$_p"; break; }
+        done
+        if [[ -z "$_eth_boot" ]]; then
+          _fail "--ethernet-force: no hassos-boot partition found on $DEVICE — marker NOT written"
+        elif ! sudo mount "$_eth_boot" "$_eth_mnt" 2>/dev/null; then
+          _fail "--ethernet-force: could not mount $_eth_boot — marker NOT written"
+        else
+          printf 'set-by=%s\ndate=%s\nimage=%s\nreason=provisioning over ethernet; REMOVE BEFORE SHIPPING\n' \
+            "${_flash_operator}" "${_flash_date}" "$(basename "$IMAGE")" \
+            | sudo tee "$_eth_mnt/ga-ethernet-force" >/dev/null
+          sudo sync
+          if sudo test -e "$_eth_mnt/ga-ethernet-force"; then
+            _pass "ethernet-force marker written to hassos-boot ($_eth_boot)"
+            _warn "REMOVE IT BEFORE THIS DEVICE SHIPS — rm /mnt/boot/ga-ethernet-force"
+          else
+            _fail "--ethernet-force: marker missing after write"
+          fi
+          sudo umount "$_eth_mnt" 2>/dev/null || true
+        fi
+        rmdir "$_eth_mnt" 2>/dev/null || true
+      fi
     fi
   fi
 fi

@@ -19,13 +19,33 @@
 #
 # OVERRIDE — two markers, two different authorisations
 #
-#   /mnt/boot/ga-ethernet-force        physical access IS the authorisation.
-#                                      Whoever set this stood at the device or
-#                                      had the card in a reader, and it can only
-#                                      ever affect that one device. Honoured in
-#                                      every environment, production included:
-#                                      refusing it would block the on-site case
-#                                      without preventing anything.
+#   /mnt/boot/ga-ethernet-force        SHIPPED ON BY DEFAULT since 2026-07-30
+#                                      (operator decision): provisioning runs
+#                                      over Ethernet, not WiFi, and a cable
+#                                      beats a WLAN per bench. The image build
+#                                      writes it (board hassos-hook.sh).
+#                                      An earlier version of this comment said
+#                                      "physical access IS the authorisation —
+#                                      whoever set this had the card in a
+#                                      reader". That stopped being true the
+#                                      moment the image started carrying it, so
+#                                      it is corrected rather than left to
+#                                      mislead: presence now proves only that
+#                                      this is a factory image.
+#                                      The consequence is that the safety moved
+#                                      from the marker's origin to a REMOVAL
+#                                      STEP: the provisioner deletes it before
+#                                      the unit ships, and
+#                                      tests/ga_tests/ethernet_force is the exit
+#                                      gate. That gate reads this script's own
+#                                      status file, not just the filesystem,
+#                                      because deleting the file changes nothing
+#                                      until the device reboots.
+#                                      Still honoured in every environment
+#                                      including production: refusing it would
+#                                      block the on-site case without preventing
+#                                      anything, and it is scoped to the one
+#                                      device whose card carries it.
 #
 #   <ga_manager addon /data>/          settable remotely via ga_manager, so it is
 #     ga-ethernet-force                the one that could silently override many
