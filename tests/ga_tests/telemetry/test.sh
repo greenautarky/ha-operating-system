@@ -153,10 +153,44 @@ echo "--- Consent service ---"
 run_test "TEL-30" "ga-telemetry-consent.service ran successfully" \
   "systemctl is-active ga-telemetry-consent || systemctl show ga-telemetry-consent -p ActiveState --value 2>/dev/null | grep -q 'active'"
 
-# TEL-31/32: Marker files match actual consent
+# TEL-31/32: Marker files match actual consent.
+#
+# The store carries TWO representations and they can disagree:
+#   v2 (canonical)  data.tiers.tier2.value  = metrics     (telegraf)
+#                   data.tiers.tier1.value  = error_logs  (fluent-bit)
+#   v1 (legacy)     data.metrics / data.error_logs
+#
+# set-telemetry-consent writes only the tiers and leaves the legacy fields at
+# whatever they were, so a device with consent granted through the job reads
+# tiers=true / legacy=false. Reading the legacy fields — as this did — then
+# asserts "marker must be ABSENT" on a device where consent is genuinely
+# granted and the marker is correctly present. The test failed and the device
+# was right.
+#
+# Read the canonical tiers first, fall back to the legacy fields for older
+# devices that only have those, and assert separately that the two agree
+# wherever both exist. That disagreement is a real defect (Odoo #642): anything
+# still reading the legacy fields tells a user telemetry is off while it runs.
+_tier_val() {  # $1 = tier key -> true|false|"" (canonical v2)
+  # The store is pretty-printed, so "tier2": { ... "value": true ... } spans
+  # several lines and a line-oriented sed silently matches nothing — which
+  # reads exactly like "this device has no tiers". Flatten first.
+  tr -d '\n' < "$CONSENT_STORE" 2>/dev/null \
+    | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*{[^}]*\"value\"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p" \
+    | tail -1
+}
+_legacy_val() {  # $1 = flat key -> true|false|"" (legacy v1)
+  sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p" \
+    "$CONSENT_STORE" 2>/dev/null | tail -1
+}
+
 if [ -f "$CONSENT_STORE" ]; then
-  METRICS_VAL=$(sed -n 's/.*"metrics"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$CONSENT_STORE" | tail -1)
-  ERRORS_VAL=$(sed -n 's/.*"error_logs"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$CONSENT_STORE" | tail -1)
+  METRICS_TIER=$(_tier_val tier2); ERRORS_TIER=$(_tier_val tier1)
+  METRICS_LEG=$(_legacy_val metrics); ERRORS_LEG=$(_legacy_val error_logs)
+  METRICS_VAL="${METRICS_TIER:-$METRICS_LEG}"
+  ERRORS_VAL="${ERRORS_TIER:-$ERRORS_LEG}"
+  echo "      consent: metrics=${METRICS_VAL:-unset} (tier2=${METRICS_TIER:-none} legacy=${METRICS_LEG:-none})"
+  echo "      consent: error_logs=${ERRORS_VAL:-unset} (tier1=${ERRORS_TIER:-none} legacy=${ERRORS_LEG:-none})"
 
   if [ "$METRICS_VAL" = "true" ]; then
     run_test "TEL-31" "consent marker for metrics exists (consent=true)" \
@@ -172,6 +206,22 @@ if [ -f "$CONSENT_STORE" ]; then
   else
     run_test "TEL-32" "consent marker for error_logs absent (consent=false)" \
       "test ! -f $ERRORS_MARKER"
+  fi
+
+  # TEL-33: the two representations must not contradict each other. Skipped —
+  # not passed — when a device carries only one of them, because "we could not
+  # compare" and "they agree" are different results.
+  if [ -n "$METRICS_TIER" ] && [ -n "$METRICS_LEG" ]; then
+    run_test "TEL-40a" "consent store: tier2 and legacy metrics agree" \
+      "[ \"$METRICS_TIER\" = \"$METRICS_LEG\" ]"
+  else
+    skip_test "TEL-40a" "tier2 vs legacy metrics" "device carries only one representation"
+  fi
+  if [ -n "$ERRORS_TIER" ] && [ -n "$ERRORS_LEG" ]; then
+    run_test "TEL-40b" "consent store: tier1 and legacy error_logs agree" \
+      "[ \"$ERRORS_TIER\" = \"$ERRORS_LEG\" ]"
+  else
+    skip_test "TEL-40b" "tier1 vs legacy error_logs" "device carries only one representation"
   fi
 else
   warn_test "TEL-31" "consent store not found (device not onboarded)" "false"
