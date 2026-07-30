@@ -47,9 +47,11 @@ rewrite would not un-disclose it, and it would invalidate every commit hash in
 the release records, RAUC bundles and Odoo tickets that reference them. The
 mitigation for a disclosed secret is revocation, which happened.
 
-STILL OPEN — carried in the report, not closed by this entry: whether that
-password was reused for any other InfluxDB user or service. Revoking one
-account does not cover reuse.
+Follow-up on possible reuse of that password elsewhere is tracked privately
+(Odoo, project 17). It is deliberately NOT restated here: this repository is
+public, and an open question about where else a credential might still work is
+a lead, not documentation. What belongs in a public file is the fact of
+revocation and the reason these four findings are suppressed.
 """
 commits = [
   "1c0c2ba533e453ba13263110132dfd95f2813831",
