@@ -109,7 +109,7 @@ No device or emulator needed — checks the build output tree directly.
 - SLOT-04: collector calls `rauc status --detailed` (without it, install history is empty and every slot looks never-installed)
 - SLOT-05a/b: collector uses `--output-format=shell`, cross-checked against `BR2_PACKAGE_RAUC_JSON` in the build config (json is compiled out; asking for it aborts rauc)
 - SLOT-06: publishes through ga-share-publish (atomic, symlink-safe)
-- SLOT-07a/b: publishes to the **add-on-private** `/mnt/data/supervisor/addons/data/*_ga_manager/` and never to `/share` — the file is the input to a rollback decision, and `/share` is mapped rw by eleven add-ons (Samba exports it to the customer LAN), so a forged `rollback.possible: true` there would let an operator brick a device
+- SLOT-07a/b: publishes to the **add-on-private** `/mnt/data/supervisor/addons/data/*_ga_manager/` and never to `/share` — the file is the input to a rollback decision, and `/share` is mapped rw by every add-on that declares `share:rw`, so a forged `rollback.possible: true` there would let an operator brick a device
 - SLOT-08: parses rauc output instead of eval'ing it
 
 ## Category 2: Emulation (`emu`)

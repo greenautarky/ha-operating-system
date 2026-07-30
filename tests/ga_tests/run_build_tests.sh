@@ -3331,10 +3331,15 @@ fi
 
 # SLOT-07: the add-on-private path the ga_manager addon reads as /data.
 # NOT /share: this file is the input to a rollback decision, and /share is
-# mapped rw by eleven add-ons — File editor, Terminal & SSH, and Samba, which
-# exports it to the customer LAN — all running as host uid 0. Anyone on the
-# household network could forge "rollback.possible: true" onto a device whose
-# second slot is empty and have an operator brick it. Same reasoning and same
+# mapped rw by every add-on that declares `share:rw` — all of them running as
+# host uid 0, so permissions inside /share protect nothing. Whoever is on that
+# bus could forge "rollback.possible: true" onto a device whose second slot is
+# empty and have an operator brick it.
+#
+# Three installed add-ons carry that mapping on the current image and all are
+# ours, so this is not a live exposure. It is a structural one: the membership
+# of the bus is not ours to control, because a community add-on the customer
+# installs joins it by declaring one line of metadata. Same reasoning and same
 # channel as the per-device Loki credential and the device identity (OS#280).
 if col_code | grep -q '/mnt/data/supervisor/addons/data/\*_ga_manager'; then
   _pass "SLOT-07a: publishes to the add-on-private data dir (slug-tolerant glob)"
@@ -3343,7 +3348,7 @@ else
 fi
 
 if col_code | grep -q 'supervisor/share'; then
-  _fail "SLOT-07b: collector writes the slot picture into the add-on-writable /share — forgeable by any share:rw add-on (Samba exports it to the customer LAN)"
+  _fail "SLOT-07b: collector writes the slot picture into the add-on-writable /share — forgeable by any share:rw add-on"
 else
   _pass "SLOT-07b: slot picture never written to the add-on-writable /share"
 fi

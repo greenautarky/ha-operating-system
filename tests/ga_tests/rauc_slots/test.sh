@@ -109,11 +109,12 @@ fi
 
 # --- static: where it publishes, and that it never executes rauc output ------
 # The published file is not a readout, it is the input to a rollback decision.
-# /share is writable by eleven add-ons (File editor, Terminal & SSH, Samba —
-# which exports it to the customer LAN), all running as host uid 0, so anyone
-# on the household network could forge "rollback.possible: true" onto a device
-# whose second slot is empty and have an operator brick it. The add-on-private
-# data dir is the only channel they cannot reach.
+# /share is writable by every add-on declaring `share:rw`, all running as host
+# uid 0 — three installed add-ons on the current image, all ours, but the
+# customer can add to that set with one line of add-on metadata. Whoever is on
+# that bus could forge "rollback.possible: true" onto a device whose second
+# slot is empty and have an operator brick it. The add-on-private data dir is
+# the one channel they cannot reach.
 run_test "SLOT-33a" "publishes into the add-on-private data dir" \
   "grep -v '^[[:space:]]*#' '$COL' | grep -q '/mnt/data/supervisor/addons/data/\*_ga_manager'"
 
