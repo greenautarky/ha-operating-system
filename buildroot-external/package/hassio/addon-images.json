@@ -1,12 +1,12 @@
 {
   "addons": {
-    "mosquitto": {
-      "image": "ghcr.io/greenautarky/ga_mosquitto-{arch}",
-      "version": "7.1.2"
+    "ga_default_addon": {
+      "image": "ghcr.io/greenautarky/ga_default_addon-{arch}",
+      "version": "1.2.0"
     },
-    "ga_tailscale": {
-      "image": "ghcr.io/greenautarky/ga_tailscale-{arch}",
-      "version": "0.27.2"
+    "ga_hmvapp_addon": {
+      "image": "ghcr.io/greenautarky/ga_hmvapp_addon-{arch}",
+      "version": "1.2.0"
     },
     "ga_ihosthardwarecontrol": {
       "image": "ghcr.io/greenautarky/ga_ihosthardwarecontrol-{arch}",
@@ -16,17 +16,25 @@
       "image": "ghcr.io/greenautarky/ga_influxdbv1-{arch}",
       "version": "0.0.4"
     },
+    "ga_manager": {
+      "image": "ghcr.io/greenautarky/ga_manager-{arch}",
+      "version": "0.106.0"
+    },
+    "ga_tailscale": {
+      "image": "ghcr.io/greenautarky/ga_tailscale-{arch}",
+      "version": "0.27.2"
+    },
     "ga_zigbee2mqtt": {
       "image": "ghcr.io/greenautarky/ga_zigbee2mqtt-{arch}",
       "version": "2.12.1-3"
     },
+    "mosquitto": {
+      "image": "ghcr.io/greenautarky/ga_mosquitto-{arch}",
+      "version": "7.1.2"
+    },
     "sonoff_dongle_flasher": {
       "image": "ghcr.io/ihost-open-source-project/hassio-ihost-sonoff-dongle-flasher-{arch}",
       "version": "1.3.4"
-    },
-    "ga_manager": {
-      "image": "ghcr.io/greenautarky/ga_manager-{arch}",
-      "version": "0.106.0"
     }
   }
 }
