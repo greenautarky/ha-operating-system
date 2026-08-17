@@ -1,0 +1,22 @@
+# security.txt — RFC 9116
+#
+# THIS FILE IS THE SOURCE OF TRUTH. It is not served from this repository.
+# It must be deployed to the web root of every host it applies to, at
+#
+#     https://<host>/.well-known/security.txt
+#
+# RFC 9116 section 3.1: a security.txt file applies ONLY to the domain or IP
+# address in the URI used to retrieve it — NOT to its subdomains or parent
+# domains. Each customer-facing hostname therefore needs its own copy.
+#
+# Deployment procedure and the current host inventory: KB #194.
+#
+# Expires is a MANDATORY field and must be renewed before the date below.
+# An expired security.txt is worse than none: it is a dated commitment that
+# was visibly allowed to lapse.
+
+Contact: mailto:security@greenautarky.com
+Expires: 2027-08-01T00:00:00.000Z
+Preferred-Languages: de, en
+Canonical: https://greenautarky.com/.well-known/security.txt
+Policy: https://github.com/greenautarky/ha-operating-system/blob/master/SECURITY.md
