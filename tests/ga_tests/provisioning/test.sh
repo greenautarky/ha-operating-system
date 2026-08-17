@@ -17,8 +17,11 @@ ENTRIES="$HA_CFG/.storage/core.config_entries"
 # --- converge completion (step 10) ---
 # ga_manager (addon) writes /share/.ga_converged; the addon's /share is the
 # host path /mnt/data/supervisor/share (NOT the host's own /share).
-run_test "PROV-01" "converged marker present (/mnt/data/supervisor/share/.ga_converged)" \
-  "[ -f /mnt/data/supervisor/share/.ga_converged ]"
+SHARE="/mnt/data/supervisor/share"
+MARK_FULL="$SHARE/.ga_converged"
+
+run_test "PROV-01" "converged marker present ($MARK_FULL)" \
+  "[ -f '$MARK_FULL' ]"
 
 # --- Zigbee2MQTT serial + channel (= flasher stage 64 / 0.23.2) ---
 if [ -f "$Z2M_CFG" ]; then
@@ -90,6 +93,38 @@ if [ -n "$GA_MGR" ]; then
   fi
 else
   skip_test "PROV-06" "ga_manager container not found"
+fi
+
+# ─── phase invariants (ga_manager 0.108.0+) ─────────────────────────────
+# Graded by check_phase_invariants.sh, the SAME file the CI self-test runs
+# against fixture device trees (tests/ga_tests/provisioning/selftest.sh) — so
+# these checks are proven able to go red AND green without a device, and the
+# device and CI can never grade by two different definitions.
+#
+# Why they exist: until ga_manager 0.108.0 convergence had ONE marker, written
+# even when the per-device steps had been skipped. K31, 2026-08-17, fresh flash:
+# converge held the single job runner for ten minutes installing add-ons, the
+# fleet-manager's identity-write landed nine seconds AFTER the marker, and the
+# device reported "converged" plus a PASSING self-check while holding no
+# device_id, no url_prefix and no PIN.
+_INV="$SCRIPT_DIR/check_phase_invariants.sh"
+if [ -x "$_INV" ]; then
+  _inv_out=$(sh "$_INV" 2>/dev/null)
+  if [ -z "$_inv_out" ]; then
+    # Fail, never skip: an extraction that stops producing output is exactly how
+    # a guard rots into silence.
+    run_test "PROV-07" "phase invariants produced a verdict" "false"
+  else
+    echo "$_inv_out" | while read -r _id _status _detail; do
+      case "$_status" in
+        pass) run_test  "$_id" "$_detail" "true"  ;;
+        fail) run_test  "$_id" "$_detail" "false" ;;
+        skip) skip_test "$_id" "$_detail"         ;;
+      esac
+    done
+  fi
+else
+  run_test "PROV-07" "check_phase_invariants.sh present + executable" "false"
 fi
 
 suite_end
