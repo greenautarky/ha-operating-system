@@ -159,3 +159,10 @@ jobs:
       # proves red AND green here, on every PR, with no hardware.
       - name: Provisioning phase invariants (red + green on fixture device trees)
         run: ./tests/ga_tests/provisioning/selftest.sh
+
+      # The fresh-flash gate needs a card, a MUX and a power plug, so it cannot
+      # run here — but its verdict logic can, and the exit code is what a bake
+      # job would act on. Asserted without a pipe, because a pipe reports the
+      # pipe's status and that is how a gate looks green while failing.
+      - name: Provisioning gate verdict logic (exit codes on the same fixtures)
+        run: ./tests/provisioning_e2e/selftest.sh
