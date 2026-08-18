@@ -1,0 +1,79 @@
+name: pin-addon-images
+
+# The OS pins itself against the published add-on store instead of being pushed
+# to.
+#
+# Until now every add-on's CI opened this repo's pin PR with a cross-repo write
+# token (DOWNSTREAM_SYNC_PAT). That meant handing a write credential to each
+# add-on repo — including one that is public — and it made the pin depend on
+# some add-on happening to build. Here the direction is reversed: the store is
+# PUBLIC, so this repo can read it with no credential at all and open its own
+# PR with its own GITHUB_TOKEN.
+#
+# Proposes, never merges: a bake pin is a release decision.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "scripts/check-addon-pins.py"
+      - ".github/workflows/pin-addon-images.yml"
+      - "buildroot-external/package/hassio/addon-images.json"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: greenautarky/vibe_addons
+          path: .store
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PyYAML
+        run: pip install --quiet "PyYAML>=6,<7"
+
+      # On a PR: report only. Drift is not a reason to fail someone else's PR,
+      # but an unreadable store or a comparison that inspected nothing is.
+      - name: Compare pins against the published store
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/check-addon-pins.py --store .store || true
+
+      - name: Update the pins
+        if: github.event_name != 'pull_request'
+        id: apply
+        run: |
+          set -euo pipefail
+          python3 scripts/check-addon-pins.py --store .store --apply
+          if git diff --quiet buildroot-external/package/hassio/addon-images.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "pins already match the store — nothing to propose"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --unified=0 buildroot-external/package/hassio/addon-images.json
+          fi
+
+      - name: Open the pin PR
+        if: github.event_name != 'pull_request' && steps.apply.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          br="ci/pin-addon-images-$(git rev-parse --short HEAD)"
+          git config user.name "ga-ci-bot"
+          git config user.email "ci@greenautarky.com"
+          git checkout -b "$br"
+          git commit -am "chore(bake): pin add-on images to the published store versions"
+          git push -f origin "$br"
+          gh pr create --base "${{ github.event.repository.default_branch }}" --head "$br" \
+            --title "chore(bake): pin add-on images to the published store versions" \
+            --body "Opened by \`pin-addon-images\`. The versions come from the PUBLIC greenautarky/vibe_addons store — the same entry the Supervisor reads on the device — so this pins what devices would actually install. Review the diff and merge before the next OS bake." \
+            || echo "PR for $br already exists — branch updated"
