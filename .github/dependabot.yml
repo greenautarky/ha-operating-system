@@ -18,11 +18,19 @@ updates:
       - "dependencies"
       - "tests"
 
-  - package-ecosystem: "npm"
-    directory: "/tests/app"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    labels:
-      - "dependencies"
-      - "tests"
+  # /tests/app is deliberately NOT watched.
+  #
+  # It is an Appium/WebdriverIO Android suite with 11 devDependencies and zero
+  # runtime dependencies. It is driven MANUALLY by tests/run_app_tests.sh — it is
+  # a bench tool, not dead code — but no workflow runs it, so no CI can validate
+  # a dependency bump against it. Its dependencies are also dev-only: never
+  # loaded on a device, never built into an image, never shipped.
+  #
+  # So the watcher produced 21 open pull requests that could neither reduce risk
+  # nor be verified. What they did do is bury the real ones: on 2026-08-18 they
+  # were 21 of 24 open in this repository, so "what needs review here?" could not
+  # be answered by looking at the list.
+  #
+  # The condition to re-enable is not a calendar date, it is a workflow: wire the
+  # suite into CI, and restore this block in the same change. A watcher for a
+  # suite CI never exercises is what got removed here — not the suite.
