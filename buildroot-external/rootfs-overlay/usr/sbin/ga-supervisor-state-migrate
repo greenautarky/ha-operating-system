@@ -91,7 +91,12 @@ log "rewriting to $UPSTREAM_URL"
 # service runs Before=hassio-supervisor.service so there's no race
 # in practice, but defensive coding is cheap here).
 TMP="${JSON}.migrate.$$"
-sed -E "s|\"image\"[[:space:]]*:[[:space:]]*\"[^\"]*$STALE_PATTERN[^\"]*\"|\"image\": \"$UPSTREAM_URL\"|" \
+# Braces on the variable: `$STALE_PATTERN[^"]*` is correct here — bash
+# expands the variable and hands the sed character class through — but it
+# reads exactly like the array-index mistake `$arr[0]` (which needs
+# `${arr[0]}`), and shellcheck rightly flags the shape as SC1087. Bracing
+# it says what is meant, to shellcheck and to the next reader.
+sed -E "s|\"image\"[[:space:]]*:[[:space:]]*\"[^\"]*${STALE_PATTERN}[^\"]*\"|\"image\": \"$UPSTREAM_URL\"|" \
     "$JSON" > "$TMP"
 chmod 0600 "$TMP"
 mv -f "$TMP" "$JSON"

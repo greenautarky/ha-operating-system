@@ -59,20 +59,59 @@ jobs:
       - name: Lint shell scripts
         run: |
           set -e
-          # Collect targets — find ignores files starting with '.' by default,
-          # which keeps editor backup files out of the scan.
+          # COMPUTED, not curated. Until 2026-08-18 this was a hand-maintained
+          # list of `find` paths, and it covered 111 of the repository's 175
+          # shell scripts — 37% went unchecked, silently, because a lint that
+          # runs over fewer files is still green. The misses were all
+          # near-misses, which is how this rots:
+          #
+          #   buildroot-ihost/rootfs-overlay/usr/libexec  — the list had ../sbin
+          #   buildroot-ihost/rootfs-overlay/usr/sbin     — listed, but only ga-*
+          #   buildroot-external/scripts                  — the list had ./scripts
+          #   tests/provisioning_e2e                      — the list had tests/ga_tests
+          #   buildroot-external/package/hassio           — never listed
+          #   board/{rpi5-64,asus,odroid-c2,arm-uefi}     — only board/sonoff/ihost
+          #
+          # tests/provisioning_e2e is the fresh-flash gate; the scripts under
+          # buildroot-external/rootfs-overlay/usr/sbin ship on devices. Nothing
+          # broken was hiding in the gap when it was measured (0 parse errors,
+          # 0 real findings), but the flasher repo's equivalent gap held a script
+          # that had not parsed since 2026-02-16.
+          #
+          # So: every tracked file that IS a shell script, by extension or by
+          # shebang. Adding a directory can no longer mean forgetting to lint it.
           mapfile -t targets < <(
-            find scripts -maxdepth 2 -type f -name '*.sh'
-            find buildroot-ihost/board/sonoff/ihost -type f -name '*.sh'
-            find buildroot-ihost/rootfs-overlay/usr/sbin -type f -name 'ga-*' -not -name '*.bak'
-            find buildroot-external/rootfs-overlay -type f -name '*.sh' 2>/dev/null || true
-            # Root services on the host<->addon /share bridge. They carry no
-            # .sh suffix, so the pattern above never saw them — including
-            # ga-share-publish, which exists to contain a privilege
-            # escalation. All of them pass at --severity=error today.
-            find buildroot-external/rootfs-overlay/usr/libexec -type f 2>/dev/null || true
-            find tests/ga_tests -type f -name '*.sh'
+            git ls-files -z \
+              | while IFS= read -r -d '' f; do
+                  [ -f "$f" ] || continue
+                  case "$f" in
+                    *.sh) printf '%s\n' "$f"; continue ;;
+                    # Binary and non-shell by extension. `.img` earned its place the
+                    # hard way: two bootloader images start with NUL bytes, and
+                    # reading them made bash warn once per file.
+                    *.bak|*.png|*.jpg|*.jpeg|*.gif|*.ico|*.pdf) continue ;;
+                    *.img|*.raucb|*.tar|*.gz|*.xz|*.zip|*.bin|*.der|*.pem) continue ;;
+                    *.patch|*.drawio|*.woff|*.woff2|*.ttf) continue ;;
+                  esac
+                  # Shebang sniff for the extension-less ones — the /share
+                  # bridge services (ga-share-publish, which exists to contain a
+                  # privilege escalation) have no suffix.
+                  # `tr -d '\0'` on BOTH reads: the repo tracks binary files,
+                  # and a NUL inside a command substitution makes bash print
+                  # "ignored null byte in input" once per file. The warning is
+                  # harmless, which is exactly why it must go — CI output people
+                  # learn to ignore is CI output that has stopped working.
+                  [ "$(head -c 2 "$f" 2>/dev/null | tr -d '\0')" = '#!' ] || continue
+                  case "$(head -n 1 "$f" 2>/dev/null | tr -d '\0')" in
+                    *sh*) printf '%s\n' "$f" ;;
+                  esac
+                done
           )
+          # A lint that inspects nothing is a false green, not a clean tree.
+          if [ "${#targets[@]}" -eq 0 ]; then
+            echo "::error::collected zero shell scripts — the collection is broken, not the tree"
+            exit 1
+          fi
           echo "Scanning ${#targets[@]} shell scripts:"
           printf '  %s\n' "${targets[@]}"
           echo ""
