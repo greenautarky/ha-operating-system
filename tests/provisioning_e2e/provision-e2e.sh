@@ -104,6 +104,44 @@ fm() { # fm <method> <path> [body]
     ${body:+-d '$body'} '$FM_URL$path'"
 }
 
+# ── serial: work on BOTH console states ─────────────────────────────────
+# The gate's first hardware run (2026-08-18) failed for 25 minutes on a device
+# that had finished converging after 18. Cause: every read passed `--shell`,
+# which serial_run.py documents as "assume already at a shell, skip login". A
+# freshly flashed device sits at a LOGIN PROMPT, so the command text went into
+# the login and nothing usable came back — and `2>/dev/null` on the ssh hid it,
+# so the verdict blamed the device ("never reported full convergence") for a
+# harness defect.
+#
+# It could not have worked: --shell only succeeds on a console someone has
+# already logged into by hand, which is never true of the fresh boot this gate
+# exists to test. It passed in development because the author had a shell open.
+#
+# So: try a real login first, fall back to --shell when the console is already
+# at one. Errors are RETURNED, not discarded — a read failure must be
+# distinguishable from a device that simply is not ready.
+# Pull dd's byte count out of its report. Its own function so the fixtures can
+# exercise it without a card: `dd` writes "2684354560 bytes (2.7 GB) copied…" in
+# the C locale, and this is the number the completeness check rests on.
+bytes_written() { # bytes_written <dd-output>
+    sed -n 's/^\([0-9][0-9]*\) bytes.*copied.*/\1/p' <<<"$1" | tail -1
+}
+
+serial_read() { # serial_read <marker-to-expect> <commands...>
+    local expect="$1"; shift
+    local out
+    for mode in "" "--shell"; do
+        out="$(ssh -o BatchMode=yes "$BENCH" \
+            "cd \$HOME/git/ga-flasher-py && timeout 120 python3 $BENCH_SERIAL_HELPER \
+             $SERIAL_DEV root $BENCH_SERIAL_PW $mode $*" 2>&1)"
+        if grep -q "$expect" <<<"$out"; then printf '%s\n' "$out"; return 0; fi
+    done
+    # Neither mode produced the marker: report it upward instead of returning
+    # an empty string that reads like "not ready yet".
+    printf '%s\n' "$out" >&2
+    return 1
+}
+
 enrollment_field() { # enrollment_field <hw_serial> <field>
   fm GET /api/enrollments | python3 -c "
 import json,sys
@@ -174,8 +212,8 @@ print(row['hw_serial'] if row else '')
 " 2>/dev/null)"
 if [[ -z "$HW_SERIAL" ]]; then
   log "no enrollment for $DEVICE_ID yet — reading hw_serial off the device over serial"
-  HW_SERIAL="$(ssh "$BENCH" "cd \$HOME/git/ga-flasher-py && timeout 90 python3 $BENCH_SERIAL_HELPER $SERIAL_DEV root $BENCH_SERIAL_PW --shell \
-    \"tr -d '\\0' < /sys/firmware/devicetree/base/serial-number\" 2>/dev/null" \
+  HW_SERIAL="$(serial_read SERIAL_OK \
+    "\"tr -d '\\0' < /sys/firmware/devicetree/base/serial-number; echo; echo SERIAL_OK\"" \
     | sed -n 's/^\([0-9a-f]\{8,\}\)$/\1/p' | head -1)"
 fi
 [[ -n "$HW_SERIAL" ]] || die "could not determine hw_serial for $DEVICE_ID (needed to watch the enrollment)"
@@ -208,11 +246,28 @@ if [[ $SKIP_FLASH -eq 0 ]]; then
 
   log "writing the image (this takes ~9 min at ~19 MB/s)"
   # PIPESTATUS, not the pipe's exit code: a failed dd behind a pipe reports 0.
-  FLASH_OUT="$(ssh "$BENCH" "bash -c 'set -o pipefail; xzcat $IMAGE | sudo -n dd of=/dev/sda bs=4M conv=fsync status=none; \
-    echo PIPESTATUS=\${PIPESTATUS[*]}; sync; blockdev --getsize64 /dev/sda'")"
+  # `status=progress` so dd reports the byte count on stderr. The header of this
+  # file promises "byte count + PIPESTATUS"; before 2026-08-18 the byte-count
+  # half was DEAD — it called bare `blockdev`, which is not on PATH in a
+  # non-login shell on the bench, so the command printed
+  # "blockdev: command not found" and nothing was ever compared. Only PIPESTATUS
+  # gated. A promise in a comment is not a check.
+  FLASH_OUT="$(ssh "$BENCH" "bash -c 'set -o pipefail; xzcat $IMAGE | sudo -n dd of=/dev/sda bs=4M conv=fsync status=progress 2>&1 | tail -3; \
+    echo PIPESTATUS=\${PIPESTATUS[*]}; sync; /sbin/blockdev --getsize64 /dev/sda 2>/dev/null || lsblk -bno SIZE /dev/sda | head -1'")"
   echo "$FLASH_OUT" | grep -q 'PIPESTATUS=0 0' \
     || { fail "flash did not complete cleanly: $FLASH_OUT"; exit 1; }
-  log "flash complete, PIPESTATUS clean"
+
+  WROTE_BYTES="$(bytes_written "$FLASH_OUT")"
+  [[ -n "$WROTE_BYTES" ]] \
+    || { fail "could not read a byte count from dd — the completeness half of this check is blind: $FLASH_OUT"; exit 1; }
+  # A GA BOS image is ~2.5 GB uncompressed. Anything under 1 GiB is a truncated
+  # write that would still boot far enough to look fine (paid for 2026-07: a
+  # network stall mid-write left a half-flashed card).
+  (( WROTE_BYTES > 1073741824 )) \
+    || { fail "dd wrote only $WROTE_BYTES bytes — truncated card"; exit 1; }
+  (( WROTE_BYTES <= CARD_SIZE )) \
+    || { fail "dd reports $WROTE_BYTES bytes written but the card is $CARD_SIZE"; exit 1; }
+  log "flash complete, PIPESTATUS clean, $WROTE_BYTES bytes written (card $CARD_SIZE)"
 
   ssh "$BENCH" "sudo -n usbsdmux /dev/usb-sd-mux/$MUX_ID dut" || die "MUX → dut failed"
 fi
@@ -228,17 +283,43 @@ fi
 # ── power on and measure ────────────────────────────────────────────────
 T0=$(date +%s)
 log "POWER ON"
+# Remove the stale device node first: with it gone, its re-appearance is real
+# evidence rather than a leftover. Bench clocks are close enough for the mtime
+# comparison below (both hosts run NTP; see the 2026-08-17 DietPi fix).
+ssh -o BatchMode=yes "$BENCH" "sudo -n rm -f $SERIAL_DEV 2>/dev/null || true"
+POWER_ON_EPOCH="$(ssh -o BatchMode=yes "$BENCH" 'date +%s')"
 ssh "$BENCH" "sudo -n /usr/sbin/uhubctl -l $HUB -p $HUB_PORT -a on >/dev/null" \
   || die "could not power on label $PLUG"
 mark power_on
 
-log "waiting for the USB serial gadget to return (proves the kernel booted)"
+# The first hardware run marked this PASSED at t+6s from power-on. A Rockchip
+# RV1126 cannot reach a USB CDC-ACM gadget in six seconds — U-Boot alone takes
+# longer, and the next milestone (enrol) landed at t+148s. The check was
+# `test -e /dev/a16-port13`, and that is a udev SYMLINK: it survives the device
+# disappearing, so the check passed on a leftover path and could never fail.
+#
+# That is the exact defect this gate was built to catch. rc38 (BOOTDELAY -2) was
+# structurally perfect and no device booted it; a boot proof that passes on a
+# stale symlink would have called rc38 good.
+#
+# So: monitor the subject. Require the console to ANSWER, and require the device
+# node to have been re-created after power-on.
+log "waiting for the device to answer on the console (proves the kernel booted)"
 booted=0
-for _ in $(seq 1 60); do
-  if ssh "$BENCH" "test -e $SERIAL_DEV"; then booted=1; break; fi
+for _ in $(seq 1 72); do   # 6 min
+  node_mtime="$(ssh -o BatchMode=yes "$BENCH" \
+    "stat -Lc %Y $SERIAL_DEV 2>/dev/null || echo 0")"
+  if [[ "${node_mtime:-0}" -ge "$POWER_ON_EPOCH" ]] \
+     && serial_read BOOT_OK "\"echo BOOT_OK\"" >/dev/null 2>&1; then
+    booted=1; break
+  fi
   sleep 5
 done
-[[ $booted -eq 1 ]] && mark gadget_back || fail "serial gadget never came back — the device did not boot"
+if [[ $booted -eq 1 ]]; then
+  mark gadget_back
+else
+  fail "the device never answered on the console — it did not boot (node mtime=${node_mtime:-none}, power-on=${POWER_ON_EPOCH})"
+fi
 
 wait_for_status() { # wait_for_status <wanted> <deadline_s> <label>
   local wanted="$1" deadline="$2" label="$3" now
@@ -274,14 +355,21 @@ converged=0
 while :; do
   now=$(date +%s)
   (( now - T0 > DEADLINE_CONVERGED_S )) && break
-  facts="$(ssh "$BENCH" "cd \$HOME/git/ga-flasher-py && timeout 90 python3 $BENCH_SERIAL_HELPER $SERIAL_DEV root $BENCH_SERIAL_PW --shell \
-    \"S=/mnt/data/supervisor/share; H=/mnt/data/supervisor/homeassistant; \
+  # FACTS_OK is the marker that proves the console answered at all. Without it,
+  # an unreadable console and a not-yet-converged device look identical — which
+  # is exactly how the 2026-08-18 run spent 25 minutes blaming the device.
+  facts="$(serial_read FACTS_OK \
+    "\"S=/mnt/data/supervisor/share; H=/mnt/data/supervisor/homeassistant; \
       G=\\\$(ls -d /mnt/data/supervisor/addons/data/*ga_manager 2>/dev/null | head -1); \
       echo FULL=\\\$([ -f \\\$S/.ga_converged ] && echo 1 || echo 0); \
       echo BASE=\\\$([ -f \\\$S/.ga_converged_base ] && echo 1 || echo 0); \
       echo PIN=\\\$([ -s \\\$H/.storage/greenautarky_secrets/onboarding_pin ] || [ -s \\\$H/ga-onboarding-pin ] && echo 1 || echo 0); \
       echo PARKED=\\\$([ -f \\\$G/ga-generated-admin-pw ] && echo 1 || echo 0); \
-      echo IDENTITY_BEGIN; cat \\\$S/ga-identity.json 2>/dev/null; echo IDENTITY_END\" " 2>/dev/null)"
+      echo IDENTITY_BEGIN; cat \\\$S/ga-identity.json 2>/dev/null; echo IDENTITY_END; \
+      echo FACTS_OK\"")" || {
+        log "console did not answer this round — retrying (this is NOT a device verdict)"
+        sleep 20; continue
+      }
   if echo "$facts" | grep -q '^FULL=1'; then converged=1; fi
   if [[ $converged -eq 1 ]]; then mark converged; break; fi
   sleep 20
