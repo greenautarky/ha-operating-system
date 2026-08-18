@@ -256,7 +256,7 @@ and pinned in [`version.yaml`](version.yaml) under `components:` (ADR-0007):
 
 #### Add-ons
 
-Some of these forks are private, and two were retired on 2026-08-18. Their
+Some of these forks are private, and three were retired on 2026-08-18. Their
 names are given as plain text rather than as links, because a link into a
 private repository is a 404 for every reader of this file. The attribution
 that matters is the **upstream** column, which stays linked and carries the
@@ -266,7 +266,7 @@ license.
 |------------|----------|---------|-------------|
 | [ga_tailscale](https://github.com/greenautarky/ga_tailscale) | [hassio-addons/addon-tailscale](https://github.com/hassio-addons/addon-tailscale) | MIT | Custom Tailscale add-on with hostname persistence fix |
 | [influxDBv1](https://github.com/greenautarky/influxDBv1) | [hassio-addons/addon-influxdb](https://github.com/hassio-addons/addon-influxdb) | MIT | InfluxDB v1 add-on for time-series data storage |
-| `greenautarky/grafana` *(private)* | [hassio-addons/addon-grafana](https://github.com/hassio-addons/addon-grafana) | MIT | Grafana add-on for dashboards and visualization |
+| `greenautarky/grafana` *(retired 2026-08-18)* | [hassio-addons/addon-grafana](https://github.com/hassio-addons/addon-grafana) | MIT | Grafana add-on for dashboards and visualization |
 | `greenautarky/glances` *(retired 2026-08-18)* | [hassio-addons/addon-glances](https://github.com/hassio-addons/addon-glances) | MIT | Glances add-on for system monitoring |
 | `greenautarky/telegraf` *(retired 2026-08-18)* | [sabuto/hassio-telegraf](https://github.com/sabuto/hassio-telegraf) | MIT | Telegraf add-on for metrics collection |
 | `greenautarky/MQTT` *(private)* | [home-assistant/addons](https://github.com/home-assistant/addons) (mosquitto) | Apache-2.0 | Mosquitto MQTT broker add-on |
