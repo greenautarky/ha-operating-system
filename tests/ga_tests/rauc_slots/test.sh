@@ -71,8 +71,13 @@ run_test "SLOT-25" "fresh flash: rollback is NOT possible (slot B never installe
 # exactly like a false assertion. Measured on K31 2026-07-30; this suite passed
 # on the build host and failed on the device with an identical collector (same
 # md5), which is what made it look like a real regression for an hour.
-run_test "SLOT-26" "fresh flash: reason names the empty slot + the reflash consequence" \
-  "jq -r '.rollback.reason' '$F' | grep -q 'never received an OTA install' && \
+# Wording changed on 2026-08-19 and the old assertion was right to fail: the
+# refusal has TWO grounds now (no install record AND no recorded healthy boot),
+# so a message naming only the install record would be an incomplete reason for
+# an operator deciding whether to force. Still greps for the consequence, which
+# is the part that changes behaviour.
+run_test "SLOT-26" "fresh flash: reason names BOTH missing evidences + the reflash consequence" \
+  "jq -r '.rollback.reason' '$F' | grep -q 'NEITHER an OTA install record nor a recorded healthy boot' && \
    jq -r '.rollback.reason' '$F' | grep -q 're-flash'"
 
 # Regression guard for the actual trap: boot_status is STILL 'good' on the
@@ -157,6 +162,88 @@ fi
 # new code. Cheap static guard so it cannot creep back in.
 run_test "SLOT-32" "collector never evals or sources rauc output" \
   "! grep -v '^[[:space:]]*#' '$COL' | grep -Eq '(^|[^[:alnum:]_])(eval|source)[[:space:]]|^[[:space:]]*\\.[[:space:]]'"
+
+# =========================================================================
+# Healthy-boot evidence (2026-08-19) — the second, independent rollback ground
+# =========================================================================
+# The gap this closes, measured on K31 2026-08-18: an SD flash writes no RAUC
+# slot metadata, so the moment the device booted B, slot A read
+# ever_installed=false even though it had booted A minutes earlier. A new device
+# had NO rollback target, and its first OTA was un-rollback-able by construction.
+#
+# These cases assert the evidence is EARNED, not assumed: recorded only after the
+# uptime threshold (a boot-looping slot never qualifies), and honoured only when
+# the bootloader has not given up on the slot.
+
+# Same fresh-flash fixture as SLOT-25..28 — booted A, B empty, no install record
+# anywhere — driven with a boot record and a faked uptime.
+run_with_boots() { # run_with_boots <fixture> <boots-json> <uptime-s> <out-name>
+  printf '%s' "$2" > "$WORK/$4.boots.json"
+  GA_RAUC_SLOTS_TS=1753790000 \
+  GA_RAUC_SLOTS_INPUT="$FIX/$1.shell" \
+  GA_RAUC_SLOTS_OUT="$WORK/$4.json" \
+  GA_RAUC_SLOTS_BOOTS="$WORK/$4.boots.json" \
+  GA_RAUC_SLOTS_UPTIME="$3" \
+  "$COL" >/dev/null 2>&1
+}
+
+# --- no record: unchanged refusal (the guard still guards) --------------------
+run_with_boots fresh-sd-flash '{}' 60 boots-none
+B0="$WORK/boots-none.json"
+run_test "SLOT-50" "no boot record: rollback still refused (nothing regressed)" \
+  "jq -e '.rollback.possible == false' '$B0'"
+run_test "SLOT-51" "no boot record: target reports booted_ok=false" \
+  "jq -e '[.slots[] | select(.bootname == \"B\")] | .[0].booted_ok == false' '$B0'"
+
+# --- a recorded healthy boot of the TARGET makes it a target ------------------
+run_with_boots fresh-sd-flash '{"B":{"at":1753700000,"uptime_s":1200}}' 60 boots-b
+B1="$WORK/boots-b.json"
+run_test "SLOT-52" "recorded healthy boot of B: rollback becomes possible" \
+  "jq -e '.rollback.possible == true and .rollback.target == \"B\"' '$B1'"
+run_test "SLOT-53" "recorded healthy boot is reported as its OWN field, not as an install" \
+  "jq -e '[.slots[] | select(.bootname == \"B\")] | .[0] | .booted_ok == true and .ever_installed == false and .installed_timestamp == null' '$B1'"
+run_test "SLOT-54" "rollback possible: no refusal reason is invented" \
+  "jq -e '.rollback.reason == null' '$B1'"
+
+# --- a record for the WRONG slot must not promote the target ------------------
+# The bug this catches: keying the evidence on "any record exists" rather than on
+# the target slot. A device that has only ever booted A would then look ready to
+# roll back INTO the empty B.
+run_with_boots fresh-sd-flash '{"A":{"at":1753700000,"uptime_s":1200}}' 60 boots-a
+B2="$WORK/boots-a.json"
+run_test "SLOT-55" "record for A only: rollback into the empty B stays refused" \
+  "jq -e '.rollback.possible == false and .rollback.target == \"B\"' '$B2'"
+
+# --- the bootloader still overrides the evidence ------------------------------
+# slot-b-marked-bad has B marked bad. A healthy-boot record must NOT rescue it:
+# boot_status good is required for both non-booted grounds.
+run_with_boots slot-b-marked-bad '{"B":{"at":1753700000,"uptime_s":1200}}' 60 boots-bad
+B3="$WORK/boots-bad.json"
+run_test "SLOT-56" "marked-bad beats a boot record: rollback refused, reason names the bootloader" \
+  "jq -e '.rollback.possible == false' '$B3' && jq -r '.rollback.reason' '$B3' | grep -q 'bootloader'"
+
+# --- the record is EARNED: below the threshold nothing is written -------------
+# This is the half that makes the evidence honest. A slot that boots and dies is
+# not a rollback target, so the record only appears once the device has been up
+# past the threshold.
+run_with_boots fresh-sd-flash '{}' 60 boots-early
+run_test "SLOT-57" "uptime below the threshold: nothing recorded (a boot loop never qualifies)" \
+  "jq -e '. == {}' '$WORK/boots-early.boots.json'"
+
+run_with_boots fresh-sd-flash '{}' 900 boots-late
+run_test "SLOT-58" "uptime past the threshold: the BOOTED slot is recorded, with its uptime" \
+  "jq -e '.A.uptime_s == 900 and .A.at == 1753790000' '$WORK/boots-late.boots.json'"
+run_test "SLOT-59" "recording is per-slot and does not invent an entry for the other slot" \
+  "jq -e 'has(\"B\") == false' '$WORK/boots-late.boots.json'"
+
+# --- a corrupt record must read as NO evidence, never as permission ----------
+printf 'this is not json' > "$WORK/boots-corrupt.boots.json"
+GA_RAUC_SLOTS_TS=1753790000 GA_RAUC_SLOTS_INPUT="$FIX/fresh-sd-flash.shell" \
+  GA_RAUC_SLOTS_OUT="$WORK/boots-corrupt.json" \
+  GA_RAUC_SLOTS_BOOTS="$WORK/boots-corrupt.boots.json" \
+  GA_RAUC_SLOTS_UPTIME=60 "$COL" >/dev/null 2>&1
+run_test "SLOT-60" "unparseable boot record: refused, and the collector still publishes" \
+  "jq -e '.rollback.possible == false and .error == null' '$WORK/boots-corrupt.json'"
 
 # =========================================================================
 # Device-side wiring (skipped off-device)
