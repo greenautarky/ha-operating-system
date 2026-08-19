@@ -2426,7 +2426,20 @@ if [[ "$GA_ENV" == "prod" ]]; then
     elif [[ "$_cve_rc" -eq 0 ]]; then
       echo "CVE scan complete — results in ${OUT}/images/reports/cve-scan-sbom.txt"
     else
-      echo "CVE scan found vulnerabilities — see ${OUT}/images/reports/cve-scan-sbom.txt"
+      # scan-cves.sh exited 1 = CRITICAL/HIGH findings above the allowlist budget.
+      # On prod this must ABORT — an image with a fixable known-vuln must never
+      # ship (same fail-closed rule as the broken-scan exit 2 above and the RAUC
+      # keyring audit below). Until now this branch only printed and continued,
+      # so the bake gated on "nothing UNSCANNED ships" but not "nothing
+      # VULNERABLE ships". Triage a real unfixable finding into the allowlist
+      # (with expiry) in scans/cve-allowlist.yaml rather than weakening this.
+      echo "CVE scan found CRITICAL/HIGH findings above budget — see ${OUT}/images/reports/cve-scan-sbom.txt"
+      if [[ "${GA_ENV:-dev}" == "prod" ]]; then
+        echo "ERROR: OS CVE scan found findings above budget — refusing to build a prod image"
+        echo "       Fix them, or triage into the allowlist (with expiry), then rebuild. See scripts/scan-cves.sh."
+        exit 1
+      fi
+      echo "WARN: findings above budget (non-prod build — continuing)"
     fi
 
     # 11b) Scan downloaded container image tars (covers private GHCR images)
@@ -2442,19 +2455,35 @@ if [[ "$GA_ENV" == "prod" ]]; then
         _cve_img_name="$(basename "$tarball" .tar)"
         _cve_img_total=$((_cve_img_total + 1))
         echo "  Scanning: ${_cve_img_name}..." | tee -a "$_cve_scan_file"
-        if trivy image --severity CRITICAL,HIGH --format table --input "$tarball" 2>&1 | tee -a "$_cve_scan_file"; then
-          _cve_count=$(grep -cE "CRITICAL|HIGH" "$_cve_scan_file" 2>/dev/null || echo 0)
-          if [[ "$_cve_count" -gt 0 ]]; then
-            _cve_img_findings=$((_cve_img_findings + 1))
-          else
-            _cve_img_clean=$((_cve_img_clean + 1))
-          fi
+        # Use trivy's OWN exit code (--exit-code 1) instead of grepping the
+        # cumulative log — the old `grep -cE CRITICAL|HIGH "$_cve_scan_file"`
+        # re-counted the whole accumulating file every iteration, so one finding
+        # marked every later image as "findings" too. --ignore-unfixed so we gate
+        # only on ACTIONABLE CVEs (each add-on repo now gates its own image; this
+        # is the OS-bake backstop that catches anything disclosed since).
+        set +e
+        trivy image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 \
+          --format table --input "$tarball" 2>&1 | tee -a "$_cve_scan_file"
+        _one_rc=${PIPESTATUS[0]}
+        set -e
+        if [[ "$_one_rc" -eq 0 ]]; then
+          _cve_img_clean=$((_cve_img_clean + 1))
+        elif [[ "$_one_rc" -eq 1 ]]; then
+          _cve_img_findings=$((_cve_img_findings + 1))
         else
-          echo "    WARN: could not scan ${_cve_img_name}" | tee -a "$_cve_scan_file"
+          echo "    WARN: could not scan ${_cve_img_name} (trivy rc=${_one_rc})" | tee -a "$_cve_scan_file"
         fi
       done
       echo "" | tee -a "$_cve_scan_file"
       echo "Container image scan: ${_cve_img_clean} clean, ${_cve_img_findings} with findings (${_cve_img_total} total)" | tee -a "$_cve_scan_file"
+      # Gate: a bundled add-on/vendor image with a fixable CRITICAL/HIGH aborts a
+      # prod bake — "nothing vulnerable ships" applies to every artifact we bake
+      # in, not only the OS rootfs. Dev/test report only.
+      if [[ "${_cve_img_findings}" -gt 0 && "${GA_ENV:-dev}" == "prod" ]]; then
+        echo "ERROR: ${_cve_img_findings} bundled container image(s) have fixable CRITICAL/HIGH CVEs — refusing to build a prod image" | tee -a "$_cve_scan_file"
+        echo "       Fix/bump the offending add-on image(s) (each add-on repo now gates its own image) and rebuild." | tee -a "$_cve_scan_file"
+        exit 1
+      fi
     fi
   elif [[ "${GA_ENV:-dev}" == "prod" ]]; then
     # Fail closed: a prod release must not ship without a scanned SBOM.
