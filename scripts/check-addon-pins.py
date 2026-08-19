@@ -61,6 +61,19 @@ def store_index(store_root: pathlib.Path) -> dict[str, str]:
     return index
 
 
+def _is_prerelease(version: str) -> bool:
+    """True for a canary tag, False for a normal release.
+
+    The naive test — "does it contain a dash" — is wrong here: z2m ships as
+    `2.12.1-3`, upstream version plus add-on revision, and treating that as a
+    canary would silently stop proposing z2m pins forever. Our canary tags carry
+    letters after the dash (`1.3.0-ga.1`); a plain numeric suffix is a release
+    revision.
+    """
+    _, _, suffix = version.partition("-")
+    return bool(suffix) and any(ch.isalpha() for ch in suffix)
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--store", required=True, help="path to a vibe_addons checkout")
@@ -80,6 +93,7 @@ def main(argv: list[str]) -> int:
 
     behind: list[tuple[str, str, str]] = []
     unmatched: list[str] = []
+    prerelease: list[str] = []
     ok = 0
 
     for key, entry in addons.items():
@@ -93,13 +107,23 @@ def main(argv: list[str]) -> int:
             unmatched.append(f"{key} (slug {slug} has no store entry)")
             continue
         pinned = str(entry.get("version"))
-        if pinned != published:
+        if _is_prerelease(published):
+            # A pre-release in the store is a CANARY: an image built from a
+            # feature branch, with the store pointed at it by hand so exactly
+            # one device pulls it. Baking that into an OS image would ship a
+            # branch build to every device flashed from it — the opposite of
+            # what the canary is for. Reported, never proposed.
+            prerelease.append(f"{key} (store is on the pre-release {published}, pinned {pinned})")
+        elif pinned != published:
             behind.append((key, pinned, published))
         else:
             ok += 1
 
     print(f"inspected {len(addons)} pins against {len(store)} store entries: "
-          f"{ok} in sync, {len(behind)} drifted, {len(unmatched)} unmatched")
+          f"{ok} in sync, {len(behind)} drifted, {len(prerelease)} on a pre-release, "
+          f"{len(unmatched)} unmatched")
+    for p in prerelease:
+        print(f"  pre-release, NOT proposed: {p}")
     for u in unmatched:
         print(f"  unmatched: {u}")
     for key, pinned, published in behind:
