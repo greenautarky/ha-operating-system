@@ -92,16 +92,95 @@
 # to "unknown" and must NOT treat unknown as "rollback is fine" - absence of
 # evidence is not evidence of a bootable slot.
 #
-# Test hooks (used by tests/ga_tests/rauc_slots/parser_test.sh):
-#   GA_RAUC_SLOTS_INPUT  read `rauc status` output from this file instead
-#                        of talking to rauc
-#   GA_RAUC_SLOTS_OUT    publish to exactly this path instead of resolving
-#                        the add-on-private dir
-#   GA_RAUC_SLOTS_TS     fixed epoch for reproducible fixtures
+# HEALTHY-BOOT EVIDENCE (2026-08-19)
+# ----------------------------------
+# `ever_installed` alone left a freshly flashed device with NO rollback target:
+# an SD flash writes the partition without RAUC slot metadata, so slot A read
+# ever_installed=false the moment the device booted B, even though it had booted
+# A minutes earlier. Measured on K31 2026-08-18. The first OTA a new device
+# receives was therefore un-rollback-able by construction.
+#
+# The fix is NOT to fake an install record — that is the confusion this file was
+# written to prevent, and the downside is an unrecoverable reboot loop. It is to
+# record the evidence we actually have, which is stronger than an install record:
+# this slot booted THIS device and stayed up.
+#
+# "Stayed up" is the load-bearing half. A slot that boots and immediately panics
+# is not a rollback target, so the record is only written once uptime passes
+# BOOT_OK_UPTIME_S. The timer that drives this collector (OnBootSec=90s, then
+# every 10min) means the first run that can qualify is the second tick — a boot
+# loop never reaches it, and no new scheduling was needed to get that.
+#
+# What this deliberately does NOT assert: that the slot is healthy in any richer
+# sense. It asserts it is not boot-looping, which is exactly the failure that
+# makes a rollback unrecoverable on hardware with no U-Boot prompt (rc38,
+# CONFIG_BOOTDELAY=-2).
+#
+# Test hooks (used by tests/ga_tests/rauc_slots/test.sh):
+#   GA_RAUC_SLOTS_INPUT   read `rauc status` output from this file instead
+#                         of talking to rauc
+#   GA_RAUC_SLOTS_OUT     publish to exactly this path instead of resolving
+#                         the add-on-private dir
+#   GA_RAUC_SLOTS_TS      fixed epoch for reproducible fixtures
+#   GA_RAUC_SLOTS_BOOTS   read/write the healthy-boot record here
+#   GA_RAUC_SLOTS_UPTIME  pretend the system has been up this many seconds
 
 # Add-on-private target. Glob because the slug carries a repository hash.
 ADDON_DATA_GLOB="/mnt/data/supervisor/addons/data/*_ga_manager"
 OUT_BASENAME="ga-rauc-slots.json"
+
+# Healthy-boot record. /mnt/data survives an OTA (it is not a slot) and is wiped
+# by a factory reset, which is the right lifetime: the evidence is about THIS
+# device's slots, and a reset legitimately discards it.
+BOOTS_FILE="${GA_RAUC_SLOTS_BOOTS:-/mnt/data/ga-slot-boots.json}"
+BOOT_OK_UPTIME_S="${GA_RAUC_SLOTS_BOOT_OK_UPTIME_S:-600}"
+
+uptime_s() {
+	if [ -n "${GA_RAUC_SLOTS_UPTIME:-}" ]; then
+		printf '%s\n' "$GA_RAUC_SLOTS_UPTIME"
+		return 0
+	fi
+	# /proc/uptime is "<seconds>.<hundredths> <idle>" — integer part is enough.
+	cut -d' ' -f1 /proc/uptime 2>/dev/null | cut -d. -f1
+}
+
+# Record that <bootname> booted this device and stayed up. Idempotent: the entry
+# is replaced, so the file always holds the most recent qualifying boot per slot
+# rather than growing forever.
+record_healthy_boot() {
+	_rhb_slot="$1"
+	[ -n "$_rhb_slot" ] || return 0
+	_rhb_up="$(uptime_s)"
+	case "$_rhb_up" in ''|*[!0-9]*) return 0 ;; esac
+	[ "$_rhb_up" -ge "$BOOT_OK_UPTIME_S" ] || return 0
+
+	_rhb_prev='{}'
+	if [ -s "$BOOTS_FILE" ]; then
+		_rhb_prev="$(jq -c '. // {}' "$BOOTS_FILE" 2>/dev/null || printf '{}')"
+	fi
+	_rhb_tmp="${BOOTS_FILE}.tmp.$$"
+	if printf '%s' "$_rhb_prev" | jq -c \
+			--arg slot "$_rhb_slot" \
+			--argjson up "$_rhb_up" \
+			--argjson at "$TS" \
+			'.[$slot] = {at: $at, uptime_s: $up}' > "$_rhb_tmp" 2>/dev/null; then
+		mv -f "$_rhb_tmp" "$BOOTS_FILE"
+	else
+		rm -f "$_rhb_tmp"
+	fi
+}
+
+# The recorded slots, as a JSON array. Absent or unparseable file -> empty, never
+# an error: missing evidence must read as "no evidence", not as "rollback is
+# fine" and not as a collector failure.
+healthy_boot_slots() {
+	if [ -s "$BOOTS_FILE" ]; then
+		jq -c '[to_entries[] | select(.value.at != null) | .key]' "$BOOTS_FILE" 2>/dev/null \
+			|| printf '[]'
+	else
+		printf '[]'
+	fi
+}
 
 # `rauc status --detailed` is what adds the slot_status block (bundle version,
 # installed timestamp/count). Without --detailed the per-slot install history
@@ -193,7 +272,15 @@ main() {
 		return 0
 	fi
 
-	printf '%s\n' "$kv" | jq -R -s --argjson ts "$TS" '
+	# Record THIS boot before publishing. Recording first is deliberate: the
+	# booted slot is already bootable by demonstration, so it cannot change this
+	# run's verdict — what it changes is the verdict after the NEXT reboot, which
+	# is when the evidence is actually needed.
+	record_healthy_boot "$(printf '%s\n' "$kv" \
+		| awk -F'\t' '$1 == "RAUC_SYSTEM_BOOTED_BOOTNAME" { print $2; exit }')"
+
+	printf '%s\n' "$kv" | jq -R -s --argjson ts "$TS" \
+		--argjson booted_ok "$(healthy_boot_slots)" '
 		# --- shell KEY<TAB>VALUE lines -> flat lookup object ---
 		(split("\n")
 		 | map(select(length > 0) | split("\t") | {key: .[0], value: (.[1:] | join("\t"))})
@@ -246,10 +333,28 @@ main() {
 		        # ever_installed, NOT boot_status, is the honest rollback gate:
 		        # an SD-flashed empty slot reports boot_status "good".
 		        ever_installed: $ever,
+		        # Second, independent evidence: this slot booted THIS device and
+		        # stayed up past the uptime threshold (see record_healthy_boot).
+		        # Kept as its own field rather than folded into ever_installed —
+		        # they are different claims, and a reader deciding whether to
+		        # roll back deserves to see WHICH one holds.
+		        booted_ok: ($booted_ok | index($s.bootname) != null),
 		        # The booted slot is bootable by demonstration - we are
 		        # running out of it - even on an SD-flashed device where
 		        # RAUC has no install record for it at all.
-		        bootable: ($s.state == "booted" or ($ever and $s.boot_status == "good")),
+		        # Bootable on any of three grounds, all of them observed rather
+		        # than assumed: we are running from it; RAUC installed it; or it
+		        # booted this device and stayed up. boot_status still has to be
+		        # good in the latter two: boot_status is only the try counter the
+		        # bootloader keeps, so it cannot promote a slot by itself, but a
+		        # slot the bootloader has given up on is not a target either.
+		        # (No apostrophes in here — this jq program is single-quoted, and
+		        # a stray one closes it. Cost: one syntax error at write time.)
+		        bootable: (
+		          $s.state == "booted"
+		          or (($ever or ($booted_ok | index($s.bootname) != null))
+		              and $s.boot_status == "good")
+		        ),
 		        members: ($group | map(.name))
 		      } ]
 		  | sort_by(.bootname) as $slots
@@ -269,8 +374,8 @@ main() {
 		      reason: (
 		        if $tgt == null then
 		          "no second bootable slot on this device"
-		        elif ($tgt.ever_installed | not) then
-		          "slot \($tgt.bootname) never received an OTA install (RAUC records no bundle) - it is an SD-flash empty slot; booting it is an endless reboot loop recoverable only by re-flashing"
+		        elif (($tgt.ever_installed | not) and ($tgt.booted_ok | not)) then
+		          "slot \($tgt.bootname) has NEITHER an OTA install record nor a recorded healthy boot - nothing has ever been shown to run from it; booting it is an endless reboot loop recoverable only by re-flashing"
 		        elif $tgt.boot_status != "good" then
 		          "slot \($tgt.bootname) is marked \($tgt.boot_status // "unknown") by the bootloader"
 		        else null end
