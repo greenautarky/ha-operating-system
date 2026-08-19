@@ -205,6 +205,15 @@ jobs:
       - name: Lockstep gate (drift vs canary vs revision)
         run: ./tests/gates/lockstep_prerelease/selftest.sh
 
+      # A pinned add-on that never made it into the image used to count as
+      # "skipped" while the build suite still printed a pass line — and
+      # sonoff_dongle_flasher had never once been checked, because the pin key
+      # spells it with underscores and the tar with dashes. Presence is a local
+      # fact, so this runs here with --no-registry on fixture filenames taken
+      # from a real bake.
+      - name: Baked add-on images (a pin that is not in the image must go red)
+        run: ./tests/gates/baked_addon_images/selftest.sh
+
       # Same idea, applied to the on-device provisioning checks. They normally
       # need a flashed device, so they were unprovable in CI and PROV-06 in fact
       # reported "self-check PASSED" on a device with no identity at all (K31,
