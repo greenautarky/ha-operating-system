@@ -149,6 +149,43 @@ run_case "canary pin, release store -> FAIL (pin behind on a canary)" \
 run_case "numeric suffix is a revision, not a canary -> FAIL on drift" \
     "2.12.1" "2.12.1-4" 'FAIL.*ga_hmvapp_addon version mismatch' 'PRERELEASE'
 
+echo "== a lockstep failure has to name ITSELF, not the registry =="
+
+# Until 2026-08-19 every failure here printed "N image(s) not found in registry",
+# including a version mismatch where the line directly above read
+# `OK ghcr.io/…/ga_manager-armv7:0.118.0`. It sent two investigations in one hour
+# to check a registry that was fine.
+#
+# Asserted on the breakdown counters rather than on the absence of the
+# "not found in registry" line, because in this fixture the system-image lookups
+# point at a nonexistent registry ON PURPOSE — that line is legitimately present
+# and asserting on its absence would be asserting on the wrong thing.
+make_pin "1.2.0"; make_store "1.3.0"
+out="$(REPO_ROOT="$WORK/repo" VIBE_ADDONS_REPO_URL="$WORK/store" \
+       VIBE_ADDONS_REPO_REF=main "$GATE" "$WORK/stable.json" 2>&1)"
+ran=$((ran + 1))
+if grep -qE 'out of lockstep: 1' <<<"$out" \
+   && grep -qE 'out of lockstep with the vibe_addons store' <<<"$out"; then
+    ok "drift is counted and named as lockstep, separately from availability"
+else
+    bad "a lockstep drift is not distinguishable from a missing image"
+    grep -aE 'Failed:|ERROR' <<<"$out" | sed 's/^/          /' | head -4
+fi
+
+# And the counter must not fire when the store is merely on a canary — otherwise
+# the new message replaces the old wrong one with a different wrong one.
+make_pin "1.2.0"; make_store "1.3.0-ga.1"
+out="$(REPO_ROOT="$WORK/repo" VIBE_ADDONS_REPO_URL="$WORK/store" \
+       VIBE_ADDONS_REPO_REF=main "$GATE" "$WORK/stable.json" 2>&1)"
+ran=$((ran + 1))
+if grep -qE 'out of lockstep: 0' <<<"$out" \
+   && ! grep -qE 'out of lockstep with the vibe_addons store' <<<"$out"; then
+    ok "a canary store is NOT counted as lockstep drift"
+else
+    bad "a canary store is being counted as lockstep drift"
+    grep -aE 'Failed:|ERROR' <<<"$out" | sed 's/^/          /' | head -4
+fi
+
 echo "== the outcome has to be visible =="
 make_pin "1.2.0"; make_store "1.3.0-ga.1"
 out="$(REPO_ROOT="$WORK/repo" VIBE_ADDONS_REPO_URL="$WORK/store" \

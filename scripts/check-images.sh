@@ -36,6 +36,10 @@ NC='\033[0m'
 fail_count=0
 pass_count=0
 auth_count=0
+# Availability and lockstep are different failures with different fixes, so they
+# are counted apart: fail_count means "the registry does not have this image",
+# lockstep_count means "it exists and two files disagree about which one to use".
+lockstep_count=0
 # Store carries a canary while the pin holds a release. Its own counter, so
 # it appears in the summary instead of vanishing between OK and FAIL — an
 # outcome nobody sees is not an outcome.
@@ -266,7 +270,7 @@ if [ -f "$ADDON_IMAGES_JSON" ] && command -v git >/dev/null 2>&1; then
             if [ -z "$found_dir" ]; then
                 printf "${RED}FAIL${NC}: addon-images.json[%s] image=%s has no matching addon in vibe_addons\n" \
                     "$key" "$expected_image"
-                fail_count=$((fail_count + 1))
+                lockstep_count=$((lockstep_count + 1))
                 continue
             fi
             if [ "$found_version" = "$expected_version" ]; then
@@ -291,7 +295,7 @@ if [ -f "$ADDON_IMAGES_JSON" ] && command -v git >/dev/null 2>&1; then
             else
                 printf "${RED}FAIL${NC}: %s version mismatch — addon-images.json=%s vibe_addons/%s=%s — bump one to match\n" \
                     "$key" "$expected_version" "$(basename "$found_dir")" "$found_version"
-                fail_count=$((fail_count + 1))
+                lockstep_count=$((lockstep_count + 1))
             fi
         done
     fi
@@ -398,7 +402,7 @@ fi
 echo ""
 echo "=== Summary ==="
 echo "Passed:       ${pass_count}"
-echo "Failed:       ${fail_count}"
+echo "Failed:       $((fail_count + lockstep_count))  (missing from registry: ${fail_count}, out of lockstep: ${lockstep_count})"
 echo "Unverified:   ${auth_count} (private, no registry credentials)"
 echo "Pre-release:  ${prerelease_count} (store on a canary, pin on a release — deliberate, not drift)"
 
@@ -409,9 +413,24 @@ if [ "${drift_fatal:-0}" = "1" ]; then
     exit 1
 fi
 
-if [ "$fail_count" -gt 0 ]; then
+if [ "$fail_count" -gt 0 ] || [ "$lockstep_count" -gt 0 ]; then
     echo ""
-    printf "${RED}ERROR: ${fail_count} image(s) not found in registry. Fix before building.${NC}\n"
+    # Name the cause. Until 2026-08-19 every failure in this script printed
+    # "N image(s) not found in registry", including a lockstep mismatch where the
+    # image demonstrably exists — the line right above it said
+    # `OK ghcr.io/…/ga_manager-armv7:0.118.0`. It misdirected two separate
+    # investigations in one hour, each time into checking a registry that was
+    # fine. The awareness was already here: the source-drift branch below
+    # deliberately avoided fail_count for exactly this reason, in a comment. The
+    # counter needed splitting rather than avoiding.
+    if [ "$fail_count" -gt 0 ]; then
+        printf "${RED}ERROR: ${fail_count} image(s) not found in registry. Fix before building.${NC}\n"
+    fi
+    if [ "$lockstep_count" -gt 0 ]; then
+        printf "${RED}ERROR: ${lockstep_count} add-on(s) out of lockstep with the vibe_addons store.${NC}\n"
+        printf "${RED}The images exist. The STORE and the bake pin disagree about the version —${NC}\n"
+        printf "${RED}bump whichever is behind; the store is what a device installs from.${NC}\n"
+    fi
     exit 1
 elif [ "$auth_count" -gt 0 ]; then
     echo ""
