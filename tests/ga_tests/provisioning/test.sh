@@ -127,4 +127,43 @@ else
   run_test "PROV-07" "check_phase_invariants.sh present + executable" "false"
 fi
 
+# ─── PROV-11: the inactive slot must actually CONTAIN something ──────────
+# SRC-23 asserts the layout DECLARES an image for both slot pairs. Only a
+# flashed device can say whether the bytes landed, which is this check.
+#
+# Why it matters, measured on K31 2026-08-18: an SD flash left kernel1/system1
+# empty, RAUC reported the inactive slot as installed_version=null /
+# bootable=false / rollback.possible=false, and the device had NO rollback
+# target. The first OTA it ever received was un-rollback-able — the one you most
+# want to be able to undo.
+#
+# NOTE what this does NOT assert: that RAUC will roll back to it. RAUC keys that
+# on installed.timestamp in rauc.db, written only by `rauc install`, never by a
+# flash. Filled-but-not-installed is the intended state after this change; making
+# it a rollback target is a separate, deliberate decision.
+_INACTIVE_KERNEL=""
+case "$(rauc status 2>/dev/null | sed -n 's/^Booted from:[[:space:]]*\([a-z0-9.]*\).*/\1/p')" in
+  kernel.0) _INACTIVE_KERNEL=/dev/disk/by-partlabel/hassos-kernel1 ;;
+  kernel.1) _INACTIVE_KERNEL=/dev/disk/by-partlabel/hassos-kernel0 ;;
+esac
+if [ -z "$_INACTIVE_KERNEL" ]; then
+  skip_test "PROV-11" "could not read the booted slot from rauc status"
+elif [ ! -b "$_INACTIVE_KERNEL" ]; then
+  skip_test "PROV-11" "$_INACTIVE_KERNEL is not a block device on this board"
+else
+  # A kernel image starts with a non-zero magic; an unwritten partition is all
+  # zeros. 4 KiB is enough to tell those apart and costs nothing.
+  # An unwritten partition reads as all zeros; a kernel image does not. Strip the
+  # NUL bytes and count what is left: 0 means the block was entirely zeros.
+  #
+  # The obvious `od -An -tx1 | grep -qv '^0*$'` does NOT work, and the predicate
+  # was written that way first: od collapses repeated lines to a literal `*`, so
+  # a 4 KiB block of zeros dumps as zeros PLUS an asterisk, the asterisk survives
+  # the whitespace strip, and a blank slot reads as filled. Caught by testing the
+  # predicate against a zero-filled file before trusting it — `od -v` would also
+  # fix it, but counting non-NUL bytes has no formatting quirks at all.
+  run_test "PROV-11" "inactive kernel slot is not blank ($_INACTIVE_KERNEL)" \
+    "[ \"\$(dd if='$_INACTIVE_KERNEL' bs=4096 count=1 2>/dev/null | tr -d '\\000' | wc -c)\" -gt 0 ]"
+fi
+
 suite_end

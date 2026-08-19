@@ -3081,6 +3081,39 @@ else
 fi
 
 # =========================================================================
+# SRC-23: the image must FILL both RAUC slot pairs, not just allocate them
+# =========================================================================
+# Measured on K31 on 2026-08-18: an SD flash left kernel1/system1 empty, so RAUC
+# reported the inactive slot as installed_version=null / bootable=false and
+# rollback.possible=false. A brand-new device therefore had NO rollback target,
+# and the first OTA it ever received was un-rollback-able by construction — the
+# one you most want to be able to undo.
+#
+# Source-level on purpose: this is the layout DECLARATION. Whether the bytes
+# actually landed is asserted on the device by PROV-11 (provisioning/test.sh),
+# because only a flashed device can answer that. Two layers, two questions.
+_slot1_missing=""
+for _pcfg in "${SRC}/buildroot-external/genimage/partitions-os-gpt.cfg" \
+             "${SRC}/buildroot-external/genimage/partitions-os-mbr.cfg"; do
+  [[ -f "$_pcfg" ]] || { _slot1_missing+="$(basename "$_pcfg"):absent "; continue; }
+  for _part in hassos-kernel1 hassos-system1; do
+    # the partition block, then whether it declares an image
+    if ! awk -v p="partition ${_part} {" '
+           index($0, p) { inblock=1 }
+           inblock && /^[[:space:]]*image[[:space:]]*=/ { found=1 }
+           inblock && /^}/ { exit }
+           END { exit !found }' "$_pcfg"; then
+      _slot1_missing+="$(basename "$_pcfg"):${_part} "
+    fi
+  done
+done
+if [[ -z "$_slot1_missing" ]]; then
+  _pass "SRC-23: both layouts fill hassos-kernel1 + hassos-system1 (a flashed device has a rollback target)"
+else
+  _fail "SRC-23: slot-1 partitions ALLOCATED BUT EMPTY: ${_slot1_missing}— a fresh device would have no rollback target, and its first OTA would be un-rollback-able"
+fi
+
+# =========================================================================
 # RAUC keyring CONTENTS — what actually shipped, not what rauc.sh intended
 # =========================================================================
 # RAUC-LEGACY-01 above proves the gate FUNCTION honours the flag against a
