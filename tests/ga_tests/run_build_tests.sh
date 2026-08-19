@@ -1021,41 +1021,57 @@ if [[ -f "$VER_JSON" ]]; then
     _skip "VER-09" "skopeo not available or no images dir"
   fi
 
-  # VER-10: All addon image digests match GHCR (not stale cache)
+  # VER-10: every pinned add-on is actually IN the image, and not stale.
+  #
+  # This used to be inline and it could not fail in the two cases that matter.
+  # It globbed the pin's SLUG for the tar, and a miss counted as SKIP while the
+  # summary still printed a pass line — so `sonoff_dongle_flasher` had never
+  # been checked on any bake (pin key uses underscores, the tar is
+  # `…sonoff-dongle-flasher-armv7…` with dashes, which neither the glob nor its
+  # `grep -i` fallback can match), and a pin whose image was never fetched read
+  # as "skipped" rather than as the missing bake it is.
+  #
+  # The logic moved to scripts/check-baked-addon-images.sh so that
+  # tests/gates/baked_addon_images/selftest.sh can drive the LIVE code on every
+  # pull request instead of a copy of it. It derives the tar name from the pinned
+  # image reference — exact, not a glob — and treats a missing tar as fatal while
+  # an unreachable registry stays a counted UNVERIFIED.
   ADDON_JSON="${BR2EXT_NETBIRD:-/build/buildroot-external}/package/hassio/addon-images.json"
-  if [[ -d "$IMAGES_DIR" ]] && [[ -f "$ADDON_JSON" ]] && command -v skopeo >/dev/null 2>&1; then
-    VER10_PASS=0; VER10_FAIL=0; VER10_SKIP=0
-    for addon_name in $(jq -r '.addons | keys[]' "$ADDON_JSON" 2>/dev/null); do
-      addon_image="$(jq -r --arg n "$addon_name" '.addons[$n].image' "$ADDON_JSON" | sed "s/{arch}/${ARCH:-armv7}/")"
-      addon_version="$(jq -r --arg n "$addon_name" '.addons[$n].version' "$ADDON_JSON")"
-      addon_tar="$(ls "$IMAGES_DIR"/*"$(echo "$addon_name" | tr '/' '_')"*.tar 2>/dev/null | head -n 1 || true)"
-      if [[ -z "$addon_tar" ]]; then
-        addon_tar="$(ls "$IMAGES_DIR"/*"${addon_version}"*.tar 2>/dev/null | grep -i "$addon_name" | head -n 1 || true)"
-      fi
-      if [[ -n "$addon_tar" ]]; then
-        a_build="$(basename "$addon_tar" .tar | grep -oP 'sha256_\K[a-f0-9]+' || true)"
-        a_ghcr="$(skopeo inspect --override-arch arm --override-variant v7 "docker://${addon_image}:${addon_version}" 2>/dev/null | jq -r '.Digest' | sed 's/sha256://' || true)"
-        if [[ -n "$a_build" ]] && [[ -n "$a_ghcr" ]]; then
-          if [[ "$a_build" == "$a_ghcr" ]]; then
-            VER10_PASS=$((VER10_PASS + 1))
-          else
-            _fail "VER-10: Addon $addon_name STALE — ${a_build:0:12} != GHCR ${a_ghcr:0:12}"
-            VER10_FAIL=$((VER10_FAIL + 1))
-          fi
-        else
-          VER10_SKIP=$((VER10_SKIP + 1))
-        fi
-      else
-        VER10_SKIP=$((VER10_SKIP + 1))
-      fi
-    done
-    if [[ "$VER10_FAIL" -eq 0 ]] && [[ "$VER10_PASS" -gt 0 ]]; then
-      _pass "VER-10: All ${VER10_PASS} addon digests match GHCR (${VER10_SKIP} skipped)"
-    elif [[ "$VER10_FAIL" -eq 0 ]] && [[ "$VER10_PASS" -eq 0 ]]; then
-      _skip "VER-10" "no addon digests could be verified"
-    fi
+
+  # $SRC is only defined further down in this script, so the source root is
+  # resolved locally — the same three-way derivation BLD_FE_SRC uses below.
+  # Reaching for $SRC here would abort the whole suite under `set -u`.
+  VER10_SRC=""
+  if [[ -d "/build/scripts" ]]; then
+    VER10_SRC="/build"
+  elif [[ -d "${OUT}/../scripts" ]]; then
+    VER10_SRC="$(cd "${OUT}/.." && pwd)"
+  elif [[ -d "$(dirname "$0")/../../scripts" ]]; then
+    VER10_SRC="$(cd "$(dirname "$0")/../.." && pwd)"
+  fi
+  VER10_CHECKER="${VER10_SRC:+${VER10_SRC}/scripts/check-baked-addon-images.sh}"
+
+  if [[ ! -d "$IMAGES_DIR" ]] || [[ ! -f "$ADDON_JSON" ]]; then
+    # Nothing was built, so there is nothing to be absent from. This is the
+    # source-only run and a skip is the honest verdict.
+    _skip "VER-10" "no images dir or no addon-images.json — source-only run"
+  elif [[ -z "$VER10_CHECKER" ]] || [[ ! -x "$VER10_CHECKER" ]]; then
+    # A built image WITH no checker is the gate rotting, not a reason to be
+    # quiet: skipping here would restore exactly the silent pass this replaced.
+    _fail "VER-10: images were built but scripts/check-baked-addon-images.sh was not found or is not executable (looked under '${VER10_SRC:-<unresolved>}')"
   else
-    _skip "VER-10" "addon-images.json, skopeo, or images dir not available"
+    # Status read from the command itself, not from behind a pipe — a pipe
+    # reports the pipe's status, which is how a gate looks green while failing.
+    VER10_OUT="$("$VER10_CHECKER" --images-dir "$IMAGES_DIR" --pins "$ADDON_JSON" \
+                                  --arch "${ARCH:-armv7}" 2>&1)"
+    VER10_RC=$?
+    VER10_SUMMARY="$(printf '%s\n' "$VER10_OUT" | grep -E '^baked add-on images:' || true)"
+    if [[ "$VER10_RC" -eq 0 ]]; then
+      _pass "VER-10: ${VER10_SUMMARY:-all pinned add-ons baked}"
+    else
+      printf '%s\n' "$VER10_OUT" | sed 's/^/        /'
+      _fail "VER-10: ${VER10_SUMMARY:-a pinned add-on is not in the image} (rc=${VER10_RC})"
+    fi
   fi
 
   # VER-11: Core image io.hass.version label matches version.json tag.
