@@ -27,6 +27,10 @@
     "ga_default_addon": {
       "image": "ghcr.io/greenautarky/ga_default_addon-{arch}",
       "version": "1.2.0"
+    },
+    "ga_hmvapp_addon": {
+      "image": "ghcr.io/greenautarky/ga_hmvapp_addon-{arch}",
+      "version": "1.3.1"
     }
   }
 }
