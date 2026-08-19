@@ -23,6 +23,10 @@
     "ga_manager": {
       "image": "ghcr.io/greenautarky/ga_manager-{arch}",
       "version": "0.116.0"
+    },
+    "ga_default_addon": {
+      "image": "ghcr.io/greenautarky/ga_default_addon-{arch}",
+      "version": "1.2.0"
     }
   }
 }

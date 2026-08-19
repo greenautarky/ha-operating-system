@@ -13,7 +13,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Honour an inherited REPO_ROOT, same as tests/ga_tests/run_build_tests.sh does.
+# Without it this gate could only ever be run against its own checkout, so its
+# verdicts were unprovable: tests/gates/lockstep_prerelease drives it over scratch
+# pin files to show that OK, FAIL and PRERELEASE stay apart. Derived from the
+# script location when unset, which is every real invocation.
+REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 # Default stable.json source
 STABLE_JSON_URL="${1:-https://raw.githubusercontent.com/greenautarky/haos-version/main/stable.json}"
@@ -31,6 +36,10 @@ NC='\033[0m'
 fail_count=0
 pass_count=0
 auth_count=0
+# Store carries a canary while the pin holds a release. Its own counter, so
+# it appears in the summary instead of vanishing between OK and FAIL — an
+# outcome nobody sees is not an outcome.
+prerelease_count=0
 
 # Distinguish "image is genuinely missing" from "we are not allowed to look".
 #
@@ -207,6 +216,22 @@ _read_addon_field() {
     esac
 }
 
+# Is this a canary tag rather than a release? SAME RULE as
+# scripts/check-addon-pins.py::_is_prerelease, and it has to stay the same rule:
+# one of them proposes pins and the other blocks the build, so if they disagree
+# the proposer offers a bump the gate then refuses.
+#
+# The naive "contains a dash" test is wrong here — z2m ships as `2.12.1-3`
+# (upstream version plus add-on revision) and treating that as a canary would
+# silently stop pinning z2m forever. Our canary tags carry LETTERS after the
+# dash (`1.3.0-ga.1`); a plain numeric suffix is a release revision.
+_is_prerelease() {
+    _ipr_suffix="${1#*-}"
+    [ "$_ipr_suffix" = "$1" ] && return 1          # no dash at all
+    [ -z "$_ipr_suffix" ] && return 1
+    printf '%s' "$_ipr_suffix" | grep -q '[A-Za-z]'
+}
+
 if [ -f "$ADDON_IMAGES_JSON" ] && command -v git >/dev/null 2>&1; then
     echo ""
     echo "--- vibe_addons lockstep with addon-images.json ---"
@@ -248,6 +273,21 @@ if [ -f "$ADDON_IMAGES_JSON" ] && command -v git >/dev/null 2>&1; then
                 printf "${GREEN}OK${NC}: %s (slug=%s, dir=%s) version %s — vibe_addons in lockstep\n" \
                     "$key" "$found_slug" "$(basename "$found_dir")" "$found_version"
                 pass_count=$((pass_count + 1))
+            elif _is_prerelease "$found_version" && ! _is_prerelease "$expected_version"; then
+                # The store is on a CANARY and the pin is on a release. Not drift
+                # the build may refuse, and not something to wave through either.
+                #
+                # Refusing would force one of two bad outcomes: bake a canary into
+                # every device, or leave this gate red on every pull request until
+                # a release happens — and a permanently red required check is a
+                # deadlock this repo has already paid for (2026-07-30, the lint
+                # path filter). Passing silently would hide a real lag.
+                #
+                # So it is its own outcome, loud and counted separately, exactly
+                # like the AUTH case for private images above.
+                printf "${YELLOW}PRERELEASE${NC}: %s — store is on canary %s, pin holds release %s. NOT a failure: baking a canary is a decision, not a lockstep repair. Pin it deliberately, or wait for the release.\n" \
+                    "$key" "$found_version" "$expected_version"
+                prerelease_count=$((prerelease_count + 1))
             else
                 printf "${RED}FAIL${NC}: %s version mismatch — addon-images.json=%s vibe_addons/%s=%s — bump one to match\n" \
                     "$key" "$expected_version" "$(basename "$found_dir")" "$found_version"
@@ -360,6 +400,7 @@ echo "=== Summary ==="
 echo "Passed:       ${pass_count}"
 echo "Failed:       ${fail_count}"
 echo "Unverified:   ${auth_count} (private, no registry credentials)"
+echo "Pre-release:  ${prerelease_count} (store on a canary, pin on a release — deliberate, not drift)"
 
 if [ "${drift_fatal:-0}" = "1" ]; then
     echo ""

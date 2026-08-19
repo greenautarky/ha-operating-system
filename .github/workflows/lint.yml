@@ -198,6 +198,13 @@ jobs:
       - name: apt-install action (a hang must fail, not wedge)
         run: ./tests/gates/apt_install/selftest.sh
 
+      # The lockstep gate's three verdicts must stay apart: drift FAILS, a canary
+      # store is its own outcome, and a release revision like z2m's `2.12.1-3` is
+      # not a canary. Runs the real check-images.sh over scratch pin files and a
+      # throwaway store repo — no registry, no network.
+      - name: Lockstep gate (drift vs canary vs revision)
+        run: ./tests/gates/lockstep_prerelease/selftest.sh
+
       # Same idea, applied to the on-device provisioning checks. They normally
       # need a flashed device, so they were unprovable in CI and PROV-06 in fact
       # reported "self-check PASSED" on a device with no identity at all (K31,
