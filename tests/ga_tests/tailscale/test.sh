@@ -9,11 +9,20 @@ suite_start "Tailscale"
 # Find the ga_tailscale container name (may vary by addon ID prefix)
 TS_CONTAINER=$(docker ps --format '{{.Names}}' 2>/dev/null | grep 'ga_tailscale' | head -1)
 
-# --- Container running ---
-run_test "TS-01" "ga_tailscale addon container running" \
-  "[ -n '$TS_CONTAINER' ]"
-
+# --- Container running (or legitimately absent) ---
+# Tailscale became OPTIONAL on 2026-08-18: converge no longer installs it
+# (ga_manager 0.114.0) and the OS no longer bakes its image. A suite that FAILS
+# because an optional component is absent measures the wrong thing — and this one
+# did: TS-01 was a run_test on a non-empty container name, so every device
+# provisioned after that change reported a red TS-01 while behaving exactly as
+# intended. The suite still grades a device that DOES run it, which is the point
+# of keeping it registered.
+#
+# No auth key reaches a self-provisioned device (the flasher stage that supplied
+# one went with the pipeline, and none is baked), so absent is the expected state
+# on anything flashed after 2026-08-18.
 if [ -z "$TS_CONTAINER" ]; then
+  skip_test "TS-01" "ga_tailscale addon container running" "not installed — Tailscale is optional since 2026-08-18"
   skip_test "TS-02" "Tailscale connected" "container not running"
   skip_test "TS-03" "Hostname matches device label" "container not running"
   skip_test "TS-04" "Tailscale IP assigned" "container not running"
