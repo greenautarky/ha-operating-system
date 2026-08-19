@@ -1,0 +1,110 @@
+name: apt-install
+description: >
+  Install apt packages so a hung mirror cannot wedge a release gate: skip what is
+  already present, bound every apt call with a timeout, retry the transient ones,
+  and fail with a message that says which package and why.
+
+# WHY THIS EXISTS
+# ---------------
+# On 2026-08-18/19 the version-check gate could not report on a pull request at
+# all. Three runs wedged in the SAME step, `apt-get install -y -qq jq skopeo`:
+# one for 21m57s, one for roughly SIXTEEN HOURS. Nothing in the pull request
+# touched that step — its diff was one line in addon-images.json. A required
+# check that cannot report is a deadlock, and this repo has already paid for that
+# once (2026-07-30, the lint path filter).
+#
+# It is not one workflow's problem: three gates fetch their own tooling from an
+# apt mirror at run time — cve-scan (wget/gnupg + trivy), lint (jq + shellcheck)
+# and version-check (jq + skopeo). Any of them can wedge the same way, and they
+# are exactly the checks that gate a release.
+#
+# The fix is not "retry apt". A retry does nothing about a HANG: the 16-hour run
+# was never going to return. The timeout is the part that matters; the retry only
+# helps with the transient failures on top.
+
+inputs:
+  packages:
+    description: Space-separated package list.
+    required: true
+  timeout-seconds:
+    description: >
+      Hard bound per attempt. Chosen so a wedged mirror costs a couple of minutes
+      instead of a workflow-length hang; a healthy install of these packages takes
+      seconds.
+    required: false
+    default: "180"
+  attempts:
+    description: How many times to try before failing.
+    required: false
+    default: "3"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        TIMEOUT_S: ${{ inputs.timeout-seconds }}
+        ATTEMPTS: ${{ inputs.attempts }}
+      run: |
+        set -uo pipefail
+
+        # 1. What is genuinely missing? GitHub's runner images already carry a
+        #    lot (jq among them), so most of these calls install nothing and can
+        #    only fail. Report BOTH lists — a log that shows "already present:
+        #    jq" is how the next person learns the install was never needed.
+        present=(); missing=()
+        for p in $PACKAGES; do
+          if command -v "$p" >/dev/null 2>&1 || dpkg -s "$p" >/dev/null 2>&1; then
+            present+=("$p")
+          else
+            missing+=("$p")
+          fi
+        done
+        (( ${#present[@]} )) && echo "already present: ${present[*]}"
+        if (( ${#missing[@]} == 0 )); then
+          echo "nothing to install"
+          exit 0
+        fi
+        echo "missing: ${missing[*]}"
+
+        # 2. Bounded attempts. `timeout` is the load-bearing part: it converts a
+        #    hang into a failure, and a failure is something a retry or a human
+        #    can act on. Without it the job simply never ends.
+        attempt=1
+        while :; do
+          echo "::group::apt attempt ${attempt}/${ATTEMPTS} (timeout ${TIMEOUT_S}s each)"
+          rc=0
+          timeout "${TIMEOUT_S}" sudo apt-get update -qq || rc=$?
+          if [[ $rc -eq 0 ]]; then
+            timeout "${TIMEOUT_S}" sudo apt-get install -y -qq "${missing[@]}" || rc=$?
+          fi
+          echo "::endgroup::"
+
+          if [[ $rc -eq 0 ]]; then
+            echo "installed: ${missing[*]}"
+            break
+          fi
+          # 124 is timeout(1)'s "the command did not finish" — worth naming,
+          # because that is the failure this action was written for.
+          if [[ $rc -eq 124 ]]; then
+            echo "attempt ${attempt} TIMED OUT after ${TIMEOUT_S}s (apt hung)"
+          else
+            echo "attempt ${attempt} failed (rc=${rc})"
+          fi
+          if (( attempt >= ATTEMPTS )); then
+            echo "::error::could not install ${missing[*]} after ${ATTEMPTS} attempts (last rc=${rc}). This is the apt mirror, not the change under test — but the job fails rather than continuing without its tooling, because a gate that runs without its tools is not a gate."
+            exit 1
+          fi
+          sleep $(( 5 * attempt ))
+          attempt=$(( attempt + 1 ))
+        done
+
+        # 3. Prove the tools are actually callable. An install that "succeeded"
+        #    while leaving nothing on PATH is the false green this whole action
+        #    exists to avoid.
+        for p in $PACKAGES; do
+          command -v "$p" >/dev/null 2>&1 \
+            && echo "  ok  $p -> $(command -v "$p")" \
+            || { echo "::error::${p} is still not on PATH after a successful install"; exit 1; }
+        done
