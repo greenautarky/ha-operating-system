@@ -46,12 +46,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The linter ships pre-installed on ubuntu-latest; the action skips what is
+      # already there and only calls apt when it is genuinely missing.
       - name: Install shellcheck
-        run: |
-          # The linter ships pre-installed on ubuntu-latest, but reinstalling
-          # keeps the invocation version-independent across image updates.
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck
+        uses: ./.github/actions/apt-install
+        with:
+          packages: shellcheck
 
       - name: Show shellcheck version
         run: shellcheck --version | head -3
@@ -160,9 +160,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install jq
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq jq
+        uses: ./.github/actions/apt-install
+        with:
+          packages: jq
 
       - name: ga-share-publish (/share symlink hardening)
         run: sh tests/ga_tests/share_publish/test.sh
@@ -190,6 +190,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Gate self-tests (each pattern fires on known-bad, stays quiet on known-good)
         run: ./tests/gates/run_gate_selftests.sh
+
+      # The apt-install action, proven against the failure it was written for: a
+      # hung mirror. Runs here rather than in version-check because it must run
+      # even when version-check itself cannot — which was the situation on
+      # 2026-08-19.
+      - name: apt-install action (a hang must fail, not wedge)
+        run: ./tests/gates/apt_install/selftest.sh
 
       # Same idea, applied to the on-device provisioning checks. They normally
       # need a flashed device, so they were unprovable in CI and PROV-06 in fact
