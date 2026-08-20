@@ -364,8 +364,18 @@ if [ -f "$ADDON_IMAGES_JSON" ] && command -v skopeo >/dev/null 2>&1; then
         # while master's last run was still green.
         newest=$(skopeo list-tags "docker://${image}" 2>/dev/null \
             | jq -r '.Tags[]?' 2>/dev/null \
-            | grep -E '^[0-9]+([.][0-9]+)+' \
+            | grep -E '^[0-9]+([.][0-9]+)+$' \
             | sort -V | tail -1) || newest=""
+
+        # Anchored with $ so a PRE-RELEASE tag is not counted as the newest
+        # RELEASE. Without it, publishing 1.3.2-dev makes a correct pin of
+        # 1.3.0 look like drift — and because ga_build.sh runs this with
+        # GA_SOURCE_DRIFT_STRICT=1, that fails the BAKE (measured: rc3 run
+        # 32385233219 died in pre-flight on exactly this). The check exists to
+        # find "a released image no device can reach because the pin is
+        # behind"; a -dev tag is precisely what devices must NOT reach, so
+        # counting it made the guard fire on the wrong event. A pre-release
+        # that should ship gets a release tag. That is the point.
 
         if [ -z "$newest" ]; then
             # Not agreement. Say so.
