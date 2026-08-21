@@ -98,6 +98,11 @@ else
   run_test "FW-26" "HA UI (:8123) reachable from the LAN (input chain)" \
     "nft list table $TABLE | sed -n '/chain input/,/}/p' | grep -Eq '8123.*accept'"
 
+  # :80 is the current HA Core default UI port (older frozen Core used :8123).
+  # Added to the allowlist 2026-08-21; both must be reachable.
+  run_test "FW-26b" "HA UI (:80) reachable from the LAN (input chain)" \
+    "nft list table $TABLE | sed -n '/chain input/,/}/p' | grep -Eq 'dport.*(\\b80\\b).*accept|,\\s*80[,\\s]'"
+
   # --- default-deny -------------------------------------------------------
   run_test "FW-27" "LAN ingress otherwise dropped (input)" \
     "nft list table $TABLE | sed -n '/chain input/,/}/p' | grep -Eq 'eth0.*drop|drop.*eth0'"
