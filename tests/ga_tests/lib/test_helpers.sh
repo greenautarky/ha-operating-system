@@ -52,6 +52,39 @@ run_test_show() {
   [ -n "$_out" ] && echo "        -> $_out"
 }
 
+# wait_for <timeout_s> <command> — poll <command> until it returns 0, up to
+# <timeout_s> seconds. Returns 0 as soon as it passes, non-zero on timeout.
+#
+# WHY THIS EXISTS, and why it is NOT a skip: a fresh flash installs Core and
+# converges the add-ons over several minutes, so a suite that runs the instant
+# the device is reachable sees a half-built system and reports false failures
+# (observed on rc5: OSI-04 red because Core had not been created yet, green a
+# few minutes later). A BOUNDED wait removes the timing flake. It must never
+# become a mask: on timeout the caller runs the assertion anyway and reports
+# the REAL state, so "Core never came up" fails loudly instead of being skipped.
+# "Could not become ready in N s" is a failure, not a pass.
+wait_for() {
+  _to="$1"; shift
+  _deadline=$(( $(date +%s) + _to ))
+  while :; do
+    if ( eval "$@" ) >/dev/null 2>&1; then return 0; fi
+    [ "$(date +%s)" -ge "$_deadline" ] && return 1
+    sleep 3
+  done
+}
+
+# run_test_ready <id> <desc> <ready_cmd> <ready_timeout_s> <assert_cmd>
+# Waits (bounded) for <ready_cmd>, THEN runs <assert_cmd> as a normal check.
+# If readiness times out it still runs the assertion — so a genuinely broken
+# subject fails loudly rather than being hidden behind the wait.
+run_test_ready() {
+  _rid="$1"; _rdesc="$2"; _rready="$3"; _rto="$4"; _rassert="$5"
+  if ! wait_for "$_rto" "$_rready"; then
+    printf "${_YELLOW}  (readiness for %s timed out after %ss — asserting anyway)${_RESET}\n" "$_rid" "$_rto"
+  fi
+  run_test_show "$_rid" "$_rdesc" "$_rassert"
+}
+
 # Warn: test ran but result is informational (not a failure)
 # Usage: warn_test "TEST-01" "description" "command"
 warn_test() {
