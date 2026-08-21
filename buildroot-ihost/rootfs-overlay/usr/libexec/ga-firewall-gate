@@ -65,7 +65,12 @@ LAN_IFACES='"eth0", "wlan0"'
 
 # What stays reachable from those interfaces.
 HOST_ALLOW_TCP='22222'          # dropbear — on-site + local diagnostics
-CONTAINER_ALLOW_TCP='8123'      # Home Assistant UI — the resident's own access
+# Comma-separated ON PURPOSE: these expand into nft sets `{ ... }` and a JSON
+# array below. A space instead of a comma yields `{ 22222, 80 8123 }`, which
+# nft rejects — `nft -f` then deletes the table and the device ships
+# UNFILTERED. :80 is the current HA Core default UI port; :8123 stays for the
+# frozen 2025.11.3 armv7 Core and any explicit server_port. Same trust class.
+CONTAINER_ALLOW_TCP='80, 8123'  # HA Core UI (resident's own front door)
 
 log() { echo "ga-firewall-gate: $*"; }
 
