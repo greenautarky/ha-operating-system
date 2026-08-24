@@ -3322,6 +3322,75 @@ else
   _skip "CVE-SCAN-03: unmatchable-SBOM behaviour" "scripts/scan-cves.sh not found (no source tree)"
 fi
 
+# CVE-SCAN-08/09: the same coverage rule, on the IMAGE half of scan-cves.sh.
+#
+# The SBOM half has asserted coverage since 2026-07-28 (CVE-SCAN-01..03). The
+# image half, which .github/workflows/cve-scan.yml drives with --images, did
+# NOT: it counted findings out of the report and called an empty one clean, so
+# a base image trivy has no matcher for would have been reported CLEAN by the
+# very script that exists to refuse exactly that. Nothing compared the two
+# halves of one file against each other, so the gap survived the fix.
+#
+# Same hermetic stub idiom as CVE-SCAN-03. Two sets, both mandatory:
+#   08 must-fail — scanner returns success having evaluated 0 OS packages
+#   09 must-pass — scanner evaluated real packages and found nothing
+# 09 is not padding: an image gate that fails on a clean image gets switched
+# off, which is a slower way of having no gate.
+if [[ -f "${_cve_src}/scripts/scan-cves.sh" ]] && command -v jq >/dev/null 2>&1; then
+  _img_tmp=$(mktemp -d)
+  mkdir -p "${_img_tmp}/bin"
+
+  # must-fail stub: trivy's real no-op shape — exits 0, writes a result set with
+  # no Packages at all. Before this change that produced "CLEAN".
+  cat > "${_img_tmp}/bin/trivy" <<'CVEEOF'
+#!/usr/bin/env bash
+_out=""; while [[ $# -gt 0 ]]; do [[ "$1" == "--output" ]] && _out="$2"; shift; done
+echo 'WARN  Unsupported os  family="buildroot"' >&2
+[[ -n "$_out" ]] && echo '{"Results":[{"Class":"os-pkgs","Packages":[],"Vulnerabilities":[]}]}' > "$_out"
+exit 0
+CVEEOF
+  chmod +x "${_img_tmp}/bin/trivy"
+  set +e
+  PATH="${_img_tmp}/bin:$PATH" OUTPUT_DIR="${_img_tmp}/out" GA_ENV=dev \
+    ALLOW_FILE="${_img_tmp}/none" "$_cve_sh" --images >"${_img_tmp}/mf.log" 2>&1
+  _img_rc=$?
+  set -e
+  if [[ "$_img_rc" -eq 2 ]] && grep -q 'BLIND SCAN' "${_img_tmp}/mf.log"; then
+    _pass "CVE-SCAN-08: an image scanned with 0 package coverage exits 2 (broken), not 0 (clean)"
+  elif [[ "$_img_rc" -eq 2 ]]; then
+    _fail "CVE-SCAN-08: exit 2 but not from the coverage assertion — a different check fired"
+  else
+    _fail "CVE-SCAN-08: zero-coverage image scan returned ${_img_rc}, expected 2 — fail-open regression"
+  fi
+
+  # must-pass stub: real package coverage, no findings. Must NOT be called broken.
+  cat > "${_img_tmp}/bin/trivy" <<'CVEEOF'
+#!/usr/bin/env bash
+_out=""; while [[ $# -gt 0 ]]; do [[ "$1" == "--output" ]] && _out="$2"; shift; done
+[[ -n "$_out" ]] && echo '{"Results":[{"Class":"os-pkgs","Target":"stub (alpine 3.20)","Packages":[{"Name":"musl","Version":"1.2.5"},{"Name":"busybox","Version":"1.36.1"}],"Vulnerabilities":[]}]}' > "$_out"
+exit 0
+CVEEOF
+  chmod +x "${_img_tmp}/bin/trivy"
+  set +e
+  PATH="${_img_tmp}/bin:$PATH" OUTPUT_DIR="${_img_tmp}/out" GA_ENV=dev \
+    ALLOW_FILE="${_img_tmp}/none" "$_cve_sh" --images >"${_img_tmp}/mp.log" 2>&1
+  _img_rc=$?
+  set -e
+  # Assert BEHAVIOUR, not the new wording: a must-pass fixture keyed on a string
+  # this change introduces would fail on the pre-fix script too, which conflates
+  # "the gate is missing" with "the gate flags everything". It must stay green on
+  # both, so that only the must-fail fixture discriminates.
+  if [[ "$_img_rc" -eq 0 ]] && ! grep -q 'BLIND SCAN' "${_img_tmp}/mp.log"; then
+    _pass "CVE-SCAN-09: an image with real package coverage and no findings still passes"
+  else
+    _fail "CVE-SCAN-09: covered, clean image returned ${_img_rc} (expected 0) — the gate flags everything$(printf '\n%s' "$(tail -5 "${_img_tmp}/mp.log")" | sed 's/^/      /')"
+  fi
+  rm -rf "$_img_tmp"
+else
+  _skip "CVE-SCAN-08: zero-coverage image behaviour" "scan-cves.sh or jq not available"
+  _skip "CVE-SCAN-09: covered clean image behaviour" "scan-cves.sh or jq not available"
+fi
+
 # CVE-SCAN-05: the enriched-SBOM path. An SBOM carrying the `ga:cve-check`
 # marker is read natively (CycloneDX analysis.state), and an entry marked
 # exploitable at or above the severity threshold must fail — while a bare SBOM

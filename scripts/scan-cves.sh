@@ -142,7 +142,7 @@ load_allowlist
 echo ""
 
 # --- Container image scanning ---
-IMG_TOTAL=0; IMG_PASS=0; IMG_FAIL=0; IMG_FINDINGS=0; IMG_SUPPRESSED=0
+IMG_TOTAL=0; IMG_PASS=0; IMG_FAIL=0; IMG_FINDINGS=0; IMG_SUPPRESSED=0; IMG_BLIND=0
 if [[ "$SCAN_IMAGES" == "true" ]]; then
   echo "=== Scanning Container Images ==="
 
@@ -198,16 +198,32 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
     echo "--- Scanning: ${img} ---"
     REPORT="${OUTPUT_DIR}/image-$(echo "$img" | tr '/:' '__').json"
 
-    if trivy image --severity "$SEVERITY" --format json --output "$REPORT" "$img" 2>/dev/null; then
+    # --list-all-pkgs is what turns "no findings" into a CHECKABLE claim: trivy
+    # reports every package it CONSIDERED, so a verdict of "clean" can be held
+    # against the number of packages it actually looked at. Without it this loop
+    # counted a scan of ZERO packages as a clean image — the same blindness the
+    # SBOM half of this very file was fixed for on 2026-07-28, left in place here
+    # because nothing had ever compared the two halves against each other.
+    if trivy image --severity "$SEVERITY" --list-all-pkgs --format json --output "$REPORT" "$img" 2>/dev/null; then
+      _pkgs=$(jq '[.Results[]? | select(.Class == "os-pkgs") | .Packages // []] | flatten | length' "$REPORT" 2>/dev/null || echo 0)
+      if [[ "${_pkgs:-0}" -eq 0 ]]; then
+        # NOT a clean image. Trivy returns success having evaluated nothing when
+        # it has no matcher for the image's package family — the empty report is
+        # indistinguishable from a clean one unless you count.
+        echo "  ERROR: BLIND SCAN — trivy evaluated ZERO OS packages in this image."
+        echo "         An empty report is not a clean report. Not counted as clean."
+        IMG_BLIND=$((IMG_BLIND + 1))
+        continue
+      fi
       read -r _n _s < <(count_unsuppressed "$REPORT") || true
       IMG_FINDINGS=$((IMG_FINDINGS + _n))
       IMG_SUPPRESSED=$((IMG_SUPPRESSED + _s))
       if [[ "$_n" -gt 0 ]]; then
-        echo "  FOUND: ${_n} vulnerabilities (${SEVERITY})$([[ "$_s" -gt 0 ]] && echo ", ${_s} allowlisted")"
+        echo "  FOUND: ${_n} vulnerabilities (${SEVERITY}) across ${_pkgs} evaluated package(s)$([[ "$_s" -gt 0 ]] && echo ", ${_s} allowlisted")"
         trivy image --severity "$SEVERITY" --format table "$img" 2>/dev/null || true
         IMG_FAIL=$((IMG_FAIL + 1))
       else
-        echo "  CLEAN: no unsuppressed ${SEVERITY} vulnerabilities$([[ "$_s" -gt 0 ]] && echo " (${_s} allowlisted)")"
+        echo "  CLEAN: no unsuppressed ${SEVERITY} vulnerabilities across ${_pkgs} evaluated package(s)$([[ "$_s" -gt 0 ]] && echo " (${_s} allowlisted)")"
         IMG_PASS=$((IMG_PASS + 1))
       fi
     else
@@ -217,12 +233,23 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
   done
 
   echo ""
-  echo "=== Image Scan Summary: ${IMG_PASS} clean, ${IMG_FAIL} with findings (${IMG_TOTAL} total, ${img_unscannable} unscannable) ==="
+  echo "=== Image Scan Summary: ${IMG_PASS} clean, ${IMG_FAIL} with findings, ${IMG_BLIND} blind (${IMG_TOTAL} total, ${img_unscannable} unscannable) ==="
   [[ "$IMG_FINDINGS" -gt 0 ]] && EXIT_CODE=1
 
   # Every image failing to pull is a broken scan, not a clean one.
   if [[ "$IMG_TOTAL" -gt 0 && "$img_unscannable" -eq "$IMG_TOTAL" ]]; then
     echo "  ERROR: not a single image could be scanned — the image scan is BROKEN, not clean"
+    SCAN_BROKEN=true
+  fi
+
+  # An image trivy could pull but not understand is the WORSE failure: it looks
+  # like a successful scan. One is enough to make the summary a false claim, so
+  # it is a broken scan (exit 2), never a finding (exit 1) — you cannot triage a
+  # vulnerability list that was never produced.
+  if [[ "$IMG_BLIND" -gt 0 ]]; then
+    echo "  ERROR: ${IMG_BLIND} of ${IMG_TOTAL} image(s) were scanned with ZERO package coverage"
+    echo "         — the image scan is BROKEN for those, not clean. Most likely a base"
+    echo "         image changed to a family trivy has no package matcher for."
     SCAN_BROKEN=true
   fi
 fi
