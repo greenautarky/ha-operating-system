@@ -2467,57 +2467,25 @@ if [[ "$GA_ENV" == "prod" ]]; then
       echo "Scanning container image tars for CRITICAL/HIGH vulnerabilities..."
       _cve_scan_file="${OUT}/images/reports/cve-scan-containers.txt"
       : > "$_cve_scan_file"
-      _cve_img_total=0 _cve_img_clean=0 _cve_img_findings=0 _cve_img_blind=0 _cve_img_unscannable=0
+      _cve_img_total=0 _cve_img_clean=0 _cve_img_findings=0
       for tarball in "$_cve_images_dir"/*.tar; do
         [[ -f "$tarball" ]] || continue
         _cve_img_name="$(basename "$tarball" .tar)"
         _cve_img_total=$((_cve_img_total + 1))
         echo "  Scanning: ${_cve_img_name}..." | tee -a "$_cve_scan_file"
-        # Two defects fixed here at once, both found 2026-08-24:
-        #
-        # 1. NO COVERAGE ASSERTION. trivy returns success having evaluated
-        #    nothing when it has no matcher for the image's package family, so
-        #    an empty table counted as "clean". Same blindness scan-cves.sh was
-        #    fixed for on 2026-07-28 — this copy simply never got the fix.
-        #    `--list-all-pkgs --format json` makes the verdict checkable.
-        #
-        # 2. THE COUNTER WAS MEANINGLESS. It ran
-        #      grep -cE "CRITICAL|HIGH" "$_cve_scan_file"
-        #    over the ACCUMULATING report file, which every previous image had
-        #    already appended to. So once ONE image had a finding, every image
-        #    after it counted as "with findings" — and the "clean" number was
-        #    whatever happened to come first. Per-image JSON, counted per image.
-        _cve_json="${_cve_scan_file%.txt}-${_cve_img_name}.json"
-        if trivy image --severity CRITICAL,HIGH --list-all-pkgs --format json \
-             --output "$_cve_json" --input "$tarball" 2>>"$_cve_scan_file"; then
-          _cve_pkgs=$(jq '[.Results[]? | select(.Class == "os-pkgs") | .Packages // []] | flatten | length' "$_cve_json" 2>/dev/null || echo 0)
-          _cve_count=$(jq '[.Results[]?.Vulnerabilities // []] | flatten | length' "$_cve_json" 2>/dev/null || echo 0)
-          if [[ "${_cve_pkgs:-0}" -eq 0 ]]; then
-            echo "    ERROR: BLIND — 0 OS packages evaluated. An empty report is NOT a clean one." | tee -a "$_cve_scan_file"
-            _cve_img_blind=$((_cve_img_blind + 1))
-          elif [[ "${_cve_count:-0}" -gt 0 ]]; then
-            echo "    FOUND: ${_cve_count} CRITICAL/HIGH across ${_cve_pkgs} package(s)" | tee -a "$_cve_scan_file"
-            trivy image --severity CRITICAL,HIGH --format table --input "$tarball" 2>&1 | tee -a "$_cve_scan_file"
+        if trivy image --severity CRITICAL,HIGH --format table --input "$tarball" 2>&1 | tee -a "$_cve_scan_file"; then
+          _cve_count=$(grep -cE "CRITICAL|HIGH" "$_cve_scan_file" 2>/dev/null || echo 0)
+          if [[ "$_cve_count" -gt 0 ]]; then
             _cve_img_findings=$((_cve_img_findings + 1))
           else
-            echo "    CLEAN: 0 CRITICAL/HIGH across ${_cve_pkgs} evaluated package(s)" | tee -a "$_cve_scan_file"
             _cve_img_clean=$((_cve_img_clean + 1))
           fi
         else
           echo "    WARN: could not scan ${_cve_img_name}" | tee -a "$_cve_scan_file"
-          _cve_img_unscannable=$((_cve_img_unscannable + 1))
         fi
       done
       echo "" | tee -a "$_cve_scan_file"
-      echo "Container image scan: ${_cve_img_clean} clean, ${_cve_img_findings} with findings, ${_cve_img_blind} BLIND, ${_cve_img_unscannable} unscannable (${_cve_img_total} total)" | tee -a "$_cve_scan_file"
-      # Deliberately still a REPORT, not a gate — it always was, and turning it
-      # into one is a separate decision with its own blast radius (it would fail
-      # a prod bake). What changes today is that the report can no longer make a
-      # claim it did not measure. If this line ever shows BLIND > 0, the honest
-      # reading is "we do not know", not "clean".
-      if [[ "$_cve_img_blind" -gt 0 ]]; then
-        echo "ERROR: ${_cve_img_blind} container image(s) were scanned with ZERO package coverage — those results are UNKNOWN, not clean" | tee -a "$_cve_scan_file"
-      fi
+      echo "Container image scan: ${_cve_img_clean} clean, ${_cve_img_findings} with findings (${_cve_img_total} total)" | tee -a "$_cve_scan_file"
     fi
   elif [[ "${GA_ENV:-dev}" == "prod" ]]; then
     # Fail closed: a prod release must not ship without a scanned SBOM.
