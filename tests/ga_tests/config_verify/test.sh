@@ -18,11 +18,19 @@ run_test "CFG-03" "telegraf.conf has uuid tag" \
   "grep -q 'uuid.*DEVICE_UUID' /etc/telegraf/telegraf.conf"
 
 # --- Telegraf service ---
-run_test "CFG-04" "telegraf.service has DEVICE_LABEL ExecStartPre" \
-  "systemctl cat telegraf 2>/dev/null | grep -q 'ga-device-label'"
+# CFG-04/05 assert the WIRING, not the spelling. The label and uuid lookups used
+# to sit inline in the unit; they were deliberately moved into ga-telegraf-env
+# because systemd expands a plain ${VAR} in Exec* lines itself, which silently
+# emptied INFLUX_USER/INFLUX_PASSWORD and 401'd every write. Grepping the unit
+# for 'ga-device-label' therefore tested the pre-refactor form and failed on a
+# correct device — a test red for the wrong reason, which is how a suite gets
+# ignored. Assert instead that the unit calls the helper AND the helper resolves
+# both values, which is the property that has to hold either way.
+run_test "CFG-04" "telegraf.service runs the env helper that resolves DEVICE_LABEL" \
+  "systemctl cat telegraf 2>/dev/null | grep -qE 'ExecStartPre=.*ga-telegraf-env' && grep -q 'device_id\\|ga-device-label' /usr/libexec/ga-telegraf-env"
 
-run_test "CFG-05" "telegraf.service has DEVICE_UUID ExecStartPre" \
-  "systemctl cat telegraf 2>/dev/null | grep -q 'core.uuid'"
+run_test "CFG-05" "telegraf env helper resolves DEVICE_UUID from core.uuid" \
+  "grep -q 'core.uuid' /usr/libexec/ga-telegraf-env"
 
 run_test "CFG-06" "telegraf.service has DEVICE_LABEL safe default" \
   "systemctl cat telegraf 2>/dev/null | grep -q 'Environment=.*DEVICE_LABEL=unknown'"
@@ -38,8 +46,9 @@ run_test "CFG-09" "fluent-bit.conf has device_label in Loki labels" \
   "grep 'labels.*job=ihost' /etc/fluent-bit/fluent-bit.conf | grep -q 'device_label'"
 
 # --- Fluent-Bit service ---
-run_test "CFG-10" "fluent-bit.service has DEVICE_LABEL ExecStartPre" \
-  "systemctl cat fluent-bit 2>/dev/null | grep -q 'ga-device-label'"
+# Same refactor, same correction as CFG-04.
+run_test "CFG-10" "fluent-bit.service runs the env helper that resolves DEVICE_LABEL" \
+  "systemctl cat fluent-bit 2>/dev/null | grep -qE 'ExecStartPre=.*ga-fluent-bit-env' && grep -q 'device_id\\|ga-device-label' /usr/libexec/ga-fluent-bit-env"
 
 run_test "CFG-11" "fluent-bit.service has DEVICE_LABEL safe default" \
   "systemctl cat fluent-bit 2>/dev/null | grep -q 'Environment=.*DEVICE_LABEL=unknown'"
