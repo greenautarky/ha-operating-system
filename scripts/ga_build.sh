@@ -2301,13 +2301,44 @@ elif [[ "$MODE" == "update" ]]; then
   # Force hassio to re-check container image digests from registry
   # Without this, Buildroot skips the fetch step and uses stale cached tars
   # (same Docker tag can have new content after a Core/Frontend rebuild)
-  rm -f "${OUT}/build/hassio-1.0.0/.stamp_built" \
+  #
+  # .stamp_configured BELONGS IN THIS LIST, and its absence cost a release.
+  #
+  # HASSIO_CONFIGURE_CMDS is where version.json is written:
+  #     curl {HASSIO_VERSION_URL}{channel}.json | jq '.core = …' > $(@D)/version.json
+  # and that file is the ONLY carrier of the channel-resolved Supervisor, Core
+  # and plugin versions into the image. Buildroot guards CONFIGURE_CMDS with
+  # $(@D)/.stamp_configured (package/pkg-generic.mk, $(2)_TARGET_CONFIGURE), so
+  # on any tree that already has one, configure never re-runs and yesterday's
+  # version.json — yesterday's CHANNEL — is reused verbatim.
+  #
+  # Measured on BOSv1.3.0-rc6, 2026-08-24: the defconfig selected
+  # BR2_PACKAGE_HASSIO_CHANNEL_BETA and ga_output/.config carried it, but the
+  # build reused a version.json dated 2026-08-20 saying "channel": "stable".
+  # The image shipped the stable component set (supervisor 2025.11.4.6,
+  # upstream armv7-hassio-dns 2025.08.0, cli 2025.10.0) while its own
+  # updater.json declared beta — because the channel string reaching
+  # create-data-partition.sh comes straight from make and DID follow the
+  # defconfig. Two channel paths, one cached and one live, and nothing compared
+  # them. Unblocked by deleting the tree on the builder by hand.
+  #
+  # Second-order: hassio.mk's own version.json validation (the latest/registry/
+  # supervisor-pin block) also lives inside CONFIGURE_CMDS, so on a reused tree
+  # it does not run either. A check that is skipped reads exactly like a check
+  # that passed.
+  #
+  # Cost of adding it: one curl + one jq. The extracted source is a local rsync
+  # (HASSIO_SITE_METHOD = local), the container tars live in HASSIO_DL_DIR, and
+  # the build/install stamps below are dropped on every update build anyway.
+  rm -f "${OUT}/build/hassio-1.0.0/.stamp_configured" \
+        "${OUT}/build/hassio-1.0.0/.stamp_built" \
         "${OUT}/build/hassio-1.0.0/.stamp_images_installed" \
         "${OUT}/build/hassio-1.0.0/.stamp_installed" \
         "${OUT}/build/hassio-1.0.0/.stamp_target_installed" 2>/dev/null || true
   # Clean old container tars to avoid disk bloat (stale digests accumulate)
   rm -rf "${OUT}/build/hassio-1.0.0/images" 2>/dev/null || true
-  echo "Cleared hassio stamps + old container tars — fresh pull from registry"
+  echo "Cleared hassio stamps (incl. .stamp_configured, so version.json is refetched"
+  echo "for the channel the defconfig declares) + old container tars"
 
 else
   echo "Usage: $0 [full|partial|kernel|update|dev|prod] [dev|prod]"
