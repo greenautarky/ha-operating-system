@@ -1,0 +1,3 @@
+# Counter-check for the word boundary above: narrowing `no fix` must not lose
+# the real claim. If someone drops the boundary the wrong way, this stops firing.
+The upstream advisory says there is no fix available for the affected package.
