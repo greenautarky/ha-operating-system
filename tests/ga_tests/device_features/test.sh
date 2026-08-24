@@ -68,6 +68,50 @@ done
 run_test_show "FEAT-07" "ga_heating registered its health entity" \
   'grep -q "sensor.ga_heating_health" '"$HACONF"'/.storage/core.entity_registry'
 
+# --- the room-thermostat plane (ga-heating 0.2.0) --------------------------
+# The INVARIANT, not this device's furniture: every area that owns a radiator
+# must own a ga_heating room thermostat. That holds on a device with three rooms
+# and on one with none — where it degenerates to "0 == 0", which is why FEAT-15
+# says out loud when there is nothing to prove.
+#
+# Measured on K31 2026-08-24 after the K0 valves were migrated onto it: three
+# areas with radiators, three thermostats, each assigned to its own area.
+_REG="$HACONF/.storage/core.entity_registry"
+
+# ⚠️ .storage is written LAZILY. Reading it seconds after a Core restart shows a
+# registry that has not been flushed yet — that cost a wrong conclusion on the
+# day this was written ("the thermostats do not exist"; they did). This suite
+# runs long after startup, but if it ever moves earlier, wait for the flush
+# rather than trusting an empty answer.
+_areas_with_radiator() {
+  # A radiator is a z2m climate entity; its area comes from its DEVICE.
+  sed -n 's/.*"area_id": *"\([a-z_0-9]*\)".*/\1/p' "$HACONF/.storage/core.device_registry" 2>/dev/null | sort -u
+}
+_ga_thermostats() {
+  grep -o '"unique_id":"ga_heating_[a-z_0-9]*"' "$_REG" 2>/dev/null \
+    | sed 's/.*ga_heating_//; s/"//' | grep -v '^health$' | sort -u
+}
+
+run_test_show "FEAT-12" "ga_heating registered a room thermostat per area with a radiator" \
+  '[ "$(grep -c "\"unique_id\":\"ga_heating_" '"$_REG"' 2>/dev/null)" -ge 2 ]'
+
+# Registering is not enough: a thermostat in no room controls nothing a resident
+# can find. The component assigns its own area after registration, so this is a
+# separate step that can separately fail.
+run_test_show "FEAT-13" "every room thermostat is assigned to an area" \
+  '! grep -o "\"unique_id\":\"ga_heating_[a-z_0-9]*\"[^}]*" '"$_REG"' 2>/dev/null | grep -v ga_heating_health | grep -q "\"area_id\":null"'
+
+# The 0.2.0 promise: a room that cannot be measured SAYS so. Silence here is the
+# failure mode this replaced — a room heated off its own valve's sensor while
+# everything looked healthy.
+run_test_show "FEAT-14" "a room lacking its own thermometer is REPORTED, not silently degraded" \
+  'docker logs homeassistant 2>&1 | grep -q "no temperature sensor of its own" || ! docker logs homeassistant 2>&1 | grep -q "custom_components.ga_heating.climate"'
+
+# Coverage, and honest about it: with no radiators paired there is nothing to
+# assert, and this says so instead of passing quietly.
+run_test_show "FEAT-15" "coverage: radiators are actually paired (else FEAT-12..14 prove nothing)" \
+  '[ "$(grep -c "\"platform\":\"mqtt\"[^}]*climate\." '"$_REG"' 2>/dev/null)" -gt 0 ] || [ "$(grep -o "climate\.0x[0-9a-f]*" '"$_REG"' 2>/dev/null | sort -u | wc -l)" -gt 0 ]'
+
 # --- the metric bridge -----------------------------------------------------
 # Telegraf must read the drop DIRECTORY. Hardcoding one filename meant the
 # second writer was collected by nothing, and a metric that never arrives looks
