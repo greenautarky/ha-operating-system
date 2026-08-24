@@ -76,7 +76,19 @@ N_ADDONS=$(echo "$ADDONS" | wc -w)
 # expectation group whose source is that JSON. Fetched REPO-SIDE for the channel
 # the caller names — never read from the device, which is the artefact under test.
 #   CHANNEL=beta sh gen_expected.sh   → expectations for a beta canary
-CHANNEL="${CHANNEL:-stable}"
+# The channel is DECLARED in the defconfig the image is built from — read it
+# there, so OSI-19 compares declaration against device instead of comparing
+# the device against whatever the operator happened to type. An explicit
+# CHANNEL= still wins, for probing a device built from another tree.
+if [ -z "${CHANNEL:-}" ]; then
+  if grep -q "^BR2_PACKAGE_HASSIO_CHANNEL_BETA=y" buildroot-ihost/configs/ga_ihost_full_defconfig 2>/dev/null; then
+    CHANNEL=beta
+  elif grep -q "^BR2_PACKAGE_HASSIO_CHANNEL_DEV=y" buildroot-ihost/configs/ga_ihost_full_defconfig 2>/dev/null; then
+    CHANNEL=dev
+  else
+    CHANNEL=stable
+  fi
+fi
 PLUGINS=$(CHANNEL="$CHANNEL" python3 - <<'PYEOF'
 import json, os, sys, urllib.request
 url = ("https://raw.githubusercontent.com/greenautarky/haos-version/main/"
