@@ -31,8 +31,14 @@ if [ ! -s "$EXP" ]; then
   suite_end; exit 1
 fi
 . "$EXP"
-run_test "OSI-00" "expected.env carries all five expectation groups" \
-  '[ -n "$EXPECTED_GA_RELEASE" ] && [ -n "$EXPECTED_KERNEL" ] && [ -n "$EXPECTED_OPENSSL" ] && [ -n "$EXPECTED_CORE" ] && [ -n "$EXPECTED_ADDON_IMAGES" ]'
+# Print what we are comparing AGAINST. A device flashed from an older
+# commit than the checkout that generated expected.env will fail the
+# image rows — correctly, but the reason is invisible without this line.
+# (Cost me a confused minute on 2026-08-24: master had moved mosquitto
+# 7.2.2 -> 7.2.3 hours after the device was flashed.)
+grep -m1 "^# source commit:" "$EXP" | sed "s/^# /  expectations from /"
+run_test "OSI-00" "expected.env carries all seven expectation groups" \
+  '[ -n "$EXPECTED_GA_RELEASE" ] && [ -n "$EXPECTED_KERNEL" ] && [ -n "$EXPECTED_OPENSSL" ] && [ -n "$EXPECTED_CORE" ] && [ -n "$EXPECTED_ADDON_IMAGES" ] && [ -n "$EXPECTED_PLUGINS" ] && [ -n "$EXPECTED_CHANNEL" ]'
 
 # --- the OS layer ----------------------------------------------------------
 run_test_show "OSI-01" "/etc/ga-release == declared ${EXPECTED_GA_RELEASE}" \
@@ -64,6 +70,26 @@ for pair in $EXPECTED_ADDON_IMAGES; do
     "docker image inspect '$_ref' >/dev/null 2>&1"
   _i=$((_i+1))
 done
+
+# --- the Supervisor's own plane: plugins -----------------------------------
+# The five plugins are NOT pinned in this repo; the Supervisor resolves them
+# from the channel JSON (ADR-0018 §2). Two of them are GA-built since
+# 2026-08-24 — an unbuilt plane is an unwatched plane, and upstream has already
+# stopped shipping armv7 for them. Compare the DECLARED image:tag against what
+# the Supervisor actually runs.
+run_test_show "OSI-19" "supervisor channel == declared ${EXPECTED_CHANNEL}" \
+  '[ "$(ha supervisor info --raw-json 2>/dev/null | sed -n "s/.*\"channel\":\"\([a-z]*\)\".*/\\1/p")" = "$EXPECTED_CHANNEL" ]'
+
+_i=20
+for pair in $EXPECTED_PLUGINS; do
+  _slug="${pair%%=*}"; _ref="${pair#*=}"
+  run_test_show "OSI-$_i" "plugin ${_slug} runs the declared ${_ref##*/}" \
+    "[ \"\$(docker inspect hassio_${_slug} --format '{{.Config.Image}}' 2>/dev/null)\" = '$_ref' ]"
+  _i=$((_i+1))
+done
+
+run_test "OSI-98" "coverage: all five plugins were checked" \
+  '[ "$(echo "$EXPECTED_PLUGINS" | wc -w)" -eq 5 ]'
 
 # Coverage: a loop over zero addons is a broken generator, not a clean device.
 run_test "OSI-99" "coverage: at least 6 addon images were checked" \

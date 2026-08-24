@@ -94,6 +94,23 @@ run_test_show "ADR-15" "hardware-control: node executes (v24 on real armv7)" \
 run_test_show "ADR-16" "ga_manager: python worker process alive" \
   'docker exec "$(ctr_of ga_manager)" sh -c "pgrep -f python3 >/dev/null" 2>/dev/null'
 
+# --- the Supervisor plugins: do they WORK? ---------------------------------
+# Identity is os_integrity's job; this is function. DNS is the device's
+# lifeline — a running-but-broken resolver takes every pull, every MQTT
+# reconnect and Core itself down with it, and "container Up" cannot see that.
+# GA builds two of these since 2026-08-24, so the plane is ours to prove.
+run_test_show "ADR-30" "dns plugin resolves for an add-on (the lifeline, not the process)" \
+  'docker exec "$(ctr_of ga_manager)" python3 -c "import socket; socket.gethostbyname(\"ghcr.io\")" 2>/dev/null'
+run_test_show "ADR-31" "dns plugin resolves for HA Core" \
+  'docker exec homeassistant python3 -c "import socket; socket.gethostbyname(\"github.com\")" 2>/dev/null'
+run_test_show "ADR-32" "cli plugin executes (it backs every ha command)" \
+  'docker exec hassio_cli ha help >/dev/null 2>&1'
+run_test_show "ADR-33" "no plugin container is restarting" \
+  'for c in hassio_dns hassio_cli hassio_audio hassio_observer hassio_multicast; do
+     rc=$(docker inspect "$c" --format "{{.RestartCount}}" 2>/dev/null || echo 1)
+     [ "${rc:-1}" -eq 0 ] || exit 1
+   done'
+
 # --- restart-loop tripwire -------------------------------------------------
 # "Up 2 seconds" forever is a crash loop that up-ness alone cannot see.
 run_test_show "ADR-20" "no addon container restarted in the last check (RestartCount==0)" \
