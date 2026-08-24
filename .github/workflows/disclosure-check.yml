@@ -135,7 +135,14 @@ jobs:
           #   172.30.32.x      Home Assistant Supervisor docker bridge
           #   172.30.232.x     Supervisor bridge subnet (daemon.json bip)
           #   192.168.1.100    the placeholder used in usage examples
-          ALLOW='s#10\.0\.2\.2#<emulator-gateway>#g; s#172\.30\.(32|232)\.[0-9]{1,3}#<supervisor-bridge>#g; s#172\.30\.0\.0#<supervisor-bridge>#g; s#192\.168\.1\.100#<doc-placeholder>#g'
+          #   --ignore-unfixed trivy's CLI flag. The OPEN pattern lists `unfixed`
+          #                    as a bare alternative, so every CVE-scanning
+          #                    workflow and script in this repo matched it — a
+          #                    flag name, not a claim about a finding. Only the
+          #                    double-dashed literal is neutralised, so a real
+          #                    sentence ("the finding is unfixed") still fires.
+          #                    Fixture: tests/gates/disclosure/must-pass/trivy-ignore-unfixed.txt
+          ALLOW='s#10\.0\.2\.2#<emulator-gateway>#g; s#172\.30\.(32|232)\.[0-9]{1,3}#<supervisor-bridge>#g; s#172\.30\.0\.0#<supervisor-bridge>#g; s#192\.168\.1\.100#<doc-placeholder>#g; s#--ignore-unfixed#--ignore-<trivy-flag>#g'
           for f in /tmp/s_diff.txt /tmp/s_commits.txt /tmp/s_title.txt; do
             sed -E "$ALLOW" "$f" > "${f}.clean" && mv "${f}.clean" "$f"
           done
@@ -158,7 +165,7 @@ jobs:
           # so "still, as of today, open" walked through; the gap is now
           # bounded rather than zero, and the verb set covers the words an
           # engineer actually writes (listening, live, exposed, unpatched).
-          OPEN='(still([[:space:],]+[A-Za-z]+){0,3}[[:space:],]+(open|running|answering|answers|vulnerable|reachable|exposed|unpatched|listening|live|accepts|accepting|responds|responding)|remains([[:space:],]+[A-Za-z]+){0,2}[[:space:],]+(open|vulnerable|exploitable|exposed|unpatched|reachable)|stays red and open|not (yet )?(fixed|closed|patched|revoked|destroyed|rotated|removed|mitigated|remediated)|(has|have|is|are) not been (fixed|patched|revoked|rotated|removed|closed)|no fix( yet| available)?|fix (is )?pending|awaiting (a )?(fix|remediation|patch)|mitigation (is )?pending|workaround pending|no revocation path|certificate (has )?expired|currently exploitable|unfixed)'
+          OPEN='(still([[:space:],]+[A-Za-z]+){0,3}[[:space:],]+(open|running|answering|answers|vulnerable|reachable|exposed|unpatched|listening|live|accepts|accepting|responds|responding)|remains([[:space:],]+[A-Za-z]+){0,2}[[:space:],]+(open|vulnerable|exploitable|exposed|unpatched|reachable)|stays red and open|not (yet )?(fixed|closed|patched|revoked|destroyed|rotated|removed|mitigated|remediated)|(has|have|is|are) not been (fixed|patched|revoked|rotated|removed|closed)|no fix(es)?\b( yet| available)?|fix (is )?pending|awaiting (a )?(fix|remediation|patch)|mitigation (is )?pending|workaround pending|no revocation path|certificate (has )?expired|currently exploitable|unfixed)'
 
           # --- credential shapes --------------------------------------------
           # gitleaks (secret-scan.yml) is the real secret gate and runs full

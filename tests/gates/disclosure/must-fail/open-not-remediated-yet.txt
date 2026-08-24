@@ -1,0 +1,4 @@
+# The counter-fixture for the allowlist entry above: neutralising the FLAG must
+# not neutralise the CLAIM. If someone widens that sed to a bare `unfixed`, this
+# line stops being flagged and the gate has quietly lost a pattern.
+The credential on the bridge is still unfixed and readable by every share:rw addon.

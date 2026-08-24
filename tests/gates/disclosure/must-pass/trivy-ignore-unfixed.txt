@@ -1,0 +1,10 @@
+# Every CVE-scanning workflow and script in this repo carries trivy's
+# --ignore-unfixed flag. It is a CLI flag name, not a claim about the state of
+# any finding. Before 2026-08-24 the OPEN pattern's bare alternative matched it,
+# so the disclosure gate fired on any PR touching a CVE scan — the exact shape
+# that trains people to reach for the override without reading.
+docker run --rm aquasec/trivy:latest image \
+  --scanners vuln --pkg-types os \
+  --severity HIGH,CRITICAL --ignore-unfixed \
+  --exit-code 1 --no-progress local/example:scan
+trivy image --severity "$SEVERITY" --list-all-pkgs --ignore-unfixed --format json
