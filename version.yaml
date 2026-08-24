@@ -38,4 +38,4 @@ rootfs_overlays:
 # Upstream base images — referenced by version.json + Supervisor config.
 base_images:
   homeassistant_core:        "2025.11.3"
-  homeassistant_supervisor:  "2025.11.4.6"
+  homeassistant_supervisor:  "2025.11.4.7"
