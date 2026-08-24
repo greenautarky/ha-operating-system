@@ -2223,6 +2223,25 @@ if [[ -n "$SRC" ]]; then
   else
     _pass "XVER-00: version source derived from hassio.mk: ${_VER_BASE}"
     STABLE_JSON="$(curl -sf "${_VER_BASE}stable.json" 2>/dev/null || true)"
+    # The channel THIS BUILD declares — not always stable. XVER-03/04/05/08 are
+    # invariants of the FLEET channel and stay on stable.json; XVER-06/07 compare
+    # the BUILD against a channel and must use the build's own, or a canary build
+    # fails a check that is asking the wrong question (measured on rc6,
+    # 2026-08-24: XVER-07 red because a beta build carried supervisor 2025.11.4.7
+    # while stable.json declared 4.6 — both correct, the comparison was not).
+    BUILD_CHANNEL="stable"
+    if grep -q "^BR2_PACKAGE_HASSIO_CHANNEL_BETA=y" buildroot-ihost/configs/ga_ihost_full_defconfig 2>/dev/null; then
+      BUILD_CHANNEL="beta"
+    elif grep -q "^BR2_PACKAGE_HASSIO_CHANNEL_DEV=y" buildroot-ihost/configs/ga_ihost_full_defconfig 2>/dev/null; then
+      BUILD_CHANNEL="dev"
+    fi
+    if [[ "$BUILD_CHANNEL" == "stable" ]]; then
+      BUILD_CHANNEL_JSON="$STABLE_JSON"
+    else
+      BUILD_CHANNEL_JSON="$(curl -sf "${_VER_BASE}${BUILD_CHANNEL}.json" 2>/dev/null || true)"
+    fi
+    CH_CORE="$(echo "$BUILD_CHANNEL_JSON" | jq -r '.core // "unknown"')"
+    CH_SUP="$(echo "$BUILD_CHANNEL_JSON" | jq -r '.supervisor // "unknown"')"
   fi
 
   if [[ -n "$STABLE_JSON" ]]; then
@@ -2269,10 +2288,12 @@ if [[ -n "$SRC" ]]; then
     # XVER-06: updater.json will use version.json core at build time; verify version.json core matches stable.json
     if [[ -f "$VER_JSON" ]]; then
       VJ_CORE="$(jq -r '.core // "unknown"' "$VER_JSON" 2>/dev/null)"
-      if [[ "$VJ_CORE" == "$STABLE_CORE" ]]; then
-        _pass "XVER-06: version.json core ($VJ_CORE) matches stable.json ($STABLE_CORE) — updater.json will be correct"
+      if [[ -z "$BUILD_CHANNEL_JSON" ]]; then
+        _fail "XVER-06: could not fetch ${BUILD_CHANNEL}.json — the comparison could not run, which is NOT a pass"
+      elif [[ "$VJ_CORE" == "$CH_CORE" ]]; then
+        _pass "XVER-06: version.json core ($VJ_CORE) matches ${BUILD_CHANNEL}.json ($CH_CORE) — updater.json will be correct"
       else
-        _fail "XVER-06: version.json core ($VJ_CORE) != stable.json core ($STABLE_CORE)"
+        _fail "XVER-06: version.json core ($VJ_CORE) != ${BUILD_CHANNEL}.json core ($CH_CORE)"
       fi
     else
       _skip "XVER-06" "version.json not found (full build needed)"
@@ -2283,10 +2304,12 @@ if [[ -n "$SRC" ]]; then
     # OS reads version.json from the same branch this stable.json is on.)
     if [[ -f "$VER_JSON" ]]; then
       BUILD_SUP="$(jq -r '.supervisor // "unknown"' "$VER_JSON" 2>/dev/null)"
-      if [[ "$BUILD_SUP" == "$STABLE_SUP" ]]; then
-        _pass "XVER-07: build version.json supervisor ($BUILD_SUP) matches stable.json ($STABLE_SUP)"
+      if [[ -z "$BUILD_CHANNEL_JSON" ]]; then
+        _fail "XVER-07: could not fetch ${BUILD_CHANNEL}.json — the comparison could not run, which is NOT a pass"
+      elif [[ "$BUILD_SUP" == "$CH_SUP" ]]; then
+        _pass "XVER-07: build version.json supervisor ($BUILD_SUP) matches ${BUILD_CHANNEL}.json ($CH_SUP)"
       else
-        _fail "XVER-07: build version.json supervisor ($BUILD_SUP) != stable.json ($STABLE_SUP)"
+        _fail "XVER-07: build version.json supervisor ($BUILD_SUP) != ${BUILD_CHANNEL}.json ($CH_SUP)"
       fi
     else
       _skip "XVER-07" "build version.json not present (full build needed)"
