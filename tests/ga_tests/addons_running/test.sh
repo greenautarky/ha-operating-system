@@ -64,8 +64,15 @@ run_test_show "ADR-08" "dongle flasher NOT running (ga_manager keeps it stopped)
 # container with a dead .so is exactly what the base migration could produce.
 run_test_show "ADR-10" "mosquitto: port 1883 listening on the host" \
   'netstat -tln 2>/dev/null | grep -q ":1883 "'
-run_test_show "ADR-11" "mosquitto: go-auth plugin registered (CGO on the new libc)" \
-  'docker logs "$(ctr_of ga_mosquitto)" 2>&1 | grep -qE "Plugin has registered to receive .basic-auth.|Backend registered"'
+# Probe the BEHAVIOUR, not the startup log: docker rotates json logs, so on a
+# container up for days the registration lines are gone and a log grep goes
+# false-red (measured on K31 2026-08-24: 3-day-old container, log starts a day
+# after boot, plugin working fine). An anonymous connect being REFUSED is
+# go-auth enforcing auth — provable at any container age. A dead .so would mean
+# either no broker (ADR-10 catches that) or an ACCEPTED anonymous connect —
+# exactly what this asserts against.
+run_test_show "ADR-11" "mosquitto: go-auth enforces auth (anonymous connect refused)" \
+  'docker exec "$(ctr_of ga_mosquitto)" sh -c "mosquitto_sub -h 127.0.0.1 -t adr11probe -C 1 -W 2 2>&1" | grep -q "not authorised"' 
 
 # influxdb: the daemon answers its own ping (204), locally.
 run_test_show "ADR-12" "influxdb: /ping answers inside the container" \
