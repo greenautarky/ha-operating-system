@@ -32,6 +32,12 @@ on:
 jobs:
   check-versions:
     runs-on: ubuntu-latest
+    # Without this the job inherits GitHub's 6-hour default. This check has hung
+    # before — repeatedly, on the registry step — and a hung check is worse than
+    # a failing one: it reports neither red nor green, so the drift it exists to
+    # catch stays invisible for as long as the hang lasts. Once measured at
+    # roughly sixteen hours, during which an add-on pin drifted unnoticed.
+    timeout-minutes: 25
     # `packages: read` lets the built-in GITHUB_TOKEN pull the private
     # ga_manager images. No PAT, nothing to rotate, nothing tied to a personal
     # account. It works because the packages granted this repository Actions
@@ -73,6 +79,12 @@ jobs:
           echo "Logged in to ghcr.io as ${{ github.actor }}"
 
       - name: Run image availability check
+        # Its own, much tighter budget: this step queries the container registry
+        # for every pinned image, and the registry's token endpoint rate-limits.
+        # A normal run is seconds. Anything approaching this is not slowness, it
+        # is a hang, and it must surface as a failure rather than as a check that
+        # never reports.
+        timeout-minutes: 8
         run: ./scripts/check-images.sh
 
       - name: Run source-level build tests
