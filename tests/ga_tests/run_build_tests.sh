@@ -81,16 +81,44 @@ grep -q '\[\[inputs.temp\]\]' "$TG_CONF" 2>/dev/null \
   && _pass "CFG-23: telegraf has cpu temperature input (inputs.temp)" \
   || _fail "CFG-23: telegraf missing inputs.temp"
 
-# CFG-24: ga_manager network-signal file-drop input
-grep -q '\[\[inputs.file\]\]' "$TG_CONF" 2>/dev/null \
-  && grep -q 'ga-network.influx' "$TG_CONF" 2>/dev/null \
-  && _pass "CFG-24: telegraf reads ga_manager signal file (inputs.file)" \
-  || _fail "CFG-24: telegraf missing ga-network.influx file input"
+# CFG-24/25: the add-on -> host metric bridge.
+#
+# Both used to grep the whole file for the literal `ga-network.influx`. #346
+# replaced that single hardcoded filename with a drop-in DIRECTORY, because
+# ga_heating writes a second file there and hardcoding the first meant the
+# second was collected by nothing — a metric that never arrives looks exactly
+# like a healthy fleet.
+#
+# That left the pair in the two worst states a check can be in:
+#   CFG-25 went RED for holding on to a form the code deliberately left, and
+#   CFG-24 stayed GREEN by matching the word inside the new COMMENT. It was
+#   asserting nothing at all, and nothing would ever have told us.
+#
+# So both now read the ACTIVE `files = [...]` setting instead of grepping the
+# document. Fourth instance of the stale-expectation class after CFG-04/05/10
+# (#325) — that sweep fixed three of four.
+_tg_files="$(grep -E '^[[:space:]]*files[[:space:]]*=' "$TG_CONF" 2>/dev/null | head -1)"
 
-# CFG-25: signal file path = host view of the addon /share bridge
-grep -q '/mnt/data/supervisor/share/telegraf/ga-network.influx' "$TG_CONF" 2>/dev/null \
-  && _pass "CFG-25: signal file path = /share addon->host bridge" \
-  || _fail "CFG-25: signal file path wrong (must be host view of /share)"
+if [[ -z "$_tg_files" ]]; then
+  _fail "CFG-24: telegraf has no active 'files =' input setting (a commented-out one does not collect)"
+elif grep -q '\[\[inputs.file\]\]' "$TG_CONF" 2>/dev/null; then
+  _pass "CFG-24: telegraf has an active file input: ${_tg_files##*=}"
+else
+  _fail "CFG-24: 'files =' is set but there is no [[inputs.file]] section to use it"
+fi
+
+# CFG-25: it must point at the host view of the /share bridge, AND it must be a
+# DIRECTORY pattern. A single filename is what #346 removed, so this asserts the
+# property that change established rather than the string it happened to use.
+if [[ -z "$_tg_files" ]]; then
+  _fail "CFG-25: no 'files =' setting to check"
+elif [[ "$_tg_files" != *"/mnt/data/supervisor/share/telegraf/"* ]]; then
+  _fail "CFG-25: file input is not on the /share addon->host bridge: ${_tg_files##*=}"
+elif [[ "$_tg_files" != *"*"* ]]; then
+  _fail "CFG-25: file input names ONE file instead of the drop directory — a second writer would be collected by nothing: ${_tg_files##*=}"
+else
+  _pass "CFG-25: file input is the /share drop DIRECTORY, not one hardcoded name"
+fi
 
 # CFG-26: the buffer dir is created before telegraf starts.
 # Since the systemd-${braced} fix (Odoo #519) the env/dir setup lives in
@@ -2229,13 +2257,31 @@ if [[ -n "$SRC" ]]; then
     # fails a check that is asking the wrong question (measured on rc6,
     # 2026-08-24: XVER-07 red because a beta build carried supervisor 2025.11.4.7
     # while stable.json declared 4.6 — both correct, the comparison was not).
-    BUILD_CHANNEL="stable"
-    if grep -q "^BR2_PACKAGE_HASSIO_CHANNEL_BETA=y" buildroot-ihost/configs/ga_ihost_full_defconfig 2>/dev/null; then
-      BUILD_CHANNEL="beta"
-    elif grep -q "^BR2_PACKAGE_HASSIO_CHANNEL_DEV=y" buildroot-ihost/configs/ga_ihost_full_defconfig 2>/dev/null; then
-      BUILD_CHANNEL="dev"
+    # Read from the SOURCE ROOT, not from the current directory. The first
+    # version of this used a relative path with `2>/dev/null`, so on the builder
+    # — where the suite does not run from the checkout — both greps found
+    # nothing, BUILD_CHANNEL silently stayed "stable", and XVER-07 then compared
+    # a beta build against stable.json and failed. Measured on the rc7 bake,
+    # 2026-08-24: the fix for a wrong comparison introduced a wrong comparison.
+    #
+    # A default substituted for a value that could not be read is exactly the
+    # shape that turns a config error into an invisible one, so this now fails
+    # closed: an undeterminable channel is empty, and the checks below refuse to
+    # compare rather than assume.
+    _defcfg="${SRC:+${SRC}/buildroot-ihost/configs/ga_ihost_full_defconfig}"
+    BUILD_CHANNEL=""
+    if [[ -n "$_defcfg" && -f "$_defcfg" ]]; then
+      if grep -q "^BR2_PACKAGE_HASSIO_CHANNEL_BETA=y" "$_defcfg"; then
+        BUILD_CHANNEL="beta"
+      elif grep -q "^BR2_PACKAGE_HASSIO_CHANNEL_DEV=y" "$_defcfg"; then
+        BUILD_CHANNEL="dev"
+      else
+        BUILD_CHANNEL="stable"
+      fi
     fi
-    if [[ "$BUILD_CHANNEL" == "stable" ]]; then
+    if [[ -z "$BUILD_CHANNEL" ]]; then
+      BUILD_CHANNEL_JSON=""
+    elif [[ "$BUILD_CHANNEL" == "stable" ]]; then
       BUILD_CHANNEL_JSON="$STABLE_JSON"
     else
       BUILD_CHANNEL_JSON="$(curl -sf "${_VER_BASE}${BUILD_CHANNEL}.json" 2>/dev/null || true)"
@@ -2288,7 +2334,9 @@ if [[ -n "$SRC" ]]; then
     # XVER-06: updater.json will use version.json core at build time; verify version.json core matches stable.json
     if [[ -f "$VER_JSON" ]]; then
       VJ_CORE="$(jq -r '.core // "unknown"' "$VER_JSON" 2>/dev/null)"
-      if [[ -z "$BUILD_CHANNEL_JSON" ]]; then
+      if [[ -z "$BUILD_CHANNEL" ]]; then
+        _fail "XVER-06: could not read the channel from the defconfig (SRC='${SRC:-}') — refusing to assume 'stable', which is NOT a pass"
+      elif [[ -z "$BUILD_CHANNEL_JSON" ]]; then
         _fail "XVER-06: could not fetch ${BUILD_CHANNEL}.json — the comparison could not run, which is NOT a pass"
       elif [[ "$VJ_CORE" == "$CH_CORE" ]]; then
         _pass "XVER-06: version.json core ($VJ_CORE) matches ${BUILD_CHANNEL}.json ($CH_CORE) — updater.json will be correct"
@@ -2304,7 +2352,9 @@ if [[ -n "$SRC" ]]; then
     # OS reads version.json from the same branch this stable.json is on.)
     if [[ -f "$VER_JSON" ]]; then
       BUILD_SUP="$(jq -r '.supervisor // "unknown"' "$VER_JSON" 2>/dev/null)"
-      if [[ -z "$BUILD_CHANNEL_JSON" ]]; then
+      if [[ -z "$BUILD_CHANNEL" ]]; then
+        _fail "XVER-07: could not read the channel from the defconfig (SRC='${SRC:-}') — refusing to assume 'stable', which is NOT a pass"
+      elif [[ -z "$BUILD_CHANNEL_JSON" ]]; then
         _fail "XVER-07: could not fetch ${BUILD_CHANNEL}.json — the comparison could not run, which is NOT a pass"
       elif [[ "$BUILD_SUP" == "$CH_SUP" ]]; then
         _pass "XVER-07: build version.json supervisor ($BUILD_SUP) matches ${BUILD_CHANNEL}.json ($CH_SUP)"
