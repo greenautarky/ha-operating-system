@@ -864,14 +864,32 @@ NB="${TARGET}/usr/bin/netbird"
 echo ""
 echo "--- Build artifacts ---"
 
-# SD-01: Image file exists
-IMG_XZ="$(ls "${OUT}/images/"*.img.xz 2>/dev/null | head -1)"
-[[ -n "$IMG_XZ" ]] \
-  && _pass "SD-01: Image file exists: $(basename "$IMG_XZ")" \
-  || _fail "SD-01: No .img.xz found"
+# SD-01/02: the artefacts this build produced.
+#
+# `ls | head -1` sorts ALPHABETICALLY, and the timestamp is inside the filename,
+# so it returned the OLDEST artefact in the directory. ${OUT}/images ACCUMULATES
+# — six images and six bundles were sitting there when this was found — so both
+# checks passed while naming a file from four days earlier. They are existence
+# checks, so nothing was mis-verified; but the PASS line named a specific
+# artefact, and a reader concludes that artefact was the subject. A status claim
+# that misstates what was checked is a defect on its own.
+#
+# `ls -t` (newest first), which line ~1712 of this same file already uses for
+# the bundle it picks. Two halves of one file disagreeing about how to find the
+# current artefact is the same shape as the two halves of scan-cves.sh.
+#
+# The count is printed too: "which one" must never again be a guess.
+_img_all=("${OUT}"/images/*.img.xz)
+IMG_XZ="$(ls -t "${OUT}/images/"*.img.xz 2>/dev/null | head -1)"
+if [[ -n "$IMG_XZ" ]]; then
+  _pass "SD-01: Image file exists: $(basename "$IMG_XZ")$([[ ${#_img_all[@]} -gt 1 ]] && echo " (newest of ${#_img_all[@]} in ${OUT}/images)")"
+else
+  _fail "SD-01: No .img.xz found"
+fi
 
 # RAUC bundle
-RAUCB="$(ls "${OUT}/images/"*.raucb 2>/dev/null | head -1)"
+_raucb_all=("${OUT}"/images/*.raucb)
+RAUCB="$(ls -t "${OUT}/images/"*.raucb 2>/dev/null | head -1)"
 [[ -n "$RAUCB" ]] \
   && _pass "BLD: RAUC bundle exists" \
   || _fail "BLD: No .raucb found"
