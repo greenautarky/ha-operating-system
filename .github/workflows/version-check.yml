@@ -87,6 +87,20 @@ jobs:
         timeout-minutes: 8
         run: ./scripts/check-images.sh
 
+      # Availability is not correctness. The pinned Supervisor can exist, carry
+      # the right version, sit in the right namespace and match the channel —
+      # and still resolve Core from a namespace that no longer holds an image,
+      # which stops every fresh flash in a landingpage pull on first boot. That
+      # difference is a property of the image's CODE, so it is read from the
+      # image rather than inferred from its tag.
+      #
+      # Only when the pin could actually change: pulling a Supervisor image on
+      # every unrelated PR buys nothing and costs registry budget.
+      - name: Check the pinned Supervisor resolves Core from upstream
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 8
+        run: ./scripts/check-supervisor-core-image.sh
+
       - name: Run source-level build tests
         run: |
           # The runner needs an OUT arg to derive SRC=$OUT/.. — without it
