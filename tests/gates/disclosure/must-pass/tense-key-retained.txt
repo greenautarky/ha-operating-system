@@ -1,0 +1,2 @@
+the OLD KEY (archived off the builder and retained there) still signs bridge-forward images
+the retired CA was removed from the keyring; the signing key it belongs to is kept in the archive
