@@ -137,6 +137,33 @@ run_test "FEAT-10" "telegraf is gated on an explicit metrics consent marker" \
 run_test_show "FEAT-11" "ga_default_addon carries no cloud DB password in its options" \
   '! grep -qiE "\"(DB_PASSWORD|POSTGRES_PASSWORD|CLOUD_DB_PASSWORD)\"[[:space:]]*:[[:space:]]*\"[^\"]+\"" /mnt/data/supervisor/addons/data/*_ga_default_addon/options.json 2>/dev/null'
 
+# --- Home Assistant's OWN onboarding (ga_manager 0.130.0, #215) ------------
+# Provisioning owns this, not the resident. Core's onboarding has four steps and
+# only the first one is unauthenticated; the call that completes it returns the
+# token every later step needs. Before 0.130.0 that token was discarded, so
+# core_config was posted empty and analytics + integration were never posted at
+# all — and because an HTTP 401 raises nothing inside a try/except, the failure
+# left no log line whatsoever. What a resident saw was Home Assistant asking for
+# a location the device already had.
+#
+# Asserted against CORE'S OWN store rather than converge's job output: a job that
+# reports success is not evidence that Core agrees. An ABSENT store is a skip and
+# never a pass — Core may simply not have started yet.
+_ONB="$HACONF/.storage/onboarding"
+run_test_show "FEAT-16" "HA Core's own onboarding was finished by provisioning" \
+  '[ -f '"$_ONB"' ] && for s in user core_config analytics integration; do
+     grep -q "\"$s\"" '"$_ONB"' || { echo "missing step: $s"; exit 1; }
+   done'
+
+# The step above can be "done" while carrying nothing. This is the half a
+# resident actually meets: core_config must hold the location converge seeded,
+# because a device that onboarded with 0/0 asks for a location on first login —
+# which is exactly the symptom that led to #215.
+run_test_show "FEAT-17" "core_config carries a seeded location, so nobody is asked for one" \
+  '_lat=$(sed -n "s/.*\"latitude\": *\([-0-9.]*\).*/\1/p" '"$HACONF"'/.storage/core.config 2>/dev/null | head -1);
+   _lon=$(sed -n "s/.*\"longitude\": *\([-0-9.]*\).*/\1/p" '"$HACONF"'/.storage/core.config 2>/dev/null | head -1);
+   [ -n "$_lat" ] && [ -n "$_lon" ] && [ "$_lat" != "0" ] && [ "$_lat" != "0.0" ] && [ "$_lon" != "0" ] && [ "$_lon" != "0.0" ]'
+
 # --- coverage --------------------------------------------------------------
 # A loop over zero components is a broken generator, not a clean device.
 run_test "FEAT-98" "coverage: four components were checked, not zero" \
