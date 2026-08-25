@@ -156,13 +156,54 @@ run_test_show "FEAT-16" "HA Core's own onboarding was finished by provisioning" 
    done'
 
 # The step above can be "done" while carrying nothing. This is the half a
-# resident actually meets: core_config must hold the location converge seeded,
-# because a device that onboarded with 0/0 asks for a location on first login —
-# which is exactly the symptom that led to #215.
-run_test_show "FEAT-17" "core_config carries a seeded location, so nobody is asked for one" \
-  '_lat=$(sed -n "s/.*\"latitude\": *\([-0-9.]*\).*/\1/p" '"$HACONF"'/.storage/core.config 2>/dev/null | head -1);
-   _lon=$(sed -n "s/.*\"longitude\": *\([-0-9.]*\).*/\1/p" '"$HACONF"'/.storage/core.config 2>/dev/null | head -1);
+# resident actually meets: Core must be RUNNING on a real location, because a
+# device sitting on null island asks for one on first login — the symptom that
+# started #215.
+#
+# Asked of Core's LIVE config, not of .storage/core.config. The first version of
+# this check read that file and failed on a device that was completely correct:
+# when the location comes from the homeassistant: block in configuration.yaml —
+# which is how converge seeds it — Core never writes that store at all. The file
+# is an artefact that may or may not exist; the running config is the state. A
+# check that goes red on a healthy device is worse than no check, because it
+# teaches people to ignore the colour. Measured on K31, 2026-08-25.
+run_test_show "FEAT-17" "Core is running on a real location, so nobody is asked for one" \
+  '_cfg=$(docker exec addon_99f1cad4_ga_manager sh -c "wget -qO- --header=\"Authorization: Bearer \$SUPERVISOR_TOKEN\" http://supervisor/core/api/config" 2>/dev/null);
+   [ -n "$_cfg" ] || { echo "could not read Core config — not a pass"; exit 1; };
+   _lat=$(echo "$_cfg" | tr "," "\n" | sed -n "s/.*\"latitude\":\([-0-9.]*\).*/\1/p" | head -1);
+   _lon=$(echo "$_cfg" | tr "," "\n" | sed -n "s/.*\"longitude\":\([-0-9.]*\).*/\1/p" | head -1);
+   echo "lat=$_lat lon=$_lon";
    [ -n "$_lat" ] && [ -n "$_lon" ] && [ "$_lat" != "0" ] && [ "$_lat" != "0.0" ] && [ "$_lon" != "0" ] && [ "$_lon" != "0.0" ]'
+
+# --- the GreenAutarky wizard, which is a different thing entirely -----------
+# FEAT-16/17 cover Home Assistant's OWN onboarding. The GA customer wizard that
+# follows it is separate, and on 2026-08-25 it failed on K31 with no symptom
+# except an empty screen: converge armed it only when it had just created the HA
+# owner, so a device whose owner already existed never got the trigger file —
+# and the site component reads an ABSENT trigger as "an old field-upgraded
+# device" and answers completed=true. A device with rooms, radiators and a
+# finished Core onboarding reported itself as set up while nobody could
+# actually onboard on it.
+#
+# The discriminator is NOT "is the wizard finished". A resident who has not
+# clicked through yet is normal and must not fail this suite. What separates
+# that from the defect is whether the trigger exists AT ALL, read together with
+# whether anyone lives here. An absent trigger on a device that also has a
+# resident is a genuinely older device and is fine — flagging it would make this
+# check something people override by reflex.
+_WIZ="$HACONF/.storage/greenautarky_site"
+_AUTH="$HACONF/.storage/auth"
+run_test_show "FEAT-18" "the GA customer wizard is armed, or already done, or genuinely not needed" \
+  'if [ -f '"$_WIZ"' ]; then echo "trigger present"; exit 0; fi;
+   [ -f '"$_AUTH"' ] || { echo "no trigger and auth unreadable — cannot tell, not a pass"; exit 1; };
+   _tenants=$(sed "s/},{/}\n{/g" '"$_AUTH"' | grep -c "\"system_generated\": *false" || true);
+   _owners=$(sed "s/},{/}\n{/g" '"$_AUTH"' | grep -c "\"is_owner\": *true" || true);
+   if [ "$_tenants" -gt "$_owners" ]; then
+     echo "no trigger, but a resident exists — device predates the trigger";
+     exit 0;
+   fi;
+   echo "NO wizard trigger and no resident: this device cannot onboard anyone and reports itself as done";
+   exit 1'
 
 # --- coverage --------------------------------------------------------------
 # A loop over zero components is a broken generator, not a clean device.
