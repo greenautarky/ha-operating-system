@@ -14,7 +14,7 @@
     },
     "ga_zigbee2mqtt": {
       "image": "ghcr.io/greenautarky/ga_zigbee2mqtt-{arch}",
-      "version": "2.12.1-3"
+      "version": "2.12.1-4"
     },
     "sonoff_dongle_flasher": {
       "image": "ghcr.io/greenautarky/ga_dongle_flasher-{arch}",
