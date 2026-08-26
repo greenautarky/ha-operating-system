@@ -28,6 +28,26 @@ on:
       - 'tests/ga_tests/**'
       - '.github/workflows/version-check.yml'
   workflow_dispatch:
+  # THE DRIFT THIS CHECK EXISTS FOR IS NOT CAUSED IN THIS REPOSITORY.
+  #
+  # Every trigger above fires on a change to ha-operating-system. But the store
+  # entry an add-on publishes, and the image it pushes to GHCR, move when a
+  # DIFFERENT repository merges something — and nothing here has any reason to
+  # run. So the check stays green on a stale answer for as long as nobody
+  # happens to touch one of the paths above.
+  #
+  # Measured 2026-08-26: last run 11:01Z, green. The store moved to
+  # ga_hmvapp_addon 1.6.1 at 11:54Z while the bake pin stayed at 1.4.1. The
+  # badge was still green at 12:10Z. The same shape was measured on 2026-07-27
+  # (green 14:50, sync 14:52, red only at 15:11 on an unrelated push) and fixed
+  # for one pipeline; the trigger was never the thing that got fixed.
+  #
+  # Time is the only trigger that is not scoped to one repository. Hourly is
+  # cheap — the job is a handful of API reads with a 25-minute ceiling — and it
+  # bounds "how long can the chain be broken before anything says so" to an
+  # hour instead of "until someone edits this repo".
+  schedule:
+    - cron: "23 * * * *"
 
 jobs:
   check-versions:
