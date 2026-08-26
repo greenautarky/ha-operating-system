@@ -296,6 +296,9 @@ jobs:
       - name: ssh-posture gate self-test (ADR-0019 — both directions)
         run: ./tests/gates/ssh_posture/selftest.sh
 
+      - name: ssh-plane build-gate self-test (ADR-0019 — both directions)
+        run: ./tests/gates/ssh_plane/selftest.sh
+
       # A pinned add-on that never made it into the image used to count as
       # "skipped" while the build suite still printed a pass line — and
       # sonoff_dongle_flasher had never once been checked, because the pin key

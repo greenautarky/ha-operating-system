@@ -2662,14 +2662,124 @@ else
   _fail "SSH-04: hassos-overlay script missing at $HASSOS_OVERLAY_SH"
 fi
 
-# SSH-05: dropbear unit unchanged invariant — ConditionFileNotEmpty must
-# still require /root/.ssh/authorized_keys. If someone weakens this we
-# risk shipping an SSH-listening device with no key authorization.
+# =========================================================================
+# SSH-05..07 — ADR-0019: is this image on the access plane it claims to be?
+# =========================================================================
+# The CONTRACTS below are pinned constants. Only WHICH contract applies comes
+# from the image's own /etc/ga-release — and GA-REL-03 already ties that to
+# version.yaml, so the selector cannot drift on its own.
+#
+# Both planes assert something, so no image slips between them: an image below
+# the cut must still carry the pre-cut contract, and an image at or above it
+# must carry the certificate contract. SSH-06 is the comparison itself — the
+# build-time twin of what fleet-manager does per device.
+
+# The pre-cut fleet-wide operator key. Pinned as a fingerprint: reading the
+# expectation out of the file under inspection would make a wrong file green.
+GA_LEGACY_FLEET_KEY_FP="SHA256:T+Pt2vUEG+lYv0t5qTMdFyd2Kchx6mjkOR3YZaVqcjE"
+SSH_CUT_TRIPLE="1.4.0"
+
+# The placeholder the CA public key ships as until the key ceremony has
+# happened. An image must never leave the build with this in it.
+GA_CA_PLACEHOLDER="PLACEHOLDER-REPLACE-AT-KEY-CEREMONY"
+
+GA_SSHD_CONFIG_T="${TARGET}/etc/ssh/sshd_config"
+GA_CA_PUB_T="${TARGET}/etc/ssh/ga_user_ca.pub"
 DROPBEAR_UNIT="${TARGET}/usr/lib/systemd/system/dropbear.service.d/hassos.conf"
-if [[ -f "$DROPBEAR_UNIT" ]]; then
-  grep -qE 'ConditionFileNotEmpty=/root/\.ssh/authorized_keys' "$DROPBEAR_UNIT" \
-    && _pass "SSH-05: dropbear unit still gates on authorized_keys (no orphan-listener risk)" \
-    || _fail "SSH-05: dropbear ConditionFileNotEmpty=/root/.ssh/authorized_keys removed — SSH could listen with no keys!"
+
+# ---- helpers -------------------------------------------------------------
+# "1.4.0" <= "$1" ?  (numeric, field by field; -rcN already stripped)
+_ssh_ge_cut() {
+  local a b
+  IFS=. read -r a1 a2 a3 <<< "$1"
+  IFS=. read -r b1 b2 b3 <<< "$SSH_CUT_TRIPLE"
+  (( a1 != b1 )) && { (( a1 > b1 )); return; }
+  (( a2 != b2 )) && { (( a2 > b2 )); return; }
+  (( a3 >= b3 ))
+}
+
+# Does the baked authorized_keys still carry the pre-cut fleet key?
+_ssh_legacy_key_present() {
+  local ak="$1" line fp tmp
+  [[ -r "$ak" ]] || return 1
+  tmp="$(mktemp)"
+  # `|| [[ -n $line ]]` — a last line with no trailing newline is otherwise
+  # dropped, and that is exactly where a hand-edited key tends to sit.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    printf '%s\n' "$line" > "$tmp"
+    fp="$(ssh-keygen -lf "$tmp" 2>/dev/null | awk '{print $2}')"
+    if [[ "$fp" == "$GA_LEGACY_FLEET_KEY_FP" ]]; then rm -f "$tmp"; return 0; fi
+  done < "$ak"
+  rm -f "$tmp"
+  return 1
+}
+
+_ssh_ca_configured() {
+  [[ -r "$GA_SSHD_CONFIG_T" ]] || return 1
+  grep -qE '^[[:space:]]*TrustedUserCAKeys[[:space:]]+' "$GA_SSHD_CONFIG_T"
+}
+
+# ---- which plane does the image DECLARE? ---------------------------------
+GA_REL_FOR_SSH="$(head -1 "${TARGET}/etc/ga-release" 2>/dev/null | tr -d '\r\n')"
+SSH_DECLARED_PLANE=""
+if [[ "$GA_REL_FOR_SSH" =~ ^BOSv([0-9]+\.[0-9]+\.[0-9]+)(-(rc|dev)[0-9]+)?$ ]]; then
+  if _ssh_ge_cut "${BASH_REMATCH[1]}"; then SSH_DECLARED_PLANE="ca"; else SSH_DECLARED_PLANE="shared"; fi
+fi
+
+# ---- which plane is the image BY CONTENT? --------------------------------
+SSH_CONTENT_PLANE="shared"
+if ! _ssh_legacy_key_present "$GA_SSH_AK" && _ssh_ca_configured; then
+  SSH_CONTENT_PLANE="ca"
+fi
+
+# SSH-05: whichever plane the image is on by content, the matching
+# no-orphan-listener invariant must hold. A device that listens on 22222 with
+# nothing authorised is the failure both planes are guarding against.
+if [[ "$SSH_CONTENT_PLANE" == "shared" ]]; then
+  if [[ -f "$DROPBEAR_UNIT" ]]; then
+    grep -qE 'ConditionFileNotEmpty=/root/\.ssh/authorized_keys' "$DROPBEAR_UNIT" \
+      && _pass "SSH-05: dropbear unit still gates on authorized_keys (no orphan-listener risk)" \
+      || _fail "SSH-05: dropbear ConditionFileNotEmpty=/root/.ssh/authorized_keys removed — SSH could listen with no keys!"
+  else
+    _fail "SSH-05: image is on the shared plane but the dropbear unit is missing"
+  fi
+else
+  if [[ -r "$GA_SSHD_CONFIG_T" ]] && grep -qE '^[[:space:]]*AuthorizedPrincipalsFile[[:space:]]+' "$GA_SSHD_CONFIG_T"; then
+    _pass "SSH-05: sshd scopes certificates per device (AuthorizedPrincipalsFile set)"
+  else
+    _fail "SSH-05: certificate plane without AuthorizedPrincipalsFile — one cert would open EVERY device"
+  fi
+fi
+
+# SSH-06: the comparison. Two sources claim the same truth about this image —
+# what the release marker declares, and what the files actually are. Reporting
+# them separately is the defect; a contradiction here is what a wrong bake
+# looks like from the outside.
+if [[ -z "$SSH_DECLARED_PLANE" ]]; then
+  _fail "SSH-06: /etc/ga-release ('$GA_REL_FOR_SSH') is unreadable or malformed — cannot tell which SSH contract applies"
+elif [[ "$SSH_DECLARED_PLANE" == "$SSH_CONTENT_PLANE" ]]; then
+  _pass "SSH-06: release marker and image content agree on the SSH plane ($SSH_CONTENT_PLANE)"
+elif [[ "$SSH_DECLARED_PLANE" == "ca" ]]; then
+  _fail "SSH-06: $GA_REL_FOR_SSH promises the certificate plane but the image is on the shared one (legacy fleet key present and/or no TrustedUserCAKeys)"
+else
+  _fail "SSH-06: image is on the certificate plane but $GA_REL_FOR_SSH declares the shared one — the release marker is wrong"
+fi
+
+# SSH-07: on the certificate plane the CA public key must be real. A baked
+# placeholder means sshd trusts a CA that cannot sign anything, so every
+# certificate login fails and the only way in is the break-glass key — a
+# fleet-wide outage that no earlier check would show.
+if [[ "$SSH_CONTENT_PLANE" == "ca" ]]; then
+  if [[ ! -s "$GA_CA_PUB_T" ]]; then
+    _fail "SSH-07: certificate plane but $GA_CA_PUB_T is missing or empty"
+  elif grep -q "$GA_CA_PLACEHOLDER" "$GA_CA_PUB_T"; then
+    _fail "SSH-07: the user-CA public key is still the build placeholder — the key ceremony has not happened"
+  elif ssh-keygen -lf "$GA_CA_PUB_T" >/dev/null 2>&1; then
+    _pass "SSH-07: user-CA public key is baked and parses as a real key"
+  else
+    _fail "SSH-07: $GA_CA_PUB_T is not a valid OpenSSH public key"
+  fi
 fi
 
 # =========================================================================
