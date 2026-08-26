@@ -98,9 +98,22 @@ async function injectToken(
   hassUrl: string,
   tokens: Partial<HassTokens>,
 ): Promise<void> {
-  // HA reads auth state from localStorage['hassTokens'] on load
-  await page.goto(hassUrl, { waitUntil: 'domcontentloaded' });
-  await page.evaluate(
+  // HA reads auth state from localStorage['hassTokens'] on load.
+  //
+  // This used to navigate first and then evaluate, which is a race the suite
+  // lost intermittently: on an unauthenticated page HA redirects to
+  // /auth/authorize on its own, and `domcontentloaded` returns BEFORE that
+  // redirect. The evaluate then landed in a context that was already being
+  // torn down — "Execution context was destroyed, most likely because of a
+  // navigation". It failed roughly half the time, which is worse than always,
+  // because a suite that is red for a different reason on every run gets
+  // re-run rather than read. Measured on K31, 2026-08-25.
+  //
+  // addInitScript runs before any page script on every navigation, so the
+  // token is already in place when the app boots and there is no window in
+  // which HA can decide it is unauthenticated. No navigation is needed here at
+  // all — the caller's own goto is the first one that matters.
+  await page.addInitScript(
     ([url, t]) => {
       const stored = {
         ...t,
