@@ -205,6 +205,41 @@ run_test_show "FEAT-18" "the GA customer wizard is armed, or already done, or ge
    echo "NO wizard trigger and no resident: this device cannot onboard anyone and reports itself as done";
    exit 1'
 
+# --- the local InfluxDB write path -----------------------------------------
+# An add-on that cannot authenticate to the local database still logs
+# "Write successful: Yes" when it has nothing to write, and on a device with no
+# paired radiators it never has anything to write. That combination hid a total
+# authentication failure for weeks: ga_default_addon reads INFLUXDB_PASSWORD
+# from its environment, the option was never delivered into its config, so it
+# connected with an empty password and every real write answered 401.
+#
+# So this does not read a log line and it does not read a config file. It takes
+# the credentials the add-on itself is configured with, performs the write the
+# add-on performs, and looks at what the database says. Measured on K31,
+# 2026-08-26: empty password -> 401, correct password -> 204, same user, same
+# database, one minute apart.
+_influx_probe() {
+  # Everything runs inside ga_manager: it is the container that already has the
+  # network path to the database and the docker socket to read the other
+  # add-on's options. Nothing is written to /share and no value is echoed.
+  docker exec addon_99f1cad4_ga_manager sh -c '
+    OPT=$(docker exec addon_99f1cad4_ga_default_addon sh -c "cat /data/options.json" 2>/dev/null)
+    [ -n "$OPT" ] || { echo "could not read ga_default_addon options"; exit 1; }
+    U=$(echo "$OPT" | sed -n "s/.*\"INFLUXDB_USERNAME\": *\"\([^\"]*\)\".*/\1/p")
+    P=$(echo "$OPT" | sed -n "s/.*\"INFLUXDB_PASSWORD\": *\"\([^\"]*\)\".*/\1/p")
+    DB=$(echo "$OPT" | sed -n "s/.*\"INFLUXDB_DATABASE\": *\"\([^\"]*\)\".*/\1/p")
+    H=$(echo "$OPT" | sed -n "s/.*\"INFLUXDB_HOST\": *\"\([^\"]*\)\".*/\1/p")
+    [ -n "$U" ] || { echo "no INFLUXDB_USERNAME configured"; exit 1; }
+    [ -n "$P" ] || { echo "no INFLUXDB_PASSWORD in the add-on options — it will connect with an empty password and every write answers 401"; exit 1; }
+    code=$(wget -qO- --server-response --post-data="ga_probe_suite,src=devicetest value=1" \
+      "http://${H}:8086/write?u=${U}&p=${P}&db=${DB}" 2>&1 | sed -n "s|.*HTTP/1.1 \([0-9]*\).*|\1|p" | head -1)
+    echo "write as ${U} -> HTTP ${code}"
+    [ "$code" = "204" ]
+  '
+}
+run_test_show "FEAT-19" "the add-on's own credentials can actually write to the local InfluxDB" \
+  '_influx_probe'
+
 # --- coverage --------------------------------------------------------------
 # A loop over zero components is a broken generator, not a clean device.
 run_test "FEAT-98" "coverage: four components were checked, not zero" \
