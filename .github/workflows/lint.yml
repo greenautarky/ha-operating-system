@@ -173,6 +173,9 @@ jobs:
       - name: ga-stage-vendored-components (trusted staging root)
         run: sh tests/ga_tests/stage_components/test.sh
 
+      - name: hassos-apparmor (profile presence + atomic download)
+        run: sh tests/ga_tests/apparmor_profile/test.sh
+
   # Prove the GATES can go red AND green — the thing review cannot see.
   #
   # A guard that cannot fail is indistinguishable from a guard that works, and
