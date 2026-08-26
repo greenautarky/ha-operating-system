@@ -10,7 +10,7 @@
     },
     "ga_influxdbv1": {
       "image": "ghcr.io/greenautarky/ga_influxdbv1-{arch}",
-      "version": "0.0.12"
+      "version": "0.0.13"
     },
     "ga_zigbee2mqtt": {
       "image": "ghcr.io/greenautarky/ga_zigbee2mqtt-{arch}",
