@@ -293,6 +293,9 @@ jobs:
       - name: Repin tool (agrees with the lockstep gate; red on drift, green on lockstep)
         run: ./tests/gates/repin_addons/selftest.sh
 
+      - name: ssh-posture gate self-test (ADR-0019 — both directions)
+        run: ./tests/gates/ssh_posture/selftest.sh
+
       # A pinned add-on that never made it into the image used to count as
       # "skipped" while the build suite still printed a pass line — and
       # sonoff_dongle_flasher had never once been checked, because the pin key
