@@ -75,12 +75,18 @@ jobs:
       # a printable response, and any failure fails the JOB with the compare
       # URL so a human can open the PR in one click.
       #
-      # NOTE the underlying refusal is the repo's Actions policy
-      # (can_approve_pull_request_reviews=false), which blocks PR creation for
-      # GITHUB_TOKEN on REST exactly as on GraphQL — switching transports does
-      # not fix it, it only makes the failure printable. Until an admin flips
-      # that setting (see the error text below), this job now goes RED instead
-      # of silently doing half its work.
+      # NOTE the underlying refusal is NOT the repo's Actions policy, which is
+      # what this comment used to say. The repo-level setting cannot be flipped
+      # at all while the ORGANISATION forbids it — the PUT returns 409, "The
+      # organization does not allow GitHub Actions to create or approve pull
+      # requests" (measured 2026-08-26, after the printed remediation was tried
+      # and did not work). Switching transports does not fix it either; REST
+      # only makes the refusal printable.
+      #
+      # The two fixes are spelled out in the error text below. Until one is
+      # done this job goes RED instead of silently doing half its work, which
+      # is correct: the pin diff IS pushed, and a branch nobody is told about
+      # is the same as no pin at all.
       - name: Open the pin PR (fail-closed)
         if: github.event_name != 'pull_request' && steps.apply.outputs.changed == 'true'
         env:
@@ -115,7 +121,28 @@ jobs:
             echo "::error::Open it by hand: $compare"
             echo "--- API response ---"
             printf '%s\n' "$resp"
-            echo "--- If the response says Actions may not create PRs, an admin flips the policy with:"
-            echo "    gh api -X PUT repos/${{ github.repository }}/actions/permissions/workflow -f default_workflow_permissions=read -F can_approve_pull_request_reviews=true"
+            echo "--- If the response says Actions may not create PRs:"
+            echo "    The repository-level command that used to be printed here"
+            echo "    returns 409 while the ORGANISATION forbids it:"
+            echo "      \"The organization does not allow GitHub Actions to create"
+            echo "       or approve pull requests\"    (measured 2026-08-26)"
+            echo "    So there are exactly two fixes, and neither is repo-level:"
+            echo ""
+            echo "    A) An ORG ADMIN allows it org-wide, then per repo:"
+            echo "         Settings -> Actions -> General -> Workflow permissions"
+            echo "         -> Allow GitHub Actions to create and approve pull requests"
+            echo "       NOTE: that single switch grants CREATE and APPROVE together."
+            echo "       Harmless only while no branch requires approving reviews."
+            echo "       ha-operating-system: required_approving_review_count = 0"
+            echo "       (measured 2026-08-26). Revisit this if that ever changes."
+            echo ""
+            echo "    B) Give THIS workflow a token instead. A PAT is not the"
+            echo "       Actions token and is not subject to that policy. A"
+            echo "       fine-grained PAT scoped to this repo with"
+            echo "       pull_requests:write + contents:write, stored as a repo"
+            echo "       secret, used for GH_TOKEN on this step only. Narrower"
+            echo "       than (A): it cannot approve anything anywhere else."
+            echo ""
+            echo "    Until one of them is done, open it by hand from the link above."
             exit 1
           fi
