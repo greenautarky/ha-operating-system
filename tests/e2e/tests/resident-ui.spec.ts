@@ -76,6 +76,75 @@ async function renderedConfig(page: import('@playwright/test').Page) {
   });
 }
 
+/**
+ * The rendered config, waited for rather than slept for.
+ *
+ * This used to be a flat `waitForTimeout(4_000)`. Measured on a bench device
+ * on 2026-08-27, the panel needed SIX seconds: the frontend lands on the
+ * default dashboard path, then swaps to the resident's own one, and the panel
+ * element only carries a config after that second navigation settles. At four
+ * seconds the suite reported "the frontend never connected — check reverse
+ * proxies and tunnels" on a device whose UI was completely fine, which sends
+ * the reader at the network instead of at the clock.
+ *
+ * A fixed sleep cannot be right: too short is a false alarm about the wrong
+ * subsystem, too long is dead time on every green run. Poll instead.
+ */
+async function waitForRenderedConfig(
+  page: import('@playwright/test').Page,
+  timeoutMs = 30_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let cfg = await renderedConfig(page);
+  while (cfg === null && Date.now() < deadline) {
+    await page.waitForTimeout(500);
+    cfg = await renderedConfig(page);
+  }
+  return cfg;
+}
+
+/**
+ * How many areas hold at least one entity the room strategy could show.
+ *
+ * The three room assertions below fail on a device with no room views — which
+ * is right when the dashboard is broken, and WRONG on a bench unit with no
+ * paired hardware, where the strategy correctly builds nothing because there
+ * is nothing. Measured on a bench device on 2026-08-27: three areas (Living
+ * Room, Kitchen, Bedroom), ZERO entities in each, zero `climate.*` on the
+ * whole device. Reported as four UI failures, it was one fact about the
+ * hardware.
+ *
+ * So the device is asked first, and the two cases are separated:
+ *   0 furnished areas -> skip, naming the count (nothing to prove here)
+ *   >0 and no room views -> fail (the defect this file exists to catch)
+ *
+ * A permanent red that everybody knows to ignore is worse than a skip that
+ * says why, because it is the colour people stop reading.
+ */
+async function furnishedAreaCount(page: import('@playwright/test').Page): Promise<number> {
+  return page.evaluate(() => {
+    const hass = (document.querySelector('home-assistant') as HTMLElement & {
+      hass?: {
+        areas?: Record<string, { area_id: string }>;
+        entities?: Record<string, { entity_id: string; area_id?: string; device_id?: string }>;
+        devices?: Record<string, { id: string; area_id?: string }>;
+      };
+    })?.hass;
+    if (!hass) return 0;
+    const areas = Object.values(hass.areas ?? {});
+    const entities = Object.values(hass.entities ?? {});
+    const devices = Object.values(hass.devices ?? {});
+    return areas.filter(a =>
+      entities.some(
+        e =>
+          e.area_id === a.area_id ||
+          (!e.area_id &&
+            devices.some(d => d.id === e.device_id && d.area_id === a.area_id)),
+      ),
+    ).length;
+  });
+}
+
 test.describe('Resident UI', () => {
   test.beforeEach(skipIfNoAuth);
 
@@ -92,13 +161,12 @@ test.describe('Resident UI', () => {
     });
 
     await page.goto(deviceUrl);
-    await page.waitForURL(/lovelace/, { timeout: 30_000 });
-    await page.waitForTimeout(4_000);
+    await page.waitForURL(/lovelace|ga-home/, { timeout: 30_000 });
 
     // A rendered config is only obtainable once the connection is live, so its
     // presence is the proof — a passing assertion here is what makes the rest
     // of this file mean anything.
-    const cfg = await renderedConfig(page);
+    const cfg = await waitForRenderedConfig(page);
     expect(
       cfg,
       `No dashboard config: the frontend never connected. WebSocket errors:\n${
@@ -114,11 +182,20 @@ test.describe('Resident UI', () => {
     await waitForHA(deviceUrl);
     await haLogin(page, deviceUrl);
     await page.goto(deviceUrl);
-    await page.waitForURL(/lovelace/, { timeout: 30_000 });
-    await page.waitForTimeout(4_000);
+    await page.waitForURL(/lovelace|ga-home/, { timeout: 30_000 });
 
-    const cfg = await renderedConfig(page);
+    const cfg = await waitForRenderedConfig(page);
     expect(cfg, 'no dashboard config — see the WebSocket test').not.toBeNull();
+
+    const furnished = await furnishedAreaCount(page);
+    if (furnished === 0) {
+      test.skip(
+        true,
+        'This device has no area holding a single entity, so the room strategy ' +
+          'correctly builds no room views. Nothing about the dashboard can be ' +
+          'proven here — pair at least one device to an area first.',
+      );
+    }
 
     const views = cfg?.views ?? [];
     // Room views are the ones the strategy builds per area. The fixed views
@@ -150,11 +227,20 @@ test.describe('Resident UI', () => {
     await waitForHA(deviceUrl);
     await haLogin(page, deviceUrl);
     await page.goto(deviceUrl);
-    await page.waitForURL(/lovelace/, { timeout: 30_000 });
-    await page.waitForTimeout(4_000);
+    await page.waitForURL(/lovelace|ga-home/, { timeout: 30_000 });
 
-    const cfg = await renderedConfig(page);
+    const cfg = await waitForRenderedConfig(page);
     expect(cfg, 'no dashboard config — see the WebSocket test').not.toBeNull();
+
+    const furnished = await furnishedAreaCount(page);
+    if (furnished === 0) {
+      test.skip(
+        true,
+        'This device has no area holding a single entity, so the room strategy ' +
+          'correctly builds no room views. Nothing about the dashboard can be ' +
+          'proven here — pair at least one device to an area first.',
+      );
+    }
 
     const empty = (cfg?.views ?? [])
       .filter(v => cardTypes(v).length === 0)
@@ -171,10 +257,17 @@ test.describe('Resident UI', () => {
     await waitForHA(deviceUrl);
     await haLogin(page, deviceUrl);
     await page.goto(deviceUrl);
-    await page.waitForURL(/lovelace/, { timeout: 30_000 });
-    await page.waitForTimeout(4_000);
+    await page.waitForURL(/lovelace|ga-home/, { timeout: 30_000 });
 
-    const cfg = await renderedConfig(page);
+    const cfg = await waitForRenderedConfig(page);
+    const furnished = await furnishedAreaCount(page);
+    if (furnished === 0) {
+      test.skip(
+        true,
+        'This device has no area holding a single entity — the tab strip has ' +
+          'nothing to name. Pair at least one device to an area first.',
+      );
+    }
     const titles = (cfg?.views ?? []).map(v => v.title).filter(Boolean);
 
     // The tab strip is what a resident navigates by. Tabs rendering while the
