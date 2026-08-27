@@ -76,8 +76,48 @@ async function renderedConfig(page: import('@playwright/test').Page) {
   });
 }
 
+/**
+ * Is this device still in the onboarding wizard?
+ *
+ * A device whose wizard is armed and unfinished redirects `/` to
+ * `/greenautarky-setup.html` and never reaches a dashboard. Every assertion
+ * in this file then fails at `waitForURL(/lovelace/)` with a timeout, which
+ * tells the reader nothing at all — it reads like a broken resident UI and is
+ * in fact a device that nobody has finished setting up.
+ *
+ * Measured on a bench device 2026-08-27: `/` -> 302 ->
+ * /greenautarky-setup.html, `steps_done: 1`, one non-system account. The
+ * onboarding suite asserts that exact redirect as a PASS, so two suites were
+ * describing the same correct state, one as success and one as four failures.
+ *
+ * This is the same shape as the WebSocket precondition below: a condition that
+ * makes every assertion here meaningless has to be REPORTED AS ITSELF, not
+ * left to surface as a wall of red.
+ */
+async function onboardingIncomplete(deviceUrl: string): Promise<boolean> {
+  const res = await fetch(deviceUrl + '/', { redirect: 'manual' });
+  const to = res.headers.get('location') ?? '';
+  return to.includes('greenautarky-setup');
+}
+
 test.describe('Resident UI', () => {
   test.beforeEach(skipIfNoAuth);
+
+  // Checked once, before anything navigates. Skipping with the reason is the
+  // honest answer: this file asserts what a RESIDENT sees, and a device still
+  // in its wizard has no resident yet. Failing here would mean reporting a
+  // device that is behaving correctly as four UI defects.
+  test.beforeEach(async ({ deviceUrl }) => {
+    if (await onboardingIncomplete(deviceUrl)) {
+      test.skip(
+        true,
+        'Device is still in the onboarding wizard: / redirects to ' +
+          '/greenautarky-setup.html, so there is no dashboard to assert and no ' +
+          'resident to assert it for. Complete onboarding, then re-run. This is ' +
+          'NOT a UI defect — the onboarding suite asserts the same redirect as a pass.',
+      );
+    }
+  });
 
   test('the WebSocket connects — everything below depends on it', async ({
     page,
