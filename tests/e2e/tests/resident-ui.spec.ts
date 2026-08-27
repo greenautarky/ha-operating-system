@@ -145,8 +145,58 @@ async function furnishedAreaCount(page: import('@playwright/test').Page): Promis
   });
 }
 
+/**
+ * Is this device still in the onboarding wizard?
+ *
+ * A device whose wizard is armed and unfinished redirects `/` to
+ * `/greenautarky-setup.html` and never reaches a dashboard. Every assertion in
+ * this file then fails at the URL wait with a timeout, which tells the reader
+ * nothing at all — it reads like a broken resident UI and is in fact a device
+ * that nobody has finished setting up.
+ *
+ * Measured on a bench device 2026-08-27: `/` -> 302 ->
+ * /greenautarky-setup.html, `steps_done: 1`, one non-system account. The
+ * onboarding suite asserts that exact redirect as a PASS, so two suites were
+ * describing the same correct state, one as success and one as four failures.
+ *
+ * Same shape as the two guards around it, and that is the point: this file now
+ * separates THREE conditions that all used to surface as "the resident UI is
+ * broken" —
+ *
+ *   no resident yet      the wizard is unfinished (here)
+ *   nothing to show      no area holds a single entity (furnishedAreaCount)
+ *   not connected yet    the panel has no config (waitForRenderedConfig)
+ *
+ * none of which is a UI defect, and each of which has to report as itself.
+ *
+ * Ported from PR #418, which was written the same morning against the version
+ * of this file that preceded the other two guards and could no longer merge.
+ * The condition it found is real and is not covered by either of them.
+ */
+async function onboardingIncomplete(deviceUrl: string): Promise<boolean> {
+  const res = await fetch(deviceUrl + '/', { redirect: 'manual' });
+  const to = res.headers.get('location') ?? '';
+  return to.includes('greenautarky-setup');
+}
+
 test.describe('Resident UI', () => {
   test.beforeEach(skipIfNoAuth);
+
+  // Checked once, before anything navigates. Skipping with the reason is the
+  // honest answer: this file asserts what a RESIDENT sees, and a device still
+  // in its wizard has no resident yet. Failing here would report a device that
+  // is behaving correctly as four UI defects.
+  test.beforeEach(async ({ deviceUrl }) => {
+    if (await onboardingIncomplete(deviceUrl)) {
+      test.skip(
+        true,
+        'Device is still in the onboarding wizard: / redirects to ' +
+          '/greenautarky-setup.html, so there is no dashboard to assert and no ' +
+          'resident to assert it for. Complete onboarding, then re-run. This is ' +
+          'NOT a UI defect — the onboarding suite asserts the same redirect as a pass.',
+      );
+    }
+  });
 
   test('the WebSocket connects — everything below depends on it', async ({
     page,
