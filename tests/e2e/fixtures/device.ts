@@ -14,7 +14,15 @@ export interface DeviceFixtures {
   resetOnboarding: () => void;
 }
 
-function sshCmd(cmd: string): string {
+/**
+ * Run a command on the device over SSH and return its stdout.
+ *
+ * Exported because a test that asserts on device state — how many users the
+ * auth store holds, what the wizard wrote — has to read that state from the
+ * device, not infer it from an HTTP response. An API that answers 200 while
+ * leaving wreckage behind is the exact failure this exists to catch.
+ */
+export function sshCmd(cmd: string): string {
   const ip = process.env.DEVICE_IP;
   if (!ip) throw new Error('DEVICE_IP not set');
   const key =
