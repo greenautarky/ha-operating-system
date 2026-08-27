@@ -1,3 +1,6 @@
+import type { APIRequestContext } from '@playwright/test';
+import { randomUUID } from 'crypto';
+
 import { test, expect, sshCmd } from '../fixtures/device';
 import { getGAOnboardingStatus } from '../helpers/ha-api';
 
@@ -46,7 +49,8 @@ import { getGAOnboardingStatus } from '../helpers/ha-api';
  * it passed against a component that had never implemented the check. A test
  * whose subject can silently change is worse than no test, because it reports.
  *
- * Requires DEVICE_IP (SSH) and an onboarding wizard that is still open.
+ * Requires DEVICE_IP (SSH) and a device whose onboarding wizard has not been
+ * completed yet.
  *
  * Red proof, bench device, 2026-08-27, component 2.3.0 (the shipped version):
  *   (1) passed   (2) failed: 400 "Username already exists"   (3) failed
@@ -57,8 +61,18 @@ const AUTH_STORE = '/mnt/data/supervisor/homeassistant/.storage/auth';
 
 /** The name every probe account carries, so cleanup can find them all. */
 const PROBE_NAME = 'e2e account step probe';
-const PROBE_PASS = 'e2e-probe-Pass-2026!';
 const PROBE_PREFIX = 'e2e-account-step-';
+
+/**
+ * The throwaway secret this suite signs its probe accounts with.
+ *
+ * Generated per run rather than written down. A literal here would be a
+ * credential-shaped string in a PUBLIC repository — worthless as a secret, but
+ * indistinguishable from a real one to anyone reading the diff, and to the
+ * disclosure gate. Generating it also means two concurrent runs cannot end up
+ * sharing one.
+ */
+const PROBE_SECRET = `Ee2!${randomUUID()}`;
 
 let mintCounter = 0;
 
@@ -120,11 +134,22 @@ function purgeProbeAccounts(): void {
   sshCmd(`echo ${b64} | base64 -d > /tmp/probe-clean.sh && sh /tmp/probe-clean.sh`);
 }
 
-interface CreateUserBody {
-  client_id: string;
-  name: string;
-  username: string;
-  password: string;
+/**
+ * POST the account step exactly as the wizard's form does.
+ *
+ * One builder rather than four inline bodies: the endpoint's field names live
+ * in a single place, so a rename is one edit and the tests below read as what
+ * they assert rather than as four copies of a payload.
+ */
+function submitAccountStep(
+  request: APIRequestContext,
+  deviceUrl: string,
+  username: string,
+  secret: string,
+) {
+  return request.post(`${deviceUrl}/api/greenautarky_site/create_user`, {
+    data: { client_id: `${deviceUrl}/`, name: PROBE_NAME, username, password: secret },
+  });
 }
 
 test.describe('Onboarding account step — pressing it twice is not a dead end', () => {
@@ -169,17 +194,9 @@ test.describe('Onboarding account step — pressing it twice is not a dead end',
    */
   test('a first submit creates the account', async ({ request, deviceUrl }) => {
     const username = mintUsername();
-    const body: CreateUserBody = {
-      client_id: `${deviceUrl}/`,
-      name: PROBE_NAME,
-      username,
-      password: PROBE_PASS,
-    };
     const before = userCount();
 
-    const res = await request.post(`${deviceUrl}/api/greenautarky_site/create_user`, {
-      data: body,
-    });
+    const res = await submitAccountStep(request, deviceUrl, username, PROBE_SECRET);
 
     expect(res.status(), await res.text()).toBe(200);
     expect(await res.json()).toHaveProperty('auth_code');
@@ -200,20 +217,13 @@ test.describe('Onboarding account step — pressing it twice is not a dead end',
     deviceUrl,
   }) => {
     const username = mintUsername();
-    const body: CreateUserBody = {
-      client_id: `${deviceUrl}/`,
-      name: PROBE_NAME,
-      username,
-      password: PROBE_PASS,
-    };
-    const url = `${deviceUrl}/api/greenautarky_site/create_user`;
 
-    const first = await request.post(url, { data: body });
+    const first = await submitAccountStep(request, deviceUrl, username, PROBE_SECRET);
     expect(first.status(), `precondition — the first submit must work: ${await first.text()}`)
       .toBe(200);
     const afterFirst = userCount();
 
-    const second = await request.post(url, { data: body });
+    const second = await submitAccountStep(request, deviceUrl, username, PROBE_SECRET);
 
     expect(
       second.status(),
@@ -236,19 +246,18 @@ test.describe('Onboarding account step — pressing it twice is not a dead end',
     deviceUrl,
   }) => {
     const username = mintUsername();
-    const url = `${deviceUrl}/api/greenautarky_site/create_user`;
-    const base = { client_id: `${deviceUrl}/`, name: PROBE_NAME, username };
 
-    const first = await request.post(url, {
-      data: { ...base, password: PROBE_PASS },
-    });
+    const first = await submitAccountStep(request, deviceUrl, username, PROBE_SECRET);
     expect(first.status(), `precondition — the account must exist: ${await first.text()}`)
       .toBe(200);
     const afterFirst = userCount();
 
-    const wrong = await request.post(url, {
-      data: { ...base, password: 'definitely-not-the-password' },
-    });
+    const wrong = await submitAccountStep(
+      request,
+      deviceUrl,
+      username,
+      `not-${PROBE_SECRET}`,
+    );
 
     expect(
       wrong.status(),
