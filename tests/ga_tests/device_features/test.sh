@@ -218,27 +218,96 @@ run_test_show "FEAT-18" "the GA customer wizard is armed, or already done, or ge
 # add-on performs, and looks at what the database says. Measured on K31,
 # 2026-08-26: empty password -> 401, correct password -> 204, same user, same
 # database, one minute apart.
+# The probe runs from a FILE, copied into the container, not from a nested
+# shell string. Escaping `sed` patterns through three levels of quoting is how
+# the first version of this silently extracted an empty username and then
+# reported a connection error as an auth result.
+_influx_write_probe_script() {
+  cat <<'PROBE'
+#!/bin/sh
+# Read a consumer's own options through the docker socket — ga_manager has it,
+# and the add-on's /data is not mounted anywhere else.
+opts() { docker exec "addon_99f1cad4_$1" cat /data/options.json 2>/dev/null; }
+val()  { sed -n "s/.*\"$1\": *\"\([^\"]*\)\".*/\1/p" | head -1; }
+IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+     addon_99f1cad4_ga_influxdbv1 2>/dev/null)
+[ -n "$IP" ] || { echo "influx container has no address — is it running?"; exit 1; }
+
+# The address is RESOLVED, never assumed. It changes on every restart, and a
+# stale one answers 000, which reads like an auth failure and is not one.
+w() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 -XPOST \
+      --data-binary 'ga_probe_suite,src=devicetest value=1' \
+      "http://${IP}:8086/write?db=$1&u=$2&p=$3"; }
+
+O=$(opts ga_default_addon)
+[ -n "$O" ] || { echo "could not read ga_default_addon options"; exit 1; }
+U=$(echo "$O" | val INFLUXDB_USERNAME)
+P=$(echo "$O" | val INFLUXDB_PASSWORD)
+DB=$(echo "$O" | val INFLUXDB_DATABASE)
+[ -n "$U" ] || { echo "no INFLUXDB_USERNAME configured"; exit 1; }
+[ -n "$P" ] || { echo "no INFLUXDB_PASSWORD in the add-on options — it connects with an empty password and every write answers 401"; exit 1; }
+
+case "$1" in
+  write)
+    c=$(w "$DB" "$U" "$P"); echo "write as ${U} -> HTTP ${c}"; [ "$c" = "204" ] ;;
+  authoff)
+    # THE POSITIVE CONTROL. A 204 proves a write landed; it does NOT prove the
+    # server asked for a credential. With auth off, every write answers 204 and
+    # the check above passes while the database is wide open. So a deliberately
+    # wrong password must be REFUSED, or the success above means nothing.
+    c=$(w "$DB" "$U" wrong-on-purpose-$$); echo "wrong password -> HTTP ${c}"; [ "$c" = "401" ] ;;
+  nocred)
+    c=$(w "$DB" '' ''); echo "no credential -> HTTP ${c}"; [ "$c" = "401" ] ;;
+  leastpriv)
+    # Authenticated but NOT granted. 403, not 401: the difference is the whole
+    # point of per-user secrets — a consumer that can prove who it is and still
+    # cannot touch another plane's data. 401 here would mean the credential is
+    # wrong; 204 would mean the grants are not doing anything.
+    c=$(w ga_telegraf "$U" "$P"); echo "${U} writing to ga_telegraf -> HTTP ${c}"; [ "$c" = "403" ] ;;
+  readback)
+    # Accepted is not stored. InfluxDB answers 204 for a batch of zero points,
+    # which is how an add-on with no credential reported "Write successful" for
+    # weeks while writing nothing.
+    r=$(curl -s --max-time 10 "http://${IP}:8086/query?db=${DB}&u=${U}&p=${P}" \
+        --data-urlencode 'q=SELECT count(value) FROM ga_probe_suite')
+    n=$(echo "$r" | sed -n 's/.*"values":\[\[[^,]*,\([0-9]*\)\]\].*/\1/p')
+    echo "rows readable back: ${n:-0}"
+    [ -n "$n" ] && [ "$n" -gt 0 ] ;;
+esac
+PROBE
+}
+
 _influx_probe() {
-  # Everything runs inside ga_manager: it is the container that already has the
-  # network path to the database and the docker socket to read the other
-  # add-on's options. Nothing is written to /share and no value is echoed.
-  docker exec addon_99f1cad4_ga_manager sh -c '
-    OPT=$(docker exec addon_99f1cad4_ga_default_addon sh -c "cat /data/options.json" 2>/dev/null)
-    [ -n "$OPT" ] || { echo "could not read ga_default_addon options"; exit 1; }
-    U=$(echo "$OPT" | sed -n "s/.*\"INFLUXDB_USERNAME\": *\"\([^\"]*\)\".*/\1/p")
-    P=$(echo "$OPT" | sed -n "s/.*\"INFLUXDB_PASSWORD\": *\"\([^\"]*\)\".*/\1/p")
-    DB=$(echo "$OPT" | sed -n "s/.*\"INFLUXDB_DATABASE\": *\"\([^\"]*\)\".*/\1/p")
-    H=$(echo "$OPT" | sed -n "s/.*\"INFLUXDB_HOST\": *\"\([^\"]*\)\".*/\1/p")
-    [ -n "$U" ] || { echo "no INFLUXDB_USERNAME configured"; exit 1; }
-    [ -n "$P" ] || { echo "no INFLUXDB_PASSWORD in the add-on options — it will connect with an empty password and every write answers 401"; exit 1; }
-    code=$(wget -qO- --server-response --post-data="ga_probe_suite,src=devicetest value=1" \
-      "http://${H}:8086/write?u=${U}&p=${P}&db=${DB}" 2>&1 | sed -n "s|.*HTTP/1.1 \([0-9]*\).*|\1|p" | head -1)
-    echo "write as ${U} -> HTTP ${code}"
-    [ "$code" = "204" ]
-  '
+  _influx_write_probe_script > /tmp/ga-influx-probe.sh
+  docker cp /tmp/ga-influx-probe.sh addon_99f1cad4_ga_manager:/tmp/p.sh >/dev/null 2>&1 || return 1
+  docker exec addon_99f1cad4_ga_manager sh /tmp/p.sh "$1"
 }
 run_test_show "FEAT-19" "the add-on's own credentials can actually write to the local InfluxDB" \
-  '_influx_probe'
+  '_influx_probe write'
+
+# FEAT-19 alone does not prove what it looks like it proves. A 204 says a write
+# landed; it says nothing about whether the server ASKED for a credential. With
+# auth off every write answers 204 and FEAT-19 passes over a database open to
+# anyone on the add-on network. So the success above is only evidence together
+# with these two refusals.
+run_test_show "FEAT-20" "a WRONG password is refused — so FEAT-19's 204 means something" \
+  '_influx_probe authoff'
+
+run_test_show "FEAT-21" "no credential at all is refused" \
+  '_influx_probe nocred'
+
+# The point of per-user secrets, asserted directly. 403 and not 401: the
+# consumer proves who it is and is still refused another plane's data. 401 here
+# would mean the credential is wrong; 204 would mean the grants do nothing, and
+# the whole least-privilege model would be decoration.
+run_test_show "FEAT-22" "least privilege: a consumer is REFUSED a database it was not granted" \
+  '_influx_probe leastpriv'
+
+# Accepted is not stored. InfluxDB answers 204 for a batch of zero points,
+# which is how an add-on with no credential reported "Write successful" for
+# weeks while writing nothing at all.
+run_test_show "FEAT-23" "what was written can be read back — accepted is not stored" \
+  '_influx_probe readback'
 
 # --- coverage --------------------------------------------------------------
 # A loop over zero components is a broken generator, not a clean device.
