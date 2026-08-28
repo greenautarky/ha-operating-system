@@ -1,0 +1,19 @@
+[Unit]
+Description=GA — republish the services address when the override changes
+Documentation=file:/usr/libexec/ga-publish-services
+# The override is what ga_manager's ga-services-reconcile rewrites when a
+# device is pointed at a different backend. Watching the file means the
+# published copy follows it without anyone having to remember to trigger a
+# republish — the alternative was naming this unit in the reconciler's restart
+# list, which is a coupling that silently rots the day someone adds a third
+# writer.
+After=hassos-overlay.service mnt-data.mount
+
+[Path]
+PathChanged=/mnt/data/ga-services.conf
+# The file may not exist yet on a device that has never been re-pointed;
+# a path unit watches the directory in that case and fires on creation.
+Unit=ga-publish-services.service
+
+[Install]
+WantedBy=multi-user.target

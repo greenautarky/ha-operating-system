@@ -176,6 +176,9 @@ jobs:
       - name: hassos-apparmor (profile presence + atomic download)
         run: sh tests/ga_tests/apparmor_profile/test.sh
 
+      - name: ga-publish-services (services address -> /share bridge)
+        run: sh tests/ga_tests/publish_services/test.sh
+
   # Prove the GATES can go red AND green — the thing review cannot see.
   #
   # A guard that cannot fail is indistinguishable from a guard that works, and
