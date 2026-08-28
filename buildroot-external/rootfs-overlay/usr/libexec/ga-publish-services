@@ -1,0 +1,87 @@
+#!/bin/sh
+# ga-publish-services — put the GA services address where the add-ons can read it.
+#
+# WHY THIS EXISTS
+# ---------------
+# `GA_SERVICES_IP` lives in /etc/ga-services.conf (baked) and may be overridden
+# at /mnt/data/ga-services.conf. Both are HOST paths. Add-on containers map
+# /share, /ssl, /homeassistant, /data and their own config dir — and neither
+# /mnt/data nor the host's /etc. So an add-on that opens either path gets
+# ENOENT, every time, and cannot tell that apart from "the key is not set".
+#
+# Measured on a bench device on 2026-08-28 while wiring the reverse-proxy trust
+# block: the address was present on the host and invisible from inside
+# ga_manager. ga_services_reconcile reads the same two paths from the same
+# container.
+#
+# WHY NOT DERIVE IT FROM SOMETHING ALREADY IN /share
+# --------------------------------------------------
+# The address IS reachable today: /share/ga-fleet-mqtt.yaml carries it, because
+# the fleet broker happens to live on the same host. Reading it from there would
+# work right now and would tie whatever consumes it to a coincidence — the first
+# consumer is a TRUST BOUNDARY ("which proxy may claim a client's IP"), and
+# deriving that from "where the broker runs" is exactly the kind of accidental
+# agreement no later comparison can catch, because the two agree until the day
+# they do not. So the value is published for what it is.
+#
+# WHAT IT PUBLISHES
+# -----------------
+# /share/ga-services.json, e.g.
+#
+#     {"schema_version":1,"ga_services_ip":"…","source":"override"}
+#
+# and, when the key is genuinely absent:
+#
+#     {"schema_version":1,"ga_services_ip":null,"source":"absent"}
+#
+# The explicit null matters. A consumer must be able to tell "the publisher ran
+# and there is nothing" from "the file is missing, so I know nothing" — those
+# are different states and only the first is a statement about the device.
+#
+# Published through ga-share-publish, which renames into place from a root-only
+# staging dir: /share is writable by every add-on that maps it, so a plain `>`
+# would follow a symlink a hostile add-on planted at the target.
+#
+# Test hooks: GA_SERVICES_CONF_BAKED / GA_SERVICES_CONF_OVERRIDE / GA_SHARE_TARGET.
+set -u
+
+BAKED="${GA_SERVICES_CONF_BAKED:-/etc/ga-services.conf}"
+OVERRIDE="${GA_SERVICES_CONF_OVERRIDE:-/mnt/data/ga-services.conf}"
+TARGET="${GA_SHARE_TARGET:-/mnt/data/supervisor/share/ga-services.json}"
+PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
+
+# Read one KEY from a shell-style KEY=VALUE file WITHOUT sourcing it. Sourcing
+# would execute whatever is in the file, and the override lives on a partition
+# several root services already treat as data.
+read_key() {
+	_file="$1"
+	_key="$2"
+	[ -f "$_file" ] || return 1
+	# Last assignment wins, matching `.`-sourcing semantics. Leading whitespace
+	# tolerated; commented lines are not assignments.
+	_val="$(sed -n "s/^[[:space:]]*${_key}[[:space:]]*=[[:space:]]*//p" "$_file" \
+		| sed -e 's/^"//' -e "s/^'//" -e 's/"$//' -e "s/'$//" \
+		| tail -n 1)"
+	[ -n "$_val" ] || return 1
+	printf '%s' "$_val"
+}
+
+ip=""
+source="absent"
+if ip="$(read_key "$OVERRIDE" GA_SERVICES_IP)"; then
+	source="override"
+elif ip="$(read_key "$BAKED" GA_SERVICES_IP)"; then
+	source="baked"
+else
+	ip=""
+fi
+
+if [ -n "$ip" ]; then
+	body="$(printf '{"schema_version":1,"ga_services_ip":"%s","source":"%s"}\n' "$ip" "$source")"
+else
+	# Not an error: an image may legitimately ship without a services host. It
+	# is published all the same, so a consumer reads a fact instead of a gap.
+	body='{"schema_version":1,"ga_services_ip":null,"source":"absent"}'
+fi
+
+printf '%s\n' "$body" | "$PUBLISH" "$TARGET" 0644

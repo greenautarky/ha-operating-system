@@ -1,0 +1,20 @@
+[Unit]
+Description=GA — publish the services address to /share for the add-ons
+Documentation=file:/usr/libexec/ga-publish-services
+# /share lives under the data partition, and the override this reads does too.
+After=hassos-overlay.service mnt-data.mount
+Wants=hassos-overlay.service
+# The add-ons that consume it start with the Supervisor; being there first
+# means the first read is a value rather than a gap.
+Before=hassio-supervisor.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/ga-publish-services
+# Two small file reads and a rename. If this ever takes longer, something is
+# wrong with the data partition and blocking the boot on it helps nobody.
+TimeoutStartSec=15s
+
+[Install]
+WantedBy=multi-user.target
