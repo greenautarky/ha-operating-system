@@ -88,10 +88,64 @@ case "$GA_RELEASE" in
         ;;
 esac
 
+# ---------------------------------------------------------------------------
+# PIN THE DOWNLOAD TO THE PATH ga-resolve-ota ACTUALLY CHOSE.
+#
+# ga-resolve-ota probes GA_OTA_IPS in priority order every five minutes and
+# writes the winner to /run/ga-resolve-ota.active; ga-update-hosts copies it into
+# /etc/hosts. That was the whole delivery mechanism, and it did not reach this
+# download.
+#
+# WHY /etc/hosts IS NOT ENOUGH. A name is resolved by DNS first; /etc/hosts is
+# consulted only when DNS has nothing to say. Measured on K31 2026-08-28 across
+# the five GA names in /etc/hosts: fleet, influx and loki have no public A record
+# and therefore took the pinned mesh address, while ota and mqtt — the two that
+# DO have one — resolved to the public endpoint instead. Three of five looked
+# correct, which is exactly why nobody noticed: they agreed with the pin by
+# accident, not because the pin worked.
+#
+# So every bundle came over the public internet, and a failover that had already
+# selected a reachable mesh path could not be used. Forcing the address here
+# makes the selection load-bearing without touching DNS at all.
+OTA_ACTIVE_FILE="${GA_OTA_ACTIVE_FILE:-/run/ga-resolve-ota.active}"
+OTA_HOST="${GA_OTA_HOST:-ota.greenautarky.com}"
+OTA_PIN=""            # curl args; empty means "resolve normally"
+
+_read_active_ip() {
+    [ -r "$OTA_ACTIVE_FILE" ] || return 1
+    # First whitespace-delimited token, so a trailing newline or a stray comment
+    # cannot become part of the address.
+    _ip=$(awk 'NR==1{print $1; exit}' "$OTA_ACTIVE_FILE" 2>/dev/null)
+    case "$_ip" in
+        "" | *[!0-9.]* ) return 1 ;;                 # IPv4 literals only
+    esac
+    # Four octets, each 0-255. A malformed pin would send the download somewhere
+    # nobody chose, which is worse than not pinning at all.
+    echo "$_ip" | awk -F. 'NF==4 && $1<=255 && $2<=255 && $3<=255 && $4<=255 \
+                           && $1!="" && $2!="" && $3!="" && $4!="" {ok=1}
+                           END{exit !ok}' || return 1
+    printf '%s' "$_ip"
+}
+
+if OTA_IP=$(_read_active_ip); then
+    # Both ports: the URL is https today, and a redirect to :80 must not silently
+    # fall back to a DNS answer.
+    OTA_PIN="--resolve ${OTA_HOST}:443:${OTA_IP} --resolve ${OTA_HOST}:80:${OTA_IP}"
+    echo "[ga-rauc-install] using OTA path ${OTA_IP} (chosen by ga-resolve-ota)"
+else
+    # LOUD, not INFO. Without the pin the download silently takes whatever public
+    # DNS returns — which is the defect this block exists to close, so a run that
+    # falls back has to say so at the level of the failure.
+    echo "[ga-rauc-install] WARN: no usable path in $OTA_ACTIVE_FILE — falling back" \
+         "to DNS for $OTA_HOST. The multi-path OTA failover is NOT in effect for" \
+         "this download; check ga-resolve-ota.service." >&2
+fi
+# ---------------------------------------------------------------------------
+
 # Per-rc slot when a ga_release is given, else the version-only prod slot.
 # With a ga_release we FALL BACK to the prod slot on a 404 so a device is never
 # stranded if the per-rc bundle wasn't staged (e.g. transitional roll).
-BASE_URL="https://ota.greenautarky.com/releases/${VERSION}"
+BASE_URL="https://${OTA_HOST}/releases/${VERSION}"
 if [ -n "$GA_RELEASE" ]; then
     PRIMARY_URL="${BASE_URL}/${GA_RELEASE}/haos_ihost-${VERSION}.raucb"
     FALLBACK_URL="${BASE_URL}/haos_ihost-${VERSION}.raucb"
@@ -105,15 +159,17 @@ fi
 # curl returns error 23 mid-download. /mnt/data/tmp/ is created by
 # /usr/lib/tmpfiles.d/ga-mnt-data-tmp.conf and aged out at 7 days by
 # systemd-tmpfiles-clean.timer.
-STAGING_DIR="/mnt/data/tmp"
+# Overridable ONLY so the host-lane fixtures can exercise this script without
+# a device; the default is the real path and nothing on a device sets it.
+STAGING_DIR="${GA_OTA_STAGING_DIR:-/mnt/data/tmp}"
 mkdir -p "$STAGING_DIR"
 BUNDLE="$STAGING_DIR/ga-rauc-install-${VERSION}.raucb"
 
 echo "[ga-rauc-install] downloading $PRIMARY_URL"
-if ! curl --fail --silent --show-error --location --output "$BUNDLE" "$PRIMARY_URL"; then
+if ! curl --fail --silent --show-error --location $OTA_PIN --output "$BUNDLE" "$PRIMARY_URL"; then
     if [ -n "$FALLBACK_URL" ]; then
         echo "[ga-rauc-install] per-rc slot miss — falling back to $FALLBACK_URL" >&2
-        if ! curl --fail --silent --show-error --location --output "$BUNDLE" "$FALLBACK_URL"; then
+        if ! curl --fail --silent --show-error --location $OTA_PIN --output "$BUNDLE" "$FALLBACK_URL"; then
             echo "[ga-rauc-install] FATAL: download failed for $PRIMARY_URL and $FALLBACK_URL" >&2
             exit 3
         fi
