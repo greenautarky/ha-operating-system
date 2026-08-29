@@ -159,25 +159,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install jq
-        uses: ./.github/actions/apt-install
-        with:
-          packages: jq
-
-      - name: ga-share-publish (/share symlink hardening)
-        run: sh tests/ga_tests/share_publish/test.sh
-
-      - name: RAUC slot contract (parser + fail-closed)
-        run: sh tests/ga_tests/rauc_slots/test.sh
-
-      - name: ga-stage-vendored-components (trusted staging root)
-        run: sh tests/ga_tests/stage_components/test.sh
-
-      - name: hassos-apparmor (profile presence + atomic download)
-        run: sh tests/ga_tests/apparmor_profile/test.sh
-
-      - name: ga-publish-services (services address -> /share bridge)
-        run: sh tests/ga_tests/publish_services/test.sh
+      # THESE SUITES RUN DEVICE SCRIPTS, SO THEY RUN IN A CONTAINER.
+      #
+      # They used to run directly on the runner. That was fine until a suite
+      # exercised a script that DETACHES a child: ga-rauc-install ends with
+      # `( sleep 5 && systemctl reboot ) &`, which outlives the script, outlives
+      # the suite, and resolves `systemctl` through whatever PATH survives it.
+      # On 2026-08-28 that rebooted a developer's laptop twice while the fixture
+      # reported "nothing tried to reboot this machine" — a check that asserted
+      # the stub FILE existed and therefore could not fail.
+      #
+      # This runner has systemd too. The same suite here would have rebooted it
+      # mid-job, and a job that vanishes with its logs is a bad way to find out.
+      #
+      # The container has no systemd, no dbus and no init: `systemctl reboot`
+      # cannot do anything but fail. The fixtures still stub it — defence in
+      # depth — but correctness no longer depends on them getting it right.
+      - name: Host suites (in a container — device scripts, no systemd)
+        run: tests/run_host_suites.sh
 
   # Prove the GATES can go red AND green — the thing review cannot see.
   #
