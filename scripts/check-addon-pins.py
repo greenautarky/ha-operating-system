@@ -12,9 +12,22 @@ every add-on repo a write token for the OS. This inverts it: the OS reads the
 public store itself and proposes its own pin. No cross-repo credential, and the
 pin no longer depends on some add-on repo happening to build.
 
-The join is the IMAGE REF, not the JSON key: the keys here are local names
-("mosquitto", "sonoff_dongle_flasher") while the store entry is keyed by the
-add-on slug. `ghcr.io/greenautarky/ga_mosquitto-{arch}` -> slug ga_mosquitto.
+The join is the store entry's `image:` field, not the JSON key and not a slug
+derived from the image ref. The keys here are local names ("mosquitto",
+"sonoff_dongle_flasher"); the match is `addon-images.json[*].image` ==
+`<store-dir>/config.*:image`, byte-for-byte. This is the SAME join the ENFORCING
+gate `scripts/check-images.sh` uses, so the proposer and the gate agree on which
+store entry a pin maps to.
+
+An earlier version derived a slug from the image ref
+(`ghcr.io/greenautarky/<slug>-{arch}` -> slug) and looked the store up by its
+`slug:` field. That was BLIND wherever the two disagree: measured 2026-08-31,
+`sonoff_dongle_flasher` pins `ghcr.io/greenautarky/ga_dongle_flasher-{arch}`
+(slug `ga_dongle_flasher`) while its store `slug:` is
+`sonoff_dongle_flasher_for_ihost`, so the pin was silently "unmatched" and a
+sonoff bump was never proposed. The `image:` field is byte-identical on both
+sides, so the image-join matches it; the other seven pins are unaffected because
+their slug happens to equal their image basename.
 
     python3 scripts/check-addon-pins.py --store <path-to-vibe_addons-checkout>
     python3 scripts/check-addon-pins.py --store <path> --apply
@@ -29,17 +42,20 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
-import re
 import sys
 
 import yaml
 
 PINS = pathlib.Path("buildroot-external/package/hassio/addon-images.json")
-IMAGE_RE = re.compile(r"^ghcr\.io/greenautarky/(?P<slug>[A-Za-z0-9_.-]+)-\{arch\}$")
 
 
-def store_index(store_root: pathlib.Path) -> dict[str, str]:
-    """slug -> version, from every <dir>/config.{yaml,json} in the store repo.
+def store_image_index(store_root: pathlib.Path) -> dict[str, str]:
+    """image -> version, from every <dir>/config.{yaml,json} in the store repo.
+
+    Keyed by the `image:` field — the SAME join scripts/check-images.sh uses —
+    so a pin maps to its store entry even when the add-on's slug differs from its
+    image basename (sonoff_dongle_flasher_for_ihost vs ga_dongle_flasher). An
+    earlier version keyed this by `slug:`, which silently dropped that add-on.
 
     Both extensions on purpose: the Supervisor accepts either, and two entries
     still use the legacy JSON form (zigbee2mqtt, the sonoff dongle flasher).
@@ -55,9 +71,9 @@ def store_index(store_root: pathlib.Path) -> dict[str, str]:
         except yaml.YAMLError as e:
             print(f"::warning::{cfg} is not valid YAML/JSON: {e}")
             continue
-        slug, version = data.get("slug"), data.get("version")
-        if slug and version is not None:
-            index[str(slug)] = str(version)
+        image, version = data.get("image"), data.get("version")
+        if image and version is not None:
+            index[str(image)] = str(version)
     return index
 
 
@@ -80,7 +96,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--apply", action="store_true", help="write the new versions")
     args = ap.parse_args(argv)
 
-    store = store_index(pathlib.Path(args.store))
+    store = store_image_index(pathlib.Path(args.store))
     if not store:
         print("::error::no store entries found — refusing to report success")
         return 1
@@ -97,14 +113,13 @@ def main(argv: list[str]) -> int:
     ok = 0
 
     for key, entry in addons.items():
-        m = IMAGE_RE.match(str(entry.get("image", "")))
-        if not m:
-            unmatched.append(f"{key} (image not ours: {entry.get('image')})")
-            continue
-        slug = m.group("slug")
-        published = store.get(slug)
+        image = str(entry.get("image", ""))
+        published = store.get(image)
         if published is None:
-            unmatched.append(f"{key} (slug {slug} has no store entry)")
+            # No store entry carries this pin's image. Reported, not fatal here
+            # (unchanged from before) — the ENFORCING gate scripts/check-images.sh
+            # is what FAILs on a pin the store cannot match.
+            unmatched.append(f"{key} (image {image} has no store entry)")
             continue
         pinned = str(entry.get("version"))
         if _is_prerelease(published):
