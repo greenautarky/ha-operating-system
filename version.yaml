@@ -13,7 +13,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.3.0-rc13  # marker baked into /etc/ga-release at build. rc13 = rc12 with the baked add-on images brought into lockstep with the published vibe_addons store (addon-images.json, #434): ga_manager 0.143.0 -> 0.144.0 (S3 — projects core.area_registry into /share/ga-rooms.json), ga_default_addon 2.0.0 -> 2.0.1 and ga_hmvapp_addon 1.6.1 -> 1.7.0 (S3 readers of /share/ga-rooms.json instead of the retired gd_data.sensor_info table + S4 one-writer-per-field: hm_vapp writes ONLY the calibration offset, ga-heating owns the setpoint). So a freshly flashed device boots the coherent one-door-out set, not a mix of old writer + new readers. armv7 canary flash on K31.
+gaos_release: BOSv1.3.0-rc14  # marker baked into /etc/ga-release at build. rc14 = rc13 PLUS: ga_manager 0.144.0 -> 0.146.0 (converge step 8.5 delivers the device-local InfluxDB credential, #227; + recorder 7-day retention, #229), ga_influxdbv1 0.0.16 -> 0.0.17 (per_user_secrets default TRUE — a freshly flashed device boots per-user least-privilege creds and heals the local InfluxDB 401 at provisioning converge, NOT the empty shared secret; existing devices keep their option, Supervisor preserves it on update), ga-telemetry-config 1.0.2 -> 1.0.3 (converge shipped to the always-on tier-0 Loki, PII-safe). K31 fresh-flash auto-heal proof.
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
@@ -33,7 +33,7 @@ rootfs_overlays:
   # critical system services and config bundles that need to live in
   # their canonical rootfs locations to be picked up by systemd.
   ga-bootstrap:         "1.2.9"  # https://github.com/greenautarky/ga-bootstrap — first-boot orchestrator. v1.2.8 forces protected=false on ga_manager post-install (= enables docker_api self-update path; pre-1.2.8 fresh-flash devices needed manual operator toggle, see ha-os memory:bug_k49_supervisor_docker_sock_missing_2026_06_21). v1.2.2 adds EnvironmentFile=-/mnt/data/ga-bootstrap.env so on-device tests + operators can override GHCR_CREDS_FILE / BACKOFF_SEQUENCE without rebuilding (/etc is RO squashfs). v1.2.9 lifts a blocking Supervisor job condition instead of retrying it for 8 min: 'StoreManager.add_repository blocked, supervisor needs to be updated first' is a job condition, not the transient git race the retry loop was built for. It left EVERY freshly flashed device with no store, no add-ons and no ga_manager while booting fine and answering on serial (K31, 2026-07-30). Pairs with the hassio.mk channel fix that removes the cause.
-  ga-telemetry-config:  "1.0.2"  # https://github.com/greenautarky/ga-telemetry-config — Tier-0 telemetry (boot-timing exporter + fluent-bit boot-log capture)
+  ga-telemetry-config:  "1.0.3"  # https://github.com/greenautarky/ga-telemetry-config — Tier-0 telemetry (boot-timing exporter + fluent-bit boot-log capture)
 
 # Upstream base images — referenced by version.json + Supervisor config.
 base_images:
