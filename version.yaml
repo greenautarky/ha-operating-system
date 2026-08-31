@@ -13,7 +13,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.3.0-rc12  # marker baked into /etc/ga-release at build. rc12 = rc11 PLUS the ADR-0020 add-on pins: ga_default_addon 1.6.1 -> 2.0.0 (no cloud DB credential, no ThingsBoard token — POSTs aggregates to ga_manager local ingest) and ga_manager 0.142.0 -> 0.143.0 (authenticated local /cloud/ingest + spooled cloud writer, ADR-0017). For the armv7 canary flash on K31 to test the one-door-out egress on a fresh device.
+gaos_release: BOSv1.3.0-rc13  # marker baked into /etc/ga-release at build. rc13 = rc12 with the baked add-on images brought into lockstep with the published vibe_addons store (addon-images.json, #434): ga_manager 0.143.0 -> 0.144.0 (S3 — projects core.area_registry into /share/ga-rooms.json), ga_default_addon 2.0.0 -> 2.0.1 and ga_hmvapp_addon 1.6.1 -> 1.7.0 (S3 readers of /share/ga-rooms.json instead of the retired gd_data.sensor_info table + S4 one-writer-per-field: hm_vapp writes ONLY the calibration offset, ga-heating owns the setpoint). So a freshly flashed device boots the coherent one-door-out set, not a mix of old writer + new readers. armv7 canary flash on K31.
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
