@@ -22,15 +22,15 @@
     },
     "ga_manager": {
       "image": "ghcr.io/greenautarky/ga_manager-{arch}",
-      "version": "0.143.0"
+      "version": "0.144.0"
     },
     "ga_default_addon": {
       "image": "ghcr.io/greenautarky/ga_default_addon-{arch}",
-      "version": "2.0.0"
+      "version": "2.0.1"
     },
     "ga_hmvapp_addon": {
       "image": "ghcr.io/greenautarky/ga_hmvapp_addon-{arch}",
-      "version": "1.6.1"
+      "version": "1.7.0"
     }
   }
 }
