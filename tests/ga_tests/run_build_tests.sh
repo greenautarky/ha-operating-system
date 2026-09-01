@@ -498,6 +498,23 @@ grep -q 'GA_INFLUX_HOST=' "${TARGET}/etc/ga-services.conf" 2>/dev/null \
   && _pass "SVC-04: ga-update-hosts script exists and executable" \
   || _fail "SVC-04: ga-update-hosts NOT found"
 
+# SVC-04b: ga-update-hosts bounces ALL endpoint-bound telemetry shippers on an
+# IP change. The set must match ga_manager identity-write's _SHIPPER_UNITS — a
+# long-lived client left off this list keeps a cached connection to the stale
+# backend IP after a cutover. fluent-bit.service (tier-1) was the one omitted.
+# Fail closed if the assignment cannot be read (an empty match must never pass).
+_ubh_endpoint_bound="$(sed -n 's/^ENDPOINT_BOUND_SERVICES=//p' "${TARGET}/usr/sbin/ga-update-hosts" 2>/dev/null | tr -d '"'\''')"
+_svc04b_ok=1
+for _svc in fluent-bit-tier0.service fluent-bit.service telegraf.service; do
+  case " ${_ubh_endpoint_bound} " in
+    *" ${_svc} "*) : ;;
+    *) _svc04b_ok=0 ;;
+  esac
+done
+[[ -n "${_ubh_endpoint_bound}" && "${_svc04b_ok}" -eq 1 ]] \
+  && _pass "SVC-04b: ga-update-hosts ENDPOINT_BOUND_SERVICES covers all three telemetry shippers" \
+  || _fail "SVC-04b: ga-update-hosts ENDPOINT_BOUND_SERVICES must list fluent-bit-tier0.service fluent-bit.service telegraf.service (got: '${_ubh_endpoint_bound:-<none>}')"
+
 # SVC-05: ga-update-hosts.service exists
 [[ -f "${TARGET}/etc/systemd/system/ga-update-hosts.service" ]] \
   && _pass "SVC-05: ga-update-hosts.service exists" \

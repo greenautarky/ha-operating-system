@@ -40,7 +40,18 @@ APPLIED_IP_FILE="/mnt/data/.ga-services-applied-ip"
 LEGACY_COMMENT="# GreenAutarky services — fallback when NetBird DNS is unavailable"
 # Services that cache the resolved GA endpoint IP and must be bounced when it
 # changes so they re-resolve (only restarted if present + already running).
-ENDPOINT_BOUND_SERVICES="fluent-bit-tier0.service telegraf.service"
+# This is the SAME set of telemetry shippers ga_manager's identity-write worker
+# bounces (its _SHIPPER_UNITS) — they must stay in lockstep, because both lists
+# answer the one question "which long-lived clients hold a cached GA endpoint?":
+#   - fluent-bit-tier0.service : always-on Loki writer (no consent gate)
+#   - fluent-bit.service       : tier-1 Loki writer (consent-gated; running only
+#                                when the user opted into error logs — a
+#                                try-restart no-ops when it is not running)
+#   - telegraf.service         : tier-2 InfluxDB writer (consent-gated)
+# fluent-bit.service was missing here while present in identity-write: on a
+# backend-IP cutover a consented device's tier-1 error logs kept shipping to the
+# stale IP until the next reconnect/reboot, while tier-0 + telegraf re-resolved.
+ENDPOINT_BOUND_SERVICES="fluent-bit-tier0.service fluent-bit.service telegraf.service"
 
 if [ -f "$CONF_OVERRIDE" ]; then
     . "$CONF_OVERRIDE"
