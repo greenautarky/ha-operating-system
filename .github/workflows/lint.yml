@@ -211,6 +211,15 @@ jobs:
       - name: Lockstep gate (drift vs canary vs revision)
         run: ./tests/gates/lockstep_prerelease/selftest.sh
 
+      # scripts/repin-addons.py rewrites the bake pins to the store and stamps the
+      # rc marker — the hand-edit that a typo used to turn into a red bake found
+      # late. Its selftest drives BOTH repin and the REAL check-images.sh over the
+      # same scratch fixtures, so a pin repin would write that the enforcing gate
+      # then rejects cannot pass here, and --check is proven to go red on drift and
+      # green on lockstep. No registry, no network.
+      - name: Repin tool (agrees with the lockstep gate; red on drift, green on lockstep)
+        run: ./tests/gates/repin_addons/selftest.sh
+
       # A pinned add-on that never made it into the image used to count as
       # "skipped" while the build suite still printed a pass line — and
       # sonoff_dongle_flasher had never once been checked, because the pin key
