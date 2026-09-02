@@ -118,9 +118,22 @@ if [ -f /mnt/data/ga-device-label ]; then
   run_test_show "CFG-12" "ga-device-label file has valid content" \
     "cat /mnt/data/ga-device-label"
 else
-  # No label file — verify fallback works (env should show "unknown")
-  run_test "CFG-12" "ga-device-label fallback (no label file, env=unknown)" \
-    "grep -q 'DEVICE_LABEL=unknown' /mnt/data/telegraf/env 2>/dev/null"
+  # No label file. This is the NORMAL case on a self-provisioned device: the
+  # flasher stage that wrote /mnt/data/ga-device-label was retired, so the
+  # env-builder must derive the label from ga-identity.json instead.
+  #
+  # "unknown" is therefore the FAILURE state, not the pass state. Asserting
+  # DEVICE_LABEL=unknown here (as this branch used to) went RED on a healthy
+  # device and GREEN on a broken one — it masked exactly the regression where a
+  # shipper starts before the identity lands and nothing bounces it (measured
+  # K31 rc18, 2026-09-02). Subject is fluent-bit's env: tier-0 is the always-on
+  # shipper, whereas telegraf is tier-2 opt-in and may not exist at all.
+  if ls /mnt/data/supervisor/addons/data/*_ga_manager/ga-identity.json >/dev/null 2>&1; then
+    run_test_show "CFG-12" "DEVICE_LABEL derived from identity (no label file)" \
+      "grep -q '^DEVICE_LABEL=KIB-SON-' /mnt/data/fluent-bit/env"
+  else
+    skip_test "CFG-12" "no label file and no identity on disk yet — nothing to derive from"
+  fi
 fi
 
 # CFG-31: WiFi power save disabled (can be in main conf or conf.d/)
