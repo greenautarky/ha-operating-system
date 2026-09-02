@@ -68,7 +68,13 @@ _kernel=$(uname -r 2>/dev/null || echo "unknown")
 _uptime=$(uptime 2>/dev/null | sed 's/.*up /up /' | sed 's/,.*load/ load/' || echo "unknown")
 _mem_total=$(awk '/^MemTotal:/ {printf "%d MB", $2/1024}' /proc/meminfo 2>/dev/null || echo "unknown")
 _ha_ver=$(docker inspect homeassistant 2>/dev/null | grep -o '"io.hass.version":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "unknown")
-_device_label=$(cat /etc/ga-device-label 2>/dev/null || echo "unknown")
+# Identity-derived devices (ADR-0010) never have the legacy label file; the
+# canonical identity is the ga_manager-private ga-identity.json. Same fallback
+# chain as ga-fluent-bit-env, so the report names the device it ran on.
+_device_label=$(cat /etc/ga-device-label 2>/dev/null \
+  || cat /mnt/data/ga-device-label 2>/dev/null \
+  || sed -n 's/.*"device_id": *"\([^"]*\)".*/\1/p' /mnt/data/supervisor/addons/data/*_ga_manager/ga-identity.json 2>/dev/null | head -1)
+_device_label=${_device_label:-unknown}
 _os_version=$(. /etc/os-release 2>/dev/null && echo "${GA_BUILD_TIMESTAMP:-unknown}" || echo "unknown")
 
 echo "=============================================="

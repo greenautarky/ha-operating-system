@@ -60,7 +60,20 @@ run_test "OTA-05" "RAUC keyring exists" \
 run_test "OTA-07" "Journal has boot history" \
   "[ $(journalctl --list-boots 2>/dev/null | wc -l) -gt 0 ]"
 
-for svc in telegraf fluent-bit netbird; do
+
+# Tier-1 (error logs) and tier-2 (metrics) shippers are consent-gated by design:
+# telegraf has ConditionPathExists=/mnt/data/.ga-consent-metrics, fluent-bit
+# (tier-1) has ConditionPathExists=/mnt/data/.ga-consent-error_logs. Without the
+# marker the unit is inactive on purpose and its env file does not exist. Tests
+# that assert on them must SKIP with the reason, not FAIL — on a fresh device
+# without consent they were 12 structural reds (2026-09-02, K31 rc19).
+_consent_metrics()    { [ -f /mnt/data/.ga-consent-metrics ]; }
+_consent_error_logs() { [ -f /mnt/data/.ga-consent-error_logs ]; }
+for svc in telegraf fluent-bit fluent-bit-tier0 netbird; do
+  case "$svc" in
+    telegraf)   _consent_metrics    || { skip_test "OTA-08-$svc" "Service $svc active (tier-2 consent not given)"; continue; } ;;
+    fluent-bit) _consent_error_logs || { skip_test "OTA-08-$svc" "Service $svc active (tier-1 consent not given)"; continue; } ;;
+  esac
   run_test "OTA-08-$svc" "Service $svc active" \
     "systemctl is-active $svc >/dev/null 2>&1"
 done

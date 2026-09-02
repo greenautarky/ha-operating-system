@@ -77,8 +77,11 @@ run_test "OB-06" "Supervisor is greenautarky fork" \
   "docker inspect hassio_supervisor --format '{{.Config.Image}}' 2>/dev/null | grep -qi 'greenautarky'"
 
 # --- Non-core components should stay upstream ---
-run_test "OB-07" "Non-core components use upstream registries" \
-  "for c in hassio_dns hassio_audio hassio_cli hassio_multicast hassio_observer; do IMG=\$(docker inspect \$c --format '{{.Config.Image}}' 2>/dev/null); [ -z \"\$IMG\" ] && continue; echo \"\$IMG\" | grep -qi 'greenautarky' && exit 1; done; exit 0"
+# T4 (Odoo #708): dns and cli are our own armv7 builds; audio, multicast and
+# observer stay upstream until their shutdown analysis lands. The old rule
+# ("no plugin is ours") went red the day T4 shipped and stayed red.
+run_test "OB-07" "Supervisor plugins: dns+cli are GA builds, audio/multicast/observer upstream" \
+  "for c in hassio_dns hassio_cli; do IMG=\$(docker inspect \$c --format '{{.Config.Image}}' 2>/dev/null); [ -z \"\$IMG\" ] && continue; echo \"\$IMG\" | grep -qi 'greenautarky' || exit 1; done; for c in hassio_audio hassio_multicast hassio_observer; do IMG=\$(docker inspect \$c --format '{{.Config.Image}}' 2>/dev/null); [ -z \"\$IMG\" ] && continue; echo \"\$IMG\" | grep -qi 'greenautarky' && exit 1; done; exit 0"
 
 # --- Core image freshness ---
 run_test_show "OB-08" "Core image is latest (not stale)" \

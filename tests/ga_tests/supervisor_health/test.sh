@@ -170,7 +170,15 @@ if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^hassio_supervisor$'; 
 
   _ADDON="$(docker ps --format '{{.Names}}' 2>/dev/null | grep '_ga_manager$' | head -1)"
   if [ -n "$_ADDON" ]; then
+    # HAOS busybox has no getent — resolve the way the host itself does
+    # (nslookup, then the hosts file the reconciler writes).
     _HOST_IP="$(getent hosts ota.greenautarky.com 2>/dev/null | awk '{print $1}' | head -1)"
+    # Resolve in the order the host itself does (nsswitch: files, then dns).
+    # The reconciler pins the mesh address in /etc/hosts; public DNS answers
+    # the public one (5.75.161.213 on 2026-09-02) — asking DNS first compares
+    # a name the host never uses against the add-on and reports a false split.
+    [ -n "$_HOST_IP" ] || _HOST_IP="$(grep -m1 'ota.greenautarky.com' /etc/hosts 2>/dev/null | awk '{print $1}')"
+    [ -n "$_HOST_IP" ] || _HOST_IP="$(nslookup ota.greenautarky.com 2>/dev/null | awk '/^Address/ {print $NF}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | tail -1)"
     _ADDON_IP="$(docker exec "$_ADDON" getent hosts ota.greenautarky.com 2>/dev/null | awk '{print $1}' | head -1)"
     printf '        host=%s addon=%s\n' "${_HOST_IP:-?}" "${_ADDON_IP:-?}"
     if [ -n "$_HOST_IP" ] && [ -n "$_ADDON_IP" ]; then

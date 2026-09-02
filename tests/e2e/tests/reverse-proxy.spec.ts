@@ -5,7 +5,9 @@ import { waitForHA } from '../helpers/ha-api';
  * Reverse Proxy — verify HA is accessible via Tailscale Funnel and Caddy proxy
  *
  * Tests that the device is configured for reverse proxy access:
- * - trusted_proxies set correctly in configuration.yaml
+ * - trusted_proxies set correctly in configuration.yaml or ga_packages/*.yaml
+ *   (converge writes the managed http: block into ga_packages/ga_http.yaml,
+ *   pulled in by `packages: !include_dir_named ga_packages` — 2026-09-02, K31 rc19)
  * - external_url points to ki-butler domain
  * - Tailscale Funnel responds (if TAILSCALE_URL is set)
  * - Caddy proxy responds (if CADDY_URL is set)
@@ -33,7 +35,7 @@ test.describe('Reverse Proxy Config', () => {
     const ssh = `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${key} -p ${port} root@${ip}`;
 
     const config = execSync(
-      `${ssh} 'cat /mnt/data/supervisor/homeassistant/configuration.yaml'`,
+      `${ssh} 'cat /mnt/data/supervisor/homeassistant/configuration.yaml /mnt/data/supervisor/homeassistant/ga_packages/*.yaml 2>/dev/null'`,
       { timeout: 15_000 },
     ).toString();
 
@@ -53,7 +55,7 @@ test.describe('Reverse Proxy Config', () => {
     const ssh = `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${key} -p ${port} root@${ip}`;
 
     const config = execSync(
-      `${ssh} 'cat /mnt/data/supervisor/homeassistant/configuration.yaml'`,
+      `${ssh} 'cat /mnt/data/supervisor/homeassistant/configuration.yaml /mnt/data/supervisor/homeassistant/ga_packages/*.yaml 2>/dev/null'`,
       { timeout: 15_000 },
     ).toString();
 
@@ -86,7 +88,7 @@ test.describe('Reverse Proxy Config', () => {
     const ssh = `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${key} -p ${port} root@${ip}`;
 
     const config = execSync(
-      `${ssh} 'cat /mnt/data/supervisor/homeassistant/configuration.yaml'`,
+      `${ssh} 'cat /mnt/data/supervisor/homeassistant/configuration.yaml /mnt/data/supervisor/homeassistant/ga_packages/*.yaml 2>/dev/null'`,
       { timeout: 15_000 },
     ).toString();
 

@@ -176,10 +176,21 @@ sleep 5
 
 # Check if persistent connection was created
 CONN_EXISTS=$(nmcli -t -f NAME connection show 2>/dev/null | grep -c "$CONN_NAME")
-run_test "OS-16" "Persistent connection created by script" \
-  "[ '$CONN_EXISTS' -gt 0 ]"
+if [ -z "$GA_SSIDS" ] && [ "$CONN_EXISTS" -eq 0 ]; then
+  # No OpenStick in scan range and no connection ever created: nothing to
+  # assert about. On the bench this cascaded into 6 structural reds.
+  for t in OS-16 OS-17a OS-17b OS-18 OS-19 OS-20; do
+    skip_test "$t" "OpenStick connection state (no GA-* SSID in range on this device)"
+  done
+  OS_SKIP_STATE=1
+else
+  run_test "OS-16" "Persistent connection created by script" \
+    "[ '$CONN_EXISTS' -gt 0 ]"
+fi
 
-if [ "$CONN_EXISTS" -gt 0 ]; then
+if [ -n "${OS_SKIP_STATE:-}" ]; then
+  :
+elif [ "$CONN_EXISTS" -gt 0 ]; then
   # Check autoconnect
   AC=$(nmcli -g connection.autoconnect connection show "$CONN_NAME" 2>/dev/null)
   run_test "OS-17a" "Connection has autoconnect=yes" \
@@ -202,7 +213,9 @@ fi
 
 # --- OS-19..20: Route metric and priority ---
 
-if [ "$CONN_EXISTS" -gt 0 ]; then
+if [ -n "${OS_SKIP_STATE:-}" ]; then
+  :
+elif [ "$CONN_EXISTS" -gt 0 ]; then
   METRIC=$(nmcli -g ipv4.route-metric connection show "$CONN_NAME" 2>/dev/null)
   run_test "OS-19" "Route metric is 500 (got: ${METRIC:-none})" \
     "[ '${METRIC:-0}' = '500' ]"
@@ -212,7 +225,7 @@ if [ "$CONN_EXISTS" -gt 0 ]; then
   STICK_PRIO=$(nmcli -g connection.autoconnect-priority connection show "$CONN_NAME" 2>/dev/null || echo "0")
   run_test "OS-20" "OpenStick priority ($STICK_PRIO) > Install WiFi ($INSTALL_PRIO)" \
     "[ '$STICK_PRIO' -gt '$INSTALL_PRIO' ]"
-else
+elif [ -z "${OS_SKIP_STATE:-}" ]; then
   run_test "OS-19" "Route metric 500" "false"
   run_test "OS-20" "Priority over Install WiFi" "false"
 fi
