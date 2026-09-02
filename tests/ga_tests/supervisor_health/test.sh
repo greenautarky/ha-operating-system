@@ -127,9 +127,13 @@ skip_test "SUP-10" "Real addon install probe (Bug #4 coverage)" \
 #
 # See memory/incident_hassio_vs_hassos_systemd_unit for the originating
 # bench-test incident.
+# SUP-11 reads the unit properties, not `systemctl status` text: on a finished
+# oneshot `status` prints "Active: inactive (dead) since …" and never a
+# "Result: success" on that line, so the old regex could not pass on a
+# successful run (K31 rc20, 2026-09-03: Result=success, test red).
 run_test "SUP-11" "ga-bootstrap.service ran successfully (not silently dropped)" \
-  "systemctl status ga-bootstrap.service --no-pager 2>/dev/null \
-    | grep -qE 'Active: active|Active: inactive.*Result: success'"
+  "R=\$(systemctl show -p Result -p ActiveState ga-bootstrap.service 2>/dev/null | tr '\n' ' '); \
+    echo \"\$R\" | grep -qE 'ActiveState=active' || echo \"\$R\" | grep -qE 'Result=success'"
 
 # SUP-12 — ga-bootstrap.service journal has entries. A `Requires=` on a
 # missing unit can also produce 'inactive (dead)' if the unit was never
