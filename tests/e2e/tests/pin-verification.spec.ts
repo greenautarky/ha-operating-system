@@ -158,15 +158,30 @@ test.describe("PIN verification (onboarding)", () => {
   test("QR auto-inject: PIN from URL parameter auto-submitted", async ({ page, deviceUrl, resetOnboarding }) => {
     test.skip(!pinRequired, "No PIN required on this device");
     test.skip(!DEVICE_PIN, "DEVICE_PIN env var not set");
-    test.setTimeout(90_000);
+    // resetOnboarding() waits up to 240 s for Core plus the page; 90 s was
+    // the harness timing itself out (Odoo #751).
+    test.setTimeout(300_000);
 
     resetOnboarding();
 
     await page.goto(`${deviceUrl}/greenautarky-setup.html?pin=${DEVICE_PIN}&device=KIB-SON-TEST`);
     await page.waitForLoadState("networkidle");
 
+    // For ~a minute after resetOnboarding()'s Core restart the integration's
+    // API answers while GET /greenautarky-setup.html still returns 404; a tab
+    // opened in that window stays blank and never recovers on its own — a
+    // reload does (measured on K31 rc20, 2026-09-03, Odoo #751). Do what a
+    // person does: reload until the panel is there, bounded.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (await page.locator("ha-panel-greenautarky-setup").count()) break;
+      await page.waitForTimeout(10_000);
+      await page.reload({ waitUntil: "networkidle" }).catch(() => {});
+    }
+    await expect(page.locator("ha-panel-greenautarky-setup")).toBeAttached({ timeout: 30_000 });
+    await expect(page.locator("ga-setup-welcome, ga-setup-pin, ga-setup-gdpr").first()).toBeAttached({ timeout: 30_000 });
+
     const startButton = page.locator("ha-button.start, mwc-button");
-    if (await startButton.isVisible({ timeout: 5000 })) {
+    if (await startButton.isVisible({ timeout: 15000 })) {
       await startButton.click();
     }
 
@@ -180,15 +195,30 @@ test.describe("PIN verification (onboarding)", () => {
 
   test("QR auto-inject: wrong PIN from URL falls back to manual entry", async ({ page, deviceUrl, resetOnboarding }) => {
     test.skip(!pinRequired, "No PIN required on this device");
-    test.setTimeout(90_000);
+    // resetOnboarding() waits up to 240 s for Core plus the page; 90 s was
+    // the harness timing itself out (Odoo #751).
+    test.setTimeout(300_000);
 
     resetOnboarding();
 
     await page.goto(`${deviceUrl}/greenautarky-setup.html?pin=000000`);
     await page.waitForLoadState("networkidle");
 
+    // For ~a minute after resetOnboarding()'s Core restart the integration's
+    // API answers while GET /greenautarky-setup.html still returns 404; a tab
+    // opened in that window stays blank and never recovers on its own — a
+    // reload does (measured on K31 rc20, 2026-09-03, Odoo #751). Do what a
+    // person does: reload until the panel is there, bounded.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (await page.locator("ha-panel-greenautarky-setup").count()) break;
+      await page.waitForTimeout(10_000);
+      await page.reload({ waitUntil: "networkidle" }).catch(() => {});
+    }
+    await expect(page.locator("ha-panel-greenautarky-setup")).toBeAttached({ timeout: 30_000 });
+    await expect(page.locator("ga-setup-welcome, ga-setup-pin, ga-setup-gdpr").first()).toBeAttached({ timeout: 30_000 });
+
     const startButton = page.locator("ha-button.start, mwc-button");
-    if (await startButton.isVisible({ timeout: 5000 })) {
+    if (await startButton.isVisible({ timeout: 15000 })) {
       await startButton.click();
     }
 
@@ -202,15 +232,30 @@ test.describe("PIN verification (onboarding)", () => {
 
   test("QR auto-inject: no PIN in URL shows manual entry", async ({ page, deviceUrl, resetOnboarding }) => {
     test.skip(!pinRequired, "No PIN required on this device");
-    test.setTimeout(90_000);
+    // resetOnboarding() waits up to 240 s for Core plus the page; 90 s was
+    // the harness timing itself out (Odoo #751).
+    test.setTimeout(300_000);
 
     resetOnboarding();
 
     await page.goto(`${deviceUrl}/greenautarky-setup.html`);
     await page.waitForLoadState("networkidle");
 
+    // For ~a minute after resetOnboarding()'s Core restart the integration's
+    // API answers while GET /greenautarky-setup.html still returns 404; a tab
+    // opened in that window stays blank and never recovers on its own — a
+    // reload does (measured on K31 rc20, 2026-09-03, Odoo #751). Do what a
+    // person does: reload until the panel is there, bounded.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (await page.locator("ha-panel-greenautarky-setup").count()) break;
+      await page.waitForTimeout(10_000);
+      await page.reload({ waitUntil: "networkidle" }).catch(() => {});
+    }
+    await expect(page.locator("ha-panel-greenautarky-setup")).toBeAttached({ timeout: 30_000 });
+    await expect(page.locator("ga-setup-welcome, ga-setup-pin, ga-setup-gdpr").first()).toBeAttached({ timeout: 30_000 });
+
     const startButton = page.locator("ha-button.start, mwc-button");
-    if (await startButton.isVisible({ timeout: 5000 })) {
+    if (await startButton.isVisible({ timeout: 15000 })) {
       await startButton.click();
     }
 
@@ -223,15 +268,30 @@ test.describe("PIN verification (onboarding)", () => {
 
   test("QR auto-inject: invalid PIN format in URL ignored", async ({ page, deviceUrl, resetOnboarding }) => {
     test.skip(!pinRequired, "No PIN required on this device");
-    test.setTimeout(90_000);
+    // resetOnboarding() waits up to 240 s for Core plus the page; 90 s was
+    // the harness timing itself out (Odoo #751).
+    test.setTimeout(300_000);
 
     resetOnboarding();
 
     await page.goto(`${deviceUrl}/greenautarky-setup.html?pin=abc`);
     await page.waitForLoadState("networkidle");
 
+    // For ~a minute after resetOnboarding()'s Core restart the integration's
+    // API answers while GET /greenautarky-setup.html still returns 404; a tab
+    // opened in that window stays blank and never recovers on its own — a
+    // reload does (measured on K31 rc20, 2026-09-03, Odoo #751). Do what a
+    // person does: reload until the panel is there, bounded.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (await page.locator("ha-panel-greenautarky-setup").count()) break;
+      await page.waitForTimeout(10_000);
+      await page.reload({ waitUntil: "networkidle" }).catch(() => {});
+    }
+    await expect(page.locator("ha-panel-greenautarky-setup")).toBeAttached({ timeout: 30_000 });
+    await expect(page.locator("ga-setup-welcome, ga-setup-pin, ga-setup-gdpr").first()).toBeAttached({ timeout: 30_000 });
+
     const startButton = page.locator("ha-button.start, mwc-button");
-    if (await startButton.isVisible({ timeout: 5000 })) {
+    if (await startButton.isVisible({ timeout: 15000 })) {
       await startButton.click();
     }
 
