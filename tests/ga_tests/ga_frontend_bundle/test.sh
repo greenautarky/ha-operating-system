@@ -71,8 +71,10 @@ run_test "FB-04" "cards.json present and lists >=1 card" \
 run_test "FB-05" "every card in cards.json is on disk" "_all_cards_on_disk"
 
 # --- Activation (enable-list) ---
-run_test "FB-06" "configuration.yaml has ga_frontend_bundle: enable-list entry" \
-  "grep -qE '^ga_frontend_bundle:' '$CFG'"
+# converge activates integrations via ga_packages/ga_integrations.yaml (pulled in
+# by `packages: !include_dir_named ga_packages`), not in configuration.yaml itself.
+run_test "FB-06" "ga_frontend_bundle: enable-list entry present (configuration.yaml or ga_packages/)" \
+  "cat '$CFG' \"$(dirname "$CFG")\"/ga_packages/*.yaml 2>/dev/null | grep -qE '^ga_frontend_bundle:'"
 
 # --- Runtime: integration loaded + static path registered (no auth needed) ---
 run_test "FB-07" "integration loaded — static path serves a card 200 ($FIRST)" \

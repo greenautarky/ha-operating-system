@@ -101,8 +101,11 @@ run_test "CFG-38" "fluent-bit.conf Loki OUTPUT host/port from env" \
 run_test "CFG-39" "fluent-bit.service has anonymous-safe LOKI defaults" \
   "systemctl cat fluent-bit 2>/dev/null | grep -q 'Environment=.*LOKI_USER=anonymous'"
 
-run_test "CFG-40" "fluent-bit.service reads loki cred sidecar via addon-data glob" \
-  "systemctl cat fluent-bit 2>/dev/null | grep -q '_ga_manager/ga-fleet-loki.yaml'"
+# The sidecar is read by the env-builder the unit runs in ExecStartPre
+# (ga-fluent-bit-env CRED_GLOB), not named in the unit file itself — the old
+# assertion grepped the wrong file and was red on a correct device.
+run_test "CFG-40" "fluent-bit env-builder reads the loki cred sidecar via the addon-data glob" \
+  "systemctl cat fluent-bit-tier0 2>/dev/null | grep -q 'ExecStartPre=/usr/libexec/ga-fluent-bit-env' && grep -q '_ga_manager/ga-fleet-loki.yaml' /usr/libexec/ga-fluent-bit-env"
 
 # If a cred was delivered, the built env must carry the parsed values (a device
 # without the sidecar legitimately runs on defaults — skip, don't fail).
@@ -145,9 +148,13 @@ run_test "CFG-31" "WiFi power save disabled via NM config" \
 # On non-provisioned devices (fresh flash, no flasher run), these will fail — that's expected.
 
 HA_CFG="/mnt/data/supervisor/homeassistant/configuration.yaml"
+# converge writes its managed HA entries into ga_packages/*.yaml (pulled in by
+# `packages: !include_dir_named ga_packages`), not into configuration.yaml
+# itself. Assert on what Core loads: the main file plus the packages dir.
+HA_CFG_ALL="$HA_CFG /mnt/data/supervisor/homeassistant/ga_packages/*.yaml"
 if [ -f "$HA_CFG" ]; then
-  run_test "CFG-32" "HA use_x_forwarded_for enabled" \
-    "grep -q 'use_x_forwarded_for.*true' $HA_CFG"
+  run_test "CFG-32" "HA use_x_forwarded_for enabled (configuration.yaml or ga_packages/)" \
+    "cat $HA_CFG_ALL 2>/dev/null | grep -q 'use_x_forwarded_for.*true'"
 
   # Read expected IP from ga-services.conf
   GA_IP=$(grep '^GA_SERVICES_IP=' /mnt/data/ga-services.conf 2>/dev/null \
@@ -155,11 +162,11 @@ if [ -f "$HA_CFG" ]; then
   GA_IP="${GA_IP#GA_SERVICES_IP=}"
 
   run_test "CFG-33" "HA trusted_proxies has 127.0.0.1 (Tailscale Funnel)" \
-    "grep -A10 'trusted_proxies' $HA_CFG | grep -q '127.0.0.1'"
+    "cat $HA_CFG_ALL 2>/dev/null | grep -A10 'trusted_proxies' | grep -q '127.0.0.1'"
 
   if [ -n "$GA_IP" ]; then
     run_test "CFG-34" "HA trusted_proxies has GA_SERVICES_IP ($GA_IP)" \
-      "grep -A10 'trusted_proxies' $HA_CFG | grep -q '$GA_IP'"
+      "cat $HA_CFG_ALL 2>/dev/null | grep -A10 'trusted_proxies' | grep -q '$GA_IP'"
   else
     skip_test "CFG-34" "HA trusted_proxies has GA_SERVICES_IP (no ga-services.conf)"
   fi
@@ -192,7 +199,18 @@ run_test "CFG-48" "no plain \${VAR} in Exec* lines of any GA unit (systemd eats 
 run_test "CFG-49" "telegraf builds its env via /usr/libexec/ga-telegraf-env" \
   "test -x /usr/libexec/ga-telegraf-env && systemctl cat telegraf 2>/dev/null | grep -q 'ExecStartPre=/usr/libexec/ga-telegraf-env'"
 
-if [ -f /mnt/data/supervisor/share/ga-fleet-influx.yaml ]; then
+
+# Tier-1 (error logs) and tier-2 (metrics) shippers are consent-gated by design:
+# telegraf has ConditionPathExists=/mnt/data/.ga-consent-metrics, fluent-bit
+# (tier-1) has ConditionPathExists=/mnt/data/.ga-consent-error_logs. Without the
+# marker the unit is inactive on purpose and its env file does not exist. Tests
+# that assert on them must SKIP with the reason, not FAIL — on a fresh device
+# without consent they were 12 structural reds (2026-09-02, K31 rc19).
+_consent_metrics()    { [ -f /mnt/data/.ga-consent-metrics ]; }
+_consent_error_logs() { [ -f /mnt/data/.ga-consent-error_logs ]; }
+if [ -f /mnt/data/supervisor/share/ga-fleet-influx.yaml ] && ! _consent_metrics; then
+  skip_test "CFG-50" "telegraf env per-device INFLUX_USER (tier-2 metrics consent not given — env does not exist)"
+elif [ -f /mnt/data/supervisor/share/ga-fleet-influx.yaml ]; then
   run_test "CFG-50" "telegraf env has a NON-EMPTY per-device INFLUX_USER (cred delivered)" \
     "grep -qE '^INFLUX_USER=dev_KIB-SON-[0-9]+' /mnt/data/telegraf/env"
 else

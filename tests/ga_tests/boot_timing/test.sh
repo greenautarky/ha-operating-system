@@ -34,8 +34,21 @@ run_test "BOOT-05" "Service times are plausible (0 < t < 600s)" \
 run_test "BOOT-06" "Telegraf exec input configured" \
   "grep -q 'ga-boot-timing' /etc/telegraf/telegraf.conf 2>/dev/null"
 
-run_test "BOOT-07" "Telegraf exec input loaded (collects boot_timing)" \
-  "journalctl -u telegraf -b 0 --no-pager -q 2>/dev/null | grep -q 'Loaded inputs.*exec'"
+
+# Tier-1 (error logs) and tier-2 (metrics) shippers are consent-gated by design:
+# telegraf has ConditionPathExists=/mnt/data/.ga-consent-metrics, fluent-bit
+# (tier-1) has ConditionPathExists=/mnt/data/.ga-consent-error_logs. Without the
+# marker the unit is inactive on purpose and its env file does not exist. Tests
+# that assert on them must SKIP with the reason, not FAIL — on a fresh device
+# without consent they were 12 structural reds (2026-09-02, K31 rc19).
+_consent_metrics()    { [ -f /mnt/data/.ga-consent-metrics ]; }
+_consent_error_logs() { [ -f /mnt/data/.ga-consent-error_logs ]; }
+if _consent_metrics; then
+  run_test "BOOT-07" "Telegraf exec input loaded (collects boot_timing)" \
+    "journalctl -u telegraf -b 0 --no-pager -q 2>/dev/null | grep -q 'Loaded inputs.*exec'"
+else
+  skip_test "BOOT-07" "Telegraf exec input (tier-2 metrics consent not given — telegraf inactive by design)"
+fi
 
 run_test "BOOT-10" "Script handles errors gracefully (exit 0)" \
   "/usr/libexec/ga-boot-timing >/dev/null 2>&1"

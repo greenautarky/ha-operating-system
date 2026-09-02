@@ -13,14 +13,39 @@ run_test_show "NET-01b" "DNS entries" \
 
 # Verify telemetry endpoints work by checking output loaded + no persistent errors
 # (Both services run silently on success — no "wrote batch" messages at info level)
+
+# Tier-1 (error logs) and tier-2 (metrics) shippers are consent-gated by design:
+# telegraf has ConditionPathExists=/mnt/data/.ga-consent-metrics, fluent-bit
+# (tier-1) has ConditionPathExists=/mnt/data/.ga-consent-error_logs. Without the
+# marker the unit is inactive on purpose and its env file does not exist. Tests
+# that assert on them must SKIP with the reason, not FAIL — on a fresh device
+# without consent they were 12 structural reds (2026-09-02, K31 rc19).
+_consent_metrics()    { [ -f /mnt/data/.ga-consent-metrics ]; }
+_consent_error_logs() { [ -f /mnt/data/.ga-consent-error_logs ]; }
+if _consent_metrics; then
 run_test "NET-02" "Telegraf InfluxDB output loaded and no write errors" \
   "journalctl -u telegraf -b 0 --no-pager -q 2>/dev/null | grep -q 'Loaded outputs.*influxdb' && ! journalctl -u telegraf --no-pager -q --since '5 min ago' 2>/dev/null | grep -qi 'failed to write\|connection refused\|timeout'"
+else
+  skip_test "NET-02" "Telegraf InfluxDB output (tier-2 metrics consent not given)"
+fi
 
+if _consent_error_logs; then
 run_test "NET-03" "Fluent-Bit Loki output configured and delivering" \
   "journalctl -u fluent-bit -b 0 --no-pager -q 2>/dev/null | grep -q 'loki.greenautarky.com' && ! journalctl -u fluent-bit --no-pager -q --since '5 min ago' 2>/dev/null | grep -qi 'no upstream connections\|connection refused'"
+else
+  skip_test "NET-03" "Fluent-Bit (tier-1) Loki output (tier-1 error-log consent not given; tier-0 is covered by NET-03b)"
+fi
 
+# tier-0 is always on and is what a fresh device actually ships through
+run_test "NET-03b" "Fluent-Bit tier-0 active and delivering (no recent Loki errors)" \
+  "systemctl is-active fluent-bit-tier0 >/dev/null 2>&1 && ! journalctl -u fluent-bit-tier0 --no-pager -q --since '5 min ago' 2>/dev/null | grep -qiE 'no upstream|broken connection|HTTP status=[45]'"
+
+if _consent_metrics && _consent_error_logs; then
 run_test "NET-04" "Telemetry services active with no recent errors" \
   "systemctl is-active telegraf >/dev/null 2>&1 && systemctl is-active fluent-bit >/dev/null 2>&1 && ! journalctl -u telegraf -u fluent-bit --no-pager -q --since '5 min ago' 2>/dev/null | grep -qi 'error.*output\|failed to flush\|connection refused'"
+else
+  skip_test "NET-04" "telegraf + fluent-bit active (consent-gated tiers not enabled on this device)"
+fi
 
 run_test "NET-05" "Default gateway detected" \
   "ip route | grep -q '^default'"

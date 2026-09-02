@@ -135,6 +135,14 @@ run_test "GPS-17" "and the target is a regular file afterwards" \
 
 UNITS="$OVERLAY/usr/lib/systemd/system"
 WANTS="$OVERLAY/etc/systemd/system/multi-user.target.wants"
+if [ ! -d "$OVERLAY" ]; then
+  # These six assert on the rootfs-overlay in the REPO tree. On a device the
+  # runner copies only tests/ga_tests, so the tree is not there and all six
+  # went red by construction (2026-09-02, K31). Assert on the running rootfs
+  # instead — that is what the device can answer.
+  UNITS="/usr/lib/systemd/system"
+  WANTS="/etc/systemd/system/multi-user.target.wants"
+fi
 run_test "GPS-18" "service unit ships" "test -f '$UNITS/ga-publish-services.service'"
 run_test "GPS-19" "path unit ships (republish when the override changes)" \
   "test -f '$UNITS/ga-publish-services.path'"

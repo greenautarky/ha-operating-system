@@ -56,8 +56,21 @@ else
   skip_test "TEL-05" "DEVICE_UUID extracted" "service never started (no consent)"
 fi
 
-run_test "TEL-06" "DEVICE_UUID matches across services" \
-  "[ \"$(grep DEVICE_UUID /mnt/data/telegraf/env 2>/dev/null)\" = \"$(grep DEVICE_UUID /mnt/data/fluent-bit/env 2>/dev/null)\" ]"
+
+# Tier-1 (error logs) and tier-2 (metrics) shippers are consent-gated by design:
+# telegraf has ConditionPathExists=/mnt/data/.ga-consent-metrics, fluent-bit
+# (tier-1) has ConditionPathExists=/mnt/data/.ga-consent-error_logs. Without the
+# marker the unit is inactive on purpose and its env file does not exist. Tests
+# that assert on them must SKIP with the reason, not FAIL — on a fresh device
+# without consent they were 12 structural reds (2026-09-02, K31 rc19).
+_consent_metrics()    { [ -f /mnt/data/.ga-consent-metrics ]; }
+_consent_error_logs() { [ -f /mnt/data/.ga-consent-error_logs ]; }
+if _consent_metrics; then
+  run_test "TEL-06" "DEVICE_UUID matches across services" \
+    "[ \"$(grep DEVICE_UUID /mnt/data/telegraf/env 2>/dev/null)\" = \"$(grep DEVICE_UUID /mnt/data/fluent-bit/env 2>/dev/null)\" ]"
+else
+  skip_test "TEL-06" "DEVICE_UUID matches across services (tier-2 metrics consent not given — telegraf env does not exist by design)"
+fi
 
 run_test "TEL-07" "Telegraf config on rootfs" \
   "systemctl cat telegraf 2>/dev/null | grep -q '/etc/telegraf/telegraf.conf'"
