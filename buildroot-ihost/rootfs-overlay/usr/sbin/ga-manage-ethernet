@@ -197,7 +197,15 @@ link_up() {
   ip link set "$ETH_IFACE" up 2>/dev/null || true
   if [ -n "$CONN" ]; then
     nmcli connection modify "$CONN" connection.autoconnect yes 2>/dev/null || true
-    nmcli connection up "$CONN" 2>/dev/null || true
+    # Activate now only when there is a link. Without carrier the explicit
+    # `up` fails at once and, with unbounded retries, fed the storm behind
+    # Odoo #753. autoconnect=yes is enough: NetworkManager activates the
+    # profile itself the moment the carrier appears.
+    if [ "$(cat "/sys/class/net/${ETH_IFACE}/carrier" 2>/dev/null)" = "1" ]; then
+      nmcli connection up "$CONN" 2>/dev/null || true
+    else
+      echo "ga-manage-ethernet: no carrier on $ETH_IFACE — profile armed (autoconnect), not activated"
+    fi
   fi
   # NetworkManager activates asynchronously. Without this wait the status file
   # written straight afterwards reads operstate as still down and reports
