@@ -11,8 +11,12 @@ suite_start "Hardware"
 run_test "HW-01" "WiFi interface wlan0 present" \
   "ip link show wlan0 >/dev/null 2>&1"
 
+# HW-02 reads the kernel log from the journal: the dmesg ring buffer rotates
+# (K31 rc20 after 3 h uptime started at 6452 s — the probe lines were gone and
+# the test went red on a healthy driver).
 run_test "HW-02" "rtw88_8723ds driver loaded (no eFuse errors)" \
-  "dmesg | grep -q 'rtw_8723ds' && ! dmesg | grep -q 'failed to dump efuse'"
+  "K=\$(journalctl -k -b --no-pager -q 2>/dev/null); [ -n \"\$K\" ] || K=\$(dmesg 2>/dev/null); \
+    echo \"\$K\" | grep -q 'rtw_8723ds' && ! echo \"\$K\" | grep -q 'failed to dump efuse'"
 
 # RTL8723DS produces benign SDIO warnings during probe — filter those out
 warn_test "HW-03" "No unexpected SDIO/MMC errors in dmesg" \
