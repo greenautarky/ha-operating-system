@@ -83,7 +83,13 @@ test.describe("PIN verification (onboarding)", () => {
     const statusRes = await request.get(`${deviceUrl}/api/greenautarky_site/status`);
     const status = await statusRes.json();
     if (status.pin_retry_after && status.pin_retry_after > 0) {
-      test.skip(true, `Rate limited for ${status.pin_retry_after}s — run later`);
+      // the wrong-PIN tests above leave a lockout; this is the load-bearing test of
+      // the file — wait it out (≤ 60 s) instead of skipping (first rc22 run skipped it)
+      for (let t = 0; t < 12; t++) {
+        const st = await (await request.get(`${deviceUrl}/api/greenautarky_site/status`)).json();
+        if (!st.pin_retry_after && !st.pin_locked_until) break;
+        await new Promise((r) => setTimeout(r, 5000));
+      }
     }
 
     const res = await request.post(`${deviceUrl}/api/greenautarky_site/verify_pin`, {

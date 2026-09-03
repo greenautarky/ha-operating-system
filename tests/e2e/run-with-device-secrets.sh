@@ -139,11 +139,20 @@ if v is not None:
 }
 
 # --- Fetch -----------------------------------------------------------------
-LABEL_JSON="$(fm_get "/api/label-credentials/${DEVICE_ID}")" \
-  || die "could not fetch label credentials for ${DEVICE_ID} (status above) — the PIN cannot be obtained"
-
-PIN="$(printf '%s' "$LABEL_JSON" | json_field onboarding_pin)"
-[[ -n "$PIN" ]] || die "label row for ${DEVICE_ID} carries no onboarding_pin"
+# The LIVE onboarding PIN is the one identity-backfill minted (fm identity_backfill
+# store, GET /api/devices/{id}/identity); the label store carries the PIN printed
+# on the box, which differs after any identity-backfill (K31, 2026-09-03: the two
+# hashes did not match and the "correct PIN" test ran with the wrong one).
+PIN_SOURCE="identity"
+IDENTITY_JSON="$(fm_get "/api/devices/${DEVICE_ID}/identity" 2>/dev/null || true)"
+PIN="$(printf '%s' "$IDENTITY_JSON" | json_field onboarding_pin 2>/dev/null || true)"
+if [[ -z "$PIN" ]]; then
+  echo "WARNING: no identity record for ${DEVICE_ID} — falling back to the LABEL pin (may differ from the device)" >&2
+  PIN_SOURCE="label-credentials (fallback)"
+  LABEL_JSON="$(fm_get "/api/label-credentials/${DEVICE_ID}")"
+  PIN="$(printf '%s' "$LABEL_JSON" | json_field onboarding_pin)"
+fi
+[[ -n "$PIN" ]] || die "no onboarding_pin for ${DEVICE_ID} (identity + label)"
 
 ADMIN_USER=""
 for key in admin_user admin_username username; do
@@ -176,7 +185,7 @@ echo "=============================================="
 echo "  GA OS E2E (device secrets from fleet-manager)"
 echo "  Device:   ${DEVICE_ID} at ${DEVICE_URL}"
 echo "  fm:       ${FM_URL}"
-echo "  DEVICE_PIN:        set (${#DEVICE_PIN} chars)"
+echo "  DEVICE_PIN:        set (${#DEVICE_PIN} chars, source: ${PIN_SOURCE})"
 echo "  HA_ADMIN_PASSWORD: set (source: ${PASSWORD_SOURCE})"
 echo "  HA_ADMIN_USER:     ${HA_ADMIN_USER}"
 echo "=============================================="
