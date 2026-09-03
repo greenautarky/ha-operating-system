@@ -143,13 +143,14 @@ if v is not None:
 # store, GET /api/devices/{id}/identity); the label store carries the PIN printed
 # on the box, which differs after any identity-backfill (K31, 2026-09-03: the two
 # hashes did not match and the "correct PIN" test ran with the wrong one).
+LABEL_JSON="$(fm_get "/api/label-credentials/${DEVICE_ID}" 2>/dev/null || true)"
 PIN_SOURCE="identity"
 IDENTITY_JSON="$(fm_get "/api/devices/${DEVICE_ID}/identity" 2>/dev/null || true)"
 PIN="$(printf '%s' "$IDENTITY_JSON" | json_field onboarding_pin 2>/dev/null || true)"
 if [[ -z "$PIN" ]]; then
   echo "WARNING: no identity record for ${DEVICE_ID} — falling back to the LABEL pin (may differ from the device)" >&2
   PIN_SOURCE="label-credentials (fallback)"
-  LABEL_JSON="$(fm_get "/api/label-credentials/${DEVICE_ID}")"
+  [[ -n "$LABEL_JSON" ]] || LABEL_JSON="$(fm_get "/api/label-credentials/${DEVICE_ID}")"
   PIN="$(printf '%s' "$LABEL_JSON" | json_field onboarding_pin)"
 fi
 [[ -n "$PIN" ]] || die "no onboarding_pin for ${DEVICE_ID} (identity + label)"
