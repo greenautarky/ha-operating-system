@@ -1,0 +1,23 @@
+#!/bin/sh
+# docker shim for the heating suite selftest — answers from the fixture tree.
+# GA_HEAT_FIXTURE overrides GA_HEAT_FIXTURE_BASE file by file, so a fixture
+# carries only what differs from base/.
+pick() { if [ -e "$GA_HEAT_FIXTURE/$1" ]; then echo "$GA_HEAT_FIXTURE/$1"; else echo "$GA_HEAT_FIXTURE_BASE/$1"; fi; }
+cmd="$1"; shift
+case "$cmd" in
+  ps)
+    fmt=""
+    while [ $# -gt 0 ]; do case "$1" in --format) fmt="$2"; shift ;; esac; shift; done
+    case "$fmt" in
+      *Status*) cat "$(pick containers.txt)" ;;
+      *)        cut -d' ' -f1 "$(pick containers.txt)" ;;
+    esac ;;
+  exec)   # the suite's only exec is the /core/api/states fetch through ga_manager
+    cat "$(pick states.json)" ;;
+  logs)
+    name=""; for a in "$@"; do case "$a" in addon_*) name="$a" ;; esac; done
+    f="$(pick "logs/$name.log")"; [ -e "$f" ] && cat "$f"; : ;;
+  inspect)
+    f="$(pick engine-ip.txt)"; [ -e "$f" ] && cat "$f"; : ;;
+  *) echo "docker shim: unhandled: $cmd $*" >&2; exit 1 ;;
+esac

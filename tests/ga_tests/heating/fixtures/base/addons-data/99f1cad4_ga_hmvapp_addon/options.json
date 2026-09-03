@@ -1,0 +1,1 @@
+{"INFLUXDB_HOST": "127.0.0.1", "INFLUXDB_PORT": 8086, "INFLUXDB_USERNAME": "hmvapp", "INFLUXDB_PASSWORD": "placeholder-not-a-secret", "LOG_LEVEL": "info"}

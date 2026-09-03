@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "minor_version": 9,
+  "key": "core.device_registry",
+  "data": {
+    "devices": [
+      {"id": "dev-trv-e6", "name": "TRVZB e6", "area_id": "wohnzimmer"},
+      {"id": "dev-trv-e7", "name": "TRVZB e7", "area_id": null},
+      {"id": "dev-trv-e8", "name": "TRVZB e8", "area_id": "bad"}
+    ]
+  }
+}

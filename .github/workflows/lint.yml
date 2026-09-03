@@ -236,6 +236,11 @@ jobs:
       # proves red AND green here, on every PR, with no hardware.
       - name: Provisioning phase invariants (red + green on fixture device trees)
         run: ./tests/ga_tests/provisioning/selftest.sh
+      # Heating suite (ADR-0021 contract v1: HEAT-03 source, HEAT-06 decision entity,
+      # HEAT-07 liveness row, HEAT-08 one MQTT client) — 12 fixture variants, red AND
+      # green, driven through the LIVE test.sh with docker/curl shims.
+      - name: "Heating suite selftest (fixtures: must-fail / must-pass / must-skip)"
+        run: ./tests/ga_tests/heating/selftest.sh
 
       # The fresh-flash gate needs a card, a MUX and a power plug, so it cannot
       # run here — but its verdict logic can, and the exit code is what a bake

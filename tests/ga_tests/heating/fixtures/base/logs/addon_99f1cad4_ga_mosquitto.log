@@ -1,0 +1,5 @@
+1756900000: mosquitto version 2.0.20 running
+1756900001: New client connected from 172.30.32.3:41022 as zigbee2mqtt_frontend (p2, c1, k60, u'zigbee2mqtt').
+1756900002: New client connected from 172.30.32.7:50100 as ga_hmvapp_decisions (p2, c1, k60, u'hmvapp').
+1756900003: New client connected from 172.30.32.4:39810 as ga_manager (p2, c1, k60, u'ga_manager').
+1756900004: New client connected from 172.30.32.1:52200 as homeassistant_mqtt (p2, c1, k60, u'homeassistant').
