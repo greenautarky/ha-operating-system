@@ -83,7 +83,13 @@ test.describe("PIN verification (onboarding)", () => {
     const statusRes = await request.get(`${deviceUrl}/api/greenautarky_site/status`);
     const status = await statusRes.json();
     if (status.pin_retry_after && status.pin_retry_after > 0) {
-      test.skip(true, `Rate limited for ${status.pin_retry_after}s — run later`);
+      // the wrong-PIN tests above leave a lockout; this is the load-bearing test of
+      // the file — wait it out (≤ 60 s) instead of skipping (first rc22 run skipped it)
+      for (let t = 0; t < 12; t++) {
+        const st = await (await request.get(`${deviceUrl}/api/greenautarky_site/status`)).json();
+        if (!st.pin_retry_after && !st.pin_locked_until) break;
+        await new Promise((r) => setTimeout(r, 5000));
+      }
     }
 
     const res = await request.post(`${deviceUrl}/api/greenautarky_site/verify_pin`, {
@@ -135,6 +141,12 @@ test.describe("PIN verification (onboarding)", () => {
 
   test("PIN step visible in wizard when required", async ({ page, deviceUrl }) => {
     test.skip(!pinRequired, "No PIN required on this device");
+    // after a successful verification earlier in the file the wizard skips the PIN step
+    // (rc22 K31, 2026-09-03: red only by ordering, pin_verified was already true)
+    {
+      const st = await (await page.request.get(`${deviceUrl}/api/greenautarky_site/status`)).json();
+      test.skip(st.pin_verified === true, "PIN already verified — the wizard skips the PIN step");
+    }
 
     // Navigate to onboarding page
     await page.goto(`${deviceUrl}/greenautarky-setup.html`);
@@ -164,7 +176,8 @@ test.describe("PIN verification (onboarding)", () => {
 
     resetOnboarding();
 
-    await page.goto(`${deviceUrl}/greenautarky-setup.html?pin=${DEVICE_PIN}&device=KIB-SON-TEST`);
+    const qrUrl = `${deviceUrl}/greenautarky-setup.html?pin=${DEVICE_PIN}&device=KIB-SON-TEST`;
+    await page.goto(qrUrl);
     await page.waitForLoadState("networkidle");
 
     // For ~a minute after resetOnboarding()'s Core restart the integration's
@@ -175,7 +188,9 @@ test.describe("PIN verification (onboarding)", () => {
     for (let attempt = 0; attempt < 4; attempt++) {
       if (await page.locator("ha-panel-greenautarky-setup").count()) break;
       await page.waitForTimeout(10_000);
-      await page.reload({ waitUntil: "networkidle" }).catch(() => {});
+      // the wizard strips ?pin= on its first load (history.replaceState), so a reload
+      // would arrive WITHOUT the PIN — re-open the original URL instead (rc22, 2026-09-03)
+      await page.goto(qrUrl, { waitUntil: "networkidle" }).catch(() => {});
     }
     await expect(page.locator("ha-panel-greenautarky-setup")).toBeAttached({ timeout: 30_000 });
     await expect(page.locator("ga-setup-welcome, ga-setup-pin, ga-setup-gdpr").first()).toBeAttached({ timeout: 30_000 });
@@ -308,6 +323,12 @@ test.describe("PIN verification (onboarding)", () => {
 
     // Send with dash format (e.g. "847-293")
     const dashPin = DEVICE_PIN.slice(0, 3) + "-" + DEVICE_PIN.slice(3);
+    // earlier wrong-PIN tests may leave a 429 lockout (status "locked"); wait it out
+    for (let t = 0; t < 12; t++) {
+      const st = await (await request.get(`${deviceUrl}/api/greenautarky_site/status`)).json();
+      if (!st.pin_retry_after && !st.pin_locked_until) break;
+      await new Promise((r) => setTimeout(r, 5000));
+    }
     const res = await request.post(`${deviceUrl}/api/greenautarky_site/verify_pin`, {
       data: { pin: dashPin },
     });
