@@ -49,7 +49,6 @@ run_test_show "ADR-01" "ga_manager container Up" 'up ga_manager'
 run_test_show "ADR-02" "ga_mosquitto container Up" 'up ga_mosquitto'
 run_test_show "ADR-03" "ga_influxdbv1 container Up" 'up ga_influxdbv1'
 run_test_show "ADR-04" "ga_default_addon container Up" 'up ga_default_addon'
-run_test_show "ADR-05" "ga_hmvapp_addon container Up" 'up ga_hmvapp_addon'
 run_test_show "ADR-06" "ga_ihosthardwarecontrol container Up" 'up ga_ihosthardwarecontrol'
 run_test_show "ADR-07" "ga_zigbee2mqtt container Up" 'up ga_zigbee2mqtt'
 
@@ -89,14 +88,16 @@ run_test_show "ADR-12" "influxdb: /ping answers inside the container" \
 # Pinned from source — never derived from the device under test:
 #   ga_default_addon  radiator_data() every 180 s        -> "radiator_data"
 #     (default_addon/app/main.py:530, functions/radiator_data.py:132,:168)
-#   ga_hmvapp_addon   control_radiator() on the 3 s loop -> "system_info"
-#     (hmvapp_addon/app/main.py:70, functions/heating_management.py:2255)
-# Both write to INFLUXDB_GD_DATABASE = gd_data; both users hold ALL on it
+# It writes to INFLUXDB_GD_DATABASE = gd_data; its user holds ALL on it
 # (influxDBv1 rootfs/etc/cont-init.d/00_create-db_and_users.sh:115-116).
-# Caveat before anyone widens the window to make this green: both paths only
-# write when at least one room has a paired radiator (radiator_data.py:302,
-# heating_management.py:2334). On an uncommissioned device these are red, and
-# that is the honest state, not a flake.
+# Caveat before anyone widens the window to make this green: the path only
+# writes when at least one room has a paired radiator (radiator_data.py:302).
+# On an uncommissioned device this is red, and that is the honest state, not
+# a flake.
+# ga_hmvapp_addon (formerly ADR-05/14/18) is retired on the new line
+# (ADR-0021 §3): on K31 rc22, 2026-09-03, it wrote no system_info row in over
+# an hour with all valves reporting, and its control input (HA -> InfluxDB
+# temperature history) does not exist on this line.
 INFLUX_URL="http://127.0.0.1:8086"   # ga_influxdbv1 maps 8086/tcp:8086 onto the host (store config.yaml:31)
 FRESH_DB="gd_data"
 FRESH_WINDOW="10m"
@@ -136,28 +137,17 @@ _fresh_check() {
   if ! up ga_influxdbv1; then
     skip_test "$_fid" "$_fdesc" "ga_influxdbv1 not running — nothing to query (ADR-03 covers it)"
   elif ! up "$_fslug"; then
-    skip_test "$_fid" "$_fdesc" "$_fslug not running — nothing can have written (ADR-04/05 cover it)"
-  elif [ "${4:-}" = "info" ]; then
-    # informational: the measurement stays visible, the suite does not go red on it
-    if _fresh_row "$_fslug" "$_fm"; then run_test_show "$_fid" "$_fdesc" "true"; else skip_test "$_fid" "$_fdesc" "informational — no row yet (see comment above)"; fi
+    skip_test "$_fid" "$_fdesc" "$_fslug not running — nothing can have written (ADR-04 covers it)"
   else
     run_test_show "$_fid" "$_fdesc" "_fresh_row $_fslug $_fm"
   fi
 }
 _fresh_check "ADR-17" ga_default_addon radiator_data
-# ADR-18 is informational until ga_hmvapp_addon writes at all: measured twice on
-# K31 rc22 (2026-09-03, all four valves reporting for 15+ min) it wrote no
-# system_info row while ga_default_addon wrote every 3 min (Odoo #642). A red
-# nobody can turn green teaches people to ignore the suite; the measurement
-# stays visible as WARN/SKIP and flips to a real test with the hmvapp fix.
-_fresh_check "ADR-18" ga_hmvapp_addon  system_info info
 
-# the two Python add-ons: pandas 3.0 must IMPORT at runtime on the device —
-# the one thing the build pipeline could not prove (import-only evidence).
+# the Python add-on: pandas 3.0 must IMPORT at runtime on the device — the one
+# thing the build pipeline could not prove (import-only evidence).
 run_test_show "ADR-13" "ga_default_addon: pandas imports at runtime (3.x major bump)" \
   'docker exec "$(ctr_of ga_default_addon)" python3 -c "import pandas" 2>/dev/null'
-run_test_show "ADR-14" "ga_hmvapp_addon: pandas + sklearn import at runtime" \
-  'docker exec "$(ctr_of ga_hmvapp_addon)" python3 -c "import pandas, sklearn" 2>/dev/null'
 
 # hardware-control: Node 24 actually executes on this armv7 (qemu could not
 # prove this — the device is the first place the JIT truly runs for us).
