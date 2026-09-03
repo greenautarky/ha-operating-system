@@ -97,7 +97,7 @@ trv_areas() {
   jq -r --slurpfile dev "$DEVICE_REG" '
     ($dev[0].data.devices | map({key: .id, value: .area_id}) | from_entries) as $darea
     | .data.entities[]
-    | select(.entity_id | test("^climate\\.0x[0-9a-f]+$"))
+    | select(.entity_id | startswith("climate.0x"))
     | select(.platform == "mqtt")
     | (.area_id // $darea[.device_id // ""]) as $area
     | select($area != null)
