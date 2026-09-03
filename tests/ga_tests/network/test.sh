@@ -50,9 +50,23 @@ fi
 # 0 = retry forever in NetworkManager. Shipped that way until rc20; on a
 # link-less eth0 it drove the Supervisor into a D-Bus loop (Odoo #753). The
 # effective value is the main file plus conf.d, last one wins.
-_nm_retries="$(cat /etc/NetworkManager/NetworkManager.conf /etc/NetworkManager/conf.d/*.conf /run/NetworkManager/conf.d/*.conf 2>/dev/null | grep -E '^autoconnect-retries-default=' | tail -1 | cut -d= -f2)"
-run_test "NET-04b" "NetworkManager autoconnect-retries-default is bounded (got: ${_nm_retries:-unset})" \
-  "[ -n '${_nm_retries}' ] && [ '${_nm_retries}' != '0' ] && [ '${_nm_retries}' != '-1' ]"
+_nm_confs="/etc/NetworkManager/NetworkManager.conf /etc/NetworkManager/conf.d/*.conf /run/NetworkManager/conf.d/*.conf"
+# shellcheck disable=SC2086
+_nm_retries="$(cat $_nm_confs 2>/dev/null | grep -E '^autoconnect-retries-default=' | tail -1 | cut -d= -f2)"
+# A [connection] property default overrides [main] autoconnect-retries-default
+# (NM uses the global default only when the property is -1). rc20 shipped
+# connection.autoconnect-retries=0 below a bounded [main] default — the fix was
+# inert and this test was green (2026-09-03). Any active 0 anywhere is a fail.
+# shellcheck disable=SC2086
+_nm_conn_zero="$(cat $_nm_confs 2>/dev/null | grep -cE '^connection\.autoconnect-retries=0')"
+run_test "NET-04b" "NetworkManager autoconnect retries are bounded (default: ${_nm_retries:-unset}, [connection] overrides to 0: ${_nm_conn_zero})" \
+  "[ -n '${_nm_retries}' ] && [ '${_nm_retries}' != '0' ] && [ '${_nm_retries}' != '-1' ] && [ '${_nm_conn_zero}' = '0' ]"
+
+# Outcome, not config: a retry storm shows as activation failures per minute
+# (818/60 s on K31 rc20 with retries=forever; 0 with the bounded default).
+_nm_fails_60s="$(journalctl -u NetworkManager --since -60s --no-pager -q 2>/dev/null | grep -c 'Activation: failed')"
+run_test "NET-04c" "No NetworkManager activation storm (failures in the last 60 s: ${_nm_fails_60s})" \
+  "[ '${_nm_fails_60s}' -lt 10 ]"
 
 run_test "NET-05" "Default gateway detected" \
   "ip route | grep -q '^default'"
