@@ -70,7 +70,15 @@ test.describe('HA Dashboard', () => {
   test('hamburger menu is visible on mobile (sidebar collapsed)', async ({
     page,
     deviceUrl,
-  }) => {
+  }, testInfo) => {
+    // Home Assistant collapses the sidebar behind the hamburger only on a narrow
+    // viewport. On the desktop project the sidebar is expanded and the button is
+    // legitimately absent, so this asserted a mobile behaviour on a desktop page
+    // and failed there for the whole life of the test (measured 2026-09-03).
+    test.skip(
+      testInfo.project.name === 'desktop',
+      'sidebar is expanded on desktop — the hamburger is a mobile-viewport behaviour',
+    );
     await waitForHA(deviceUrl);
     await haLogin(page, deviceUrl);
     await page.goto(deviceUrl);

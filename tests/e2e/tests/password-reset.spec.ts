@@ -47,8 +47,15 @@ test.describe('Password Reset — Page', () => {
     await pinInput.fill('000000');
     await page.locator('#btn-pin').click();
 
-    // Accept either "invalid PIN" or "too many attempts" (rate-limiter)
-    const error = page.locator('#pin-error, text=/zu viele versuche|too many/i');
+    // Accept either "invalid PIN" or "too many attempts" (rate-limiter).
+    // NOT one locator string: mixing a CSS selector with the `text=` engine in a
+    // single string is a parse error ("Unexpected token = while parsing css
+    // selector"), so the old one-liner could never pass — it reported the parse
+    // error as a visibility failure. Measured on K31, 2026-09-03.
+    const error = page
+      .locator('#pin-error')
+      .or(page.getByText(/zu viele versuche|too many/i))
+      .first();
     await expect(error).toBeVisible({ timeout: 10_000 });
     const errorText = (await error.textContent()) ?? '';
     expect(/ungültige pin|invalid|zu viele versuche|too many/i.test(errorText)).toBe(true);
@@ -79,8 +86,10 @@ test.describe('Password Reset — API', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pin: '000000' }),
     });
-    // 401 (wrong PIN) or 404 (no PIN file) — both are valid
-    expect([401, 404]).toContain(res.status);
+    // 401 (wrong PIN), 404 (no PIN file) or 429 (the rate limiter this very
+    // suite trips one test earlier — the sibling reset check already allows it,
+    // and leaving it out here made the outcome depend on test order).
+    expect([401, 404, 429]).toContain(res.status);
   });
 
   test('reset endpoint exists (returns 400 or 401 or 404)', async ({ deviceUrl }) => {
