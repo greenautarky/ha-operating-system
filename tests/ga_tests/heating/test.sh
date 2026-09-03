@@ -36,7 +36,9 @@
 # device without a single TRV every test SKIPs with that reason — an
 # uncommissioned device has no heating outcome to assert.
 #
-# Host tools used: docker, jq (BR2_PACKAGE_JQ=y on ihost), grep, sort, uniq.
+# Host tools used: docker, jq (BR2_PACKAGE_JQ=y on ihost — built WITHOUT oniguruma:
+# no test()/match()/sub(); use startswith/endswith/contains only — K31 rc22, 2026-09-03),
+# grep, sort, uniq.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
 
@@ -71,7 +73,7 @@ GM="$(ctr_of ga_manager)"
 if [ -n "$GM" ]; then
   docker exec "$GM" sh -c \
     'curl -fsS -m 20 -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/api/states' 2>/dev/null \
-    | jq -c '[ .[] | select(.entity_id | test("^(climate|number)\\.")) ]' > "$STATES" 2>/dev/null \
+    | jq -c '[ .[] | select(.entity_id | startswith("climate.") or startswith("number.")) ]' > "$STATES" 2>/dev/null \
     || : > "$STATES"
 fi
 
@@ -114,7 +116,7 @@ room_entity_for_area() {
 }
 # "<entity_id>" of every ga_heating room entity present in Core, with state.
 room_entities() {
-  jq -r '.[] | select(.entity_id | startswith("climate.")) | select(.entity_id | test("^climate\\.0x[0-9a-f]+$") | not) | select(.attributes.valves != null) | .entity_id' "$STATES" 2>/dev/null
+  jq -r '.[] | select(.entity_id | startswith("climate.")) | select(.entity_id | startswith("climate.0x") | not) | select(.attributes.valves != null) | .entity_id' "$STATES" 2>/dev/null
 }
 state_of()  { jq -r --arg e "$1" '.[] | select(.entity_id == $e) | .state' "$STATES" 2>/dev/null | head -1; }
 attr_of()   { jq -r --arg e "$1" --arg a "$2" '.[] | select(.entity_id == $e) | .attributes[$a] // empty' "$STATES" 2>/dev/null | head -1; }
