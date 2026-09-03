@@ -47,6 +47,13 @@ else
   skip_test "NET-04" "telegraf + fluent-bit active (consent-gated tiers not enabled on this device)"
 fi
 
+# 0 = retry forever in NetworkManager. Shipped that way until rc20; on a
+# link-less eth0 it drove the Supervisor into a D-Bus loop (Odoo #753). The
+# effective value is the main file plus conf.d, last one wins.
+_nm_retries="$(cat /etc/NetworkManager/NetworkManager.conf /etc/NetworkManager/conf.d/*.conf /run/NetworkManager/conf.d/*.conf 2>/dev/null | grep -E '^autoconnect-retries-default=' | tail -1 | cut -d= -f2)"
+run_test "NET-04b" "NetworkManager autoconnect-retries-default is bounded (got: ${_nm_retries:-unset})" \
+  "[ -n '${_nm_retries}' ] && [ '${_nm_retries}' != '0' ] && [ '${_nm_retries}' != '-1' ]"
+
 run_test "NET-05" "Default gateway detected" \
   "ip route | grep -q '^default'"
 
