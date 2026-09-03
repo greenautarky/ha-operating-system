@@ -36,10 +36,12 @@ export async function haLogin(page: Page, hassUrl: string): Promise<void> {
   }
 
   const username = process.env.HA_ADMIN_USER || 'admin';
-  const password = process.env.HA_ADMIN_PASS;
+  // HA_ADMIN_PASSWORD is the name run-with-device-secrets.sh exports;
+  // HA_ADMIN_PASS is the older name run_e2e_tests.sh uses. Both are honoured.
+  const password = process.env.HA_ADMIN_PASS || process.env.HA_ADMIN_PASSWORD;
   if (!password) {
     throw new Error(
-      'Authentication required: set HA_TOKEN or HA_ADMIN_USER + HA_ADMIN_PASS',
+      'Authentication required: set HA_TOKEN or HA_ADMIN_USER + HA_ADMIN_PASS (or HA_ADMIN_PASSWORD)',
     );
   }
 
