@@ -70,19 +70,20 @@ export const test = base.extend<DeviceFixtures>({
       // 240s so the test exits on a real failure, not a timing flake.
       const maxWait = 240_000;
       const start = Date.now();
+      let back = false;
       while (Date.now() - start < maxWait) {
         try {
           const res = execSync(
             `curl -sf --connect-timeout 5 ${deviceUrl}/api/greenautarky_site/status`,
             { timeout: 10_000 },
           ).toString();
-          if (res.includes('"pin_required"')) return; // HA is back
+          if (res.includes('"pin_required"')) { back = true; break; } // HA is back
         } catch {
           // not ready yet
         }
         execSync('sleep 3');
       }
-      throw new Error('HA Core did not come back after onboarding reset');
+      if (!back) throw new Error('HA Core did not come back after onboarding reset');
 
       // The status endpoint answers from the integration long before the
       // frontend serves the setup panel again after the restart. Three QR
