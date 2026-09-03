@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "minor_version": 17,
+  "key": "core.entity_registry",
+  "data": {
+    "entities": [
+      {"entity_id": "climate.0x0cae5ffffeab11e6", "platform": "mqtt", "unique_id": "0x0cae5ffffeab11e6_climate_zigbee2mqtt", "device_id": "dev-trv-e6", "area_id": null},
+      {"entity_id": "climate.0x0cae5ffffeab11e7", "platform": "mqtt", "unique_id": "0x0cae5ffffeab11e7_climate_zigbee2mqtt", "device_id": "dev-trv-e7", "area_id": "wohnzimmer"},
+      {"entity_id": "climate.0x0cae5ffffeab11e8", "platform": "mqtt", "unique_id": "0x0cae5ffffeab11e8_climate_zigbee2mqtt", "device_id": "dev-trv-e8", "area_id": null},
+      {"entity_id": "number.0x0cae5ffffeab11e6_local_temperature_calibration", "platform": "mqtt", "unique_id": "0x0cae5ffffeab11e6_local_temperature_calibration_zigbee2mqtt", "device_id": "dev-trv-e6", "area_id": null},
+      {"entity_id": "number.0x0cae5ffffeab11e7_local_temperature_calibration", "platform": "mqtt", "unique_id": "0x0cae5ffffeab11e7_local_temperature_calibration_zigbee2mqtt", "device_id": "dev-trv-e7", "area_id": null},
+      {"entity_id": "number.0x0cae5ffffeab11e8_local_temperature_calibration", "platform": "mqtt", "unique_id": "0x0cae5ffffeab11e8_local_temperature_calibration_zigbee2mqtt", "device_id": "dev-trv-e8", "area_id": null},
+      {"entity_id": "climate.wohnzimmer", "platform": "ga_heating", "unique_id": "ga_heating_wohnzimmer", "device_id": null, "area_id": "wohnzimmer"},
+      {"entity_id": "climate.bad", "platform": "ga_heating", "unique_id": "ga_heating_bad", "device_id": null, "area_id": "bad"},
+      {"entity_id": "sensor.hm_0x0cae5ffffeab11e6_desired_offset", "platform": "mqtt", "unique_id": "hm_0x0cae5ffffeab11e6_desired_offset", "device_id": null, "area_id": null},
+      {"entity_id": "sensor.hm_0x0cae5ffffeab11e7_desired_offset", "platform": "mqtt", "unique_id": "hm_0x0cae5ffffeab11e7_desired_offset", "device_id": null, "area_id": null}
+    ]
+  }
+}

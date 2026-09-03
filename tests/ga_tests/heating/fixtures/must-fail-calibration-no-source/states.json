@@ -1,0 +1,115 @@
+[
+  {
+    "entity_id": "climate.wohnzimmer",
+    "state": "heat",
+    "attributes": {
+      "hvac_modes": [
+        "auto",
+        "heat",
+        "off"
+      ],
+      "temperature_source": "sensor.wohnzimmer_temperature",
+      "valves": [
+        "climate.0x0cae5ffffeab11e6",
+        "climate.0x0cae5ffffeab11e7"
+      ],
+      "calibration": {
+        "climate.0x0cae5ffffeab11e6": {
+          "offset": -0.4,
+          "written_at": "2026-09-03T12:00:00+00:00"
+        },
+        "climate.0x0cae5ffffeab11e7": {
+          "offset": 0.0,
+          "written_at": null,
+          "source": null,
+          "reason": null
+        }
+      }
+    }
+  },
+  {
+    "entity_id": "climate.bad",
+    "state": "auto",
+    "attributes": {
+      "hvac_modes": [
+        "auto",
+        "heat",
+        "off"
+      ],
+      "temperature_source": "valve",
+      "valves": [
+        "climate.0x0cae5ffffeab11e8"
+      ],
+      "calibration": {}
+    }
+  },
+  {
+    "entity_id": "climate.0x0cae5ffffeab11e6",
+    "state": "heat",
+    "attributes": {
+      "hvac_modes": [
+        "heat",
+        "off"
+      ]
+    }
+  },
+  {
+    "entity_id": "climate.0x0cae5ffffeab11e7",
+    "state": "heat",
+    "attributes": {
+      "hvac_modes": [
+        "heat",
+        "off"
+      ]
+    }
+  },
+  {
+    "entity_id": "climate.0x0cae5ffffeab11e8",
+    "state": "heat",
+    "attributes": {
+      "hvac_modes": [
+        "heat",
+        "off"
+      ]
+    }
+  },
+  {
+    "entity_id": "number.0x0cae5ffffeab11e6_local_temperature_calibration",
+    "state": "-0.4",
+    "attributes": {}
+  },
+  {
+    "entity_id": "number.0x0cae5ffffeab11e7_local_temperature_calibration",
+    "state": "0",
+    "attributes": {}
+  },
+  {
+    "entity_id": "number.0x0cae5ffffeab11e8_local_temperature_calibration",
+    "state": "unknown",
+    "attributes": {}
+  },
+  {
+    "entity_id": "sensor.hm_0x0cae5ffffeab11e6_desired_offset",
+    "state": "-0.4",
+    "attributes": {
+      "contract": 1,
+      "reason": "sensor-valve delta -0.4",
+      "valid_until": "2099-01-01T00:00:00Z",
+      "room": "wohnzimmer",
+      "model_version": "1",
+      "decided_at": "2026-09-03T14:00:00Z"
+    }
+  },
+  {
+    "entity_id": "sensor.hm_0x0cae5ffffeab11e7_desired_offset",
+    "state": "0.0",
+    "attributes": {
+      "contract": 1,
+      "reason": "within tolerance",
+      "valid_until": "2099-01-01T00:00:00Z",
+      "room": "wohnzimmer",
+      "model_version": "1",
+      "decided_at": "2026-09-03T14:00:00Z"
+    }
+  }
+]

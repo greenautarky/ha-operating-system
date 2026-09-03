@@ -1,0 +1,5 @@
+addon_99f1cad4_ga_manager Up 3 hours
+addon_99f1cad4_ga_mosquitto Up 3 hours
+addon_99f1cad4_ga_influxdbv1 Up 3 hours
+addon_99f1cad4_ga_zigbee2mqtt Up 3 hours
+addon_99f1cad4_ga_default_addon Up 2 hours

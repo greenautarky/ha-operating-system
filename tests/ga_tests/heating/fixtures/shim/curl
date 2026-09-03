@@ -1,0 +1,7 @@
+#!/bin/sh
+# curl shim for the heating suite selftest — the InfluxDB /query answer comes
+# from the fixture; every argument is appended to $GA_HEAT_TMP/curl-args.log so
+# the selftest can assert WHAT was asked (which room tags, no others).
+pick() { if [ -e "$GA_HEAT_FIXTURE/$1" ]; then echo "$GA_HEAT_FIXTURE/$1"; else echo "$GA_HEAT_FIXTURE_BASE/$1"; fi; }
+printf '%s\n' "$@" >> "${GA_HEAT_TMP:-/tmp}/curl-args.log"
+f="$(pick influx-response.json)"; [ -e "$f" ] && cat "$f"; :
