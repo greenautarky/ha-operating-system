@@ -83,6 +83,22 @@ export const test = base.extend<DeviceFixtures>({
         execSync('sleep 3');
       }
       throw new Error('HA Core did not come back after onboarding reset');
+
+      // The status endpoint answers from the integration long before the
+      // frontend serves the setup panel again after the restart. Three QR
+      // tests waited 10 s for ga-setup-pin and lost the race on K31 rc20
+      // (2026-09-03, Odoo #751). Gate on the page that the tests will open.
+      const pageStart = Date.now();
+      while (Date.now() - pageStart < maxWait) {
+        try {
+          const code = execSync(
+            `curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 ${deviceUrl}/greenautarky-setup.html`,
+            { timeout: 10_000 },
+          ).toString().trim();
+          if (code === '200') break;
+        } catch { /* not up yet */ }
+        execSync('sleep 3');
+      }
     });
   },
 });
