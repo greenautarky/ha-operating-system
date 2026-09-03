@@ -155,6 +155,13 @@ if [[ -z "$PIN" ]]; then
   PIN="$(printf '%s' "$LABEL_JSON" | json_field onboarding_pin)"
 fi
 [[ -n "$PIN" ]] || die "no onboarding_pin for ${DEVICE_ID} (identity + label)"
+# Product truth (Thomas, 2026-09-03): the resident uses the LABEL/QR PIN. Until
+# fm 0.113.0 (identity-backfill aligns with the label) is deployed the two can
+# differ; say so loudly, compare by equality only, never print either.
+LABEL_PIN="$(printf '%s' "${LABEL_JSON:-}" | json_field onboarding_pin 2>/dev/null || true)"
+if [[ -n "$LABEL_PIN" && "$LABEL_PIN" != "$PIN" ]]; then
+  echo "WARNING: the device's live PIN (identity record) differs from the LABEL PIN — the printed QR would be rejected on this device (fm identity-backfill < 0.113.0)" >&2
+fi
 
 ADMIN_USER=""
 for key in admin_user admin_username username; do
