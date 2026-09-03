@@ -213,18 +213,19 @@ test.describe('Dashboard render smoke', () => {
  * `0.0.0.dev0-2d0609e2e`. The greenautarky-setup panel renders
  * `${__VERSION__}-${__GIT_HASH__}` from the frontend build's env.version(),
  * so the placeholder reaching a release image means the injected version
- * never reached the JS bundle. Marked `test.fail` — an EXPECTED failure —
- * until stamping is fixed: it runs and asserts every time, reports as
- * "expected" while broken, and turns the suite red the day it passes so the
- * marker gets removed rather than forgotten.
+ * never reached the JS bundle. It was marked `test.fail` — an EXPECTED failure
+ * — so that it would report as "expected" while broken and turn the suite red
+ * the day it passed, forcing the marker out rather than letting it be forgotten.
+ * That is exactly what happened: on K31, 2026-09-03, /config/info's Frontend row
+ * carried a real CalVer and the marked test reported "Expected to fail, but
+ * passed". The marker is gone; this is an ordinary assertion now, and a
+ * regression here is a plain failure.
  */
 test.describe('Frontend version stamping', () => {
   test('rendered frontend version is not the 0.0.0.dev0 placeholder', async ({
     page,
     deviceUrl,
   }) => {
-    test.fail(true, 'Known open item: frontend build-id reports 0.0.0.dev0-<hash> on release images');
-
     await waitForHA(deviceUrl);
     let rendered = '';
     let where = '';
