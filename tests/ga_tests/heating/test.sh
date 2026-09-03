@@ -198,11 +198,21 @@ fi
 # =========================================================================
 # Red proof: K31 rc22, 2026-09-03 — 22 per valve in 8 min from
 # ga_hmvapp_addon 1.7.1 (a "state request" to /set every ~20 s), with
-# ga_heating driving the same valves. Measured with exactly this pipeline:
-#   docker logs --since 10m <z2m> 2>&1 | grep -oE "zigbee2mqtt/0x[0-9a-f]+/set" | sort | uniq -c
+# ga_heating driving the same valves.
+#
+# COUNT THE PUBLISH TOPIC, NOT THE LINE. zigbee2mqtt announces every entity by
+# MQTT discovery, and each discovery payload carries
+# `"command_topic":"zigbee2mqtt/<ieee>/set"` — so a bare search for that string
+# also counts announcements, which are not commands to a valve. That never
+# showed on a settled device (discovery is republished only after a restart or a
+# network re-form) and reported exactly 22 per valve on the FRESH rc23 flash,
+# 2026-09-03, while HEAT-05 saw zero add-on publishes in the same window. The
+# discriminator is the log's own shape: z2m writes `topic 'zigbee2mqtt/…/set'`
+# for a publish and puts the payload after `payload '{…}'`.
 heat02() {
   _z2m=$(ctr_of ga_zigbee2mqtt)
   docker logs --since "$SET_WINDOW" "$_z2m" 2>&1 \
+    | grep -oE "topic 'zigbee2mqtt/0x[0-9a-f]+/set'" \
     | grep -oE "zigbee2mqtt/0x[0-9a-f]+/set" | sort | uniq -c > "$SET_COUNTS" 2>/dev/null
   if [ ! -s "$SET_COUNTS" ]; then
     echo "0 messages on any zigbee2mqtt/<ieee>/set in the last $SET_WINDOW"; return 0
