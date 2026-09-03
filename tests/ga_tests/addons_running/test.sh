@@ -78,6 +78,72 @@ run_test_show "ADR-11" "mosquitto: go-auth enforces auth (anonymous connect refu
 run_test_show "ADR-12" "influxdb: /ping answers inside the container" \
   'docker exec "$(ctr_of ga_influxdbv1)" sh -c "curl -s -o /dev/null -w %{http_code} http://127.0.0.1:8086/ping" 2>/dev/null | grep -qE "^(200|204)$"'
 
+# --- does each application add-on WRITE? (the outcome, not the login) ------
+# ADR-12 proves the daemon answers and the fresh-flash gate proves each add-on
+# AUTHENTICATES (HTTP 200). Neither proves a row is flowing: an add-on can
+# answer 200 and write nothing — empty batches, a room registry it cannot read,
+# a database it holds no grant on (rc14 was "started" + 401 behind a green;
+# this is the next blind spot after auth). Each add-on has ONE write path on a
+# fixed cadence, so "a row younger than 10 minutes in that measurement, read
+# under the add-on's OWN delivered credential" is the outcome.
+# Pinned from source — never derived from the device under test:
+#   ga_default_addon  radiator_data() every 180 s        -> "radiator_data"
+#     (default_addon/app/main.py:530, functions/radiator_data.py:132,:168)
+#   ga_hmvapp_addon   control_radiator() on the 3 s loop -> "system_info"
+#     (hmvapp_addon/app/main.py:70, functions/heating_management.py:2255)
+# Both write to INFLUXDB_GD_DATABASE = gd_data; both users hold ALL on it
+# (influxDBv1 rootfs/etc/cont-init.d/00_create-db_and_users.sh:115-116).
+# Caveat before anyone widens the window to make this green: both paths only
+# write when at least one room has a paired radiator (radiator_data.py:302,
+# heating_management.py:2334). On an uncommissioned device these are red, and
+# that is the honest state, not a flake.
+INFLUX_URL="http://127.0.0.1:8086"   # ga_influxdbv1 maps 8086/tcp:8086 onto the host (store config.yaml:31)
+FRESH_DB="gd_data"
+FRESH_WINDOW="10m"
+ADDON_DATA="/mnt/data/supervisor/addons/data"   # <repo>_<slug>/options.json, host side
+
+# _fresh_row <slug> <measurement> — 0 iff gd_data.<measurement> holds a row
+# younger than FRESH_WINDOW, queried under <slug>'s own credential. The
+# credential is read from the host-side options.json into shell variables and
+# handed to curl via --data-urlencode; it is never echoed and never printed —
+# every message below is built from the response, not the request.
+_fresh_row() {
+  _slug="$1"; _m="$2"
+  _opt=$(ls -d "$ADDON_DATA"/*_"$_slug"/options.json 2>/dev/null | head -1)
+  if [ -z "$_opt" ]; then echo "no options.json for $_slug under $ADDON_DATA"; return 1; fi
+  _u=$(sed -n 's/.*"INFLUXDB_USERNAME"[^"]*"\([^"]*\)".*/\1/p' "$_opt" | head -1)
+  _p=$(sed -n 's/.*"INFLUXDB_PASSWORD"[^"]*"\([^"]*\)".*/\1/p' "$_opt" | head -1)
+  if [ -z "$_u" ] || [ -z "$_p" ]; then
+    echo "credential not delivered yet (INFLUXDB_USERNAME/INFLUXDB_PASSWORD empty in options.json)"; return 1
+  fi
+  _body=$(curl -s -m 15 -G "$INFLUX_URL/query" \
+            --data-urlencode "u=$_u" --data-urlencode "p=$_p" \
+            --data-urlencode "db=$FRESH_DB" \
+            --data-urlencode "q=SELECT last(*) FROM \"$_m\" WHERE time > now() - $FRESH_WINDOW" 2>/dev/null)
+  unset _u _p
+  case "$_body" in
+    '')                      echo "no response from $INFLUX_URL"; return 1 ;;
+    *'"error"'*)             echo "influx refused: $(printf '%s' "$_body" | cut -c1-160)"; return 1 ;;
+    *'"series"'*'"values"'*) echo "newest row: $(printf '%s' "$_body" | sed -n 's/.*"values":\[\["\([^"]*\)".*/\1/p')"; return 0 ;;
+    *)                       echo "no row in $FRESH_DB.$_m within $FRESH_WINDOW"; return 1 ;;
+  esac
+}
+# _fresh_check <id> <slug> <measurement> — SKIP (with the reason) when the
+# subject cannot be asked at all; otherwise a real PASS/FAIL.
+_fresh_check() {
+  _fid="$1"; _fslug="$2"; _fm="$3"
+  _fdesc="$_fslug: wrote $FRESH_DB.$_fm within $FRESH_WINDOW under its own credential"
+  if ! up ga_influxdbv1; then
+    skip_test "$_fid" "$_fdesc" "ga_influxdbv1 not running — nothing to query (ADR-03 covers it)"
+  elif ! up "$_fslug"; then
+    skip_test "$_fid" "$_fdesc" "$_fslug not running — nothing can have written (ADR-04/05 cover it)"
+  else
+    run_test_show "$_fid" "$_fdesc" "_fresh_row $_fslug $_fm"
+  fi
+}
+_fresh_check "ADR-17" ga_default_addon radiator_data
+_fresh_check "ADR-18" ga_hmvapp_addon  system_info
+
 # the two Python add-ons: pandas 3.0 must IMPORT at runtime on the device —
 # the one thing the build pipeline could not prove (import-only evidence).
 run_test_show "ADR-13" "ga_default_addon: pandas imports at runtime (3.x major bump)" \
