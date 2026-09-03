@@ -19,7 +19,7 @@
 #   --device ID        fleet-manager device id      (default: KIB-SON-00000031)
 #   --device-ip IP     HA host; sets DEVICE_IP + DEVICE_URL for the fixtures.
 #                      Alternatively export DEVICE_IP or DEVICE_URL yourself.
-#   --fm-url URL       fleet-manager base            (default: http://100.126.129.116:8090)
+#   --fm-url URL       fleet-manager base            (default: $GA_FM_URL; mesh-only, never a literal here)
 #   --token-file PATH  bearer token file             (default: ~/.config/ga/fleet-manager.token)
 #   -h, --help         this text
 #
@@ -34,9 +34,9 @@
 #   printed admin_password is used instead and that substitution is announced.
 #
 # Examples:
-#   tests/e2e/run-with-device-secrets.sh --device-ip 100.126.40.31 -- \
+#   tests/e2e/run-with-device-secrets.sh --device-ip <device-mesh-ip> -- \
 #       tests/pin-verification.spec.ts --project=desktop
-#   DEVICE_IP=100.126.40.31 tests/e2e/run-with-device-secrets.sh \
+#   DEVICE_IP=<device-mesh-ip> tests/e2e/run-with-device-secrets.sh \
 #       tests/dashboard-smoke.spec.ts --project=desktop
 
 set -euo pipefail
@@ -45,7 +45,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 E2E_DIR="$SCRIPT_DIR"
 
 DEVICE_ID="KIB-SON-00000031"
-FM_URL="http://100.126.129.116:8090"
+FM_URL="${GA_FM_URL:-}"
 TOKEN_FILE="${HOME}/.config/ga/fleet-manager.token"
 DEVICE_IP_ARG=""
 PW_ARGS=()
@@ -73,6 +73,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 FM_URL="${FM_URL%/}"
+[[ -n "$FM_URL" ]] || die "no fleet-manager URL: pass --fm-url or export GA_FM_URL (mesh-only address, kept out of this public repo)"
 
 # --- Preconditions ---------------------------------------------------------
 command -v curl >/dev/null || die "curl is required"
