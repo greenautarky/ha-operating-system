@@ -226,11 +226,27 @@ test.describe('Sub-User join via onboarding wizard (ADR-0006)', () => {
     expect(mine, 'new sub-user present in master list').toBeTruthy();
     createdUserId = mine.user_id;
 
-    // via the device store: Non-Admin group + parent == owner + linked person
+    // via the device store: non-admin + parent == owner + linked person + consent.
+    //
+    // NOT "system-users in group_ids" any more. Since entity scoping shipped, a
+    // sub-user is placed in exactly one ga_scope_<uid> group whose policy is the
+    // compiled allow-list of their assigned areas — membership of system-users
+    // would hand them the unrestricted default and defeat the scoping. Measured
+    // on K31, 2026-09-03: two sub-users in ga_scope_* and one older one still in
+    // system-users, so both shapes are accepted and the invariant asserted is
+    // the one that matters: NOT an admin, NOT the owner, under this master.
+    //
+    // Reported per condition. The single compound boolean this replaces printed
+    // "False" and nothing else, so every failure needed a manual investigation
+    // on the device before anyone knew which half was broken.
     const check = ssh(
-      `docker exec homeassistant python3 -c 'import json;a=json.load(open("/config/.storage/auth"))["data"];u=next(x for x in a["users"] if x["id"]=="${mine.user_id}");g=u.get("group_ids",[]);st=json.load(open("/config/.storage/greenautarky_site"))["data"];p=st.get("sub_users",{}).get("${mine.user_id}",{}).get("master");c=st.get("sub_users",{}).get("${mine.user_id}",{}).get("consent",{}).get("datenschutz",{}).get("version")==1;ps=json.load(open("/config/.storage/person"))["data"]["items"];person=any(x.get("user_id")=="${mine.user_id}" for x in ps);print(("system-users" in g) and ("system-admin" not in g) and (not u.get("is_owner")) and (p=="${ownerId}") and person and c)'`,
+      `docker exec homeassistant python3 -c 'import json;a=json.load(open("/config/.storage/auth"))["data"];u=next(x for x in a["users"] if x["id"]=="${mine.user_id}");g=u.get("group_ids",[]);st=json.load(open("/config/.storage/greenautarky_site"))["data"];rec=st.get("sub_users",{}).get("${mine.user_id}",{});ps=json.load(open("/config/.storage/person"))["data"]["items"];print(json.dumps({"not_admin":"system-admin" not in g,"not_owner":not u.get("is_owner"),"scoped_or_user":any(x.startswith("ga_scope_") for x in g) or "system-users" in g,"master_is_owner":rec.get("master")=="${ownerId}","person_linked":any(x.get("user_id")=="${mine.user_id}" for x in ps),"consent_v1":rec.get("consent",{}).get("datenschutz",{}).get("version")==1}))'`,
     );
-    expect(check).toBe('True');
+    const facts = JSON.parse(check) as Record<string, boolean>;
+    const wrong = Object.entries(facts)
+      .filter(([, ok]) => !ok)
+      .map(([name]) => name);
+    expect(wrong, `sub-user invariants that do not hold: ${wrong.join(', ')}`).toEqual([]);
   });
 
   test('a wrong invite PIN is rejected at submit', async ({ page, deviceUrl }) => {
