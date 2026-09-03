@@ -141,6 +141,12 @@ test.describe("PIN verification (onboarding)", () => {
 
   test("PIN step visible in wizard when required", async ({ page, deviceUrl }) => {
     test.skip(!pinRequired, "No PIN required on this device");
+    // after a successful verification earlier in the file the wizard skips the PIN step
+    // (rc22 K31, 2026-09-03: red only by ordering, pin_verified was already true)
+    {
+      const st = await (await page.request.get(`${deviceUrl}/api/greenautarky_site/status`)).json();
+      test.skip(st.pin_verified === true, "PIN already verified — the wizard skips the PIN step");
+    }
 
     // Navigate to onboarding page
     await page.goto(`${deviceUrl}/greenautarky-setup.html`);
