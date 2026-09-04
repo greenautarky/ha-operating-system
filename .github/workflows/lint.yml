@@ -167,6 +167,24 @@ jobs:
       - name: ga-share-publish (/share symlink hardening)
         run: sh tests/ga_tests/share_publish/test.sh
 
+      # expected.env is the DECLARATION side of the os_integrity suite: the
+      # release marker and the baked add-on pins the flashed device is held
+      # against. It is generated repo-side and committed — and nothing checked
+      # that the commit still matched the pins. It drifted from rc22 to rc23
+      # unnoticed and reported three FAILURES against a device that was
+      # correct (K31, fresh rc23 flash, 2026-09-04). A stale declaration does
+      # not fail quietly here: it accuses the artefact.
+      - name: expected.env matches the pinned declarations (no drift)
+        run: |
+          set -eu
+          ./tests/ga_tests/os_integrity/gen_expected.sh >/dev/null
+          if ! git diff --quiet -- tests/ga_tests/os_integrity/expected.env; then
+            echo "::error::tests/ga_tests/os_integrity/expected.env is stale — run tests/ga_tests/os_integrity/gen_expected.sh and commit the result"
+            git --no-pager diff -- tests/ga_tests/os_integrity/expected.env
+            exit 1
+          fi
+          echo "expected.env is in step with version.yaml + addon-images.json"
+
       - name: RAUC slot contract (parser + fail-closed)
         run: sh tests/ga_tests/rauc_slots/test.sh
 
