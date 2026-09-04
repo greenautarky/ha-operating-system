@@ -302,6 +302,28 @@ def clone_store() -> pathlib.Path:
     return dest
 
 
+EXPECTED_GEN = REPO_ROOT / "tests" / "ga_tests" / "os_integrity" / "gen_expected.sh"
+
+
+def regenerate_expectations() -> None:
+    """Re-derive tests/ga_tests/os_integrity/expected.env from the pins.
+
+    Best-effort by design: a repin must not fail because the generator is
+    missing (it is not present in every checkout shape), but a generator that
+    is present and fails is reported, because a silently stale declaration is
+    exactly the failure this exists to prevent.
+    """
+    if not EXPECTED_GEN.is_file():
+        print(f"\nnote: {EXPECTED_GEN.name} not found — expected.env not regenerated")
+        return
+    result = subprocess.run(["bash", str(EXPECTED_GEN)], capture_output=True, text=True)
+    if result.returncode == 0:
+        print("\nregenerated tests/ga_tests/os_integrity/expected.env from the new pins")
+    else:
+        print(f"\nWARNING: {EXPECTED_GEN.name} failed ({result.returncode}) — "
+              f"expected.env may be stale; run it by hand:\n{result.stderr.strip()[:400]}")
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
         description="Repin addon-images.json to the vibe_addons store, and stamp the rc marker.",
@@ -389,6 +411,16 @@ def main(argv: list[str]) -> int:
 
         if args.marker:
             update_marker(args.marker)
+
+        # The device suite holds a flashed device against these same pins and
+        # the release marker, from a file generated repo-side
+        # (tests/ga_tests/os_integrity/expected.env). Moving a pin without
+        # regenerating it makes the suite accuse a correct device: on the fresh
+        # rc23 flash of K31 (2026-09-04) a stale expected.env produced three
+        # OSI failures against a device that matched its image exactly. So the
+        # tool that moves the pins also moves the declaration.
+        if c.drift or args.marker:
+            regenerate_expectations()
         return 0
     finally:
         if cloned is not None:
