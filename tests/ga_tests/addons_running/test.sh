@@ -168,6 +168,37 @@ run_test_show "ADR-15" "hardware-control: node executes (v24 on real armv7)" \
 run_test_show "ADR-16" "ga_manager: python worker process alive" \
   'docker exec "$(ctr_of ga_manager)" sh -c "pgrep -f python3 >/dev/null" 2>/dev/null'
 
+# ==========================================================================
+# ADR-19 — the cloud producer knows WHICH DEVICE it is
+# ==========================================================================
+# ga_default_addon 2.1.0 keys every cloud batch on a device id it resolves in
+# three steps: a delivered DEVICE_ID/HA_UUID option, then Home Assistant's
+# .storage/core.uuid, then the legacy device_info row in InfluxDB.
+#
+# Red proof, K31 fresh-flashed with rc23 and fully onboarded, 2026-09-04:
+# ALL THREE were empty. No option is delivered; Home Assistant 2025.11.3 had
+# written no core.uuid at all (it is created lazily, the first time something
+# asks the instance-id helper — and nothing on a GA device does); and the
+# legacy row's writer was retired with ADR-0021. The add-on said so plainly —
+# "device id UNKNOWN from every source" — and kept producing, so every local
+# measurement was right while the cloud side had nothing to key on.
+#
+# And it CAN pass: on K49 the same day, core.uuid was present. The file exists
+# where something once asked for it and is missing where nothing ever did
+# (K0 was missing it too), which is why this belongs on the device rather than
+# in CI — the file the add-on reads does not exist in a build at all.
+#
+# This asks the add-on's own resolver, on the device, for the outcome.
+run_test_show "ADR-19" "ga_default_addon resolves a device identity (option / core.uuid / legacy row)" \
+  'docker exec "$(ctr_of ga_default_addon)" python3 -c "
+import sys
+sys.path.insert(0, \"/app\")
+from utils.device_identity import device_identity
+i = device_identity()
+print(\"source=\" + str(i.source) + \" known=\" + str(i.known))
+sys.exit(0 if i.known else 1)
+" 2>/dev/null'
+
 # --- the Supervisor plugins: do they WORK? ---------------------------------
 # Identity is os_integrity's job; this is function. DNS is the device's
 # lifeline — a running-but-broken resolver takes every pull, every MQTT
