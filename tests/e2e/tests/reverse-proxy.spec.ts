@@ -1,5 +1,6 @@
 import { test, expect } from '../fixtures/device';
 import { waitForHA } from '../helpers/ha-api';
+import { haLogin } from '../helpers/auth';
 
 /**
  * Reverse Proxy — verify HA is accessible via Tailscale Funnel and Caddy proxy
@@ -112,9 +113,22 @@ test.describe('Tailscale Funnel', () => {
 });
 
 test.describe('Caddy Proxy', () => {
+  // The runner now derives CADDY_URL from the device's own external_url, which
+  // turned these tests from 6 skips into 6 failures in 400 ms on 2026-09-07:
+  // the canary's hostname has NO DNS record (the apex does; the per-device
+  // names of two canaries do not). A test that cannot reach its subject must
+  // say why, not fail on DNS — and a device carrying an external_url that does
+  // not resolve is a finding for the fleet, reported here as the skip reason.
+  const dnsResolves = async (url: string): Promise<boolean> => {
+    const { lookup } = await import('node:dns/promises');
+    try { await lookup(new URL(url).hostname); return true; } catch { return false; }
+  };
+
   test('Caddy URL serves HA login page', async ({ page }) => {
     const caddyUrl = process.env.CADDY_URL;
     if (!caddyUrl) test.skip(true, 'CADDY_URL not set');
+    if (!(await dnsResolves(caddyUrl!)))
+      test.skip(true, `no DNS record for ${new URL(caddyUrl!).hostname} — the device's external_url does not resolve; public ingress not provisioned for it`);
 
     await page.goto(caddyUrl, { timeout: 30_000 });
 
@@ -127,13 +141,14 @@ test.describe('Caddy Proxy', () => {
   test('Caddy forwards real client IP (not proxy IP)', async ({ page }) => {
     const caddyUrl = process.env.CADDY_URL;
     const adminPass = process.env.HA_ADMIN_PASS;
+    if (caddyUrl && !(await dnsResolves(caddyUrl)))
+      test.skip(true, `no DNS record for ${new URL(caddyUrl).hostname} — the device's external_url does not resolve; public ingress not provisioned for it`);
     if (!caddyUrl || !adminPass) {
       test.skip(true, 'CADDY_URL and HA_ADMIN_PASS required');
     }
 
     // Login via Caddy and check that HA sees the real client IP
     // (not the ga-tools NetBird IP from GA_SERVICES_IP) in the auth log
-    const { haLogin } = await import('../helpers/auth');
     await haLogin(page, caddyUrl);
     await page.goto(`${caddyUrl}/profile`);
     await expect(page).toHaveURL(/profile/, { timeout: 15_000 });

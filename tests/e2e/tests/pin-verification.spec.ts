@@ -18,15 +18,31 @@ import { test, expect } from "../fixtures/device";
 const DEVICE_PIN = process.env.DEVICE_PIN || "";
 
 test.describe("PIN verification (onboarding)", () => {
+  // The PIN endpoints are part of the wizard and answer 403 "Onboarding already
+  // completed" once it is done — measured on a canary 2026-09-07, whose status
+  // read pin_required=true, pin_verified=true, completed=true. The old gate
+  // folded that into "No PIN required on this device", which is false on such a
+  // device and hid 33 skips behind a wrong sentence. The gate is now the same
+  // fact the endpoint itself gates on, and the reason says so.
+  let onboardingCompleted = true;
   let pinRequired = false;
+  const wizardDone = 'onboarding is complete — the PIN endpoints answer 403 by design; reset the wizard to exercise them';
 
   test.beforeAll(async ({ request, deviceUrl }) => {
-    // Check if PIN is required on this device
     const res = await request.get(`${deviceUrl}/api/greenautarky_site/status`);
     if (res.ok()) {
       const status = await res.json();
-      pinRequired = status.pin_required === true && status.pin_verified !== true;
+      onboardingCompleted = status.completed === true;
+      pinRequired = status.pin_required === true && !onboardingCompleted;
     }
+  });
+
+  test("on a finished device the PIN endpoint is closed, not merely unverified", async ({ request, deviceUrl }) => {
+    test.skip(!onboardingCompleted, "onboarding still pending — the live PIN tests below cover this device");
+    const res = await request.post(`${deviceUrl}/api/greenautarky_site/verify_pin`, { data: { pin: "000000" } });
+    expect(res.status(), "verify_pin must refuse once the wizard is done").toBe(403);
+    const body = await res.json().catch(() => ({}));
+    expect(String(body.message ?? "")).toMatch(/already completed/i);
   });
 
   test("status endpoint includes PIN fields", async ({ request, deviceUrl }) => {
@@ -40,7 +56,7 @@ test.describe("PIN verification (onboarding)", () => {
   });
 
   test("verify_pin rejects wrong PIN", async ({ request, deviceUrl }) => {
-    test.skip(!pinRequired, "No PIN required on this device");
+    test.skip(!pinRequired, wizardDone);
 
     const res = await request.post(`${deviceUrl}/api/greenautarky_site/verify_pin`, {
       data: { pin: "000000" },
@@ -52,7 +68,7 @@ test.describe("PIN verification (onboarding)", () => {
   });
 
   test("verify_pin returns retry_after on repeated failures", async ({ request, deviceUrl }) => {
-    test.skip(!pinRequired, "No PIN required on this device");
+    test.skip(!pinRequired, wizardDone);
 
     // First wrong attempt (may already have attempts from previous test)
     await request.post(`${deviceUrl}/api/greenautarky_site/verify_pin`, {
@@ -76,7 +92,7 @@ test.describe("PIN verification (onboarding)", () => {
   });
 
   test("verify_pin accepts correct PIN", async ({ request, deviceUrl }) => {
-    test.skip(!pinRequired, "No PIN required on this device");
+    test.skip(!pinRequired, wizardDone);
     test.skip(!DEVICE_PIN, "DEVICE_PIN env var not set");
 
     // Wait for any rate limit to expire
@@ -107,7 +123,7 @@ test.describe("PIN verification (onboarding)", () => {
   });
 
   test("verify_pin is idempotent after success", async ({ request, deviceUrl }) => {
-    test.skip(!pinRequired, "No PIN required on this device");
+    test.skip(!pinRequired, wizardDone);
     test.skip(!DEVICE_PIN, "DEVICE_PIN env var not set");
 
     // If already verified (from previous test), should return ok
@@ -124,7 +140,7 @@ test.describe("PIN verification (onboarding)", () => {
   });
 
   test("GDPR endpoint blocked before PIN verification", async ({ request, deviceUrl }) => {
-    test.skip(!pinRequired, "No PIN required on this device");
+    test.skip(!pinRequired, wizardDone);
 
     // Only test if PIN is NOT yet verified
     const statusRes = await request.get(`${deviceUrl}/api/greenautarky_site/status`);
@@ -140,7 +156,7 @@ test.describe("PIN verification (onboarding)", () => {
   });
 
   test("PIN step visible in wizard when required", async ({ page, deviceUrl }) => {
-    test.skip(!pinRequired, "No PIN required on this device");
+    test.skip(!pinRequired, wizardDone);
     // after a successful verification earlier in the file the wizard skips the PIN step
     // (rc22 K31, 2026-09-03: red only by ordering, pin_verified was already true)
     {
@@ -168,7 +184,7 @@ test.describe("PIN verification (onboarding)", () => {
   // resetOnboarding() deletes the state file and restarts HA Core.
 
   test("QR auto-inject: PIN from URL parameter auto-submitted", async ({ page, deviceUrl, resetOnboarding }) => {
-    test.skip(!pinRequired, "No PIN required on this device");
+    test.skip(!pinRequired, wizardDone);
     test.skip(!DEVICE_PIN, "DEVICE_PIN env var not set");
     // resetOnboarding() waits up to 240 s for Core plus the page; 90 s was
     // the harness timing itself out (Odoo #751).
@@ -209,7 +225,7 @@ test.describe("PIN verification (onboarding)", () => {
   });
 
   test("QR auto-inject: wrong PIN from URL falls back to manual entry", async ({ page, deviceUrl, resetOnboarding }) => {
-    test.skip(!pinRequired, "No PIN required on this device");
+    test.skip(!pinRequired, wizardDone);
     // resetOnboarding() waits up to 240 s for Core plus the page; 90 s was
     // the harness timing itself out (Odoo #751).
     test.setTimeout(300_000);
@@ -246,7 +262,7 @@ test.describe("PIN verification (onboarding)", () => {
   });
 
   test("QR auto-inject: no PIN in URL shows manual entry", async ({ page, deviceUrl, resetOnboarding }) => {
-    test.skip(!pinRequired, "No PIN required on this device");
+    test.skip(!pinRequired, wizardDone);
     // resetOnboarding() waits up to 240 s for Core plus the page; 90 s was
     // the harness timing itself out (Odoo #751).
     test.setTimeout(300_000);
@@ -282,7 +298,7 @@ test.describe("PIN verification (onboarding)", () => {
   });
 
   test("QR auto-inject: invalid PIN format in URL ignored", async ({ page, deviceUrl, resetOnboarding }) => {
-    test.skip(!pinRequired, "No PIN required on this device");
+    test.skip(!pinRequired, wizardDone);
     // resetOnboarding() waits up to 240 s for Core plus the page; 90 s was
     // the harness timing itself out (Odoo #751).
     test.setTimeout(300_000);
@@ -318,7 +334,7 @@ test.describe("PIN verification (onboarding)", () => {
   });
 
   test("PIN input accepts dash-formatted input", async ({ request, deviceUrl }) => {
-    test.skip(!pinRequired, "No PIN required on this device");
+    test.skip(!pinRequired, wizardDone);
     test.skip(!DEVICE_PIN, "DEVICE_PIN env var not set");
 
     // Send with dash format (e.g. "847-293")
