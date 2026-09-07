@@ -30,8 +30,12 @@ main() {
     }' /proc/net/dev)
 
     # container name -> docker RestartCount (all containers incl. stopped)
+    # started_at changes on every (re)start; the RestartCount stays 0 because the
+    # Supervisor stop/starts Core rather than `docker restart`-ing it, so the
+    # count is useless for Core and started_at is the reliable restart signal
+    # (ga_manager counts distinct values per window -> core.restart_storm).
     restarts_json=$(docker ps -aq 2>/dev/null \
-        | xargs -r docker inspect --format '{"name":"{{slice .Name 1}}","restart_count":{{.RestartCount}},"status":"{{.State.Status}}"}' 2>/dev/null \
+        | xargs -r docker inspect --format '{"name":"{{slice .Name 1}}","restart_count":{{.RestartCount}},"status":"{{.State.Status}}","started_at":"{{.State.StartedAt}}"}' 2>/dev/null \
         | paste -sd, -)
 
     # container name -> CUMULATIVE cpu microseconds + current memory bytes,
@@ -72,7 +76,7 @@ main() {
         --argjson nproc "$(nproc 2>/dev/null || echo 1)" \
         '{ts: $ts, boot_id: $boot_id, oom_kernel_events_24h: $oom_24h,
           netdev: ($netdev | map({(.iface): {rx_bytes, tx_bytes}}) | add // {}),
-          containers: ($containers | map({(.name): {restart_count, status}}) | add // {}),
+          containers: ($containers | map({(.name): {restart_count, status, started_at}}) | add // {}),
           container_cpu: ($ccpu | map({(.name): {cpu_usec, mem_bytes}}) | add // {}),
           nproc: $nproc}' \
         | /usr/libexec/ga-share-publish "$OUT"
