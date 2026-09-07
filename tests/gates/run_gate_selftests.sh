@@ -59,8 +59,8 @@ _bad()  { fail=$((fail+1)); printf "  ${RED}FAIL${RESET}  %s\n" "$1"; }
 
 # Only the variable assignments, taken verbatim from the workflow so there is
 # exactly one definition of each pattern in the repository.
-_defs="$(grep -E "^ *(ALLOW|ADDR|OPEN|CRED|PLACEHOLDER)='" "$WORKFLOW" | sed -E 's/^ *//')"
-for _v in ALLOW ADDR OPEN CRED PLACEHOLDER; do
+_defs="$(grep -E "^ *(ALLOW|ADDR|OPEN|OPEN_BENIGN|CRED|PLACEHOLDER)='" "$WORKFLOW" | sed -E 's/^ *//')"
+for _v in ALLOW ADDR OPEN OPEN_BENIGN CRED PLACEHOLDER; do
   printf '%s\n' "$_defs" | grep -q "^${_v}=" || {
     echo "ERROR: could not extract ${_v} from $(basename "$WORKFLOW")." >&2
     echo "       The gate was restructured and this self-test no longer reads" >&2
@@ -82,7 +82,11 @@ _flags() {
   clean="$(sed -E "$ALLOW" "$f")"
   local hit=""
   printf '%s\n' "$clean" | grep -qE  -- "$ADDR" && hit+="ADDR "
-  printf '%s\n' "$clean" | grep -qiE -- "$OPEN" && hit+="OPEN "
+  # Same two steps as the gate's scan(): match OPEN, then drop the one benign
+  # test-declaration shape. Read from the workflow like every other pattern.
+  if printf '%s\n' "$clean" | grep -qiE -- "$OPEN"; then
+    printf '%s\n' "$clean" | grep -iE -- "$OPEN" | grep -qvE -- "$OPEN_BENIGN" && hit+="OPEN "
+  fi
   if printf '%s\n' "$clean" | grep -qiE -- "$CRED"; then
     printf '%s\n' "$clean" | grep -iE -- "$CRED" | grep -qvE -- "$PLACEHOLDER" && hit+="CRED "
   fi

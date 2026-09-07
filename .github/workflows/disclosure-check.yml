@@ -210,9 +210,29 @@ jobs:
           scan /tmp/s_commits.txt "COMMIT MESSAGES" "$ADDR" "contain internal IP addresses"       ""  ""
           scan /tmp/s_title.txt   "PR TITLE"        "$ADDR" "contains an internal IP address"     ""  ""
 
-          scan /tmp/s_diff.txt    "added lines"     "$OPEN" "describe an OPEN, unfixed finding"   "i" ""
-          scan /tmp/s_commits.txt "COMMIT MESSAGES" "$OPEN" "describe an OPEN, unfixed finding"   "i" ""
-          scan /tmp/s_title.txt   "PR TITLE"        "$OPEN" "describes an OPEN, unfixed finding"  "i" ""
+          # ONE benign construction recurs often enough to be worth excluding: a
+          # device-suite test DECLARATION whose description says a service we
+          # want alive is "still running" / "still up" after some abuse. That is
+          # the assertion's own name, not a status report about a weakness.
+          #
+          # The carve-out is deliberately shaped, not broad. It requires the
+          # test-helper call, the quoted description, and the exact "is/are
+          # still running|up" phrasing. Every other OPEN phrasing inside a test
+          # declaration still fires — see the must-fail fixture
+          # open-in-a-test-declaration.txt, which is a run_test line and is
+          # caught.
+          #
+          # RESIDUAL, stated rather than hidden: a real disclosure phrased
+          # EXACTLY as "<subject> is still running" inside a test declaration
+          # would pass. That shape was accepted because it is the one benign
+          # construction that keeps recurring, and because the `running`
+          # alternative had no must-fail fixture at all until this change —
+          # it had never been shown to catch anything.
+          OPEN_BENIGN='(run_test|run_test_show|skip_test)[[:space:]]+"[^"]*"[[:space:]]+"[^"]*(is|are) still (running|up)'
+
+          scan /tmp/s_diff.txt    "added lines"     "$OPEN" "describe an OPEN, unfixed finding"   "i" "$OPEN_BENIGN"
+          scan /tmp/s_commits.txt "COMMIT MESSAGES" "$OPEN" "describe an OPEN, unfixed finding"   "i" "$OPEN_BENIGN"
+          scan /tmp/s_title.txt   "PR TITLE"        "$OPEN" "describes an OPEN, unfixed finding"  "i" "$OPEN_BENIGN"
 
           scan /tmp/s_diff.txt    "added lines"     "$CRED" "look like they contain a credential" "i" "$PLACEHOLDER"
           scan /tmp/s_commits.txt "COMMIT MESSAGES" "$CRED" "look like they contain a credential" "i" "$PLACEHOLDER"
