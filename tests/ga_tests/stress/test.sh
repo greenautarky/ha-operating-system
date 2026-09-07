@@ -38,6 +38,14 @@ run_test "STRESS-01" "stress-ng is installed" \
 # provisioning credentials, so on an unprovisioned device STRESS-02 failed while
 # saying "CPU stress" — attributing a missing credential to the CPU test.
 # Measured on K31 2026-07-30: stress-ng ran fine, both services were inactive.
+# Which telemetry collectors are up BEFORE we stress the box. Consent decides
+# this, not the stress: tier 1 (fluent-bit) is opt-out, tier 2 (telegraf) opt-in.
+STRESS_COLLECTORS_BEFORE=""
+for _u in fluent-bit fluent-bit-tier0 telegraf; do
+  systemctl is-active "$_u" >/dev/null 2>&1 && STRESS_COLLECTORS_BEFORE="$STRESS_COLLECTORS_BEFORE $_u"
+done
+STRESS_COLLECTORS_BEFORE=$(echo "$STRESS_COLLECTORS_BEFORE" | sed 's/^ //')
+
 run_test "STRESS-02" "CPU stress — all cores (${T}s) survives" \
   "stress-ng --temp-path ${TP} --cpu 0 --cpu-method matrixprod --timeout ${T} --metrics-brief >/dev/null 2>&1"
 
@@ -45,8 +53,13 @@ run_test "STRESS-02" "CPU stress — all cores (${T}s) survives" \
 # collectors survive full CPU load — so it is kept, as its own claim, and skipped
 # rather than failed where those services are not configured yet.
 if systemctl is-active telegraf >/dev/null 2>&1 || systemctl is-active fluent-bit >/dev/null 2>&1; then
-  run_test "STRESS-02b" "telemetry collectors still active after CPU stress" \
-    "systemctl is-active telegraf >/dev/null 2>&1 && systemctl is-active fluent-bit >/dev/null 2>&1"
+  # Assert the collectors that were running BEFORE the stress are running
+  # after it — not that both are. Tier 2 (telegraf) is opt-in and off on a
+  # normal device, so demanding both made this fail on every correctly
+  # configured device: measured on K31 (rc23, 2026-09-07) with tier 1 up and
+  # tier 2 legitimately off by consent.
+  run_test "STRESS-02b" "the collectors that were running are still running after CPU stress ($STRESS_COLLECTORS_BEFORE)" \
+    "for u in $STRESS_COLLECTORS_BEFORE; do systemctl is-active \"\$u\" >/dev/null 2>&1 || exit 1; done"
 else
   skip_test "STRESS-02b" "telemetry collectors after CPU stress" "telegraf/fluent-bit not active — unprovisioned device, no credentials yet"
 fi

@@ -123,9 +123,18 @@ fi
 
 # --- Ethernet consent ---
 # OB-13: Ethernet consent API endpoint exists
-run_test "OB-13" "Ethernet consent API endpoint exists" \
-  "curl -sf --connect-timeout 5 -X POST http://localhost:8123/api/greenautarky_site/ethernet \
-   -H 'Content-Type: application/json' -d '{\"enable_ethernet\": false}' 2>/dev/null | grep -q 'status'"
+# Judge the STATUS CODE, not curl's exit code. `curl -sf` fails on any non-2xx,
+# and a device whose wizard is COMPLETE answers 403 here by design — the step
+# may not be re-consented through. So the old form asserted "the endpoint still
+# accepts writes", passed only before onboarding, and called a correctly
+# finished device a missing endpoint (measured on K31, rc23, 2026-09-07).
+# 200 = accepted, 403 = registered and refusing: both prove the view is there.
+# A missing view answers 404, and curl answers 000 when nothing listens.
+run_test_show "OB-13" "Ethernet consent API view is registered (200 accept or 403 wizard-complete)" \
+  "_ob13=\$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 -X POST \
+     http://localhost:8123/api/greenautarky_site/ethernet \
+     -H 'Content-Type: application/json' -d '{\"enable_ethernet\": false}' 2>/dev/null); \
+   echo \"HTTP \$_ob13\"; [ \"\$_ob13\" = 200 ] || [ \"\$_ob13\" = 403 ]"
 
 # OB-14: Default Ethernet state after provisioning
 if [ -f /mnt/data/ga-env.conf ]; then
@@ -139,16 +148,22 @@ fi
 run_test "PW-01" "Password reset page accessible" \
   "curl -sf --connect-timeout 5 http://localhost:8123/greenautarky-password-reset 2>/dev/null | grep -qi 'passwort'"
 
+# The PIN endpoints are RATE LIMITED, and the check one line above deliberately
+# trips the limiter — so 429 is a correct answer here and its absence made the
+# outcome depend on test order. Same defect, same day, as the Playwright suite's
+# users-endpoint check (ha-operating-system#485); this is the sweep that should
+# have followed it. 429 proves the view is registered and guarding, which is
+# what these two assert.
 run_test "PW-02" "Password reset API rejects wrong PIN" \
   "HTTP_CODE=\$(curl -sf --connect-timeout 5 -o /dev/null -w '%{http_code}' \
    -X POST http://localhost:8123/api/greenautarky_site/password_reset/users \
    -H 'Content-Type: application/json' -d '{\"pin\": \"000000\"}' 2>/dev/null); \
-   [ \"\$HTTP_CODE\" = '401' ] || [ \"\$HTTP_CODE\" = '404' ]"
+   [ \"\$HTTP_CODE\" = '401' ] || [ \"\$HTTP_CODE\" = '404' ] || [ \"\$HTTP_CODE\" = '429' ]"
 
 run_test "PW-03" "Password reset API rejects missing fields" \
   "HTTP_CODE=\$(curl -sf --connect-timeout 5 -o /dev/null -w '%{http_code}' \
    -X POST http://localhost:8123/api/greenautarky_site/password_reset \
    -H 'Content-Type: application/json' -d '{\"pin\": \"000000\", \"username\": \"\", \"new_password\": \"\"}' 2>/dev/null); \
-   [ \"\$HTTP_CODE\" = '400' ] || [ \"\$HTTP_CODE\" = '401' ] || [ \"\$HTTP_CODE\" = '404' ]"
+   [ \"\$HTTP_CODE\" = '400' ] || [ \"\$HTTP_CODE\" = '401' ] || [ \"\$HTTP_CODE\" = '404' ] || [ \"\$HTTP_CODE\" = '429' ]"
 
 suite_end
