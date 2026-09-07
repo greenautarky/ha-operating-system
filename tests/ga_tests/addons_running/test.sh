@@ -224,4 +224,18 @@ run_test_show "ADR-20" "no addon container restarted in the last check (RestartC
      [ "${rc:-1}" -eq 0 ] || exit 1
    done'
 
+# --- influxd hardware-float guard (PR #31, ga_influxdbv1 >= 0.0.19) ---------
+# The official influxdb 1.8.10 armhf .deb ships a GOARM=5 (softfloat) influxd:
+# every float op goes through a software routine (~18.5% steady CPU on this
+# armv7 hardware). The image rebuilds influxd from source with GOARM=7 so floats
+# run on the FPU (~3.1%). Discriminator: the softfloat symbol runtime.fadd64,
+# present in a GOARM=5 binary and absent from GOARM>=6 (and from arm64, which
+# mandates an FPU). RED baseline measured on K31 rc24 (influx 0.0.17):
+# `grep -ac runtime.fadd64 /usr/bin/influxd` == 2 (2026-09-07). rc25 must be 0.
+run_test_show "ADR-34" "influxd is a hardware-float build (GOARM>=6; no softfloat runtime.fadd64)" \
+  'c=$(ctr_of ga_influxdbv1); [ -n "$c" ] || exit 1;
+   if docker exec "$c" sh -c "b=\$(command -v influxd || echo /usr/bin/influxd); grep -aq runtime.fadd64 \"\$b\""; then
+     echo "FAIL: softfloat influxd (runtime.fadd64 present) — GOARM=5 build"; exit 1;
+   else echo "OK: hardware-float influxd (no runtime.fadd64)"; fi'
+
 suite_end
