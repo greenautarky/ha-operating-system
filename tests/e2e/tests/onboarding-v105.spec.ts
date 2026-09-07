@@ -1,5 +1,6 @@
 import { test, expect } from '../fixtures/device';
 import { waitForHA } from '../helpers/ha-api';
+import { haLogin } from '../helpers/auth';
 
 /**
  * Onboarding v1.0.5 — front-facing surfaces (greenautarky-setup + first-party cards)
@@ -193,7 +194,6 @@ test.describe('ga-master-card (ADR-0006) — presence', () => {
     if (!process.env.HA_TOKEN && !process.env.HA_ADMIN_PASS)
       test.skip(true, 'HA auth (HA_TOKEN/HA_ADMIN_PASS) required — the card injects only in the logged-in app');
 
-    const { haLogin } = await import('../helpers/auth');
     await haLogin(page, deviceUrl);
     await page.goto(`${deviceUrl}/lovelace/0`, { waitUntil: 'domcontentloaded' }).catch(() => {});
     // add_extra_js_url injects the module on app boot; wait for registration.
