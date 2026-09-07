@@ -98,24 +98,62 @@ FAILED=${FAILED:-0}
 run_test_show "IDLE-08" "No unexpected failed units (got ${FAILED}: ${FAILED_LIST:-none})" \
   "[ \"$FAILED\" -eq 0 ]"
 
-# --- IDLE-09: Top CPU consumer < 10% ---
-# Use top in batch mode — 2 iterations, take second (first is since boot)
-TOP_PROC=$(top -bn2 -d5 2>/dev/null | awk '
-  /^top -/ { iter++ }
-  iter==2 && /^ *[0-9]/ && NR>3 {
-    if ($9+0 > max) { max=$9+0; name=$12 }
-  }
-  END { printf "%d %s", max, name }
-')
-TOP_CPU=$(echo "$TOP_PROC" | awk '{print $1}')
-TOP_NAME=$(echo "$TOP_PROC" | awk '{print $2}')
-# Allow netbird up to 20% (VPN keepalive spikes are normal)
+# --- IDLE-09: no process holds the CPU ---
+#
+# Three things this check got wrong, all measured on K31 (BOSv1.3.0-rc23,
+# 2026-09-07), and each made it report something other than the device:
+#
+#  1. IT READ THE WRONG COLUMN. It took $9 as %CPU. On this device top prints
+#     PID USER PR NI VIRT RES %CPU %MEM TIME+ S COMMAND — so $9 is TIME+, the
+#     CUMULATIVE CPU MINUTES. It announced "netbird at 292%" for a process
+#     using about 6%. A check that grows more likely to fail the longer a
+#     device is up is measuring uptime, not load.
+#  2. IT JUDGED ON ONE 5-SECOND SAMPLE taken while this suite was running.
+#  3. Comparing only the WORST process per sample hides the real case: with
+#     several processes above the limit, the worst differs between samples and
+#     a genuinely stuck process passes. (Caught by re-measuring this very fix:
+#     influxd held 10–96% across four samples and the max-comparison let it
+#     through.)
+#
+# So: read %CPU by header position, take two real samples (top's first
+# iteration is since-boot averages), and fail on the INTERSECTION — a pid over
+# the limit in BOTH samples. Names come from /proc/<pid>/comm, because top
+# truncates deep tree rows to "+".
+IDLE09_TOP="/tmp/ga-idle09-top.txt"
+top -bn3 -d5 > "$IDLE09_TOP" 2>/dev/null
+
+# pids over $1 percent in sample $2, one "pid pct" per line
+_idle09_over() {
+  awk -v lim="$1" -v want="$2" '
+    /^top -/ { iter++ }
+    /%CPU/ && cpu_col == 0 { for (i = 1; i <= NF; i++) if ($i == "%CPU") cpu_col = i; next }
+    iter == want && cpu_col > 0 && $1 ~ /^[0-9]+$/ && $cpu_col + 0 >= lim { print $1 " " $cpu_col }
+  ' "$IDLE09_TOP"
+}
+
+# netbird's keepalive spikes are normal and always had a wider band.
 IDLE09_LIMIT=10
-if echo "$TOP_NAME" | grep -qi "netbird\|net+"; then
-  IDLE09_LIMIT=20
-fi
-run_test_show "IDLE-09" "No process > ${IDLE09_LIMIT}% CPU (top: ${TOP_NAME} at ${TOP_CPU}%)" \
-  "[ \"${TOP_CPU:-0}\" -lt \"$IDLE09_LIMIT\" ]"
+IDLE09_NETBIRD_LIMIT=20
+
+IDLE09_OFFENDERS=""
+for _pid in $(_idle09_over "$IDLE09_LIMIT" 2 | cut -d' ' -f1); do
+  _pct3=$(_idle09_over "$IDLE09_LIMIT" 3 | awk -v p="$_pid" '$1 == p { print $2; exit }')
+  [ -n "$_pct3" ] || continue                     # not sustained — one sample only
+  _pct2=$(_idle09_over "$IDLE09_LIMIT" 2 | awk -v p="$_pid" '$1 == p { print $2; exit }')
+  _comm=$(cat "/proc/${_pid}/comm" 2>/dev/null || echo unknown)
+  case "$_comm" in
+    *netbird*)
+      # only an offender above its own wider band
+      awk -v a="$_pct2" -v b="$_pct3" -v l="$IDLE09_NETBIRD_LIMIT" \
+          'BEGIN { exit !(a + 0 >= l && b + 0 >= l) }' || continue ;;
+  esac
+  IDLE09_OFFENDERS="$IDLE09_OFFENDERS ${_comm}(${_pid}) ${_pct2}%->${_pct3}%;"
+done
+rm -f "$IDLE09_TOP"
+IDLE09_OFFENDERS=$(echo "$IDLE09_OFFENDERS" | sed 's/^ //')
+
+run_test_show "IDLE-09" "No process sustained over ${IDLE09_LIMIT}% CPU across two samples (${IDLE09_OFFENDERS:-none})" \
+  "[ -z \"$IDLE09_OFFENDERS\" ]"
 
 # --- IDLE-10: Docker container stats ---
 if command -v docker >/dev/null 2>&1; then
