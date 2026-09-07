@@ -123,36 +123,30 @@ npx playwright test \
 EXIT_CODE=$?
 set -e
 
-# Parse and display summary from JSON report
+# Parse and display the summary. The parser lives in its own file with its own
+# fixtures (tests/e2e/test_summarize_results.sh) because the version that was
+# inline here could not report a failure: it compared Playwright's outcome
+# field, which holds expected/unexpected/skipped, against "passed"/"failed".
+SUMMARY="$E2E_DIR/summarize_results.py"
 if [[ -f test-results/results.json ]] && command -v python3 &>/dev/null; then
-  python3 - <<'PYEOF'
-import json, sys
-try:
-    with open("test-results/results.json") as f:
-        data = json.load(f)
-    def walk(node):
-        counts = {"passed": 0, "failed": 0, "skipped": 0}
-        for spec in node.get("specs", []):
-            for t in spec.get("tests", []):
-                s = t.get("status", "unknown")
-                if s in counts:
-                    counts[s] += 1
-        for suite in node.get("suites", []):
-            sub = walk(suite)
-            for k in counts:
-                counts[k] += sub[k]
-        return counts
-    c = walk(data)
-    print(f"\n==============================================")
-    print(f"  E2E: {c['passed']} passed, {c['failed']} failed, {c['skipped']} skipped")
-    if c['failed'] == 0:
-        print("  Result: ALL PASS")
-    else:
-        print(f"  Result: {c['failed']} FAILURES")
-    print("==============================================")
-except Exception as e:
-    pass
-PYEOF
+  if [[ ! -x "$SUMMARY" ]]; then
+    echo "E2E: summariser missing at $SUMMARY — cannot report the result" >&2
+    exit 2
+  fi
+  set +e
+  python3 "$SUMMARY" test-results/results.json
+  SUMMARY_CODE=$?
+  set -e
+  # The two must agree. If Playwright failed, the run failed, whatever the
+  # report says; if the report says failures and Playwright exited 0, that
+  # disagreement is itself a defect and must not be swallowed.
+  if [[ "$EXIT_CODE" -eq 0 && "$SUMMARY_CODE" -ne 0 ]]; then
+    echo "E2E: Playwright exited 0 but the report says otherwise — failing on the report" >&2
+    EXIT_CODE="$SUMMARY_CODE"
+  fi
+else
+  echo "E2E: no test-results/results.json — no result was produced" >&2
+  [[ "$EXIT_CODE" -eq 0 ]] && EXIT_CODE=2
 fi
 
 exit "$EXIT_CODE"

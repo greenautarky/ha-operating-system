@@ -1,0 +1,44 @@
+{
+ "config": {},
+ "suites": [
+  {
+   "title": "desktop",
+   "specs": [
+    {
+     "title": "a",
+     "tests": [
+      {
+       "status": "expected",
+       "results": [
+        {
+         "status": "passed"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "suites": [
+    {
+     "title": "mobile",
+     "specs": [
+      {
+       "title": "c",
+       "tests": [
+        {
+         "status": "expected",
+         "results": [
+          {
+           "status": "passed"
+          }
+         ]
+        }
+       ]
+      }
+     ],
+     "suites": []
+    }
+   ]
+  }
+ ]
+}
