@@ -197,7 +197,12 @@ test.describe('ga-master-card (ADR-0006) — presence', () => {
     await haLogin(page, deviceUrl);
     await page.goto(`${deviceUrl}/lovelace/0`, { waitUntil: 'domcontentloaded' }).catch(() => {});
     // add_extra_js_url injects the module on app boot; wait for registration.
-    await page.waitForFunction(() => !!customElements.get('ga-master-card'), { timeout: 20_000 });
+    // Interval polling, not the default requestAnimationFrame: in WebKit
+    // headless rAF does not fire on a page that is not visible, so the default
+    // never re-evaluates and times out although the element defined at ~3 s
+    // (measured on mobile-ios against a canary, 2026-09-07: module 200 at 2.9 s,
+    // defined at 3.3 s, yet the rAF-polled wait failed 4/4).
+    await page.waitForFunction(() => !!customElements.get('ga-master-card'), undefined, { timeout: 20_000, polling: 500 });
     const listed = await page.evaluate(
       () =>
         Array.isArray((window as unknown as { customCards?: { type: string }[] }).customCards) &&
