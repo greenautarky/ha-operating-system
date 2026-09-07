@@ -129,6 +129,17 @@ function purgeProbeAccounts(): void {
     `cat /tmp/auth.probe-clean > ${AUTH_STORE}`,
     'rm -f /tmp/auth.probe-clean',
     'ha core start',
+    // ha core start returns as soon as the container is (re)started, but Core
+    // needs ~60-90s more before its API and the GA integration answer. Without
+    // this wait the NEXT serial spec runs against a still-booting Core and
+    // fails — which is what produced the dashboard/resident-ui failures blamed
+    // on "Core restarts" in the 2026-09-07 runs. Block here until the GA
+    // status endpoint answers (Core + greenautarky_site up), or give up loudly.
+    'ok=0; for i in $(seq 1 60); do',
+    '  if curl -sf -o /dev/null http://172.30.32.1:8123/api/greenautarky_site/status; then ok=1; break; fi',
+    '  sleep 3',
+    'done',
+    '[ "$ok" = 1 ] || { echo "Core did not become ready within 180s after restart" >&2; exit 1; }',
   ].join('\n');
   const b64 = Buffer.from(script, 'utf-8').toString('base64');
   sshCmd(`echo ${b64} | base64 -d > /tmp/probe-clean.sh && sh /tmp/probe-clean.sh`);
