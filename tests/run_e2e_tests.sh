@@ -37,7 +37,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 E2E_DIR="$SCRIPT_DIR/e2e"
-SSH_KEY="~/.ssh/ha-ihost.pem"
+SSH_KEY="$HOME/.ssh/ha-ihost.pem"   # was "~/..." in quotes, which never expands
 
 usage() {
   sed -n '3,38p' "$0" | sed 's/^# //' | sed 's/^#//'
@@ -94,6 +94,35 @@ fi
 # Export env vars consumed by Playwright fixtures and tests
 export DEVICE_IP="$DEVICE_IP"
 export DEVICE_URL="http://${DEVICE_IP}:8123"
+
+# Two whole suites skipped on every run because the runner never set the URL
+# they gate on, although it already knew both — measured 2026-09-07 against a
+# canary: 27 ga-manager-panel tests ("GA_PANEL_URL required") and 6 reverse-proxy
+# tests ("CADDY_URL not set") out of 127 skips. The panel is the ga_manager
+# add-on on port 8099 of the same device; the public URL is Core's own
+# external_url, read over the SSH access the suite has anyway. An explicit
+# environment value still wins, and a device without an external_url simply
+# leaves CADDY_URL unset, which is the existing (skip) behaviour.
+export GA_PANEL_URL="${GA_PANEL_URL:-http://${DEVICE_IP}:8099}"
+if [[ -z "${CADDY_URL:-}" ]]; then
+  _ext="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=10 -i "${SSH_KEY/#\~/$HOME}" -p "$SSH_PORT" "root@${DEVICE_IP}" \
+            "sed -n 's/^  external_url: *\"\{0,1\}\([^\"]*\)\"\{0,1\}$/\1/p' /mnt/data/supervisor/homeassistant/configuration.yaml" \
+            2>/dev/null | head -1 || true)"
+  [[ "$_ext" == https://* ]] && export CADDY_URL="$_ext"
+fi
+# The panel suite also authenticates with the add-on's own Bearer token
+# (/data/auth.token inside the ga_manager container, mode 0600). Read into the
+# environment only — never echoed, never on a command line of a child process
+# other than ssh's stdout. An explicit GA_PANEL_TOKEN still wins.
+if [[ -z "${GA_PANEL_TOKEN:-}" ]]; then
+  _tok="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=10 -i "${SSH_KEY/#\~/$HOME}" -p "$SSH_PORT" "root@${DEVICE_IP}" \
+            'docker exec "$(docker ps -q --filter name=ga_manager | head -1)" cat /data/auth.token' \
+            2>/dev/null | tr -d '\r\n' || true)"
+  [[ ${#_tok} -ge 16 ]] && export GA_PANEL_TOKEN="$_tok"
+  unset _tok
+fi
 export SSH_KEY="$SSH_KEY"
 export SSH_PORT="$SSH_PORT"
 export HA_ADMIN_USER="$HA_ADMIN_USER"
@@ -105,9 +134,23 @@ AUTH_DESC="none (dashboard tests will skip)"
 [[ -n "$HA_TOKEN"     ]] && AUTH_DESC="long-lived token"
 [[ -n "$HA_ADMIN_PASS" ]] && AUTH_DESC="password (${HA_ADMIN_USER})"
 
+# Which tree is this? A suite run from a checkout behind origin/master reports
+# failures that were fixed weeks ago as work to do — on 2026-09-07 a run from a
+# tree 25 commits behind reported 41 failures; the same suite from the current
+# tree reported 1. The number is printed where it will actually be read: the
+# header. It does not fail the run, because a branch under test is legitimately
+# ahead or behind; it makes "behind" impossible to miss.
+_tree="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+_behind="$(git -C "$SCRIPT_DIR" fetch -q origin 2>/dev/null; git -C "$SCRIPT_DIR" rev-list --count HEAD..origin/master 2>/dev/null || echo '?')"
+_tree_note="tree ${_tree}"
+[[ "${_behind}" =~ ^[0-9]+$ ]] && [[ "${_behind}" -gt 0 ]] && _tree_note="tree ${_tree} — ${_behind} COMMITS BEHIND origin/master; failures may already be fixed"
+
 echo "=============================================="
 echo "  GA OS E2E Tests"
+echo "  Tree:    ${_tree_note}"
 echo "  Device:  http://${DEVICE_IP}:8123"
+echo "  Panel:   ${GA_PANEL_URL} (token: $([[ -n "${GA_PANEL_TOKEN:-}" ]] && echo present || echo MISSING — panel suite skips))"
+echo "  Public:  ${CADDY_URL:-(no external_url on device — reverse-proxy public tests skip)}"
 echo "  Auth:    ${AUTH_DESC}"
 echo "  Reset:   $([ -n "$RESET_ONBOARDING" ] && echo "YES — destructive onboarding tests enabled" || echo "no (onboarding tests skipped)")"
 echo "=============================================="
