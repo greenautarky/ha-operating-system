@@ -34,15 +34,47 @@ main() {
         | xargs -r docker inspect --format '{"name":"{{slice .Name 1}}","restart_count":{{.RestartCount}},"status":"{{.State.Status}}"}' 2>/dev/null \
         | paste -sd, -)
 
+    # container name -> CUMULATIVE cpu microseconds + current memory bytes,
+    # read from the cgroup the container actually runs in.
+    #
+    # Why counters and not a percentage: the Supervisor's per-addon
+    # `cpu_percent` is a point sample. Three consecutive reads of the SAME
+    # container on K31 (2026-09-07) gave 18.98, 1.19 and 25.74 — averaging a
+    # handful of those is not a measurement of load, and the health check that
+    # consumed them could not distinguish a busy container from a quiet one.
+    # A monotonic counter can: the consumer divides the delta by the elapsed
+    # time between two snapshots and gets the exact share, with no sampling
+    # noise at all. Measured that way, an idle-but-working K31 sits at 18% of
+    # one core for InfluxDB and about 3% for the other add-ons.
+    #
+    # cgroup v2 layout on this OS: /sys/fs/cgroup/system.slice/docker-<id>.scope/
+    # Missing files are skipped rather than reported as zero — a container
+    # whose cgroup we cannot read must not look idle.
+    cpu_json=$(docker ps -q --no-trunc 2>/dev/null | while read -r cid; do
+        [ -n "$cid" ] || continue
+        cg="/sys/fs/cgroup/system.slice/docker-${cid}.scope"
+        [ -r "$cg/cpu.stat" ] || continue
+        usec=$(awk '/^usage_usec/ {print $2; exit}' "$cg/cpu.stat" 2>/dev/null)
+        [ -n "$usec" ] || continue
+        mem=$(cat "$cg/memory.current" 2>/dev/null || echo 0)
+        cname=$(docker inspect --format '{{slice .Name 1}}' "$cid" 2>/dev/null)
+        [ -n "$cname" ] || continue
+        printf '{"name":"%s","cpu_usec":%s,"mem_bytes":%s}\n' "$cname" "$usec" "$mem"
+    done | paste -sd, -)
+
     jq -n \
         --argjson ts "$(date +%s)" \
         --arg boot_id "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)" \
         --argjson oom_24h "$oom_24h" \
         --argjson netdev "[${netdev_json}]" \
         --argjson containers "[${restarts_json}]" \
+        --argjson ccpu "[${cpu_json}]" \
+        --argjson nproc "$(nproc 2>/dev/null || echo 1)" \
         '{ts: $ts, boot_id: $boot_id, oom_kernel_events_24h: $oom_24h,
           netdev: ($netdev | map({(.iface): {rx_bytes, tx_bytes}}) | add // {}),
-          containers: ($containers | map({(.name): {restart_count, status}}) | add // {})}' \
+          containers: ($containers | map({(.name): {restart_count, status}}) | add // {}),
+          container_cpu: ($ccpu | map({(.name): {cpu_usec, mem_bytes}}) | add // {}),
+          nproc: $nproc}' \
         | /usr/libexec/ga-share-publish "$OUT"
 }
 
