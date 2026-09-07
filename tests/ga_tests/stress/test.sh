@@ -114,6 +114,10 @@ skip_test "STRESS-10" "24h soak test" "run manually: STRESS_TIMEOUT=86400 stress
 
 GM_C=$(docker ps -q --filter name=ga_manager 2>/dev/null | head -1)
 INJ_NAME="ga-overload-injection"
+# The collector is invoked by path so the test does not wait out its two-minute
+# timer twice. Overridable so a collector under development can be proven on a
+# device whose read-only rootfs still carries the previous one.
+HOST_STATS_BIN="${GA_HOST_STATS_BIN:-/usr/libexec/ga-host-stats}"
 
 gm_health() {
   [ -n "$GM_C" ] || return 1
@@ -169,7 +173,7 @@ else
     INJ_PCT=0
     i=0
     while [ "$i" -lt 20 ]; do
-      /usr/libexec/ga-host-stats >/dev/null 2>&1
+      "$HOST_STATS_BIN" >/dev/null 2>&1
       sleep 15
       LOAD=$(cpu_load_row "$INJ_NAME" load)
       if [ "$LOAD" = "overload" ]; then
@@ -191,7 +195,7 @@ else
     REST_OK=no
     i=0
     while [ "$i" -lt 20 ]; do
-      /usr/libexec/ga-host-stats >/dev/null 2>&1
+      "$HOST_STATS_BIN" >/dev/null 2>&1
       sleep 15
       N=$(overloaded_count)
       if [ "${N:-1}" = "0" ]; then REST_OK=yes; break; fi
