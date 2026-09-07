@@ -1,0 +1,4 @@
+run_test "STRESS-02b" "the collectors that were running are still running after CPU stress ($STRESS_COLLECTORS_BEFORE)" \
+  "systemctl is-active telegraf >/dev/null 2>&1"
+run_test_show "SVC-11" "the broker is still up after the reconnect storm" \
+  "mosquitto_sub -C 1 -t '$SYS/broker/uptime' >/dev/null"

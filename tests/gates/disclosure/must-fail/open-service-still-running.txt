@@ -1,0 +1,2 @@
+The unauthenticated management API is still running on every device in the
+ring and we have not shipped a fix for it yet.

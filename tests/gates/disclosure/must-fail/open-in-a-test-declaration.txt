@@ -1,0 +1,2 @@
+run_test "SEC-04" "the debug endpoint is still exposed without a token" \
+  "curl -sf http://127.0.0.1/debug >/dev/null"
