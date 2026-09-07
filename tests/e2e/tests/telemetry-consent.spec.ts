@@ -22,7 +22,14 @@ const SSH_CMD = DEVICE_IP
   : '';
 
 /** Read telemetry preferences from device storage via SSH */
-async function getDeviceTelemetryPrefs(): Promise<{ error_logs: boolean; metrics: boolean } | null> {
+async function getDeviceTelemetryPrefs(): Promise<{ tier1: boolean; tier2: boolean } | null> {
+  // Mirrors ga-telemetry-gate's read contract (buildroot-ihost/.../usr/sbin/ga-telemetry-gate):
+  //   schema v2  → data.tiers.tier1.value / data.tiers.tier2.value
+  //   schema v1  → data.error_logs / data.metrics   (tier1 / tier2 by alias)
+  // A v2 file ALSO carries top-level error_logs/metrics booleans, and they may
+  // disagree with the tiers (measured on a canary 2026-09-07: tier1=true,
+  // error_logs=false). The gate ignores them on v2 and so must this test —
+  // reading them is what made this test fail on every Phase-B device.
   if (!DEVICE_IP) return null;
   const { execSync } = await import('child_process');
   try {
@@ -30,8 +37,12 @@ async function getDeviceTelemetryPrefs(): Promise<{ error_logs: boolean; metrics
       `${SSH_CMD} cat /mnt/data/supervisor/homeassistant/.storage/greenautarky_telemetry 2>/dev/null`,
       { timeout: 10_000, encoding: 'utf8' },
     );
-    const parsed = JSON.parse(raw);
-    return parsed.data || null;
+    const data = JSON.parse(raw).data;
+    if (!data) return null;
+    if (data.tiers && typeof data.tiers === 'object') {
+      return { tier1: data.tiers.tier1?.value === true, tier2: data.tiers.tier2?.value === true };
+    }
+    return { tier1: data.error_logs === true, tier2: data.metrics === true };
   } catch {
     return null;
   }
@@ -85,20 +96,18 @@ test.describe('Telemetry Consent — Device markers', () => {
       return;
     }
 
-    const metricsMarker = await hasConsentMarker('.ga-consent-metrics');
-    const errorLogsMarker = await hasConsentMarker('.ga-consent-error_logs');
+    // The gate writes the tier marker AND its legacy alias together, and
+    // removes both together. Asserting each file in both directions is what
+    // proves the pair cannot drift apart.
+    const tier1 = await hasConsentMarker('.ga-consent-tier1');
+    const tier1Legacy = await hasConsentMarker('.ga-consent-error_logs');
+    const tier2 = await hasConsentMarker('.ga-consent-tier2');
+    const tier2Legacy = await hasConsentMarker('.ga-consent-metrics');
 
-    if (prefs.metrics) {
-      expect(metricsMarker, 'metrics=true but consent marker missing').toBe(true);
-    } else {
-      expect(metricsMarker, 'metrics=false but consent marker exists').toBe(false);
-    }
-
-    if (prefs.error_logs) {
-      expect(errorLogsMarker, 'error_logs=true but consent marker missing').toBe(true);
-    } else {
-      expect(errorLogsMarker, 'error_logs=false but consent marker exists').toBe(false);
-    }
+    expect(tier1, `tier1=${prefs.tier1} but .ga-consent-tier1 ${tier1 ? 'exists' : 'is missing'}`).toBe(prefs.tier1);
+    expect(tier1Legacy, `tier1=${prefs.tier1} but legacy .ga-consent-error_logs ${tier1Legacy ? 'exists' : 'is missing'}`).toBe(prefs.tier1);
+    expect(tier2, `tier2=${prefs.tier2} but .ga-consent-tier2 ${tier2 ? 'exists' : 'is missing'}`).toBe(prefs.tier2);
+    expect(tier2Legacy, `tier2=${prefs.tier2} but legacy .ga-consent-metrics ${tier2Legacy ? 'exists' : 'is missing'}`).toBe(prefs.tier2);
   });
 
   test('ga-telemetry-gate script exists and is executable', async () => {
