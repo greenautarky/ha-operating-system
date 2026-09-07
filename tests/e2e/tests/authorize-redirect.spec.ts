@@ -95,6 +95,19 @@ test.describe('authorize.ts → GA onboarding redirect', () => {
         { key: 'ga_auth_redirect', value: authUrl },
       );
 
+      test.skip(
+
+        !gaNotComplete,
+
+        'GA onboarding already complete — greenautarky_site registers the setup '
+
+          + 'panel only while `completed` is false, so there is no page for an '
+
+          + 'Admin-Login link to appear on',
+
+      );
+
+
       await page.goto(`${deviceUrl}/greenautarky-setup`);
       await expect(page.locator('ha-panel-greenautarky-setup')).toBeAttached({
         timeout: 20_000,
@@ -114,6 +127,19 @@ test.describe('authorize.ts → GA onboarding redirect', () => {
       { key: 'ga_auth_redirect', value: authUrl },
     );
 
+    test.skip(
+
+      !gaNotComplete,
+
+      'GA onboarding already complete — greenautarky_site registers the setup '
+
+        + 'panel only while `completed` is false, so there is no page for an '
+
+        + 'Admin-Login link to appear on',
+
+    );
+
+
     await page.goto(`${deviceUrl}/greenautarky-setup`);
     await expect(page.locator('ha-panel-greenautarky-setup')).toBeAttached({
       timeout: 20_000,
@@ -128,6 +154,13 @@ test.describe('authorize.ts → GA onboarding redirect', () => {
   test('Admin-Login link is NOT rendered when setup page is visited directly (browser flow)',
     async ({ page, deviceUrl }) => {
       // No sessionStorage injection — simulates a direct browser visit (no app flow)
+      test.skip(
+        !gaNotComplete,
+        'GA onboarding already complete — greenautarky_site registers the setup '
+          + 'panel only while `completed` is false, so there is no page for an '
+          + 'Admin-Login link to appear on',
+      );
+
       await page.goto(`${deviceUrl}/greenautarky-setup`);
       await expect(page.locator('ha-panel-greenautarky-setup')).toBeAttached({
         timeout: 20_000,
