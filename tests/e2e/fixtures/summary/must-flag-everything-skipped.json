@@ -1,0 +1,37 @@
+{
+ "config": {},
+ "suites": [
+  {
+   "title": "desktop",
+   "specs": [
+    {
+     "title": "a",
+     "tests": [
+      {
+       "status": "skipped",
+       "results": [
+        {
+         "status": "failed"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "title": "b",
+     "tests": [
+      {
+       "status": "skipped",
+       "results": [
+        {
+         "status": "failed"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "suites": []
+  }
+ ]
+}
