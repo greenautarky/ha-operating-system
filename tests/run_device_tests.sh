@@ -58,6 +58,9 @@ usage() {
     echo "  --port PORT           SSH port (default: 22222)"
     echo "  --device-ip IP        Override device IP (for runner mode)"
     echo "  --suites 'a b c'     Run only specified suites"
+    echo "  --settle-timeout S   Wait up to S s for add-ons to be Up (default: 300, 0 = do not wait)"
+    echo "  --no-preflight       Skip the release-match and settled checks"
+    echo "  --allow-release-mismatch  Run even if the tree declares a different release than the device"
     echo "  --key PATH            SSH private key path"
     echo "  -h, --help            Show this help"
     echo ""
@@ -68,6 +71,13 @@ usage() {
 }
 
 # Parse arguments
+# Preflight defaults. Both checks exist because both failure modes were paid
+# for on 2026-09-08 in one evening, and both produced confident WRONG answers
+# ABOUT THE DEVICE — the most expensive kind of test output there is.
+PREFLIGHT="${PREFLIGHT:-1}"
+SETTLE_TIMEOUT="${SETTLE_TIMEOUT:-300}"
+ALLOW_RELEASE_MISMATCH="${ALLOW_RELEASE_MISMATCH:-0}"
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --ssh)      MODE="ssh"; SSH_TARGET="$2"; shift 2 ;;
@@ -77,6 +87,9 @@ while [[ $# -gt 0 ]]; do
         --device-ip) DEVICE_IP="$2"; shift 2 ;;
         --suites)   SUITES="$2"; shift 2 ;;
         --key)      SSH_KEY="$2"; shift 2 ;;
+        --settle-timeout) SETTLE_TIMEOUT="$2"; shift 2 ;;
+        --no-preflight)   PREFLIGHT=0; shift ;;
+        --allow-release-mismatch) ALLOW_RELEASE_MISMATCH=1; shift ;;
         -h|--help)  usage ;;
         *)          echo "Unknown option: $1"; usage ;;
     esac
@@ -113,6 +126,66 @@ setup_serial() {
     fi
 }
 
+
+# --- Preflight ---------------------------------------------------------------
+# THIS SCRIPT SHIPS THE LOCAL tests/ TREE TO THE DEVICE, so the suites' pinned
+# expectations come from THIS CHECKOUT — a third thing that drifts from both the
+# device and origin. A stale tree therefore produces failures that read as device
+# defects, inside a report whose entire purpose is to judge the device. On
+# 2026-09-08 a checkout 7 commits behind produced three such failures (the
+# declared release, and two add-on image versions) against a perfectly correct
+# device. OSI-01 named both values correctly — but only after 26 suites had run.
+# Say it up front instead, and refuse.
+preflight_release_match() {
+    local declared device_rel
+    declared=$(set +u; . "$TESTS_DIR/os_integrity/expected.env" 2>/dev/null; printf '%s' "${EXPECTED_GA_RELEASE:-}")
+    # shellcheck disable=SC2086
+    device_rel=$(ssh $SSH_OPTS "$SSH_TARGET" 'cat /etc/ga-release 2>/dev/null' 2>/dev/null | tr -d '\r\n')
+    if [[ -z "$declared" || -z "$device_rel" ]]; then
+        echo "  PREFLIGHT: cannot compare releases (tree='${declared:-?}' device='${device_rel:-?}') — continuing"
+        return 0
+    fi
+    if [[ "$declared" != "$device_rel" ]]; then
+        echo "ERROR: this checkout does not describe this device."
+        echo "       tree declares : $declared   (tests/ga_tests/os_integrity/expected.env)"
+        echo "       device runs   : $device_rel  (/etc/ga-release)"
+        echo ""
+        echo "       The suites shipped from here would fail ABOUT THE DEVICE for a"
+        echo "       reason that lives in this checkout. Update the tree (git pull, or"
+        echo "       run from a worktree at origin/master), or pass"
+        echo "       --allow-release-mismatch if the mismatch is deliberate."
+        [[ "$ALLOW_RELEASE_MISMATCH" == "1" ]] || exit 2
+        echo "       --allow-release-mismatch given — continuing anyway."
+        return 0
+    fi
+    echo "  Preflight: tree and device agree on $declared"
+}
+
+# A device three minutes past a reboot is not a device under test. On 2026-09-08
+# a run started at ~180 s uptime reported six failures (two containers not Up,
+# mosquitto auth, influx ping, node exec, a heating write) whose single cause was
+# that two add-ons started at ~240 s. Wait for the add-ons to be Up, then say so.
+# Never abort on this: a device that genuinely never settles is exactly what the
+# suites should be allowed to diagnose — so this warns loudly and continues.
+preflight_wait_settled() {
+    [[ "${SETTLE_TIMEOUT:-0}" -gt 0 ]] || return 0
+    local deadline=$((SECONDS + SETTLE_TIMEOUT)) not_up=""
+    while [[ $SECONDS -lt $deadline ]]; do
+        # shellcheck disable=SC2086
+        not_up=$(ssh $SSH_OPTS "$SSH_TARGET" \
+            'docker ps -a --format "{{.Names}}\t{{.Status}}" 2>/dev/null | grep "^addon_" | grep -v "\tUp " | cut -f1' \
+            2>/dev/null | tr -d '\r' | tr '\n' ' ')
+        [[ -z "${not_up// /}" ]] && { echo "  Preflight: all add-on containers Up"; return 0; }
+        sleep 10
+    done
+    echo ""
+    echo "  WARNING: after ${SETTLE_TIMEOUT}s these add-on containers are still not Up:"
+    echo "             ${not_up}"
+    echo "           Running anyway — but read failures naming these before"
+    echo "           concluding anything about the code under test."
+    echo ""
+}
+
 # --- Execute via SSH ---
 
 run_ssh() {
@@ -137,6 +210,8 @@ run_ssh() {
     machine=$(echo "$device_check" | grep -i "^VARIANT\|^GA_MACHINE\|^MACHINE" | head -1 || true)
     echo "  OK — ${machine:-GA OS detected}"
     echo ""
+
+    [[ "$PREFLIGHT" == "1" ]] && preflight_release_match && preflight_wait_settled
     echo "Copying test scripts to device..."
     # shellcheck disable=SC2086
     ssh $SSH_OPTS "$SSH_TARGET" "rm -rf $REMOTE_DIR" 2>/dev/null || true
