@@ -3620,13 +3620,13 @@ if command -v jq &>/dev/null && [[ -f "$_gab" ]] && grep -q 'assert_prod_sbom()'
   printf '. "$1"\nassert_prod_sbom "${2:-0}"\n' > "${_sb_tmp}/drive.sh"
   mkdir -p "${_sb_tmp}/images"
   # (a) prod + no SBOM -> non-zero
-  GA_ENV=prod OUT="${_sb_tmp}" bash "${_sb_tmp}/drive.sh" "${_sb_tmp}/fn.sh" >/dev/null 2>&1; _rc_absent=$?
+  _rc_absent=$(GA_ENV=prod OUT="${_sb_tmp}" bash "${_sb_tmp}/drive.sh" "${_sb_tmp}/fn.sh" >/dev/null 2>&1; echo $?)
   # (b) prod + zero-component SBOM -> non-zero
   echo '{"components":[]}' > "${_sb_tmp}/images/sbom-cyclonedx.json"
-  GA_ENV=prod OUT="${_sb_tmp}" bash "${_sb_tmp}/drive.sh" "${_sb_tmp}/fn.sh" >/dev/null 2>&1; _rc_zero=$?
+  _rc_zero=$(GA_ENV=prod OUT="${_sb_tmp}" bash "${_sb_tmp}/drive.sh" "${_sb_tmp}/fn.sh" >/dev/null 2>&1; echo $?)
   # (c) prod + real SBOM (1 component) -> zero (green)
   echo '{"components":[{"name":"busybox","version":"1.36"}]}' > "${_sb_tmp}/images/sbom-cyclonedx.json"
-  GA_ENV=prod OUT="${_sb_tmp}" bash "${_sb_tmp}/drive.sh" "${_sb_tmp}/fn.sh" >/dev/null 2>&1; _rc_ok=$?
+  _rc_ok=$(GA_ENV=prod OUT="${_sb_tmp}" bash "${_sb_tmp}/drive.sh" "${_sb_tmp}/fn.sh" >/dev/null 2>&1; echo $?)
   if [[ "$_rc_absent" -ne 0 && "$_rc_zero" -ne 0 && "$_rc_ok" -eq 0 ]]; then
     _pass "SBOM-03: assert_prod_sbom red on absent + zero-component SBOM, green on a real one (prod)"
   else
