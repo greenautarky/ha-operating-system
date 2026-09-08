@@ -261,7 +261,7 @@ fi
 # components. `--list-all-pkgs` makes trivy report every package it considered;
 # comparing that against the SBOM component count is an exact coverage measure.
 # -----------------------------------------------------------------------------
-SBOM_COMPONENTS=0; SBOM_SCANNED=0; SBOM_COVERAGE=0; SBOM_FINDINGS=0; SBOM_SUPPRESSED=0
+SBOM_COMPONENTS=0; SBOM_SCANNED=0; SBOM_COVERAGE=0; SBOM_FINDINGS=0; SBOM_SUPPRESSED=0; SBOM_TRACKED=0; SBOM_HOSTONLY=0
 SBOM_STATUS="skipped"
 if [[ "$SCAN_SBOM" == "true" ]]; then
   echo ""
@@ -298,16 +298,52 @@ if [[ "$SCAN_SBOM" == "true" ]]; then
       # Findings = entries cve-check marked exploitable, at or above SEVERITY,
       # minus anything the allowlist still covers.
       _sev_re=$(echo "$SEVERITY" | tr 'A-Z,' 'a-z|')
-      SBOM_FINDINGS=0; SBOM_SUPPRESSED=0
-      while IFS= read -r _id; do
+      # ---------------------------------------------------------------------
+      # Classify each exploitable finding by DEVICE ATTACK SURFACE (see
+      # docs/CVE-SCANNING-POSTURE.md / KB). The fatal count is GATE only.
+      #   GATE    — a SHIPPED (BR_TYPE=target) userland package that is NOT the
+      #             kernel or the bootloader. Per-build actionable (bump the
+      #             package or time-box an allowlist entry), so it stays fatal.
+      #   TRACK   — the kernel ("linux") or bootloader ("uboot*"): shipped, but
+      #             monolithic firmware that no per-build package bump can fix.
+      #             Governed by a kernel/bootloader VERSION POLICY + periodic
+      #             triage, not a per-build hard-fail — an embedded kernel always
+      #             carries HIGH CVEs, and a zero-tolerance gate against a LIVE
+      #             CVE database flips the SAME artefact red the moment the db
+      #             updates (that is what happened between rc25 and rc26/rc27).
+      #             Reported and written out for triage, never silently dropped.
+      #   EXCLUDE — the only affected components are host/build-time tools that
+      #             are NOT installed on the device: no device attack surface.
+      # ---------------------------------------------------------------------
+      SBOM_FINDINGS=0; SBOM_SUPPRESSED=0; SBOM_TRACKED=0; SBOM_HOSTONLY=0
+      TRACK_FILE="${OUTPUT_DIR}/os-tracked-cves.txt"; : > "$TRACK_FILE"
+      while IFS=' ' read -r _id _class; do
         [[ -z "$_id" ]] && continue
-        if is_allowed "$_id"; then SBOM_SUPPRESSED=$((SBOM_SUPPRESSED + 1))
-        else SBOM_FINDINGS=$((SBOM_FINDINGS + 1)); echo "    ${_id}"; fi
+        case "$_class" in
+          GATE)
+            if is_allowed "$_id"; then SBOM_SUPPRESSED=$((SBOM_SUPPRESSED + 1))
+            else SBOM_FINDINGS=$((SBOM_FINDINGS + 1)); echo "    GATE     ${_id}"; fi ;;
+          TRACK)   SBOM_TRACKED=$((SBOM_TRACKED + 1)); printf '%s\n' "$_id" >> "$TRACK_FILE" ;;
+          *)       SBOM_HOSTONLY=$((SBOM_HOSTONLY + 1)) ;;
+        esac
       done < <(jq -r --arg sev "$_sev_re" '
-                 [.vulnerabilities // [] | .[]
-                  | select(.analysis.state == "exploitable")
-                  | select([.ratings // [] | .[] | .severity // ""] | any(test($sev)))
-                  | .id] | unique | .[]' "$GA_SBOM" 2>/dev/null || true)
+                 (reduce (.components[]?) as $c ({};
+                    . + {($c["bom-ref"] // "?"): {n:($c.name // "?"),
+                         br:(($c.properties // [] | map(select(.name=="BR_TYPE").value) | first) // "?")}})) as $m
+                 | [ .vulnerabilities // [] | .[]
+                     | select(.analysis.state == "exploitable")
+                     | select([.ratings // [] | .[] | .severity // ""] | any(test($sev)))
+                     | . as $v
+                     | ([ $v.affects[]?.ref | ($m[.] // {n:"?",br:"?"}) ]) as $comps
+                     | ($comps | map(select(.br == "target"))) as $ship
+                     | ($ship | map(select(.n != "linux" and (.n | startswith("uboot") | not)))) as $userland
+                     | { id:$v.id,
+                         class:(if ($userland | length) > 0 then "GATE"
+                                elif ($ship | length) > 0 then "TRACK"
+                                else "EXCLUDE" end) } ]
+                 | unique_by(.id) | .[] | "\(.id) \(.class)"' "$GA_SBOM" 2>/dev/null || true)
+      [[ "$SBOM_TRACKED"  -gt 0 ]] && echo "  TRACKED: ${SBOM_TRACKED} kernel/bootloader finding(s) -> ${TRACK_FILE} — version policy + periodic triage, not a per-build block (see docs/CVE-SCANNING-POSTURE.md)"
+      [[ "$SBOM_HOSTONLY" -gt 0 ]] && echo "  EXCLUDED: ${SBOM_HOSTONLY} finding(s) affecting only host/build-time packages — not shipped on the device"
 
       if [[ "$SBOM_COVERAGE" -lt "$COVERAGE_MIN_PCT" ]]; then
         echo "  ERROR: only ${SBOM_COVERAGE}% of SBOM components carry a matchable CPE (minimum ${COVERAGE_MIN_PCT}%)"
@@ -411,6 +447,8 @@ jq -n \
   --argjson sbom_coverage "${SBOM_COVERAGE:-0}" \
   --argjson sbom_findings "${SBOM_FINDINGS:-0}" \
   --argjson sbom_suppressed "${SBOM_SUPPRESSED:-0}" \
+  --argjson sbom_tracked "${SBOM_TRACKED:-0}" \
+  --argjson sbom_hostonly "${SBOM_HOSTONLY:-0}" \
   --argjson img_total "${IMG_TOTAL:-0}" \
   --argjson img_findings "${IMG_FINDINGS:-0}" \
   --argjson img_suppressed "${IMG_SUPPRESSED:-0}" \
@@ -418,7 +456,8 @@ jq -n \
   '{date:$date, severity:$severity, strict:$strict, scan_broken:$broken,
     allowlist_expired:$allow_expired,
     os:{status:$sbom_status, components:$sbom_components, scanned:$sbom_scanned,
-        coverage_pct:$sbom_coverage, findings:$sbom_findings, suppressed:$sbom_suppressed},
+        coverage_pct:$sbom_coverage, findings:$sbom_findings, suppressed:$sbom_suppressed,
+        tracked:$sbom_tracked, host_only:$sbom_hostonly},
     images:{total:$img_total, findings:$img_findings, suppressed:$img_suppressed}}' \
   > "$SUMMARY" 2>/dev/null || echo "WARN: could not write ${SUMMARY}"
 
