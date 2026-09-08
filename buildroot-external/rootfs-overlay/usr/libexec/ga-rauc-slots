@@ -150,6 +150,21 @@ uptime_s() {
 record_healthy_boot() {
 	_rhb_slot="$1"
 	[ -n "$_rhb_slot" ] || return 0
+	# Never write DEVICE state from FIXTURE input. A fixture describes another
+	# device, so a run reading canned input must not persist evidence about
+	# this one — unless the caller has ALSO redirected the record, which is a
+	# test deliberately exercising the recording path (SLOT-57..59).
+	# Without this, a suite that forgets GA_RAUC_SLOTS_BOOTS writes into the
+	# real /mnt/data record: on 2026-09-08 the booted-from-b fixture taught a
+	# live canary that slot B had booted healthily, at the fixture's own
+	# timestamp, which flipped rollback.possible to true for a slot with
+	# ever_installed=false and no OS on it — the precise outcome this file
+	# exists to refuse. The guard sits HERE rather than at each call site,
+	# because the call sites are the thing that gets forgotten: four of the
+	# seven in that suite had.
+	if [ -n "${GA_RAUC_SLOTS_INPUT:-}" ] && [ -z "${GA_RAUC_SLOTS_BOOTS:-}" ]; then
+		return 0
+	fi
 	_rhb_up="$(uptime_s)"
 	case "$_rhb_up" in ''|*[!0-9]*) return 0 ;; esac
 	[ "$_rhb_up" -ge "$BOOT_OK_UPTIME_S" ] || return 0
