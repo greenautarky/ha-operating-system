@@ -410,6 +410,23 @@ else
   _fail "CFG-49b: shipping gate MISSING — nothing would catch a unit shipping with the override still on"
 fi
 
+# CFG-49c/d: the thing that actually removes the marker.
+# CFG-49b only proves a GATE exists. A gate with nothing behind it is what this
+# device fleet had for six weeks: the removal was documented in three comments
+# and implemented nowhere, so every unit shipped with eth0 forced up (Odoo #750,
+# and the precondition for the #753 NetworkManager storm). Asserted on the
+# rootfs artifact, and the enablement symlink separately from the unit file —
+# a unit that ships disabled removes nothing.
+[[ -f "${TARGET}/etc/systemd/system/ga-ethernet-retire.path"    && -f "${TARGET}/etc/systemd/system/ga-ethernet-retire.service" ]] \
+  && _pass "CFG-49c: ga-ethernet-retire.path + .service on rootfs (automatic removal exists)" \
+  || _fail "CFG-49c: retire units MISSING — the override would ship live on every unit"
+[[ -L "${TARGET}/etc/systemd/system/paths.target.wants/ga-ethernet-retire.path" ]] \
+  && _pass "CFG-49d: ga-ethernet-retire.path enabled at boot" \
+  || _fail "CFG-49d: ga-ethernet-retire.path NOT enabled — the watcher never arms"
+grep -q '^  retire)' "${TARGET}/usr/sbin/ga-manage-ethernet" 2>/dev/null \
+  && _pass "CFG-49e: ga-manage-ethernet implements the retire action the unit calls" \
+  || _fail "CFG-49e: ga-manage-ethernet has no 'retire' action — the unit would fail at ExecStart"
+
 # CFG-28/29: removed — ga-dns-inject replaced by Supervisor fork DNS handling
 
 # CFG-30: OpenStick auto-connect

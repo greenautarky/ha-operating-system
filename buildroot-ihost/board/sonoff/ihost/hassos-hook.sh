@@ -20,11 +20,22 @@ function hassos_pre_image() {
     # WLAN per provisioning bench. ga-manage-ethernet reads this marker and
     # brings eth0 up regardless of the onboarding consent state.
     #
-    # THE MARKER MUST BE REMOVED BEFORE A DEVICE SHIPS. The provisioner does
-    # that at the end of its run, and tests/ga_tests/ethernet_force is the exit
-    # gate that proves it — including the part that is easy to miss: deleting
-    # the file changes nothing until the device reboots, so the gate reads the
-    # OS's own status file, not just the filesystem.
+    # THE MARKER MUST BE REMOVED BEFORE A DEVICE SHIPS, and since 2026-09-08
+    # something actually removes it: ga-ethernet-retire.path runs
+    # `ga-manage-ethernet retire` when ga_manager writes /share/.ga_converged,
+    # which is the end of the normal provisioning run. The paragraph below
+    # describes the manual fallback for a device that never converges.
+    #
+    # tests/ga_tests/ethernet_force is the exit gate that proves it — including
+    # the part that is easy to miss: deleting the file changes nothing until the
+    # device reboots, so the gate reads the OS's own status file as well as the
+    # filesystem, and keeps the two claims apart.
+    #
+    # An earlier version of this comment said the PROVISIONER removed the file
+    # at the end of its run. It never did: measured against origin on
+    # 2026-09-08, no stage, no job and no provision-verify check named this file
+    # anywhere. Every unit built since 2026-07-30 therefore shipped with the
+    # override live (Odoo #750, and the trigger for #753).
     #
     #   remove:  rm -f /mnt/boot/ga-ethernet-force && reboot
     #   verify:  sh tests/ga_tests/ethernet_force/test.sh   (on the device)
