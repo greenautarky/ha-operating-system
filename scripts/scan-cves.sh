@@ -340,7 +340,8 @@ if [[ "$SCAN_SBOM" == "true" ]]; then
                      | { id:$v.id,
                          class:(if ($userland | length) > 0 then "GATE"
                                 elif ($ship | length) > 0 then "TRACK"
-                                else "EXCLUDE" end) } ]
+                                elif (($comps | length) > 0) and ($comps | all(.br == "host")) then "EXCLUDE"
+                                else "GATE" end) } ]
                  | unique_by(.id) | .[] | "\(.id) \(.class)"' "$GA_SBOM" 2>/dev/null || true)
       [[ "$SBOM_TRACKED"  -gt 0 ]] && echo "  TRACKED: ${SBOM_TRACKED} kernel/bootloader finding(s) -> ${TRACK_FILE} — version policy + periodic triage, not a per-build block (see docs/CVE-SCANNING-POSTURE.md)"
       [[ "$SBOM_HOSTONLY" -gt 0 ]] && echo "  EXCLUDED: ${SBOM_HOSTONLY} finding(s) affecting only host/build-time packages — not shipped on the device"
