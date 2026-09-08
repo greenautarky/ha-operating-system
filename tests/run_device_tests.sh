@@ -169,13 +169,24 @@ preflight_release_match() {
 # suites should be allowed to diagnose — so this warns loudly and continues.
 preflight_wait_settled() {
     [[ "${SETTLE_TIMEOUT:-0}" -gt 0 ]] || return 0
-    local deadline=$((SECONDS + SETTLE_TIMEOUT)) not_up=""
+    local deadline=$((SECONDS + SETTLE_TIMEOUT)) not_up="" said=0
+    # NOT `--format "{{.Names}}\t{{.Status}}" | grep -v "\tUp "`. The device's
+    # grep is POSIX: \t there is a literal backslash-t, not a tab, so nothing
+    # ever matched and every running container was reported as not running —
+    # a check that could not pass on any device. Measured 2026-09-09 on a canary
+    # with all seven add-ons up: the old form returned 7, this one returns 0.
+    # {{.State}} is one word (running/exited/restarting/created/paused/dead), so
+    # a plain space anchor is exact and needs no tab at all.
     while [[ $SECONDS -lt $deadline ]]; do
         # shellcheck disable=SC2086
         not_up=$(ssh $SSH_OPTS "$SSH_TARGET" \
-            'docker ps -a --format "{{.Names}}\t{{.Status}}" 2>/dev/null | grep "^addon_" | grep -v "\tUp " | cut -f1' \
+            "docker ps -a --format '{{.Names}} {{.State}}' 2>/dev/null | grep '^addon_' | grep -v ' running\$' | cut -d' ' -f1" \
             2>/dev/null | tr -d '\r' | tr '\n' ' ')
         [[ -z "${not_up// /}" ]] && { echo "  Preflight: all add-on containers Up"; return 0; }
+        if [[ $said -eq 0 ]]; then
+            echo "  Preflight: waiting up to ${SETTLE_TIMEOUT}s for add-ons to be up: ${not_up}"
+            said=1
+        fi
         sleep 10
     done
     echo ""
