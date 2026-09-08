@@ -88,4 +88,37 @@ else
     skip_test "ETHF-04" "link state — no eth0 on this device"
 fi
 
+# --- the retire mechanism ---------------------------------------------------
+# ETHF-01 says whether the file is gone. These two say whether the thing that
+# is SUPPOSED to remove it exists and ran — the distinction that mattered:
+# until 2026-09-08 the removal was a sentence in three comments and no code, so
+# ETHF-01 was red on every device and nobody could tell from the suite whether
+# a step had failed or had never existed.
+CONVERGED=/mnt/data/supervisor/share/.ga_converged
+
+if systemctl cat ga-ethernet-retire.path >/dev/null 2>&1; then
+    run_test "ETHF-05" "retire mechanism is installed in the image" "true"
+else
+    run_test "ETHF-05" "retire mechanism is installed in the image" "false"
+    printf '        ga-ethernet-retire.path is not on this device — this OS build\n'
+    printf '        has no automatic removal, so ETHF-01 depends on a human.\n'
+fi
+
+# The unit is armed by ConditionPathExists on the marker, so it is legitimately
+# inactive once the retire has happened. What is tested here is the OUTCOME:
+# converged and still carrying the marker means the trigger did not fire.
+if [ -e "$CONVERGED" ]; then
+    if [ -e "$FORCE_BOOT" ]; then
+        run_test "ETHF-06" "retire fired after convergence" "false"
+        printf '        %s exists (device is converged) but %s is still here.\n' "$CONVERGED" "$FORCE_BOOT"
+        printf '        Check:  systemctl status ga-ethernet-retire.path ga-ethernet-retire.service\n'
+        printf '                journalctl -u ga-ethernet-retire.service --no-pager | tail -20\n'
+        printf '        Manual: ga-manage-ethernet retire\n'
+    else
+        run_test "ETHF-06" "retire fired after convergence" "true"
+    fi
+else
+    skip_test "ETHF-06" "retire outcome — device has not converged yet, nothing should have fired"
+fi
+
 suite_end

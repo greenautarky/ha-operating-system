@@ -1,0 +1,10 @@
+[Unit]
+Description=Delete /mnt/boot/ga-ethernet-force (device is converged; the fleet-manager owns this switch now)
+# The link is deliberately NOT reconciled here — see `do_retire` in
+# ga-manage-ethernet. The device is provisioned over this very interface.
+ConditionPathExists=/mnt/boot/ga-ethernet-force
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-manage-ethernet retire
+RemainAfterExit=no
