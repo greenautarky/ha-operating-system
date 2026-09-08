@@ -30,7 +30,7 @@
     },
     "ga_hmvapp_addon": {
       "image": "ghcr.io/greenautarky/ga_hmvapp_addon-{arch}",
-      "version": "2.0.1"
+      "version": "2.2.0"
     }
   }
 }
