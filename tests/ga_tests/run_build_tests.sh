@@ -427,6 +427,24 @@ grep -q '^  retire)' "${TARGET}/usr/sbin/ga-manage-ethernet" 2>/dev/null \
   && _pass "CFG-49e: ga-manage-ethernet implements the retire action the unit calls" \
   || _fail "CFG-49e: ga-manage-ethernet has no 'retire' action — the unit would fail at ExecStart"
 
+# CFG-49f/g: the watcher must be a ONE-SHOT, not a hot loop.
+# A .path unit re-activates its unit the moment that unit goes inactive while
+# the watched path still exists — and the watched path (.ga_converged) exists
+# for the rest of the device's life. So a triggered unit that exits instantly
+# is re-triggered instantly: measured at ~25 activations/second, pinning PID 1
+# on a core and flooding the journal on every converged device. Two conditions
+# have to hold for the pair to terminate, and each gets its own assertion
+# because they fail independently.
+! grep -q '^ConditionPathExists=' "${TARGET}/etc/systemd/system/ga-ethernet-retire.service" 2>/dev/null \
+  && _pass "CFG-49f: retire.service carries no ConditionPathExists (a skipped unit re-triggers its .path forever)" \
+  || _fail "CFG-49f: retire.service has ConditionPathExists — an unmet condition makes it exit instantly and the .path re-triggers it in a hot loop"
+grep -qE '^ExecStartPost=.*systemctl.*stop[[:space:]]+ga-ethernet-retire\.path' "${TARGET}/etc/systemd/system/ga-ethernet-retire.service" 2>/dev/null \
+  && _pass "CFG-49g: retire.service disarms its own .path after firing (bounded to one run)" \
+  || _fail "CFG-49g: retire.service never stops ga-ethernet-retire.path — the watcher keeps re-firing after the marker is gone"
+grep -q '^ConditionPathExists=/mnt/boot/ga-ethernet-force' "${TARGET}/etc/systemd/system/ga-ethernet-retire.path" 2>/dev/null \
+  && _pass "CFG-49h: retire.path does not arm on a device with nothing to retire" \
+  || _fail "CFG-49h: retire.path has no ConditionPathExists — it arms on every boot of every already-retired device"
+
 # CFG-28/29: removed — ga-dns-inject replaced by Supervisor fork DNS handling
 
 # CFG-30: OpenStick auto-connect

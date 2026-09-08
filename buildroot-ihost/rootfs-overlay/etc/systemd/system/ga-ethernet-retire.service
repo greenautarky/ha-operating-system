@@ -2,9 +2,25 @@
 Description=Delete /mnt/boot/ga-ethernet-force (device is converged; the fleet-manager owns this switch now)
 # The link is deliberately NOT reconciled here — see `do_retire` in
 # ga-manage-ethernet. The device is provisioned over this very interface.
-ConditionPathExists=/mnt/boot/ga-ethernet-force
+#
+# NO ConditionPathExists ON THIS UNIT. It carried one, and that is what turned
+# a one-shot into a hot loop: .path re-activates its unit as soon as that unit
+# goes inactive while the watched path still exists, and .ga_converged exists
+# for the rest of the device's life. A unit skipped by an unmet condition goes
+# inactive immediately, so the pair re-triggered each other as fast as PID 1
+# could schedule them — pinning a core and writing the same "skipped because of
+# an unmet condition check" line to the journal many times a second, forever,
+# on every converged device. `do_retire` is already idempotent ("nothing to
+# retire"), so the guard bought nothing and cost that.
+#
+# The loop is broken by disarming the trigger instead: the watcher exists for
+# exactly one event per device lifetime, so it stops itself once it has fired.
+# --no-block, because a blocking stop of the very unit that started us would
+# wait on our own job. `-` on the prefix: failing to disarm must not mark the
+# retire itself as failed — the marker is already gone by then.
 
 [Service]
 Type=oneshot
 ExecStart=/usr/sbin/ga-manage-ethernet retire
+ExecStartPost=-/usr/bin/systemctl --no-block stop ga-ethernet-retire.path
 RemainAfterExit=no

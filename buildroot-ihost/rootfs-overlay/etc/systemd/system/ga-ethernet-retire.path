@@ -12,6 +12,11 @@
 # next boot would leave the marker on the card for the whole bench life of the
 # unit, which is precisely the window in which it ships (Odoo #750).
 Description=Retire the flash-time Ethernet override once ga_manager has converged
+# Do not even arm on a device that has nothing to retire: without this the
+# watcher starts on every boot of every already-retired device and fires once
+# for nothing. Conditions are evaluated when the unit starts, so this bounds
+# the watcher to devices that still carry the marker; the service disarms it
+# for the rest of THIS boot after it fires (see ga-ethernet-retire.service).
 ConditionPathExists=/mnt/boot/ga-ethernet-force
 
 [Path]
