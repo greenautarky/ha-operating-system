@@ -409,24 +409,25 @@ run_serial() {
     fi
 }
 
-# Fallback: send inline test commands via serial
+# The serial fallback, honestly. It used to source a ga_quick_test.sh that has
+# never existed in this repository, so this branch could only ever print "not
+# found" and exit 1 — a path that looks like a capability and is not one
+# (working-method rule 31: wire, prove, or delete).
+#
+# Deleted rather than implemented, because running 35 suites over a console is a
+# different tool, and that tool exists: tests/provisioning_e2e/provision-e2e.sh
+# drives a device entirely over serial via serial_run.py and is the thing to
+# reach for when a device has booted but has no mesh path. Say that here instead
+# of pretending.
 run_serial_inline() {
-    local port="$1"
-    local quick_test="$SCRIPT_DIR/ga_quick_test.sh"
-
-    if [[ -f "$quick_test" ]]; then
-        echo "Sending quick test via serial (line by line)..."
-        while IFS= read -r line; do
-            [[ -z "$line" || "$line" == \#* ]] && continue
-            "$SERIAL_TMUX" send "$port" "$line"
-            sleep 1
-        done < "$quick_test"
-        sleep 5
-        "$SERIAL_TMUX" capture "$port" 100
-    else
-        echo "ERROR: ga_quick_test.sh not found"
-        exit 1
-    fi
+    echo "ERROR: --serial cannot run the suites without a network path on the device."
+    echo "       This mode ships the suites over HTTP from this host, so the device"
+    echo "       needs an address and wget; serial is only used to check it is alive."
+    echo ""
+    echo "       For a device that boots but has no mesh path, use the serial-native"
+    echo "       tool instead:  tests/provisioning_e2e/provision-e2e.sh"
+    echo "       For a device that is reachable:  $0 --ssh root@<ip> --port 22222"
+    exit 1
 }
 
 # --- Main ---
