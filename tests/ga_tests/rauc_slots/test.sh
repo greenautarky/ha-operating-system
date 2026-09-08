@@ -30,11 +30,30 @@ if ! command -v jq >/dev/null 2>&1; then
 else
 
 WORK="$(mktemp -d 2>/dev/null || echo /tmp/rslots_$$)"
+# Belt and braces to the collector-side guard: no invocation in this suite may
+# fall through to the DEFAULT /mnt/data record. Exported once so a future call
+# site cannot forget it — four of the seven here had.
+GA_RAUC_SLOTS_BOOTS="${WORK}/boots.default.json"
+export GA_RAUC_SLOTS_BOOTS
+DEVICE_BOOTS_FILE=/mnt/data/ga-slot-boots.json
+_dev_boots_before="$(cat "$DEVICE_BOOTS_FILE" 2>/dev/null || echo ABSENT)"
 
 # Run the collector against a fixture, leaving the JSON in $WORK/<name>.json.
 parse_fixture() {
+  # GA_RAUC_SLOTS_BOOTS is NOT optional here, and leaving it out was a real
+  # incident on 2026-09-08. The collector records a healthy boot for the
+  # fixture's booted slot on every run; without this the write lands in the
+  # DEFAULT path, /mnt/data/ga-slot-boots.json — the device's persistent
+  # rollback-safety evidence. The booted-from-b fixture then taught a live
+  # canary that slot B had booted healthily, at the fixture's own timestamp
+  # (1753790000). Consequence on that device: rollback.possible flipped to
+  # true with target B, a slot with ever_installed=false and no installed
+  # version — the exact "rollback onto an empty slot" this collector exists to
+  # refuse. It also made this suite self-poisoning: green on its first run
+  # against a device, red on every run after.
   GA_RAUC_SLOTS_TS=1753790000 \
   GA_RAUC_SLOTS_INPUT="$FIX/$1.shell" \
+  GA_RAUC_SLOTS_BOOTS="$WORK/$1.boots.json" \
   GA_RAUC_SLOTS_OUT="$WORK/$1.json" \
   "$COL" >/dev/null 2>&1
 }
@@ -277,6 +296,27 @@ else
   else
     skip_test "SLOT-42..SLOT-44" "snapshot content checks" "no snapshot or jq unavailable"
   fi
+fi
+
+# --- the suite must not teach the device anything --------------------------
+# SLOT-61 exists because this suite once did. Running it against a live canary
+# wrote the booted-from-b fixture's healthy-boot evidence into the DEVICE's
+# persistent /mnt/data/ga-slot-boots.json, at the fixture timestamp. The device
+# then reported rollback.possible=true onto a slot with ever_installed=false —
+# the precise outcome this collector exists to refuse — and the suite, having
+# poisoned its own input, failed on every run after the first.
+# Compares the device file before and after: a test that changes the system it
+# measures has no verdict to give.
+_dev_boots_after="$(cat "$DEVICE_BOOTS_FILE" 2>/dev/null || echo ABSENT)"
+if [ "$_dev_boots_before" = "$_dev_boots_after" ]; then
+  run_test "SLOT-61" "the suite did not write the device healthy-boot record" "true"
+else
+  run_test "SLOT-61" "the suite did not write the device healthy-boot record" "false"
+  printf '        %s changed while this suite ran.\n' "$DEVICE_BOOTS_FILE"
+  printf '        before: %s\n' "$_dev_boots_before"
+  printf '        after : %s\n' "$_dev_boots_after"
+  printf '        A collector invocation is missing GA_RAUC_SLOTS_BOOTS, or the\n'
+  printf '        fixture guard in record_healthy_boot was removed.\n'
 fi
 
 suite_end
