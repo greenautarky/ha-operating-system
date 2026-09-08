@@ -3563,6 +3563,64 @@ else
 fi
 
 # =========================================================================
+# SBOM fail-closed: a prod release must carry a CycloneDX SBOM with real
+# coverage. Same fail-closed prod rule as ROOTPW-01 / CVE-SCAN. (#772)
+# =========================================================================
+_sbom_src="${_cve_src:-$(cd "$(dirname "$0")/../.." && pwd)}"
+_gab="${_sbom_src}/scripts/ga_build.sh"
+_crel="${_sbom_src}/scripts/create-release.sh"
+
+# SBOM-01: the gate exists, asserts COMPONENT COVERAGE (not just exit code), and
+# is wired at the call site via PIPESTATUS — so the `generate_sbom | tee`
+# pipeline cannot hide a failure (a bare `return 1` would report tee's status).
+if [[ -f "$_gab" ]] \
+   && grep -q 'assert_prod_sbom()' "$_gab" \
+   && grep -qE 'components' "$_gab" \
+   && grep -qE 'ZERO components|components.*-eq 0|-eq 0' "$_gab" \
+   && grep -qE '_sbom_rc=\$\{PIPESTATUS\[0\]\}' "$_gab" \
+   && grep -qE 'assert_prod_sbom "\$_sbom_rc"' "$_gab"; then
+  _pass "SBOM-01: prod SBOM gate asserts component coverage + is wired via PIPESTATUS (not the tee exit)"
+else
+  _fail "SBOM-01: prod SBOM fail-closed gate missing or not wired past the tee pipeline"
+fi
+
+# SBOM-02: create-release refuses to stage a prod release without the SBOM.
+if [[ -f "$_crel" ]] \
+   && grep -qE 'sbom-cyclonedx\.json' "$_crel" \
+   && grep -qE '_prod_' "$_crel" \
+   && grep -qE 'exit 1' "$_crel"; then
+  _pass "SBOM-02: create-release fails closed on a prod release with no CycloneDX SBOM"
+else
+  _fail "SBOM-02: create-release still stages a prod release without the SBOM"
+fi
+
+# SBOM-03: drive the LIVE assert_prod_sbom (extracted from ga_build.sh, not a
+# copy) — it must go RED on an absent and a zero-component SBOM, and GREEN on a
+# real one. This is the red+green proof committed as a fixture (norms 6/45/51).
+if command -v jq &>/dev/null && [[ -f "$_gab" ]] && grep -q 'assert_prod_sbom()' "$_gab"; then
+  _sb_tmp="$(mktemp -d)"
+  sed -n '/^assert_prod_sbom() {/,/^}/p' "$_gab" > "${_sb_tmp}/fn.sh"
+  printf '. "$1"\nassert_prod_sbom "${2:-0}"\n' > "${_sb_tmp}/drive.sh"
+  mkdir -p "${_sb_tmp}/images"
+  # (a) prod + no SBOM -> non-zero
+  GA_ENV=prod OUT="${_sb_tmp}" bash "${_sb_tmp}/drive.sh" "${_sb_tmp}/fn.sh" >/dev/null 2>&1; _rc_absent=$?
+  # (b) prod + zero-component SBOM -> non-zero
+  echo '{"components":[]}' > "${_sb_tmp}/images/sbom-cyclonedx.json"
+  GA_ENV=prod OUT="${_sb_tmp}" bash "${_sb_tmp}/drive.sh" "${_sb_tmp}/fn.sh" >/dev/null 2>&1; _rc_zero=$?
+  # (c) prod + real SBOM (1 component) -> zero (green)
+  echo '{"components":[{"name":"busybox","version":"1.36"}]}' > "${_sb_tmp}/images/sbom-cyclonedx.json"
+  GA_ENV=prod OUT="${_sb_tmp}" bash "${_sb_tmp}/drive.sh" "${_sb_tmp}/fn.sh" >/dev/null 2>&1; _rc_ok=$?
+  if [[ "$_rc_absent" -ne 0 && "$_rc_zero" -ne 0 && "$_rc_ok" -eq 0 ]]; then
+    _pass "SBOM-03: assert_prod_sbom red on absent + zero-component SBOM, green on a real one (prod)"
+  else
+    _fail "SBOM-03: assert_prod_sbom fail-closed broken (absent=${_rc_absent} zero=${_rc_zero} ok=${_rc_ok}; want !0 !0 0)"
+  fi
+  rm -rf "$_sb_tmp"
+else
+  _skip "SBOM-03: assert_prod_sbom functional red/green" "jq or ga_build.sh not available"
+fi
+
+# =========================================================================
 # U-Boot: boot must not be interruptible on a shipped device (review finding #9)
 #
 # Any CONFIG_BOOTDELAY >= 0 opens a serial window in which a keypress drops to

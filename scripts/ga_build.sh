@@ -1718,6 +1718,44 @@ generate_sbom() {
   echo "=== SBOM generation complete ==="
 }
 
+# assert_prod_sbom — fail-closed gate for the CycloneDX SBOM, mirroring the CVE
+# scan gate (generation lives in generate_sbom; the fail-closed decision lives
+# here, at the call site). A prod release must carry an SBOM with real coverage;
+# an SBOM that is absent, empty, or has zero components is a failure. Asserted on
+# the ARTIFACT (and its component count) rather than a return code, so the
+# `generate_sbom 2>&1 | tee` pipeline at the call site cannot hide it — a bare
+# `return 1` there reports tee's status, not the SBOM's (#772). Dev builds warn.
+assert_prod_sbom() {
+  local gen_rc="${1:-0}"
+  local sbom="${OUT}/images/sbom-cyclonedx.json"
+  local components=0
+  if [[ -s "$sbom" ]] && command -v jq &>/dev/null; then
+    components="$(jq '(.components // []) | length' "$sbom" 2>/dev/null || echo 0)"
+  fi
+  if [[ "${GA_ENV:-dev}" == "prod" ]]; then
+    if [[ ! -s "$sbom" ]]; then
+      echo "ERROR: prod build produced no CycloneDX SBOM (${sbom} absent or empty)"
+      echo "       A prod release must not ship without an SBOM. See Odoo #772."
+      exit 1
+    fi
+    if [[ "${components:-0}" -eq 0 ]]; then
+      echo "ERROR: prod CycloneDX SBOM has ZERO components (${sbom})"
+      echo "       Coverage, not exit code: a generator that ran over zero packages"
+      echo "       is a failure. See Odoo #772."
+      exit 1
+    fi
+    if [[ "${gen_rc}" -ne 0 ]]; then
+      echo "ERROR: SBOM generation returned ${gen_rc} on a prod build — refusing to continue (#772)"
+      exit 1
+    fi
+    echo "SBOM OK: ${components} components (prod, fail-closed)"
+  else
+    if [[ ! -s "$sbom" ]] || [[ "${components:-0}" -eq 0 ]]; then
+      echo "WARN: SBOM absent/empty/zero-components (non-prod build — continuing)"
+    fi
+  fi
+}
+
 # -----------------------------------------------------------------------------
 # Image renaming and provisioning image creation
 # -----------------------------------------------------------------------------
@@ -2405,7 +2443,16 @@ if [[ "$GA_ENV" == "prod" ]]; then
 
   # 10) Generate Software Bill of Materials (SBOM)
   log_build_step "Generate SBOM"
+  # NO `|| true` on this pipeline — it would make `true` the last command and
+  # RESET PIPESTATUS to (0), masking a failed generation (same trap as the CVE
+  # scan below). `set +e` survives a non-zero exit while keeping PIPESTATUS.
+  set +e
   generate_sbom 2>&1 | tee -a "$BUILD_LOG"
+  _sbom_rc=${PIPESTATUS[0]}
+  set -e
+  # Fail-closed on prod, asserted on the ARTIFACT (not the pipe's exit): a prod
+  # release must carry a CycloneDX SBOM with real coverage (#772).
+  assert_prod_sbom "$_sbom_rc"
 
   # 11) CVE scan of SBOM — coverage-verified, fail-closed on prod
   #

@@ -138,7 +138,18 @@ fi
 
 # --- 5. SBOMs ---
 echo "[5/6] Collecting SBOMs..."
-[[ -f "${BUILD_DIR}/images/sbom-cyclonedx.json" ]] && cp "${BUILD_DIR}/images/sbom-cyclonedx.json" "$STAGE_DIR/sbom/"
+# The CycloneDX SBOM is CRA release evidence — a prod release must not be staged
+# without it. Fail closed on a prod build (detected from the _prod_ filename);
+# warn on non-prod. (#772)
+_sbom_cdx="${BUILD_DIR}/images/sbom-cyclonedx.json"
+if [[ -f "$_sbom_cdx" ]]; then
+  cp "$_sbom_cdx" "$STAGE_DIR/sbom/"
+elif [[ "$IMG_BASE" == *_prod_* ]]; then
+  echo "ERROR: prod release has no CycloneDX SBOM ($_sbom_cdx) — refusing to stage a release without it (#772)" >&2
+  exit 1
+else
+  echo "WARN: no CycloneDX SBOM ($_sbom_cdx) — non-prod release, continuing" >&2
+fi
 [[ -f "${BUILD_DIR}/images/sbom-containers.json" ]] && cp "${BUILD_DIR}/images/sbom-containers.json" "$STAGE_DIR/sbom/"
 
 # --- 6. Create archive ---
