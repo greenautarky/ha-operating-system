@@ -116,12 +116,29 @@ jobs:
       #
       # Only when the pin could actually change: pulling a Supervisor image on
       # every unrelated PR buys nothing and costs registry budget.
+      # `!cancelled()` because this check must not be silenced by an UNRELATED
+      # one. Measured 2026-09-09 on PR #531, which moved the Supervisor pin: the
+      # availability step above failed on a stale ga_manager add-on pin — nothing
+      # to do with the Supervisor — and GitHub therefore skipped this step, the
+      # only one that validates the pin the PR actually changed. The PR could
+      # have been merged on the true-but-irrelevant argument that "the failing
+      # check is unrelated", while the relevant check had never run.
+      #
+      # The cost, stated rather than hidden: if "Install dependencies" fails,
+      # this step now fails too instead of skipping, so one broken runner
+      # produces several failures. That is louder, and loud is the point — a
+      # skipped check reads as "fine" and a failed one does not.
       - name: Check the pinned Supervisor resolves Core from upstream
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        if: >-
+          !cancelled() && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
         timeout-minutes: 8
         run: ./scripts/check-supervisor-core-image.sh
 
+      # Same reasoning: the source tests answer a different question from image
+      # availability, so one must not hide the other.
       - name: Run source-level build tests
+        if: '!cancelled()'
         run: |
           # The runner needs an OUT arg to derive SRC=$OUT/.. — without it
           # the script exits at line 9 (${1:?Usage:...}) before any test
