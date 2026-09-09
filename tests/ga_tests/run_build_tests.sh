@@ -955,16 +955,35 @@ if [[ -f "$VER_JSON" ]]; then
   # two image refs against their correct registries instead (see REG-01/02).
   SUP_IMG="$(jq -r '.images.supervisor // "unknown"' "$VER_JSON" 2>/dev/null)"
   CORE_IMG="$(jq -r '.images.core // "unknown"' "$VER_JSON" 2>/dev/null)"
-  if [[ "$SUP_IMG" == *greenautarky* ]] && [[ "$CORE_IMG" == ghcr.io/home-assistant/* ]]; then
-    _pass "BLD: version.json registries correct (supervisor=greenautarky, core=stock)"
+  # Both images are GA-built now. Upstream stopped building Core for armv7 in
+  # late 2025, so "stock upstream" no longer means "current" — it means frozen
+  # at the last armv7 tag it ever produced, receiving no fixes of any kind. The
+  # armv7 bridge (greenautarky/ga-core-armv7) exists to keep this hardware on a
+  # maintained Core, and this assertion is what makes the fleet actually use it.
+  if [[ "$SUP_IMG" == *greenautarky* ]] && [[ "$CORE_IMG" == *greenautarky* ]]; then
+    _pass "BLD: version.json registries correct (supervisor + core are GA-built)"
   else
     _fail "BLD: version.json registries wrong (supervisor='$SUP_IMG' core='$CORE_IMG')"
   fi
 
   CORE_TAG="$(jq -r '.core // "unknown"' "$VER_JSON" 2>/dev/null)"
-  [[ "$CORE_TAG" =~ ^2025\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] \
-    && _pass "BLD: Core image tag is '$CORE_TAG'" \
-    || _fail "BLD: Core tag is '$CORE_TAG' (expected HA calver like 2025.11.3 or 2025.11.3.1)"
+  # A FLOOR, not an exact pin: any calver from 2026 on is acceptable, 2025 and
+  # earlier is not. Checked numerically rather than by refusing ^2025\. so it
+  # keeps working in 2027 without an edit — a guard that needs yearly
+  # maintenance is a guard that will one day be edited to make a build pass.
+  #
+  # Why a floor at all: on 2026-09-09 the fleet was measured running 2025.11.3
+  # while upstream stood at 2026.9.1, and nobody had noticed for ten months,
+  # because nothing refused it. The bridge that could carry a current Core had
+  # been proven on hardware three weeks earlier and never shipped.
+  CORE_YEAR="${CORE_TAG%%.*}"
+  if [[ ! "$CORE_TAG" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+    _fail "BLD: Core tag is '$CORE_TAG' (expected HA calver like 2026.8.2 or 2026.8.2.1)"
+  elif (( CORE_YEAR < 2026 )); then
+    _fail "BLD-CORE-FLOOR: Core tag '$CORE_TAG' is from $CORE_YEAR — this fleet must not ship a Core older than 2026. A 2025 tag is the frozen stock armv7 image upstream abandoned; it gets no security fixes. Build one with greenautarky/ga-core-armv7 and pin that."
+  else
+    _pass "BLD: Core image tag is '$CORE_TAG' (>= 2026, GA-built)"
+  fi
 
   # REG: Verify image refs use the correct registry — V1.2-clean retires the
   # Core fork: Supervisor stays a GA image, Core goes stock upstream.
@@ -972,10 +991,13 @@ if [[ -f "$VER_JSON" ]]; then
   [[ "$SUP_IMG" == *greenautarky* ]] \
     && _pass "REG-01: Supervisor image is greenautarky: $SUP_IMG" \
     || _fail "REG-01: Supervisor image is NOT greenautarky: $SUP_IMG"
-  # REG-02 (V1.2-clean): Core fork retired — Core image must be stock upstream
-  [[ "$CORE_IMG" == ghcr.io/home-assistant/* ]] \
-    && _pass "REG-02: Core image is stock upstream: $CORE_IMG" \
-    || _fail "REG-02: Core image is NOT stock ghcr.io/home-assistant/*: $CORE_IMG"
+  # REG-02: reversed 2026-09-09. V1.2-clean retired the Core fork and moved to
+  # stock upstream, which was right while upstream still built armv7. It stopped
+  # doing so in late 2025, so "stock" became "frozen". Core is a GA image again —
+  # not the old fork, but the armv7 bridge, which tracks upstream releases.
+  [[ "$CORE_IMG" == *greenautarky* ]] \
+    && _pass "REG-02: Core image is the GA armv7 build: $CORE_IMG" \
+    || _fail "REG-02: Core image is NOT a GA armv7 build: $CORE_IMG (upstream no longer builds armv7 — a stock image here is frozen)"
 
   # REG: No upstream or oliverc7 refs in version.json
   if grep -qE 'oliverc7|iHost-Open-Source' "$VER_JSON" 2>/dev/null; then
