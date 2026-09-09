@@ -38,4 +38,4 @@ rootfs_overlays:
 # Upstream base images — referenced by version.json + Supervisor config.
 base_images:
   homeassistant_core:        "2025.11.3"
-  homeassistant_supervisor:  "2025.11.4.8"
+  homeassistant_supervisor:  "2025.11.5.3"  # 2025.11.5.3: the forward-port onto upstream 2025.11.5 (ha-supervisor #32), carrying the four API fields Core 2026.8/2026.9 require via aiohasupervisor 0.6.0 (#25) and reference_extra (#27). armv7 is kept OUT of the unsupported set — upstream #5620 would otherwise trip JobCondition.ARCHITECTURE_SUPPORTED and stop Updater.fetch_data, so the device would never read stable.json again; observed on K31 2026-09-09 and now asserted in CI. Proven on K31 the same day: the eight endpoints Core gathers at startup went from 4 of 8 unreadable to 8 of 8, healthy, 7/7 add-ons, restarts=0. PREVIOUS 2025.11.4.8.
