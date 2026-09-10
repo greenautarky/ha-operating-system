@@ -51,14 +51,33 @@ run_test_show "OB-04b" "GA release identifier" \
 # Both run unauthenticated (curl with no token). The wizard URL is
 # `/greenautarky-setup.html` (the actual page) — NOT `/greenautarky-setup`
 # (which is the view that itself 302s).
+# We probe `/` the way the device label's QR code hits it, not the way a bare
+# `curl /` does. The label encodes `/?pin=<pin>&device=<id>`, and the setup
+# panel reads both back out of `window.location` to auto-fill the six digits.
+# A redirect that answers with a bare path drops them, so a customer who has
+# just scanned the code is still asked to read the PIN off the label and type
+# it in — the one thing the QR code exists to avoid. Probing without a query
+# string cannot see that at all, which is how it survived unnoticed on every
+# device whose redirect worked (OB-WR-03).
+_wizard_probe_pin="000000"
+_wizard_probe_device="ob-wr-probe"
+
 _wizard_completed=$(jq -r '.data.completed // false' /mnt/data/supervisor/homeassistant/.storage/greenautarky_site 2>/dev/null || echo "false")
-_root_redirect=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --connect-timeout 5 'http://localhost:8123/' 2>/dev/null)
+_root_redirect=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --connect-timeout 5 \
+  "http://localhost:8123/?pin=${_wizard_probe_pin}&device=${_wizard_probe_device}" 2>/dev/null)
 
 if [ "$_wizard_completed" = "false" ]; then
   run_test "OB-WR-01" "/ redirects to /greenautarky-setup.html (wizard incomplete)" \
     "echo '$_root_redirect' | grep -qE '^302 .*greenautarky-setup\.html'"
+
+  # Reaching the wizard is necessary but not sufficient. Separate assertion, so
+  # a lost PIN reports as a lost PIN instead of hiding inside OB-WR-01 or, worse,
+  # passing because OB-WR-01 only ever looked at the status and the path.
+  run_test "OB-WR-03" "/ carries the label's ?pin= through to the wizard" \
+    "echo '$_root_redirect' | grep -qE 'greenautarky-setup\.html\?.*pin=${_wizard_probe_pin}'"
 else
   skip_test "OB-WR-01" "wizard already completed — incomplete-state gate doesn't apply"
+  skip_test "OB-WR-03" "wizard already completed — incomplete-state gate doesn't apply"
 fi
 
 if [ "$_wizard_completed" = "true" ]; then
