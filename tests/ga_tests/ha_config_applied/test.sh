@@ -47,6 +47,16 @@ fi
 # Helper: is a value present in Core's /api/config JSON?
 core_has() { grep -q "$1" "$CORE_CFG" 2>/dev/null; }
 
+# Read one key out of the `homeassistant:` block.
+#
+# `[^:]*:` and not `.*:` — the greedy form eats everything up to the LAST colon,
+# so `internal_url: "http://kibu.local:8123"` yields `8123` and the comparison
+# can never match. A check that cannot go green is as useless as one that cannot
+# go red, and this one was caught only by deliberately making it pass.
+cfg_value() {
+  grep -E "^  $1:" "$CFG" 2>/dev/null | head -1 | sed "s/^[^:]*: *//" | tr -d '"' | tr -d '\r'
+}
+
 # =========================================================================
 # Reachability — everything below is meaningless without it (HCA-01..02)
 # =========================================================================
@@ -111,7 +121,7 @@ done
 # left in that state computes every sunrise for the previous location.
 
 for key in latitude longitude elevation; do
-  want=$(grep -E "^  $key:" "$CFG" 2>/dev/null | head -1 | sed 's/.*: *//' | tr -d '"')
+  want=$(cfg_value "$key")
   if [ -n "$want" ]; then
     run_test "HCA-09:$key" "Core runs the configured $key ($want)" \
       "grep -q '\"$key\": *$want' $CORE_CFG"
@@ -121,7 +131,7 @@ for key in latitude longitude elevation; do
 done
 
 for key in time_zone country; do
-  want=$(grep -E "^  $key:" "$CFG" 2>/dev/null | head -1 | sed 's/.*: *//' | tr -d '"')
+  want=$(cfg_value "$key")
   if [ -n "$want" ]; then
     run_test "HCA-10:$key" "Core runs the configured $key ($want)" \
       "grep -q '\"$key\": *\"$want\"' $CORE_CFG"
@@ -135,6 +145,69 @@ done
 # same stale value.
 run_test "HCA-11" "Core reports config_source=yaml (our file is authoritative)" \
   "grep -q '\"config_source\": *\"yaml\"' $CORE_CFG"
+
+# =========================================================================
+# The urls: file vs Core, and the identity split (HCA-15..17)
+# =========================================================================
+# Added 2026-08-26 with ga_manager 0.133.0, which moved the urls onto the
+# reconcile path. Before that they were written by converge alone — which runs
+# once per device lifetime — so a device converged months earlier simply never
+# had them. That is the state this suite could not see: it checked location,
+# integrations and log levels, and said nothing about the two urls a resident
+# and the fleet actually use to reach the device.
+#
+# internal_url derives from the live hostname, so it is asserted everywhere.
+# external_url arrives with the identity at release, so a device without one is
+# reported, not failed.
+
+IDENT=$(cat /mnt/data/ga-identity.json 2>/dev/null || cat /mnt/data/supervisor/share/ga-identity.json 2>/dev/null)
+URL_PREFIX=$(echo "$IDENT" | tr ',' '\n' | grep url_prefix | sed 's/.*: *"//;s/".*//')
+
+want_int=$(cfg_value internal_url)
+if [ -n "$want_int" ]; then
+  run_test "HCA-15" "Core runs the configured internal_url ($want_int)" \
+    "grep -q '\"internal_url\": *\"$want_int\"' $CORE_CFG"
+else
+  run_test "HCA-15" "internal_url is set in configuration.yaml" "false"
+fi
+
+# The url must name THIS device. A stale one points at whatever answers that
+# mDNS name on the LAN — which, with two GA devices on one network, is the
+# neighbour. That is the failure the per-device hostname exists to prevent, and
+# it is invisible unless the url is compared to the live hostname.
+# Three details here, each of which made this check unable to go green, and each
+# found only by deliberately making it PASS rather than by reading it:
+#   - `"hostname":` with the colon. Without it the grep also matches the entry
+#     in the `features` list, `head -1` takes that one, and the value is empty.
+#   - `^[^:]*:` and not `.*:` — the greedy form eats to the LAST colon.
+#   - the newline strip, or the value arrives as "\nKiBu".
+# A check that cannot go green is as useless as one that cannot go red.
+HOSTNAME_NOW=$(docker exec "$GM" sh -c 'curl -fsS -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/host/info' 2>/dev/null \
+  | tr ',' '\n' | grep '"hostname":' | head -1 | sed 's/^[^:]*: *"//;s/".*//' | tr -d '\n\r ')
+if [ -z "$want_int" ]; then
+  # HCA-15 already reports the missing url. Repeating it here would turn one
+  # fault into two and hide how many things are actually wrong.
+  skip_test "HCA-16" "no internal_url to compare — see HCA-15"
+elif [ -n "$HOSTNAME_NOW" ]; then
+  run_test "HCA-16" "internal_url matches the live hostname ($HOSTNAME_NOW), not a stale one" \
+    "echo '$want_int' | grep -qi '://$HOSTNAME_NOW\.local:8123$'"
+else
+  skip_test "HCA-16" "Supervisor reported no hostname"
+fi
+
+if [ -n "$URL_PREFIX" ]; then
+  want_ext=$(cfg_value external_url)
+  run_test "HCA-17" "external_url names THIS device's prefix ($URL_PREFIX)" \
+    "echo '$want_ext' | grep -q '://$URL_PREFIX\.'"
+  if [ -n "$want_ext" ]; then
+    run_test "HCA-17b" "Core runs the configured external_url" \
+      "grep -q '\"external_url\": *\"$want_ext\"' $CORE_CFG"
+  else
+    skip_test "HCA-17b" "no external_url in configuration.yaml — see HCA-17"
+  fi
+else
+  skip_test "HCA-17" "no url_prefix on this device yet — not released, external_url not due"
+fi
 
 # =========================================================================
 # Log levels + the disclosure coupling (HCA-12..13)
