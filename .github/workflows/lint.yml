@@ -277,3 +277,13 @@ jobs:
       # pipe's status and that is how a gate looks green while failing.
       - name: Provisioning gate verdict logic (exit codes on the same fixtures)
         run: ./tests/provisioning_e2e/selftest.sh
+
+      # IMG-01 reads the bytes a bake wrote into BOTH RAUC slot pairs of the
+      # produced .img.xz — the artefact, where SRC-23 reads the declaration.
+      # No bake here, so the gate runs over synthetic GPT images built with
+      # sfdisk: the pre-#349 layout (slot 1 all zeros) must fail, partial and
+      # different pairs must fail, identical pairs (.img and .img.xz) must
+      # pass, and a truncated stream must refuse a verdict rather than hash
+      # the bytes it never saw.
+      - name: Slot-pair gate (red on an empty second slot, green on identical pairs)
+        run: ./tests/gates/slot_pairs/selftest.sh
