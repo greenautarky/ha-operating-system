@@ -1,0 +1,12 @@
+[Unit]
+Description=GreenAutarky health-gated LTE standby route (seam S2 consumer)
+Documentation=https://github.com/greenautarky/ga-ihost-docs/blob/main/adr/ADR-0025-health-gated-standby-uplink.md
+After=network.target NetworkManager.service mnt-data.mount
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-lte-standby-route
+# Driven by the paired .timer (bounded poll). A single reconcile per tick:
+# add the wlan0 default route while the verdict is usable+fresh, withdraw it
+# (loudly) when it is not-usable / missing / stale.

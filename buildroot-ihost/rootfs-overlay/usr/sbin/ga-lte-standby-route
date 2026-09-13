@@ -1,0 +1,101 @@
+#!/bin/sh
+# ga-lte-standby-route — the wlan0 default route follows a health verdict (S2).
+#
+# The iHost's standby uplink is the WiFi association to an externally-powered
+# LTE stick's AP. Before this, wlan0 carried a default route UNCONDITIONALLY,
+# so loss of the primary uplink routed traffic into a dongle that may have no
+# cellular service — a silent black hole that LOOKS like a fallback (ADR-0025).
+#
+# ga_manager publishes a single verdict for the standby (seam S2):
+#   /mnt/data/supervisor/share/ga-lte-standby.json  {usable, since, reason, updated_at}
+# derived from the MODEM's own registration (never the WiFi hop / a WAN-IP
+# guess), with hysteresis. This unit adds the wlan0 default route when the
+# verdict is `usable:true` and withdraws it otherwise. A missing verdict, or one
+# older than STALE_S, is NOT usable — the route is withdrawn AND the
+# substitution is logged at WARNING with the file's age (working-method rule 44:
+# a fallback must be loud; an INFO line is not an announcement).
+#
+# NOT a `.path` unit (the 2026-09-08 hot-loop finding): a `.path` fires on
+# change and CANNOT fire when a file STOPS changing, which is exactly the stale
+# case this must catch. A bounded poll (the paired .timer, every INTERVAL) is
+# the correct shape — and it re-asserts the route each tick, so a route added or
+# dropped out-of-band is reconciled.
+#
+# POSIX /bin/sh. Test hook: `GA_ROUTE_TEST=1 . ga-lte-standby-route` sources the
+# functions without touching real routes; the ip/logger commands and all paths
+# are env-overridable so the decision logic runs host-side.
+set -u
+
+VERDICT="${GA_STANDBY_VERDICT:-/mnt/data/supervisor/share/ga-lte-standby.json}"
+IFACE="${GA_STANDBY_IFACE:-wlan0}"
+# The dongle's AP gateway on the wlan0 subnet, and the metric the standby route
+# uses. Both match the shipped OpenStick hop (192.168.100.1, high metric so the
+# primary always wins when present).
+GW="${GA_STANDBY_GW:-192.168.100.1}"
+METRIC="${GA_STANDBY_METRIC:-20500}"
+STALE_S="${GA_STANDBY_STALE_S:-600}"     # 10 min — matches ADR-0025 D1
+IP_BIN="${GA_STANDBY_IP:-ip}"
+LOG_TAG="ga-lte-standby-route"
+
+_log()  { logger -t "$LOG_TAG" -p "daemon.$1" "$2" 2>/dev/null || echo "$LOG_TAG: $2" >&2; }
+_now_epoch() { date -u +%s; }
+
+# Parse "usable" (true|false|missing) from the verdict JSON. Echoes true/false.
+verdict_usable() {
+    [ -f "$VERDICT" ] || { echo missing; return; }
+    _u="$(tr -d '\n' < "$VERDICT" 2>/dev/null | sed -n 's/.*"usable"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p')"
+    [ -n "$_u" ] && echo "$_u" || echo missing
+}
+
+# File age in seconds from its mtime, or a huge number when absent.
+verdict_age_s() {
+    [ -f "$VERDICT" ] || { echo 999999; return; }
+    _m="$(stat -c %Y "$VERDICT" 2>/dev/null || echo 0)"
+    echo $(( $(_now_epoch) - _m ))
+}
+
+# Is the wlan0 default route currently present?
+route_present() {
+    $IP_BIN -4 route show default dev "$IFACE" 2>/dev/null | grep -q "^default"
+}
+
+add_route() {
+    route_present && return 0
+    $IP_BIN -4 route add default via "$GW" dev "$IFACE" metric "$METRIC" 2>/dev/null
+}
+
+del_route() {
+    route_present || return 0
+    $IP_BIN -4 route del default dev "$IFACE" 2>/dev/null
+}
+
+# Decide + act once. Echoes the decision word (added|present|withdrawn|absent).
+# The WARNING side (rule 44) fires whenever the route is withdrawn because the
+# verdict is missing or stale — the loud substitution announcement.
+reconcile_once() {
+    _usable="$(verdict_usable)"
+    _age="$(verdict_age_s)"
+    if [ "$_usable" = "true" ] && [ "$_age" -le "$STALE_S" ]; then
+        if add_route; then
+            route_present && { echo added; return; }
+        fi
+        echo present
+        return
+    fi
+    # Not usable → withdraw, and say WHY at WARNING when it is missing/stale.
+    if [ "$_usable" = "missing" ]; then
+        _log warning "standby verdict $VERDICT MISSING — withdrawing the $IFACE default route (loss of the primary uplink now makes the device visibly offline, not silently black-holed)"
+    elif [ "$_age" -gt "$STALE_S" ]; then
+        _log warning "standby verdict $VERDICT is STALE (${_age}s old, limit ${STALE_S}s) — ga_manager stopped publishing it; withdrawing the $IFACE default route"
+    fi
+    if del_route; then
+        route_present || { echo withdrawn; return; }
+    fi
+    echo absent
+}
+
+main() {
+    reconcile_once
+}
+
+[ -n "${GA_ROUTE_TEST:-}" ] || main
