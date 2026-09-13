@@ -49,6 +49,14 @@ for arg in "$@"; do
         esac
         CATEGORY=""
       else
+        case "$arg" in
+          emu|device|all)
+            # A bare category name is not a suite: it would be looked up as a
+            # directory, skipped as "no test.sh found", and the run would end
+            # in "ALL PASS (0 tests)". Refuse it instead of passing an empty run.
+            echo "ERROR: '$arg' is a category, not a suite — use: --category $arg" >&2
+            exit 2 ;;
+        esac
         SUITES="${SUITES:+$SUITES }$arg"
       fi
       ;;
@@ -153,7 +161,14 @@ done
 echo "  ────────────────────────────────────────────"
 printf "  %-20s %4s  %4s  %4s\n" "TOTAL" "$TOTAL_PASS" "$TOTAL_FAIL" "$TOTAL_SKIP"
 echo ""
-if [ "$TOTAL_FAIL" -eq 0 ]; then
+if [ "$((TOTAL_PASS + TOTAL_FAIL))" -eq 0 ]; then
+  # Zero executed tests is not a pass. A suite name that resolves to no test.sh,
+  # a wrong argument, or a tree that shipped without its suites all end here —
+  # and each of them used to print "ALL PASS (0 tests)" with exit 0.
+  _result="NONE"
+  echo "  Result: NO TESTS RAN ($TOTAL_SKIP skipped) — refusing to report a pass over zero tests"
+  EXIT=$((EXIT + 2))
+elif [ "$TOTAL_FAIL" -eq 0 ]; then
   _result="PASS"
   echo "  Result: ALL PASS ($TOTAL tests)"
 else
