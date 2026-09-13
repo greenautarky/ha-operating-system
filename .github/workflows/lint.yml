@@ -167,6 +167,16 @@ jobs:
       - name: ga-share-publish (/share symlink hardening)
         run: sh tests/ga_tests/share_publish/test.sh
 
+      - name: ga-enroll declares its fleet environment (ADR-0027 D4)
+        # Drives the REAL enroll script with a stub curl on PATH and every
+        # device path moved into a temp dir. Asserts the seam to the
+        # fleet-manager: absent GA_FLEET_ENV enrols as prod, an override as
+        # staging, the bridge carries it, and a value that is neither is
+        # refused before any request — a typo must never quietly enrol a
+        # device into the wrong fleet. Red-proven against the pre-field script
+        # (5 of 7 fail) before it was added.
+        run: sh tests/ga_tests/enroll_env/test.sh
+
       # expected.env is the DECLARATION side of the os_integrity suite: the
       # release marker and the baked add-on pins the flashed device is held
       # against. It is generated repo-side and committed — and nothing checked
