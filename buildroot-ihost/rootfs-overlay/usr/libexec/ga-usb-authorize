@@ -1,0 +1,29 @@
+#!/bin/sh
+# ga-usb-authorize <syspath> <vid> <pid> — authorize a host-port USB device
+# IFF its VID:PID is on the allowlist. With usbcore.authorized_default=0
+# (ADR-0029 D3) nothing binds until this says so. Fail CLOSED: any doubt
+# (missing allowlist, unreadable syspath) leaves the device unauthorized.
+#
+# POSIX /bin/sh. Test hook: GA_USB_ALLOWLIST + GA_USB_TEST override the
+# allowlist path and suppress the sysfs write (echo the decision instead).
+set -u
+SYS="${1:-}"; VID="$(echo "${2:-}" | tr 'A-F' 'a-f')"; PID="$(echo "${3:-}" | tr 'A-F' 'a-f')"
+ALLOWLIST="${GA_USB_ALLOWLIST:-/usr/share/ga-usb-allowlist}"
+LOG_TAG="ga-usb-authorize"
+_log() { logger -t "$LOG_TAG" -p "daemon.$1" "$2" 2>/dev/null || echo "$LOG_TAG: $2" >&2; }
+
+[ -n "$VID" ] && [ -n "$PID" ] || { _log warning "missing VID/PID — leaving device unauthorized"; exit 0; }
+
+# Match "vid:pid" against the allowlist, ignoring comments/blank/whitespace.
+if [ -f "$ALLOWLIST" ] && grep -viE '^[[:space:]]*(#|$)' "$ALLOWLIST" 2>/dev/null \
+     | tr 'A-F' 'a-f' | tr -d '[:space:]' | grep -qx "${VID}:${PID}"; then
+    _log info "authorizing allowlisted host-port device ${VID}:${PID}"
+    if [ -n "${GA_USB_TEST:-}" ]; then echo "authorize ${VID}:${PID}"; exit 0; fi
+    [ -w "$SYS/authorized" ] && echo 1 > "$SYS/authorized" 2>/dev/null || true
+    exit 0
+fi
+# Not on the allowlist → stays unauthorized (the default). Loud enough to see a
+# stranger's stick was refused, quiet enough not to spam on every internal event.
+_log info "host-port device ${VID}:${PID} not on the allowlist — left unauthorized (default closed)"
+[ -n "${GA_USB_TEST:-}" ] && echo "deny ${VID}:${PID}"
+exit 0
