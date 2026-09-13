@@ -144,9 +144,11 @@
 #     same slot is booted; reflash wipes /mnt/data and the record with it.
 #
 # Cost: one read of both slot pairs per device lifetime (2 x 24M + 2 x 300M on
-# the iHost), at idle IO priority and nice 19, bounded by a timeout. A
-# measurement that does not finish leaves NO verdict and is retried on the next
-# tick — unknown is never rounded to "identical".
+# the iHost), nice 19 and idle IO class where the scheduler honours it, bounded
+# by a timeout, and not before the device has been up MIRROR_MIN_UPTIME_S so the
+# first tick after boot stays as cheap as it was. A measurement that does not
+# finish leaves NO verdict and is retried on the next tick — unknown is never
+# rounded to "identical".
 #
 # Why no install record is shipped in the image instead: /mnt/boot/rauc.db is
 # RAUC's install ledger and the OTA hook copies the bundle's boot.vfat over
@@ -166,6 +168,8 @@
 #   GA_RAUC_SLOTS_BOOTS   read/write the healthy-boot record here
 #   GA_RAUC_SLOTS_UPTIME  pretend the system has been up this many seconds
 #   GA_RAUC_SLOTS_MIRROR  read/write the mirror (content identity) record here
+#                         (the comparison also honours GA_RAUC_SLOTS_UPTIME:
+#                         it is not started below MIRROR_MIN_UPTIME_S)
 #   GA_RAUC_SLOTS_DEVROOT compare <dir>/<partlabel> files instead of the real
 #                         /dev/disk/by-partlabel/<partlabel> devices
 
@@ -186,6 +190,13 @@ MIRROR_FILE="${GA_RAUC_SLOTS_MIRROR:-/mnt/data/ga-slot-mirror.json}"
 # verdict and the next tick starts over. Must stay well inside the unit's
 # TimeoutStartSec (ga-rauc-slots.service), or systemd kills the publish too.
 MIRROR_CMP_TIMEOUT_S="${GA_RAUC_SLOTS_CMP_TIMEOUT_S:-300}"
+# The comparison is not started before this uptime. The first tick runs 90 s
+# after boot, when Supervisor and Core are still starting from the same SD
+# card; ionice is best-effort only (BFQ is built in but nothing selects it, so
+# the card runs mq-deadline, which ignores IO classes). Waiting for the same
+# threshold that qualifies a healthy boot costs nothing — nobody rolls a device
+# back in its first ten minutes — and keeps the boot path unchanged.
+MIRROR_MIN_UPTIME_S="${GA_RAUC_SLOTS_MIRROR_MIN_UPTIME_S:-$BOOT_OK_UPTIME_S}"
 
 uptime_s() {
 	if [ -n "${GA_RAUC_SLOTS_UPTIME:-}" ]; then
@@ -312,6 +323,14 @@ measure_mirror() {
 	# Already measured against the slot that is booted now: nothing to do. This
 	# is what keeps the cost at one read per device lifetime.
 	case "$(cached_mirror "$_mm_target" "$_mm_of")" in true|false) return 0 ;; esac
+
+	# Not yet: the boot path stays cheap (see MIRROR_MIN_UPTIME_S).
+	_mm_up="$(uptime_s)"
+	case "$_mm_up" in ''|*[!0-9]*) return 0 ;; esac
+	if [ "$_mm_up" -lt "$MIRROR_MIN_UPTIME_S" ]; then
+		echo "ga-rauc-slots: mirror check deferred (uptime ${_mm_up}s < ${MIRROR_MIN_UPTIME_S}s)" >&2
+		return 0
+	fi
 
 	_mm_verdict=true
 	_mm_members=""
