@@ -11,6 +11,12 @@ RequiresMountsFor=/mnt/boot /mnt/data
 [Service]
 Type=oneshot
 ExecStart=/usr/libexec/ga-rauc-slots
-# One D-Bus round trip plus jq. Bounded so a wedged rauc.service can never
-# hold the timer.
-TimeoutStartSec=30s
+# Normally one D-Bus round trip plus jq. ONCE per device lifetime the collector
+# also compares the inactive slot pair with the booted one byte for byte
+# (2 x 24M + 2 x 300M on the iHost, idle IO class, nice 19) to earn the mirror
+# evidence — see MIRROR EVIDENCE in the script. That single read is bounded
+# inside the script (GA_RAUC_SLOTS_CMP_TIMEOUT_S, 300s per pair), so this bound
+# must stay above 2 x 300s plus the publish, or systemd kills the tick before
+# it publishes anything. Still bounded: a wedged rauc.service cannot hold the
+# timer, and OnUnitActiveSec=10min means a slow tick never overlaps the next.
+TimeoutStartSec=11min

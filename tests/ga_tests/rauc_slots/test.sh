@@ -37,6 +37,14 @@ GA_RAUC_SLOTS_BOOTS="${WORK}/boots.default.json"
 export GA_RAUC_SLOTS_BOOTS
 DEVICE_BOOTS_FILE=/mnt/data/ga-slot-boots.json
 _dev_boots_before="$(cat "$DEVICE_BOOTS_FILE" 2>/dev/null || echo ABSENT)"
+# Same for the mirror (content identity) record the collector keeps since
+# 2026-09-13, and for the partitions it compares: a fixture run must never read
+# THIS device's slots nor write its record. The collector refuses on its own
+# when either redirect is missing; this makes the default safe as well.
+GA_RAUC_SLOTS_MIRROR="${WORK}/mirror.default.json"
+export GA_RAUC_SLOTS_MIRROR
+DEVICE_MIRROR_FILE=/mnt/data/ga-slot-mirror.json
+_dev_mirror_before="$(cat "$DEVICE_MIRROR_FILE" 2>/dev/null || echo ABSENT)"
 
 # Run the collector against a fixture, leaving the JSON in $WORK/<name>.json.
 parse_fixture() {
@@ -136,7 +144,6 @@ GA_RAUC_SLOTS_TS=1753790000 GA_RAUC_SLOTS_INPUT="$WORK/garbage.shell" \
 run_test "SLOT-31b" "unparseable rauc output: error record, rollback not possible" \
   "jq -e '.error != null and .rollback.possible == false' '$WORK/garbage.json'"
 
-rm -rf "$WORK"
 fi
 
 # --- static: where it publishes, and that it never executes rauc output ------
@@ -265,6 +272,169 @@ run_test "SLOT-60" "unparseable boot record: refused, and the collector still pu
   "jq -e '.rollback.possible == false and .error == null' '$WORK/boots-corrupt.json'"
 
 # =========================================================================
+# Mirror evidence (2026-09-13) — the third, independent rollback ground
+# =========================================================================
+# Since #349 the image writes the same kernel and rootfs into BOTH slot pairs,
+# so a fresh flash carries a complete OS in the inactive slot. Neither an
+# install record nor a healthy boot can see that, so every fresh device kept
+# reporting rollback.possible=false (measured on a fresh flash, 2026-09-13:
+# "target=B possible=false reason=slot B has NEITHER ..."). The collector now
+# compares the inactive slot group with the booted one, byte for byte, on the
+# device — and that is the evidence asserted here, with the partitions
+# replaced by files under GA_RAUC_SLOTS_DEVROOT.
+#
+# The predicate under test is the ONE the live check (SLOT-46) applies to the
+# device snapshot, so red and green are proven on every PR: SLOT-70 is the
+# post-change fresh flash (identical slots) and must be possible=true; SLOT-71
+# is the pre-#349 fresh flash (empty B) and must stay false.
+rollback_possible_verdict() { # rollback_possible_verdict <json>  -> 0 if possible
+  if jq -e '.rollback.possible == true' "$1" >/dev/null 2>&1; then
+    jq -r '.rollback | "target=" + (.target // "none") + " possible=true"' "$1"
+    return 0
+  fi
+  jq -r '"target=" + (.rollback.target // "none") + " possible=" + (.rollback.possible|tostring)
+         + " evidence(install=" + ([.slots[] | select(.booted|not)][0].ever_installed|tostring)
+         + " boot=" + ([.slots[] | select(.booted|not)][0].booted_ok|tostring)
+         + " mirror=" + ([.slots[] | select(.booted|not)][0].mirror_of_booted|tostring)
+         + ") reason=" + (.rollback.reason // "-")' "$1"
+  return 1
+}
+
+if command -v jq >/dev/null 2>&1 && command -v cmp >/dev/null 2>&1; then
+# A fake device: files named like the partlabels the fixtures reference.
+# Content is small but not trivial — a kernel-ish header and some filler — so
+# that "identical" and "different" are both real comparisons.
+DEV="$WORK/dev"
+mk_dev() { # mk_dev <kernel1 = identical|zero|absent|different> <system1 = identical|zero|different>
+  rm -rf "$DEV"; mkdir -p "$DEV"
+  printf 'GAOS-KERNEL-IMAGE\000\001\002' > "$DEV/hassos-kernel0"
+  head -c 4096 /dev/zero | tr '\000' 'k' >> "$DEV/hassos-kernel0"
+  printf 'GAOS-ROOTFS-IMAGE\000\001\002' > "$DEV/hassos-system0"
+  head -c 8192 /dev/zero | tr '\000' 'r' >> "$DEV/hassos-system0"
+  case "$1" in
+    identical) cp "$DEV/hassos-kernel0" "$DEV/hassos-kernel1" ;;
+    zero)      head -c "$(wc -c < "$DEV/hassos-kernel0")" /dev/zero > "$DEV/hassos-kernel1" ;;
+    different) cp "$DEV/hassos-kernel0" "$DEV/hassos-kernel1"; printf 'X' >> "$DEV/hassos-kernel1" ;;
+    absent)    : ;;
+  esac
+  case "$2" in
+    identical) cp "$DEV/hassos-system0" "$DEV/hassos-system1" ;;
+    zero)      head -c "$(wc -c < "$DEV/hassos-system0")" /dev/zero > "$DEV/hassos-system1" ;;
+    different) head -c 4096 "$DEV/hassos-system0" > "$DEV/hassos-system1" ;;
+  esac
+}
+# run_mirror <fixture> <boots-json> <mirror-json|-> <out-name>
+run_mirror() {
+  printf '%s' "$2" > "$WORK/$4.boots.json"
+  if [ "$3" = "-" ]; then rm -f "$WORK/$4.mirror.json"; else printf '%s' "$3" > "$WORK/$4.mirror.json"; fi
+  GA_RAUC_SLOTS_TS=1753790000 \
+  GA_RAUC_SLOTS_INPUT="$FIX/$1.shell" \
+  GA_RAUC_SLOTS_OUT="$WORK/$4.json" \
+  GA_RAUC_SLOTS_BOOTS="$WORK/$4.boots.json" \
+  GA_RAUC_SLOTS_MIRROR="$WORK/$4.mirror.json" \
+  GA_RAUC_SLOTS_DEVROOT="$DEV" \
+  GA_RAUC_SLOTS_UPTIME="${MIRROR_UPTIME:-900}" \
+  "$COL" >/dev/null 2>"$WORK/$4.err"
+}
+
+# --- fresh flash of a post-#349 image: both pairs identical -----------------
+mk_dev identical identical
+run_mirror fresh-sd-flash '{}' - mirror-same
+M1="$WORK/mirror-same.json"
+run_test_show "SLOT-70" "fresh flash, slot B byte-identical to booted A: rollback IS possible" \
+  "rollback_possible_verdict '$M1'"
+run_test "SLOT-71" "identical slot: evidence is its OWN field, not an install record and not a version" \
+  "jq -e '[.slots[] | select(.bootname == \"B\")] | .[0] | .mirror_of_booted == true and .ever_installed == false and .booted_ok == false and .installed_version == null and .bootable == true' '$M1'"
+run_test "SLOT-72" "identical slot: no refusal reason is invented" \
+  "jq -e '.rollback.reason == null' '$M1'"
+run_test "SLOT-73" "the measurement is recorded: target, compared-with slot, verdict, member pairs" \
+  "jq -e '.B.of == \"A\" and .B.identical == true and .B.at == 1753790000 and .B.members == {\"kernel.1\":\"kernel.0\",\"rootfs.1\":\"rootfs.0\"}' '$WORK/mirror-same.mirror.json'"
+
+# --- fresh flash of a pre-#349 image: slot B is all zeros --------------------
+# The same predicate as SLOT-70 must go RED here. This is what the live check
+# would have said on every fresh device before this change.
+mk_dev zero zero
+run_mirror fresh-sd-flash '{}' - mirror-zero
+M2="$WORK/mirror-zero.json"
+run_test "SLOT-74" "fresh flash, slot B empty: rollback stays refused, and the reason says the content differs" \
+  "! rollback_possible_verdict '$M2' >/dev/null && jq -r '.rollback.reason' '$M2' | grep -q 'content differs from the booted slot' && jq -e '[.slots[] | select(.bootname == \"B\")] | .[0].mirror_of_booted == false' '$M2'"
+
+# --- a flash that stopped half-way: kernel identical, rootfs not -------------
+# Every member of the group has to match. A kernel that boots into a rootfs that
+# is not there is the reboot loop this whole file exists to prevent.
+mk_dev identical different
+run_mirror fresh-sd-flash '{}' - mirror-partial
+run_test "SLOT-75" "kernel identical but rootfs differs: refused (every member must match)" \
+  "jq -e '.rollback.possible == false and ([.slots[] | select(.bootname == \"B\")] | .[0].mirror_of_booted == false)' '$WORK/mirror-partial.json'"
+
+# --- RAUC has touched the slot: the identity evidence is dead ----------------
+# status=pending on kernel.1, no timestamp (RAUC 1.13 writes that before it
+# writes the slot). Content is identical on disk — and must NOT count.
+mk_dev identical identical
+run_mirror slot-b-install-pending '{}' - mirror-pending
+run_test "SLOT-76" "install pending on B: content identity is not consulted, rollback refused" \
+  "jq -e '.rollback.possible == false and ([.slots[] | select(.bootname == \"B\")] | .[0] | .mirror_of_booted == null and .install_status == \"pending\")' '$WORK/mirror-pending.json' && [ ! -s '$WORK/mirror-pending.mirror.json' ]"
+
+# --- the bootloader still overrides the evidence -----------------------------
+mk_dev identical identical
+run_mirror slot-b-marked-bad '{}' - mirror-bad
+run_test "SLOT-77" "marked-bad beats identical content: refused, reason names the bootloader" \
+  "jq -e '.rollback.possible == false' '$WORK/mirror-bad.json' && jq -r '.rollback.reason' '$WORK/mirror-bad.json' | grep -q 'bootloader'"
+
+# --- the record is reused only against the slot it was measured with --------
+# A cached "identical" that was measured while B was booted says nothing about
+# B versus A now. With B empty on disk, a stale record must not promote it.
+mk_dev zero zero
+run_mirror fresh-sd-flash '{}' '{"B":{"of":"B","identical":true,"at":1,"members":{}}}' mirror-stale
+run_test "SLOT-78" "record measured against another booted slot is stale: re-measured, refused" \
+  "jq -e '.rollback.possible == false' '$WORK/mirror-stale.json' && jq -e '.B.of == \"A\" and .B.identical == false' '$WORK/mirror-stale.mirror.json'"
+
+# --- one read per device lifetime: a valid record is not re-measured --------
+# Same booted slot, record says identical — the partitions are not read again.
+# Proven by making them unreadable (absent): a re-measurement would find no
+# device and produce no verdict; the cached one carries.
+mk_dev absent identical
+rm -f "$DEV/hassos-system1"
+run_mirror fresh-sd-flash '{}' '{"B":{"of":"A","identical":true,"at":1753700000,"members":{"kernel.1":"kernel.0","rootfs.1":"rootfs.0"}}}' mirror-cached
+run_test "SLOT-79" "valid record for the booted slot is reused: no re-read, rollback possible" \
+  "jq -e '.rollback.possible == true' '$WORK/mirror-cached.json' && jq -e '.B.at == 1753700000' '$WORK/mirror-cached.mirror.json'"
+
+# --- a healthy-boot record already settles it: nothing is read from disk ----
+mk_dev zero zero
+run_mirror fresh-sd-flash '{"B":{"at":1753700000,"uptime_s":1200}}' - mirror-booted
+run_test "SLOT-80" "recorded healthy boot of B: possible, and no comparison is made (nothing written)" \
+  "jq -e '.rollback.possible == true' '$WORK/mirror-booted.json' && [ ! -s '$WORK/mirror-booted.mirror.json' ]"
+
+# --- fixture input without a device root: never touch the real partitions ---
+mk_dev identical identical
+printf '{}' > "$WORK/mirror-noroot.boots.json"
+rm -f "$WORK/mirror-noroot.mirror.json"
+GA_RAUC_SLOTS_TS=1753790000 GA_RAUC_SLOTS_INPUT="$FIX/fresh-sd-flash.shell" \
+  GA_RAUC_SLOTS_OUT="$WORK/mirror-noroot.json" GA_RAUC_SLOTS_BOOTS="$WORK/mirror-noroot.boots.json" \
+  GA_RAUC_SLOTS_MIRROR="$WORK/mirror-noroot.mirror.json" GA_RAUC_SLOTS_UPTIME=60 \
+  "$COL" >/dev/null 2>&1
+run_test "SLOT-81" "fixture input without GA_RAUC_SLOTS_DEVROOT: not measured, nothing recorded, refused" \
+  "jq -e '.rollback.possible == false and ([.slots[] | select(.bootname == \"B\")] | .[0].mirror_of_booted == null)' '$WORK/mirror-noroot.json' && [ ! -s '$WORK/mirror-noroot.mirror.json' ]"
+
+# --- a corrupt record reads as NO evidence, and is re-measured ---------------
+mk_dev identical identical
+run_mirror fresh-sd-flash '{}' 'this is not json' mirror-corrupt
+run_test "SLOT-82" "unparseable mirror record: re-measured from scratch, collector still publishes" \
+  "jq -e '.rollback.possible == true and .error == null' '$WORK/mirror-corrupt.json' && jq -e '.B.identical == true' '$WORK/mirror-corrupt.mirror.json'"
+
+# --- the boot path stays cheap: nothing is read before the uptime threshold --
+# The first tick runs 90 s after boot while Core is still starting from the
+# same card. Identical content on disk, but at 60 s uptime nothing may be
+# compared or recorded; the verdict is "not measured yet", not "different".
+mk_dev identical identical
+MIRROR_UPTIME=60 run_mirror fresh-sd-flash '{}' - mirror-early
+run_test "SLOT-83" "uptime below the threshold: not compared, nothing recorded, reason says not compared yet" \
+  "jq -e '.rollback.possible == false and ([.slots[] | select(.bootname == \"B\")] | .[0].mirror_of_booted == null)' '$WORK/mirror-early.json' && [ ! -s '$WORK/mirror-early.mirror.json' ] && grep -q 'deferred' '$WORK/mirror-early.err' && jq -r '.rollback.reason' '$WORK/mirror-early.json' | grep -q 'not been compared with the booted slot yet'"
+else
+  skip_test "SLOT-70..SLOT-83" "mirror evidence" "jq or cmp not available"
+fi
+
+# =========================================================================
 # Device-side wiring (skipped off-device)
 # =========================================================================
 if [ ! -d /mnt/data/supervisor ]; then
@@ -293,8 +463,20 @@ else
 
     run_test_show "SLOT-44" "rollback target + verdict on this device" \
       "jq -r '\"target=\" + (.rollback.target // \"none\") + \" possible=\" + (.rollback.possible|tostring) + \" reason=\" + (.rollback.reason // \"-\")' '$SHARE_JSON'"
+
+    # SLOT-46 turns SLOT-44's readout into an assertion. The image has carried a
+    # complete OS in BOTH slots since #349, so a device whose rollback target is
+    # not bootable is a finding, not a state: on a fresh flash it means the
+    # collector found no evidence for slot B (this was every fresh device until
+    # 2026-09-13); on an OTA'd device it means the previous release is not there
+    # to go back to. Reads the published snapshot — what the fleet-manager
+    # pre-flight reads — and runs nothing that could write device state.
+    # Same predicate as SLOT-70/74, which prove it red and green on every PR.
+    run_test_show "SLOT-46" "the rollback target on this device is bootable (evidence, not assumption)" \
+      "rollback_possible_verdict '$SHARE_JSON'"
   else
     skip_test "SLOT-42..SLOT-44" "snapshot content checks" "no snapshot or jq unavailable"
+    skip_test "SLOT-46" "rollback target bootable" "no snapshot or jq unavailable"
   fi
 fi
 
@@ -318,5 +500,22 @@ else
   printf '        A collector invocation is missing GA_RAUC_SLOTS_BOOTS, or the\n'
   printf '        fixture guard in record_healthy_boot was removed.\n'
 fi
+
+# Same guard for the mirror record: a fixture run must never measure THIS
+# device's partitions nor persist a verdict about them.
+_dev_mirror_after="$(cat "$DEVICE_MIRROR_FILE" 2>/dev/null || echo ABSENT)"
+if [ "$_dev_mirror_before" = "$_dev_mirror_after" ]; then
+  run_test "SLOT-62" "the suite did not write the device mirror record" "true"
+else
+  run_test "SLOT-62" "the suite did not write the device mirror record" "false"
+  printf '        %s changed while this suite ran.\n' "$DEVICE_MIRROR_FILE"
+  printf '        before: %s\n' "$_dev_mirror_before"
+  printf '        after : %s\n' "$_dev_mirror_after"
+  printf '        A collector invocation is missing GA_RAUC_SLOTS_MIRROR or\n'
+  printf '        GA_RAUC_SLOTS_DEVROOT, or the fixture guard in measure_mirror\n'
+  printf '        was removed.\n'
+fi
+
+[ -n "${WORK:-}" ] && rm -rf "$WORK"
 
 suite_end

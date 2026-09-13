@@ -116,6 +116,49 @@
 # makes a rollback unrecoverable on hardware with no U-Boot prompt (rc38,
 # CONFIG_BOOTDELAY=-2).
 #
+# MIRROR EVIDENCE (2026-09-13) — the third, independent rollback ground
+# -----------------------------------------------------------------------
+# Since #349 the image writes the SAME kernel and rootfs into both slot pairs,
+# so a freshly flashed card carries a complete OS in the inactive slot. Neither
+# ground above can see that: RAUC never installed it (no rauc.db entry) and the
+# device never booted it. The verdict stayed "rollback not possible" on every
+# fresh device, for weeks, while the bytes were there.
+#
+# The evidence this adds is MEASURED ON THE DEVICE, not declared by the build:
+# the inactive slot group (kernel.N + rootfs.N) is compared byte for byte with
+# the booted slot group (`cmp` on the partitions). If they are identical, the
+# inactive slot holds exactly the bytes this device is demonstrably running
+# from — a stronger claim than an install record, which only says RAUC wrote
+# something once. A version string match would prove nothing (raucdb-update
+# seeds bundle.version without ever looking at the partition), so no version is
+# compared, and none is invented: installed_version stays null for such a slot.
+#
+# Two deliberate limits keep it honest:
+#   * Consulted only while RAUC has never touched the target — no `status`, no
+#     installed.timestamp in its group. RAUC 1.13 writes status=pending BEFORE
+#     it writes a slot and failed/ok after, so the moment an install starts the
+#     identity evidence is discarded, and a half-written slot can never ride on
+#     a comparison made before the install.
+#   * Cached in /mnt/data/ga-slot-mirror.json keyed on the target AND the slot
+#     it was compared with (`of`). A cached verdict is reused only while the
+#     same slot is booted; reflash wipes /mnt/data and the record with it.
+#
+# Cost: one read of both slot pairs per device lifetime (2 x 24M + 2 x 300M on
+# the iHost), nice 19 and idle IO class where the scheduler honours it, bounded
+# by a timeout, and not before the device has been up MIRROR_MIN_UPTIME_S so the
+# first tick after boot stays as cheap as it was. A measurement that does not
+# finish leaves NO verdict and is retried on the next tick — unknown is never
+# rounded to "identical".
+#
+# Why no install record is shipped in the image instead: /mnt/boot/rauc.db is
+# RAUC's install ledger and the OTA hook copies the bundle's boot.vfat over
+# /mnt/boot wholesale, so a rauc.db baked into the image would overwrite the
+# device's real history on every OTA; installed.timestamp would also stop
+# meaning "RAUC wrote and verified this slot on THIS device", which is what the
+# ever_installed gate rests on; and a build-time record attests the image, not
+# the card — a flash that stopped half-way through the second slot would still
+# carry it. The comparison measures the card.
+#
 # Test hooks (used by tests/ga_tests/rauc_slots/test.sh):
 #   GA_RAUC_SLOTS_INPUT   read `rauc status` output from this file instead
 #                         of talking to rauc
@@ -124,6 +167,11 @@
 #   GA_RAUC_SLOTS_TS      fixed epoch for reproducible fixtures
 #   GA_RAUC_SLOTS_BOOTS   read/write the healthy-boot record here
 #   GA_RAUC_SLOTS_UPTIME  pretend the system has been up this many seconds
+#   GA_RAUC_SLOTS_MIRROR  read/write the mirror (content identity) record here
+#                         (the comparison also honours GA_RAUC_SLOTS_UPTIME:
+#                         it is not started below MIRROR_MIN_UPTIME_S)
+#   GA_RAUC_SLOTS_DEVROOT compare <dir>/<partlabel> files instead of the real
+#                         /dev/disk/by-partlabel/<partlabel> devices
 
 # Add-on-private target. Glob because the slug carries a repository hash.
 ADDON_DATA_GLOB="/mnt/data/supervisor/addons/data/*_ga_manager"
@@ -134,6 +182,21 @@ OUT_BASENAME="ga-rauc-slots.json"
 # device's slots, and a reset legitimately discards it.
 BOOTS_FILE="${GA_RAUC_SLOTS_BOOTS:-/mnt/data/ga-slot-boots.json}"
 BOOT_OK_UPTIME_S="${GA_RAUC_SLOTS_BOOT_OK_UPTIME_S:-600}"
+
+# Mirror (content identity) record — same lifetime reasoning as BOOTS_FILE.
+MIRROR_FILE="${GA_RAUC_SLOTS_MIRROR:-/mnt/data/ga-slot-mirror.json}"
+# Upper bound for ONE partition comparison. 2 x 300M at idle IO priority on a
+# loaded SD card can take minutes; past this the tick publishes without a
+# verdict and the next tick starts over. Must stay well inside the unit's
+# TimeoutStartSec (ga-rauc-slots.service), or systemd kills the publish too.
+MIRROR_CMP_TIMEOUT_S="${GA_RAUC_SLOTS_CMP_TIMEOUT_S:-300}"
+# The comparison is not started before this uptime. The first tick runs 90 s
+# after boot, when Supervisor and Core are still starting from the same SD
+# card; ionice is best-effort only (BFQ is built in but nothing selects it, so
+# the card runs mq-deadline, which ignores IO classes). Waiting for the same
+# threshold that qualifies a healthy boot costs nothing — nobody rolls a device
+# back in its first ten minutes — and keeps the boot path unchanged.
+MIRROR_MIN_UPTIME_S="${GA_RAUC_SLOTS_MIRROR_MIN_UPTIME_S:-$BOOT_OK_UPTIME_S}"
 
 uptime_s() {
 	if [ -n "${GA_RAUC_SLOTS_UPTIME:-}" ]; then
@@ -194,6 +257,133 @@ healthy_boot_slots() {
 			|| printf '[]'
 	else
 		printf '[]'
+	fi
+}
+
+# Where a slot device lives. The real path on a device; under the test root
+# when a fixture run has redirected it (GA_RAUC_SLOTS_DEVROOT).
+slot_devpath() {
+	if [ -n "${GA_RAUC_SLOTS_DEVROOT:-}" ]; then
+		printf '%s/%s\n' "$GA_RAUC_SLOTS_DEVROOT" "${1##*/}"
+	else
+		printf '%s\n' "$1"
+	fi
+}
+
+# Compare two slot devices byte for byte, as gently as the box allows: nice 19,
+# idle IO class, and a hard timeout so one tick can never run away. Exit 0 =
+# identical, 1 = different, anything else = NO verdict (timeout, missing device,
+# read error). The caller must treat "no verdict" as unknown, never as either
+# answer.
+cmp_slots() {
+	_cs_cmd="cmp -s"
+	# Probed, not assumed: a sandbox that denies ioprio_set makes ionice exit
+	# without running its argument, and that must not read as "no verdict"
+	# forever. Politeness is dropped; the comparison is not.
+	if ionice -c 3 true >/dev/null 2>&1; then _cs_cmd="ionice -c 3 $_cs_cmd"; fi
+	if nice -n 19 true >/dev/null 2>&1; then _cs_cmd="nice -n 19 $_cs_cmd"; fi
+	if timeout 5 true >/dev/null 2>&1; then
+		_cs_cmd="timeout $MIRROR_CMP_TIMEOUT_S $_cs_cmd"
+	fi
+	# shellcheck disable=SC2086  # the command is assembled from fixed words
+	$_cs_cmd "$1" "$2" 2>/dev/null
+}
+
+# The cached mirror record for <target>, but only if it was measured against
+# the slot that is booted NOW; anything else is stale and reads as unmeasured.
+# Prints "true" / "false" or nothing.
+cached_mirror() {
+	[ -s "$MIRROR_FILE" ] || return 0
+	jq -r --arg t "$1" --arg of "$2" \
+		'.[$t] | select(. != null) | select(.of == $of) | .identical | select(. == true or . == false)' \
+		"$MIRROR_FILE" 2>/dev/null
+}
+
+# Measure whether the inactive slot group is byte-identical to the booted one.
+# Input: the measurement plan, one TSV line per member pair:
+#   <target bootname> <booted bootname> <member> <member device> <counterpart> <counterpart device>
+# Empty plan = nothing to measure (no inactive slot, or RAUC has already
+# touched it, or it is already proven by a healthy boot).
+measure_mirror() {
+	_mm_plan="$1"
+	[ -n "$_mm_plan" ] || return 0
+	# Same rule as record_healthy_boot: fixture input describes ANOTHER device.
+	# Never read this device's partitions, and never write its record, unless
+	# the test has redirected BOTH. Without the device-root guard the
+	# fresh-sd-flash fixture would be measured against the real card under the
+	# test, and a suite run on a mirrored device would flip the fixture verdict.
+	if [ -n "${GA_RAUC_SLOTS_INPUT:-}" ]; then
+		[ -n "${GA_RAUC_SLOTS_DEVROOT:-}" ] && [ -n "${GA_RAUC_SLOTS_MIRROR:-}" ] || return 0
+	fi
+
+	_mm_target="$(printf '%s\n' "$_mm_plan" | head -1 | cut -f1)"
+	_mm_of="$(printf '%s\n' "$_mm_plan" | head -1 | cut -f2)"
+	[ -n "$_mm_target" ] && [ -n "$_mm_of" ] || return 0
+
+	# Already measured against the slot that is booted now: nothing to do. This
+	# is what keeps the cost at one read per device lifetime.
+	case "$(cached_mirror "$_mm_target" "$_mm_of")" in true|false) return 0 ;; esac
+
+	# Not yet: the boot path stays cheap (see MIRROR_MIN_UPTIME_S).
+	_mm_up="$(uptime_s)"
+	case "$_mm_up" in ''|*[!0-9]*) return 0 ;; esac
+	if [ "$_mm_up" -lt "$MIRROR_MIN_UPTIME_S" ]; then
+		echo "ga-rauc-slots: mirror check deferred (uptime ${_mm_up}s < ${MIRROR_MIN_UPTIME_S}s)" >&2
+		return 0
+	fi
+
+	_mm_verdict=true
+	_mm_members=""
+	while IFS="$(printf '\t')" read -r _t _b _mname _mdev _cname _cdev; do
+		[ -n "$_mname" ] || continue
+		_mm_a="$(slot_devpath "$_mdev")"
+		_mm_b="$(slot_devpath "$_cdev")"
+		if [ ! -e "$_mm_a" ] || [ ! -e "$_mm_b" ]; then
+			echo "ga-rauc-slots: mirror check: $_mm_a or $_mm_b missing - no verdict" >&2
+			return 0
+		fi
+		cmp_slots "$_mm_a" "$_mm_b"
+		_mm_rc=$?
+		case "$_mm_rc" in
+			0) _mm_members="${_mm_members}${_mm_members:+,}\"${_mname}\":\"${_cname}\"" ;;
+			1) _mm_verdict=false
+			   _mm_members="${_mm_members}${_mm_members:+,}\"${_mname}\":null"
+			   break ;;
+			*) echo "ga-rauc-slots: mirror check of $_mname vs $_cname gave no verdict (rc=$_mm_rc)" >&2
+			   return 0 ;;
+		esac
+	done <<EOF
+$_mm_plan
+EOF
+
+	_mm_prev='{}'
+	if [ -s "$MIRROR_FILE" ]; then
+		_mm_prev="$(jq -c '. // {}' "$MIRROR_FILE" 2>/dev/null || printf '{}')"
+	fi
+	_mm_tmp="${MIRROR_FILE}.tmp.$$"
+	if printf '%s' "$_mm_prev" | jq -c \
+			--arg t "$_mm_target" --arg of "$_mm_of" \
+			--argjson id "$_mm_verdict" --argjson at "$TS" \
+			--argjson members "{${_mm_members}}" \
+			'.[$t] = {of: $of, identical: $id, at: $at, members: $members}' > "$_mm_tmp" 2>/dev/null; then
+		mv -f "$_mm_tmp" "$MIRROR_FILE"
+	else
+		rm -f "$_mm_tmp"
+	fi
+}
+
+# {"<bootname>": true|false} for every target measured against the slot booted
+# NOW. A bootname that is absent was never measured (or the record is stale) —
+# the verdict program treats absent as unknown, which refuses.
+mirror_slots() {
+	_ms_of="$1"
+	if [ -s "$MIRROR_FILE" ]; then
+		jq -c --arg of "$_ms_of" \
+			'[to_entries[] | select(.value.of == $of and (.value.identical == true or .value.identical == false))
+			  | {key: .key, value: .value.identical}] | from_entries' "$MIRROR_FILE" 2>/dev/null \
+			|| printf '{}'
+	else
+		printf '{}'
 	fi
 }
 
@@ -291,12 +481,13 @@ main() {
 	# booted slot is already bootable by demonstration, so it cannot change this
 	# run's verdict — what it changes is the verdict after the NEXT reboot, which
 	# is when the evidence is actually needed.
-	record_healthy_boot "$(printf '%s\n' "$kv" \
+	booted_now="$(printf '%s\n' "$kv" \
 		| awk -F'\t' '$1 == "RAUC_SYSTEM_BOOTED_BOOTNAME" { print $2; exit }')"
+	record_healthy_boot "$booted_now"
 
-	printf '%s\n' "$kv" | jq -R -s --argjson ts "$TS" \
-		--argjson booted_ok "$(healthy_boot_slots)" '
-		# --- shell KEY<TAB>VALUE lines -> flat lookup object ---
+	# --- phase 1: shell KEY<TAB>VALUE lines -> one flat JSON table -------------
+	# Parsed exactly once; the measurement plan and the verdict both read it.
+	flat=$(printf '%s\n' "$kv" | jq -R -s -c '
 		(split("\n")
 		 | map(select(length > 0) | split("\t") | {key: .[0], value: (.[1:] | join("\t"))})
 		 | from_entries) as $f
@@ -309,21 +500,58 @@ main() {
 
 		# Every slot, flat. Index is 1-based and follows RAUC_SYSTEM_SLOTS
 		# order (both lists come from the same hash-table walk in rauc).
-		| [ range(0; ($names | length))
-		    | . as $i
-		    | (($i + 1) | tostring) as $n
-		    | {
-		        name: $names[$i],
-		        class: nz("RAUC_SLOT_CLASS_" + $n),
-		        device: nz("RAUC_SLOT_DEVICE_" + $n),
-		        bootname: nz("RAUC_SLOT_BOOTNAME_" + $n),
-		        parent: nz("RAUC_SLOT_PARENT_" + $n),
-		        state: nz("RAUC_SLOT_STATE_" + $n),
-		        boot_status: nz("RAUC_SLOT_BOOT_STATUS_" + $n),
-		        bundle_version: nz("RAUC_SLOT_STATUS_BUNDLE_VERSION_" + $n),
-		        installed_timestamp: nz("RAUC_SLOT_STATUS_INSTALLED_TIMESTAMP_" + $n),
-		        installed_count: ((nz("RAUC_SLOT_STATUS_INSTALLED_COUNT_" + $n) // "0") | tonumber? // 0)
-		      } ] as $all
+		| {
+		    compatible: nz("RAUC_SYSTEM_COMPATIBLE"),
+		    booted: nz("RAUC_SYSTEM_BOOTED_BOOTNAME"),
+		    boot_primary: nz("RAUC_BOOT_PRIMARY"),
+		    slots: [ range(0; ($names | length))
+		      | . as $i
+		      | (($i + 1) | tostring) as $n
+		      | {
+		          name: $names[$i],
+		          class: nz("RAUC_SLOT_CLASS_" + $n),
+		          device: nz("RAUC_SLOT_DEVICE_" + $n),
+		          bootname: nz("RAUC_SLOT_BOOTNAME_" + $n),
+		          parent: nz("RAUC_SLOT_PARENT_" + $n),
+		          state: nz("RAUC_SLOT_STATE_" + $n),
+		          boot_status: nz("RAUC_SLOT_BOOT_STATUS_" + $n),
+		          bundle_version: nz("RAUC_SLOT_STATUS_BUNDLE_VERSION_" + $n),
+		          # RAUC 1.13 writes pending before it touches a slot, then
+		          # failed or ok. Read so "RAUC has touched this slot" is known
+		          # even when no install ever completed.
+		          install_status: nz("RAUC_SLOT_STATUS_STATUS_" + $n),
+		          installed_timestamp: nz("RAUC_SLOT_STATUS_INSTALLED_TIMESTAMP_" + $n),
+		          installed_count: ((nz("RAUC_SLOT_STATUS_INSTALLED_COUNT_" + $n) // "0") | tonumber? // 0)
+		        } ]
+		  }')
+
+	# --- phase 2: measure the inactive slot against the booted one --------------
+	# The plan names every (member, counterpart) device pair of the inactive
+	# group, but ONLY when RAUC has never touched that group and no healthy boot
+	# of it is on record — both of those already settle the verdict, so nothing
+	# is read from disk for them.
+	plan=$(printf '%s' "$flat" | jq -r --argjson booted_ok "$(healthy_boot_slots)" '
+		.slots as $all
+		| (.booted // "") as $booted
+		| ($all[] | select(.bootname != null and .bootname == $booted)) as $cur
+		| ($all[] | select(.bootname != null and .bootname != $booted)) as $tgt
+		| ([$tgt] + [$all[] | select(.parent == $tgt.name)]) as $tgroup
+		| ([$cur] + [$all[] | select(.parent == $cur.name)]) as $cgroup
+		| select(($tgroup | map(select(.install_status != null or .installed_timestamp != null)) | length) == 0)
+		| select(($booted_ok | index($tgt.bootname)) == null)
+		| $tgroup[] | . as $m
+		| ($cgroup[] | select(.class == $m.class)) as $c
+		| [$tgt.bootname, $booted, $m.name, $m.device, $c.name, $c.device] | @tsv' 2>/dev/null)
+	measure_mirror "$plan"
+
+	# --- phase 3: the verdict --------------------------------------------------
+	printf '%s' "$flat" | jq --argjson ts "$TS" \
+		--argjson booted_ok "$(healthy_boot_slots)" \
+		--argjson mirror "$(mirror_slots "$booted_now")" '
+		.slots as $all
+		| .compatible as $compatible
+		| .booted as $booted
+		| .boot_primary as $boot_primary
 
 		# A bootable unit is the slot carrying the bootname (kernel.N) PLUS
 		# its children (rootfs.N, parent=kernel.N). RAUC records the install
@@ -335,6 +563,19 @@ main() {
 		    | . as $s
 		    | ([$s] + [$all[] | select(.parent == $s.name)]) as $group
 		    | ($group | map(select(.installed_timestamp != null)) | length > 0) as $ever
+		    # "RAUC touched it": a status or a timestamp anywhere in the group.
+		    # pending/failed count - the identity evidence must die the moment
+		    # an install into this slot starts, finished or not.
+		    | ($group | map(select(.install_status != null or .installed_timestamp != null)) | length > 0) as $touched
+		    # Third ground, measured on this device (see MIRROR EVIDENCE):
+		    # true / false when measured against the slot booted now, null when
+		    # not measured. Only meaningful for a slot RAUC never touched.
+		    # has(), not `// null`: jq treats false as absent in `//`, which
+		    # would erase a measured "different" into "not measured" — the
+		    # first version of this line did exactly that (caught by SLOT-74).
+		    | (if $touched then null
+		       elif ($mirror | has($s.bootname)) then $mirror[$s.bootname]
+		       else null end) as $mirror_state
 		    | {
 		        bootname: $s.bootname,
 		        slot: $s.name,
@@ -345,6 +586,7 @@ main() {
 		        installed_version: ($group | map(.bundle_version) | map(select(. != null)) | .[0]),
 		        installed_timestamp: ($group | map(.installed_timestamp) | map(select(. != null)) | .[0]),
 		        installed_count: ($group | map(.installed_count) | max),
+		        install_status: ($group | map(.install_status) | map(select(. != null)) | .[0]),
 		        # ever_installed, NOT boot_status, is the honest rollback gate:
 		        # an SD-flashed empty slot reports boot_status "good".
 		        ever_installed: $ever,
@@ -354,20 +596,24 @@ main() {
 		        # they are different claims, and a reader deciding whether to
 		        # roll back deserves to see WHICH one holds.
 		        booted_ok: ($booted_ok | index($s.bootname) != null),
+		        # Third evidence: byte-identical to the booted slot group, as
+		        # measured on this device. null = not (yet) measured.
+		        mirror_of_booted: $mirror_state,
 		        # The booted slot is bootable by demonstration - we are
 		        # running out of it - even on an SD-flashed device where
 		        # RAUC has no install record for it at all.
-		        # Bootable on any of three grounds, all of them observed rather
-		        # than assumed: we are running from it; RAUC installed it; or it
-		        # booted this device and stayed up. boot_status still has to be
-		        # good in the latter two: boot_status is only the try counter the
-		        # bootloader keeps, so it cannot promote a slot by itself, but a
-		        # slot the bootloader has given up on is not a target either.
+		        # Bootable on any of four grounds, all of them observed rather
+		        # than assumed: we are running from it; RAUC installed it; it
+		        # booted this device and stayed up; or it is byte-identical to
+		        # the slot we are running from. boot_status still has to be
+		        # good in the latter three: boot_status is only the try counter
+		        # the bootloader keeps, so it cannot promote a slot by itself,
+		        # but a slot the bootloader has given up on is not a target.
 		        # (No apostrophes in here — this jq program is single-quoted, and
 		        # a stray one closes it. Cost: one syntax error at write time.)
 		        bootable: (
 		          $s.state == "booted"
-		          or (($ever or ($booted_ok | index($s.bootname) != null))
+		          or (($ever or ($booted_ok | index($s.bootname) != null) or ($mirror_state == true))
 		              and $s.boot_status == "good")
 		        ),
 		        members: ($group | map(.name))
@@ -378,9 +624,9 @@ main() {
 		| ($slots | map(select(.booted | not)) | .[0]) as $tgt
 		| {
 		    ts: $ts,
-		    compatible: nz("RAUC_SYSTEM_COMPATIBLE"),
-		    booted: (nz("RAUC_SYSTEM_BOOTED_BOOTNAME") // ($cur.bootname // null)),
-		    boot_primary: nz("RAUC_BOOT_PRIMARY"),
+		    compatible: $compatible,
+		    booted: ($booted // ($cur.bootname // null)),
+		    boot_primary: $boot_primary,
 		    slots: $slots,
 		    rollback: {
 		      current: ($cur.bootname // null),
@@ -389,8 +635,11 @@ main() {
 		      reason: (
 		        if $tgt == null then
 		          "no second bootable slot on this device"
-		        elif (($tgt.ever_installed | not) and ($tgt.booted_ok | not)) then
-		          "slot \($tgt.bootname) has NEITHER an OTA install record nor a recorded healthy boot - nothing has ever been shown to run from it; booting it is an endless reboot loop recoverable only by re-flashing"
+		        elif (($tgt.ever_installed | not) and ($tgt.booted_ok | not) and ($tgt.mirror_of_booted != true)) then
+		          "slot \($tgt.bootname) has NEITHER an OTA install record nor a recorded healthy boot"
+		          + (if $tgt.mirror_of_booted == false then ", and its content differs from the booted slot"
+		             else ", and its content has not been compared with the booted slot yet" end)
+		          + " - nothing has ever been shown to run from it; booting it is an endless reboot loop recoverable only by re-flashing"
 		        elif $tgt.boot_status != "good" then
 		          "slot \($tgt.bootname) is marked \($tgt.boot_status // "unknown") by the bootloader"
 		        else null end

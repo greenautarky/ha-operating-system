@@ -939,6 +939,33 @@ else
   _fail "SD-01: No .img.xz found"
 fi
 
+# IMG-01: both RAUC slot pairs of the PRODUCED image carry identical, non-blank
+# content. SRC-23 asserts the layout DECLARES an image for hassos-kernel1 and
+# hassos-system1; this reads the bytes genimage actually wrote into the .img.xz
+# SD-01 just found. A pre-#349 bake (2026-07-23) fails it with slot 1 all zeros,
+# a post-#349 bake (2026-08-31) passes — both measured on real artefacts, 2-4 s
+# each, streaming ~700 MB of the decompressed image and touching no disk.
+# The gate's own red/green proof runs on every PR: tests/gates/slot_pairs.
+# Resolved from this runner's own location: the gate ships in the same tree as
+# this file, and SRC is only determined further down.
+_slot_gate="$(cd "$(dirname "$0")/../.." && pwd)/scripts/check-slot-pairs.sh"
+if [[ -z "$IMG_XZ" ]]; then
+  _skip "IMG-01: both RAUC slot pairs identical in the produced image" "no .img.xz (SD-01 owns that failure)"
+elif [[ ! -x "$_slot_gate" ]]; then
+  _fail "IMG-01: gate missing or not executable: ${_slot_gate}"
+else
+  _slot_out="$("$_slot_gate" "$IMG_XZ" 2>&1)"; _slot_rc=$?
+  if [[ "$_slot_rc" -eq 0 ]]; then
+    _pass "IMG-01: both RAUC slot pairs carry identical, non-blank content in $(basename "$IMG_XZ")"
+  elif [[ "$_slot_rc" -eq 1 ]]; then
+    _fail "IMG-01: slot pairs DIFFER or are BLANK in $(basename "$IMG_XZ") — a fresh device would have no OS in its inactive slot"
+    printf '%s\n' "$_slot_out" | sed 's/^/        /'
+  else
+    _fail "IMG-01: could not judge $(basename "$IMG_XZ") (gate rc=${_slot_rc}) — a verdict is required, not a skip"
+    printf '%s\n' "$_slot_out" | sed 's/^/        /'
+  fi
+fi
+
 # RAUC bundle
 _raucb_all=("${OUT}"/images/*.raucb)
 RAUCB="$(ls -t "${OUT}/images/"*.raucb 2>/dev/null | head -1)"
