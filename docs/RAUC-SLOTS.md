@@ -81,7 +81,9 @@ publishes the slot picture to the ga_manager add-on's private data dir. Its
    (`/mnt/data/ga-slot-boots.json`, written by the collector itself).
 3. **`mirror_of_booted`** (since 2026-09-13) — the inactive slot group is
    **byte-identical to the booted one**, measured on the device with `cmp`
-   over the partitions (2 x 24M + 2 x 300M, idle IO class, nice 19, bounded).
+   over the partitions (2 x 24M + 2 x 300M, nice 19, idle IO class where the
+   scheduler honours it, bounded, and not before 600 s of uptime so the first
+   tick after boot stays cheap).
    Cached in `/mnt/data/ga-slot-mirror.json` keyed on the target and the slot
    it was compared with, so the read happens once per device lifetime; a
    reflash wipes `/mnt/data` and the record with it. Consulted only while RAUC
@@ -103,6 +105,6 @@ always bootable by demonstration.
 * `SRC-23` (build suite): the layouts declare an image for both pairs.
 * `PROV-11` (provisioning suite, device): the inactive kernel slot is not blank.
 * `tests/ga_tests/rauc_slots/test.sh`: SLOT-25..28 keep proving an empty slot is
-  refused; SLOT-70..82 prove the mirror evidence red and green on fixtures;
+  refused; SLOT-70..83 prove the mirror evidence red and green on fixtures;
   SLOT-46 (device) asserts the live rollback target is bootable; SLOT-61/62
   prove the suite wrote no device record.

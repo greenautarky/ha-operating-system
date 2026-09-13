@@ -333,7 +333,7 @@ run_mirror() {
   GA_RAUC_SLOTS_BOOTS="$WORK/$4.boots.json" \
   GA_RAUC_SLOTS_MIRROR="$WORK/$4.mirror.json" \
   GA_RAUC_SLOTS_DEVROOT="$DEV" \
-  GA_RAUC_SLOTS_UPTIME=60 \
+  GA_RAUC_SLOTS_UPTIME="${MIRROR_UPTIME:-900}" \
   "$COL" >/dev/null 2>"$WORK/$4.err"
 }
 
@@ -421,8 +421,17 @@ mk_dev identical identical
 run_mirror fresh-sd-flash '{}' 'this is not json' mirror-corrupt
 run_test "SLOT-82" "unparseable mirror record: re-measured from scratch, collector still publishes" \
   "jq -e '.rollback.possible == true and .error == null' '$WORK/mirror-corrupt.json' && jq -e '.B.identical == true' '$WORK/mirror-corrupt.mirror.json'"
+
+# --- the boot path stays cheap: nothing is read before the uptime threshold --
+# The first tick runs 90 s after boot while Core is still starting from the
+# same card. Identical content on disk, but at 60 s uptime nothing may be
+# compared or recorded; the verdict is "not measured yet", not "different".
+mk_dev identical identical
+MIRROR_UPTIME=60 run_mirror fresh-sd-flash '{}' - mirror-early
+run_test "SLOT-83" "uptime below the threshold: not compared, nothing recorded, reason says not compared yet" \
+  "jq -e '.rollback.possible == false and ([.slots[] | select(.bootname == \"B\")] | .[0].mirror_of_booted == null)' '$WORK/mirror-early.json' && [ ! -s '$WORK/mirror-early.mirror.json' ] && grep -q 'deferred' '$WORK/mirror-early.err' && jq -r '.rollback.reason' '$WORK/mirror-early.json' | grep -q 'not been compared with the booted slot yet'"
 else
-  skip_test "SLOT-70..SLOT-82" "mirror evidence" "jq or cmp not available"
+  skip_test "SLOT-70..SLOT-83" "mirror evidence" "jq or cmp not available"
 fi
 
 # =========================================================================
