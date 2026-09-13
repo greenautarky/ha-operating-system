@@ -189,4 +189,30 @@ else
   skip_test "NET-16c" "OTA bundle fetch" "cannot read VERSION_ID from /etc/os-release"
 fi
 
+
+# NET-20: MAC randomization is OFF (ADR-0029 D6 — stable device identity).
+# The control is `wifi.cloned-mac-address=permanent` in NetworkManager.conf's
+# [connection-wifi-defaults]; the observable is that wlan0's ACTIVE MAC equals
+# its PERMANENT hardware MAC. `nmcli -f GENERAL.HWADDR,GENERAL.PERM-HWADDR` on
+# the device reports both; they must match. Config is NOT changed by this
+# package — only asserted (the shipped conf already sets it).
+if command -v nmcli >/dev/null 2>&1 && nmcli -t -f DEVICE device 2>/dev/null | grep -qx wlan0; then
+  _hw="$(nmcli -t -f GENERAL.HWADDR device show wlan0 2>/dev/null | sed 's/^GENERAL.HWADDR://' | tr 'a-f' 'A-F' | tr -d '\\')"
+  _perm="$(nmcli -t -f GENERAL.PERM-HWADDR device show wlan0 2>/dev/null | sed 's/^GENERAL.PERM-HWADDR://' | tr 'a-f' 'A-F' | tr -d '\\')"
+  if [ -n "$_perm" ] && [ "$_perm" != "00:00:00:00:00:00" ]; then
+    run_test "NET-20" "wlan0 active MAC == permanent MAC (no randomization; hw=$_hw perm=$_perm)" \
+      "[ -n '$_hw' ] && [ '$_hw' = '$_perm' ]"
+  else
+    skip_test "NET-20" "wlan0 MAC randomization off (permanent MAC not reported by this driver)"
+  fi
+  run_test "NET-21" "NetworkManager default pins the permanent MAC for wifi" \
+    "grep -q 'wifi.cloned-mac-address=permanent' /etc/NetworkManager/NetworkManager.conf"
+  run_test "NET-22" "scan-time MAC randomization disabled" \
+    "grep -q 'wifi.scan-rand-mac-address=no' /etc/NetworkManager/NetworkManager.conf"
+else
+  skip_test "NET-20" "wlan0 MAC == permanent (no wlan0 / no nmcli)"
+  skip_test "NET-21" "NetworkManager pins permanent MAC (no nmcli host run)"
+  skip_test "NET-22" "scan-time MAC randomization off (no nmcli host run)"
+fi
+
 suite_end

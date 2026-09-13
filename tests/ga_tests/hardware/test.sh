@@ -50,10 +50,18 @@ else
     "ls /sys/bus/usb/devices/*/product 2>/dev/null | while read f; do echo \"\$(cat \$f)\"; done | head -5"
 fi
 
-# --- USB host port (enabled for RNDIS router stick support) ---
+# --- USB host port: CLOSED by default (ADR-0029 D3/D6) ---
+# HW-08a used to assert "USB host port enabled (for RNDIS stick support)".
+# That claim is now false by design: the host DATA path is closed unless a
+# device is declared (usbcore.authorized_default=0 + an allowlist). A status
+# claim that misstates what ships is a bug (N19), so the assertion is REPLACED,
+# not kept beside the new one. Clean-flash validated (N47) — the default is the
+# thing under test, so an upgrade could carry a stale authorized_default.
+run_test "HW-08a" "USB host controller NOT authorized by default (host data path closed)" \
+  "for f in /sys/bus/usb/devices/usb*/authorized_default; do [ -e \"\$f\" ] && [ \"\$(cat \"\$f\" 2>/dev/null)\" != \"0\" ] && exit 1; done; ls /sys/bus/usb/devices/usb*/authorized_default >/dev/null 2>&1"
 
-run_test "HW-08a" "USB host port enabled" \
-  "ls /sys/bus/usb/devices/usb*/product 2>/dev/null | xargs cat 2>/dev/null | grep -qi 'EHCI\|OHCI'"
+run_test "HW-08a2" "USB authorize helper + empty-by-default allowlist shipped" \
+  "test -x /usr/libexec/ga-usb-authorize && test -f /usr/share/ga-usb-allowlist && ! grep -qviE '^[[:space:]]*(#|\$)' /usr/share/ga-usb-allowlist"
 
 run_test "HW-08b" "USB gadget (serial console) functional" \
   "dmesg | grep -q 'Gadget Serial\|g_serial\|dwc3.*peripheral' || [ -c /dev/ttyGS0 ]"
