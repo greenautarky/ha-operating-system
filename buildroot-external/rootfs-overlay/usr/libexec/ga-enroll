@@ -30,19 +30,37 @@
 # ga_release at the fleet-manager after every boot/reflash. The GHCR
 # creds file is only (re)written when content actually changed.
 #
+# FLEET ENVIRONMENT (ADR-0027 D4)
+# -------------------------------
+# Two fleet-managers run on the same host, one port apart: production and
+# staging. Which one this device belongs to is PROVISIONED DATA, not something
+# an image can know (GA_ENV is the build mode — canaries run prod-mode images
+# and live in staging). It is `GA_FLEET_ENV` in ga-services.conf, normally set
+# in the /mnt/data override next to `GA_FLEET_PORT=8091`; ABSENT MEANS
+# PRODUCTION. The resolved value rides in the enroll payload as `fleet_env`,
+# so the fleet-manager that receives it can compare it with its own
+# environment and badge or refuse a misrouted device. A value that is neither
+# `prod` nor `staging` is refused HERE, loudly (exit 1, retried) — a typo in
+# the override must never quietly enrol a device into production.
+#
 # RETRY BEHAVIOR
 # --------------
 # Exit 1 on any transient failure (fleet unreachable, 5xx, no mesh IP
 # yet); the unit retries every 60 s until enrollment succeeds.
+#
+# Test hooks (tests/ga_tests/enroll_env/test.sh drives the real script on a
+# CI runner): every path below can be moved with GA_ENROLL_*; the defaults are
+# the device paths.
 set -e
 
 LOG_TAG="ga-enroll"
-CONF_DEFAULT="/etc/ga-services.conf"
-CONF_OVERRIDE="/mnt/data/ga-services.conf"
-CREDS_FILE="/mnt/data/ghcr-creds.json"
-STATE_FILE="/mnt/data/supervisor/share/ga-enroll-state.json"
-NB_ENV="/mnt/data/netbird/netbird.env"
-HA_UUID_STORE="/mnt/data/supervisor/homeassistant/.storage/core.uuid"
+CONF_DEFAULT="${GA_ENROLL_CONF_DEFAULT:-/etc/ga-services.conf}"
+CONF_OVERRIDE="${GA_ENROLL_CONF_OVERRIDE:-/mnt/data/ga-services.conf}"
+CREDS_FILE="${GA_ENROLL_CREDS_FILE:-/mnt/data/ghcr-creds.json}"
+STATE_FILE="${GA_ENROLL_STATE_FILE:-/mnt/data/supervisor/share/ga-enroll-state.json}"
+NB_ENV="${GA_ENROLL_NB_ENV:-/mnt/data/netbird/netbird.env}"
+HA_UUID_STORE="${GA_ENROLL_HA_UUID_STORE:-/mnt/data/supervisor/homeassistant/.storage/core.uuid}"
+SHARE_PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
 
 log()  { echo "${LOG_TAG}: $*"; }
 warn() { echo "${LOG_TAG}: WARNING: $*" >&2; }
@@ -57,6 +75,16 @@ if [ -z "${GA_FLEET_HOST:-}" ]; then
     exit 0
 fi
 FLEET_URL="http://${GA_FLEET_HOST}:${GA_FLEET_PORT:-8090}"
+
+# Fleet environment — absent means production (ADR-0027 D4). Anything else
+# than the two known values is a provisioning error, refused before any
+# request is made: better a device that visibly fails to enrol than one that
+# quietly enrols into the wrong fleet.
+fleet_env="${GA_FLEET_ENV:-prod}"
+case "$fleet_env" in
+    prod|staging) ;;
+    *) die "GA_FLEET_ENV='${fleet_env}' is not 'prod' or 'staging' — fix it in ${CONF_OVERRIDE} (absent = prod); refusing to enrol" ;;
+esac
 
 command -v jq >/dev/null 2>&1 || die "jq not present — required to parse the enroll response"
 
@@ -88,9 +116,9 @@ ga_release=""
 # 3. Enroll. --max-time keeps a hung fleet-manager from wedging the unit.
 payload=$(jq -cn \
     --arg hw "$hw_serial" --arg uuid "$ha_uuid" --arg host "$nb_hostname" \
-    --arg ip "$netbird_ip" --arg rel "$ga_release" \
-    '{hw_serial:$hw, ha_uuid:$uuid, netbird_hostname:$host, netbird_ip:$ip, ga_release:$rel}')
-log "enrolling hw_serial=${hw_serial} at ${FLEET_URL} (ip=${netbird_ip:-none})"
+    --arg ip "$netbird_ip" --arg rel "$ga_release" --arg fenv "$fleet_env" \
+    '{hw_serial:$hw, ha_uuid:$uuid, netbird_hostname:$host, netbird_ip:$ip, ga_release:$rel, fleet_env:$fenv}')
+log "enrolling hw_serial=${hw_serial} at ${FLEET_URL} (ip=${netbird_ip:-none}, fleet_env=${fleet_env})"
 response=$(curl -fsS --max-time 20 -H "Content-Type: application/json" \
     -X POST "${FLEET_URL}/api/enroll" -d "$payload") \
     || die "fleet-manager unreachable or rejected the enrollment — will retry"
@@ -138,9 +166,12 @@ mkdir -p "$(dirname "$STATE_FILE")"
 ga_env=""
 [ -r /mnt/data/ga-env.conf ] && ga_env=$(sed -n 's/^GA_ENV=//p' /mnt/data/ga-env.conf | head -1 | tr -d '\r\n"'"'"'')
 [ -n "$ga_env" ] || { [ -r /etc/ga-env.conf ] && ga_env=$(sed -n 's/^GA_ENV=//p' /etc/ga-env.conf | head -1 | tr -d '\r\n"'"'"''); }
+# fleet_env (prod/staging — the FLEET, ADR-0027) rides next to ga_env (the
+# BUILD MODE): two different facts that are easy to conflate, side by side so
+# a reader of the bridge sees both.
 jq -cn --arg hw "$hw_serial" --arg url "$FLEET_URL" --arg ipurl "$FLEET_URL_IP" \
        --arg pid "$prov_id" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-       --arg rel "$ga_release" --arg env "$ga_env" \
-       '{hw_serial:$hw, fleet_url:$url, fleet_url_ip:$ipurl, provisional_id:$pid, enrolled_at:$at, ga_release:$rel, ga_env:$env}' \
-    | /usr/libexec/ga-share-publish "$STATE_FILE" 0644
+       --arg rel "$ga_release" --arg env "$ga_env" --arg fenv "$fleet_env" \
+       '{hw_serial:$hw, fleet_url:$url, fleet_url_ip:$ipurl, provisional_id:$pid, enrolled_at:$at, ga_release:$rel, ga_env:$env, fleet_env:$fenv}' \
+    | "$SHARE_PUBLISH" "$STATE_FILE" 0644
 log "state written to ${STATE_FILE}"

@@ -12,6 +12,30 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased — rides in the next rc after rc29
+
+### Added — the device declares its fleet environment on enrolment (ADR-0027 D4)
+
+Two fleet-managers now run on the services host, production and staging, one
+port apart. Which one a device belongs to is provisioned data: `GA_FLEET_ENV`
+in `ga-services.conf` (normally in the `/mnt/data` override, next to the
+staging port). **Absent means production**, so the baked file does not set it.
+
+`ga-enroll` resolves it and sends `fleet_env` in the `/api/enroll` payload and
+in the `/share` enrol-state bridge (next to `ga_env`, the build mode — a
+different fact). The fleet-manager accepts the field since 0.125.0, compares it
+with its own environment, badges or refuses a misrouted device, and never
+releases one. A value that is neither `prod` nor `staging` is refused on the
+device, before any request — a typo in the override must not quietly enrol a
+device into the wrong fleet.
+
+Tests: `tests/ga_tests/enroll_env/test.sh` (host-side, CI) drives the real
+script with a stub `curl` and asserts the payload, the bridge and the refusal;
+red-proven against the pre-field script. `CFG-53` checks the shipped script on
+the device.
+
+---
+
 ## 16.3.1.2 (V1.2-clean) — in flight, 2026-06-24 (edge-buffered telemetry + iHost LED bake)
 
 Telemetry-survivability session (PRs #100–#108 on master; the telegraf 1.38

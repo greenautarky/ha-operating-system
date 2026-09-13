@@ -220,6 +220,14 @@ fi
 run_test "CFG-51" "ga-enroll writes ga_env into the enroll-state bridge (addon-visible env source)" \
   "grep -q 'ga_env:\$env' /usr/libexec/ga-enroll"
 
+# --- ADR-0027 D4: the device declares its fleet environment on enroll ---------
+# fleet_env (prod|staging, from GA_FLEET_ENV in ga-services.conf, absent = prod)
+# rides in the enroll payload AND in the bridge, next to ga_env (the build mode).
+# The host-side suite tests/ga_tests/enroll_env proves the behaviour; this
+# checks the shipped script on the device is the one that has it.
+run_test "CFG-53" "ga-enroll sends fleet_env in the enroll payload and the bridge (ADR-0027)" \
+  "grep -q 'fleet_env:\$fenv' /usr/libexec/ga-enroll && grep -q 'prod|staging' /usr/libexec/ga-enroll"
+
 # --- DEVICE_LABEL single-source-of-truth fallback (CFG-52) --------------------
 # Both host env-builders read the legacy /mnt/data/ga-device-label (flasher
 # stage 72b) and must fall back to the canonical ga-identity.json device_id when
