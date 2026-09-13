@@ -37,6 +37,7 @@ No device or emulator needed — checks the build output tree directly.
 ### From sd_flash
 - SD-01: Image file exists after build
 - SD-02: Image filename contains build metadata
+- IMG-01: both RAUC slot pairs of the produced `.img.xz` carry identical, non-blank content (`scripts/check-slot-pairs.sh`: parses the primary GPT, hashes `hassos-kernel0/1` + `hassos-system0/1` in one streamed pass; rc 1 = differ/blank, rc 2 = cannot judge, both fail the suite). Reads the artefact where SRC-23 reads the declaration. Red/green proven on every PR by `tests/gates/slot_pairs/selftest.sh`, and on real bakes: a 2026-07-23 image fails (slot 1 all zeros), a 2026-08-31 image passes.
 
 ### From disk_guard
 - DG-01: Script and service installed
@@ -145,6 +146,9 @@ Runs anywhere with `sh` + `jq`; gated per-PR by the `host-suites` job in
 published contract.
 - SLOT-21..24: healthy dual-slot device — valid JSON, rollback target, per-slot version, kernel+rootfs grouping
 - SLOT-25..28: fresh SD flash — rollback blocked, and specifically: the empty slot still reports `boot_status=good`, which is why `ever_installed` (not `boot_status`) is the gate
+- SLOT-50..60: healthy-boot evidence — earned after the uptime threshold, per slot, overridden by a bootloader bad mark, corrupt record reads as no evidence
+- SLOT-70..82: mirror evidence (2026-09-13) — the inactive slot group is compared byte for byte with the booted one (partitions replaced by files under `GA_RAUC_SLOTS_DEVROOT`): identical pair → `rollback.possible=true` with `mirror_of_booted=true` and `installed_version` still null; all-zero B (pre-#349) → refused, reason says the content differs; kernel identical but rootfs not → refused; install `pending` on B → identity not consulted, nothing written; marked-bad → refused; record measured against another booted slot → stale, re-measured; valid record → reused without re-reading; healthy boot on record → no comparison made; fixture input without a device root → nothing read or written; corrupt record → re-measured
+- SLOT-61/62: the suite wrote neither the device healthy-boot record nor the device mirror record (a fixture run must never teach the device anything)
 - SLOT-29: slot marked bad by the bootloader — rollback blocked
 - SLOT-30: booted from B — the rollback target is A (no A/B hardcoding)
 - SLOT-31a/b: rauc silent or unparseable — publishes an error record, never a bootable-looking one (fail closed)
@@ -202,6 +206,7 @@ Must run on real iHost hardware. Needs network, Docker, HA running.
 - SLOT-42: snapshot inside the addon's 35min staleness window
 - SLOT-43: snapshot agrees with live `rauc status` on the booted slot
 - SLOT-44: reports this device's rollback target + verdict (informational)
+- SLOT-46: the rollback target on this device IS bootable — SLOT-44's readout as an assertion, read from the published snapshot (what the fleet-manager pre-flight reads), writing nothing. Red on every fresh device flashed before 2026-09-13 (no evidence for slot B); green on an image carrying the mirror-evidence collector, once its first tick has compared the slots. On an OTA'd device, red means the previous release is not there to go back to.
 
 ### From config_verify (needs running services)
 - CFG-04, CFG-05, CFG-10, CFG-12, CFG-17, CFG-18
