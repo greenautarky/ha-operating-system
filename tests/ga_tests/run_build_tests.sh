@@ -3910,6 +3910,47 @@ fi
 # =========================================================================
 # Summary
 # =========================================================================
+# =========================================================================
+# WP7 — USB host port closed by default + WiFi MAC not randomized (ADR-0029)
+# Checks the BUILT rootfs ($TARGET) + the board cmdline ($SRC). The device
+# suite usb_net_posture proves the extraction goes red on a mutation (rule 45);
+# here we assert the shipped artefacts are present in the image.
+# =========================================================================
+echo ""
+echo "--- USB + MAC posture (ADR-0029 D3/D6) ---"
+
+_CMDLINE="${SRC:-.}/buildroot-ihost/board/sonoff/ihost/cmdline.txt"
+grep -qE 'usbcore\.authorized_default=0' "$_CMDLINE" 2>/dev/null \
+  && _pass "USB-01: cmdline closes the host data path (usbcore.authorized_default=0)" \
+  || _fail "USB-01: cmdline missing usbcore.authorized_default=0 — host port open by default"
+
+if [[ -x "${TARGET}/usr/libexec/ga-usb-authorize" ]]; then
+  _pass "USB-02: ga-usb-authorize helper present + executable"
+else
+  _fail "USB-02: ga-usb-authorize helper missing/not executable"
+fi
+
+if grep -q 'ga-usb-authorize' "${TARGET}/usr/lib/udev/rules.d/80-ga-usb-authorize.rules" 2>/dev/null; then
+  _pass "USB-03: udev authorize rule present"
+else
+  _fail "USB-03: udev authorize rule missing"
+fi
+
+if [[ -f "${TARGET}/usr/share/ga-usb-allowlist" ]] \
+   && ! grep -qviE '^[[:space:]]*(#|$)' "${TARGET}/usr/share/ga-usb-allowlist" 2>/dev/null; then
+  _pass "USB-04: allowlist shipped and EMPTY by default"
+else
+  _fail "USB-04: allowlist missing or non-empty by default"
+fi
+
+_NM="${TARGET}/etc/NetworkManager/NetworkManager.conf"
+grep -qE '^\s*wifi\.cloned-mac-address\s*=\s*permanent' "$_NM" 2>/dev/null \
+  && _pass "MAC-01: NetworkManager pins the permanent WiFi MAC" \
+  || _fail "MAC-01: NetworkManager.conf does not pin wifi.cloned-mac-address=permanent"
+grep -qE '^\s*wifi\.scan-rand-mac-address\s*=\s*no' "$_NM" 2>/dev/null \
+  && _pass "MAC-02: scan-time MAC randomization disabled" \
+  || _fail "MAC-02: NetworkManager.conf does not set wifi.scan-rand-mac-address=no"
+
 echo ""
 total=$((pass + fail + skip))
 echo "=== Build tests: ${pass} passed, ${fail} failed, ${skip} skipped (${total} total) ==="

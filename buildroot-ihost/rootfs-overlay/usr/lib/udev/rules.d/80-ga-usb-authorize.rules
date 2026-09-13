@@ -1,0 +1,8 @@
+# ga-usb-authorize — ADR-0029 D3: the iHost host port is CLOSED by default
+# (usbcore.authorized_default=0 on the kernel cmdline). A newly-enumerated
+# device is authorized only if its VID:PID is on /usr/share/ga-usb-allowlist
+# (empty by default). The helper fails closed. Only whole devices (not each
+# interface) carry an `authorized` attribute, hence ENV{DEVTYPE}=="usb_device".
+# The gadget/OTG peripheral side is unaffected — this governs the host side.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", \
+  RUN+="/usr/libexec/ga-usb-authorize %S%p '$env{ID_VENDOR_ID}' '$env{ID_MODEL_ID}'"

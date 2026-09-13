@@ -1,0 +1,11 @@
+# ga-usb-allowlist — VID:PID (lowercase hex, e.g. 1a86:55d3) of USB devices
+# authorized on the iHost HOST port, one per line. EMPTY BY DEFAULT
+# (ADR-0029 D3): with usbcore.authorized_default=0 on the kernel cmdline, a
+# newly-enumerated host-port device is NOT bound to any driver until a line
+# here matches it. The standard kit needs nothing here — the LTE stick is
+# WiFi-only, Zigbee/BT are internal (SDIO/UART). A bench or site that needs the
+# port (e.g. a USB-serial adapter for provisioning, or a declared RNDIS stick)
+# adds its VID:PID; that is a per-device declaration set from the fleet-manager
+# (ADR-0029 D4), recorded in ops_audit. Comments (#) and blank lines ignored.
+# The gadget serial console (OTG peripheral) is unaffected — authorization
+# governs the HOST side only.
