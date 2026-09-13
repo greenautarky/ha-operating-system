@@ -101,13 +101,21 @@ chmod +x "$FAKEBIN/logger"
 VERDICT="$TMPD/ga-lte-standby.json"
 FAKE_STATE="$TMPD/route_state"; : > "$FAKE_STATE"
 FAKEIP="$TMPD/fakeip"
+# Two default routes live on wlan0 of a WiFi-primary device: NetworkManager's
+# PRIMARY (metric 600, always present here — the state file only tracks the
+# standby one) and the STANDBY the script owns (metric 20500). The fake prints
+# both when the standby is present, the primary alone otherwise; a delete that
+# does not name the standby metric removes the PRIMARY and is recorded as such.
+PRIMARY_STATE="$TMPD/primary_state"; echo present > "$PRIMARY_STATE"
 cat > "$FAKEIP" <<IPEOF
 #!/bin/sh
-# fake \`ip\`: -4 route show default dev wlan0 -> prints a default line iff state file says present
 case "\$*" in
-  *"route show default dev wlan0"*) grep -q present "$FAKE_STATE" && echo "default via 192.168.100.1 dev wlan0 metric 20500" ;;
-  *"route add default"*)  echo present > "$FAKE_STATE" ;;
-  *"route del default"*)  : > "$FAKE_STATE" ;;
+  *"route show default dev wlan0"*)
+    grep -q present "$PRIMARY_STATE" && echo "default via 198.51.100.1 dev wlan0 proto dhcp src 198.51.100.50 metric 600"
+    grep -q present "$FAKE_STATE"    && echo "default via 192.168.100.1 dev wlan0 metric 20500" ;;
+  *"route add default"*"metric 20500"*)  echo present > "$FAKE_STATE" ;;
+  *"route del default"*"metric 20500"*)  : > "$FAKE_STATE" ;;
+  *"route del default"*)  : > "$PRIMARY_STATE" ;;   # an unqualified delete hits the lowest-metric route = the PRIMARY
 esac
 IPEOF
 chmod +x "$FAKEIP"
@@ -129,15 +137,20 @@ D2="$(_route)"
 run_test "LSB-21" "verdict usable:false -> route withdrawn" \
   "test '$D2' = withdrawn && ! grep -q present '$FAKE_STATE'"
 
-# add it back, then a MISSING verdict must withdraw AND warn (rule 44)
+# add it back, then a MISSING verdict must leave EVERY route alone. This
+# inverts the pre-rc31 expectation ("MISSING withdraws"): on 2026-09-14 a
+# WiFi-only canary lost its PRIMARY default route to that rule after an OTA,
+# because the script matched any default on wlan0 and no device without a
+# declared standby hop has a verdict file. No verdict = nothing to manage.
 printf '{"usable":true,"updated_at":"y"}\n' > "$VERDICT"; touch "$VERDICT"; _route >/dev/null
 rm -f "$VERDICT"
 : > "$TMPD/logcap"
-( export GA_ROUTE_TEST=1 GA_STANDBY_VERDICT="$VERDICT" GA_STANDBY_IP="$FAKEIP" PATH="$FAKEBIN:$PATH"; . "$ROUTE"; reconcile_once ) >/dev/null 2>&1
-WARN_MISS="$(cat "$TMPD/logcap")"
-run_test "LSB-22" "MISSING verdict withdraws the route" "! grep -q present '$FAKE_STATE'"
-run_test "LSB-23" "MISSING verdict logs a WARNING naming the substitution (rule 44)" \
-  "echo '$WARN_MISS' | grep -qi 'MISSING'"
+D_MISS="$( export GA_ROUTE_TEST=1 GA_STANDBY_VERDICT="$VERDICT" GA_STANDBY_IP="$FAKEIP" PATH="$FAKEBIN:$PATH"; . "$ROUTE"; reconcile_once 2>/dev/null )"
+LOG_MISS="$(cat "$TMPD/logcap")"
+run_test "LSB-22" "MISSING verdict manages nothing: the primary default route is untouched (rc30 defect, measured on a canary)" \
+  "grep -q present '$PRIMARY_STATE' && test '$D_MISS' = unmanaged"
+run_test "LSB-23" "MISSING verdict leaves even the standby route alone and says so at info level, not as a warning" \
+  "grep -q present '$FAKE_STATE' && echo '$LOG_MISS' | grep -qi 'no standby verdict'"
 
 # stale verdict (old mtime) must withdraw AND warn with the age
 printf '{"usable":true,"updated_at":"y"}\n' > "$VERDICT"; touch "$VERDICT"; _route >/dev/null
@@ -145,7 +158,8 @@ touch -d '2020-01-01' "$VERDICT" 2>/dev/null || touch -t 202001010000 "$VERDICT"
 : > "$TMPD/logcap"
 ( export GA_ROUTE_TEST=1 GA_STANDBY_VERDICT="$VERDICT" GA_STANDBY_IP="$FAKEIP" GA_STANDBY_STALE_S=600 PATH="$FAKEBIN:$PATH"; . "$ROUTE"; reconcile_once ) >/dev/null 2>&1
 WARN_STALE="$(cat "$TMPD/logcap")"
-run_test "LSB-24" "STALE verdict (>10min) withdraws the route" "! grep -q present '$FAKE_STATE'"
+run_test "LSB-24" "STALE verdict (>10min) withdraws the STANDBY route only — the primary stays" \
+  "! grep -q present '$FAKE_STATE' && grep -q present '$PRIMARY_STATE'"
 run_test "LSB-25" "STALE verdict logs a WARNING with the file age (rule 44)" \
   "echo '$WARN_STALE' | grep -qi 'STALE'"
 

@@ -55,8 +55,17 @@ verdict_age_s() {
 }
 
 # Is the wlan0 default route currently present?
+# The script owns exactly ONE route: the standby default via $GW with $METRIC.
+# It must never see, add or delete any other default route on $IFACE — on a
+# device whose primary uplink IS wlan0 (every WiFi-only site), the primary
+# default route lives on the same interface with NetworkManager's metric.
+# Measured 2026-09-14 00:26 on a WiFi-only canary after an OTA to rc30: the
+# previous "any default on wlan0" match withdrew the primary route every tick
+# (no standby verdict on a device that never declared a standby hop) and the
+# device dropped off the mesh until it was reflashed. A management script
+# withdraws only what it added.
 route_present() {
-    $IP_BIN -4 route show default dev "$IFACE" 2>/dev/null | grep -q "^default"
+    $IP_BIN -4 route show default dev "$IFACE" 2>/dev/null | grep -q "^default.* metric $METRIC\( \|$\)"
 }
 
 add_route() {
@@ -66,7 +75,7 @@ add_route() {
 
 del_route() {
     route_present || return 0
-    $IP_BIN -4 route del default dev "$IFACE" 2>/dev/null
+    $IP_BIN -4 route del default via "$GW" dev "$IFACE" metric "$METRIC" 2>/dev/null
 }
 
 # Decide + act once. Echoes the decision word (added|present|withdrawn|absent).
@@ -84,7 +93,12 @@ reconcile_once() {
     fi
     # Not usable → withdraw, and say WHY at WARNING when it is missing/stale.
     if [ "$_usable" = "missing" ]; then
-        _log warning "standby verdict $VERDICT MISSING — withdrawing the $IFACE default route (loss of the primary uplink now makes the device visibly offline, not silently black-holed)"
+        # No verdict file = this device has not declared an LTE standby hop
+        # (ga_manager writes the file only when one is configured). Nothing to
+        # manage: leave every route alone. Withdrawing here was the rc30 defect.
+        _log info "no standby verdict at $VERDICT — this device manages no standby route on $IFACE"
+        echo unmanaged
+        return
     elif [ "$_age" -gt "$STALE_S" ]; then
         _log warning "standby verdict $VERDICT is STALE (${_age}s old, limit ${STALE_S}s) — ga_manager stopped publishing it; withdrawing the $IFACE default route"
     fi
