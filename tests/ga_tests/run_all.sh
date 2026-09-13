@@ -26,12 +26,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 #            `host-suites` job in .github/workflows/lint.yml instead.
 # - device = needs real iHost hardware, network, Docker, HA running.
 # - all    = union; used when no category is specified.
-SUITES_EMU="environment crash_detection boot_timing disk_guard supervisor_health share_publish rauc_slots stage_components publish_services"
+SUITES_EMU="environment crash_detection boot_timing disk_guard supervisor_health share_publish rauc_slots stage_components publish_services lte_standby"
 # idle_perf runs BEFORE stress: the 5-min load average and per-process CPU it
 # measures were still carrying the stress suite (K31 rc19+rc20: IDLE-04 got 2.96
 # and 3.01 right after stress — an ordering artefact, not an idle device).
-SUITES_DEVICE="os_integrity addons_running heating health ha_config_applied telemetry network ping config_verify dns_config onboarding ga_frontend_bundle provisioning tailscale watchdog idle_perf stress telemetry_buffering hardware openstick ota_update connectivity_recorder rc19_device firewall audio_disabled rauc_slots ethernet_force"
-SUITES_ALL="crash_detection os_integrity addons_running heating health ha_config_applied telemetry environment network ping boot_timing disk_guard watchdog config_verify dns_config idle_perf stress onboarding ga_frontend_bundle provisioning tailscale telemetry_buffering hardware openstick ota_update supervisor_health connectivity_recorder rc19_device firewall share_publish audio_disabled rauc_slots stage_components ethernet_force publish_services"
+SUITES_DEVICE="os_integrity addons_running heating health ha_config_applied telemetry network ping config_verify dns_config onboarding ga_frontend_bundle provisioning tailscale watchdog idle_perf stress telemetry_buffering hardware openstick ota_update connectivity_recorder rc19_device firewall audio_disabled rauc_slots ethernet_force lte_standby"
+SUITES_ALL="crash_detection os_integrity addons_running heating health ha_config_applied telemetry environment network ping boot_timing disk_guard watchdog config_verify dns_config idle_perf stress onboarding ga_frontend_bundle provisioning tailscale telemetry_buffering hardware openstick ota_update supervisor_health connectivity_recorder rc19_device firewall share_publish audio_disabled rauc_slots stage_components ethernet_force publish_services lte_standby"
 
 # Parse arguments
 CATEGORY=""

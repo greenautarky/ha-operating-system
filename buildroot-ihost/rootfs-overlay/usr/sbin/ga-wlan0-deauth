@@ -1,0 +1,131 @@
+#!/bin/sh
+# ga-wlan0-deauth — persistent WiFi Reason-3 deauth counter (seam S1).
+#
+# The dongle-hop WiFi (the association to an externally-powered LTE stick's own
+# AP) drops when the AP restarts its own hostapd. That kernel line —
+#   wlan0: deauthenticated from <bssid> (Reason: 3=DEAUTH_LEAVING)
+# — lives ONLY in the kernel ring buffer (~2 days) and is exported nowhere, so
+# the single most informative signal about the standby hop is lost. This daemon
+# follows the kernel journal (EVENT-DRIVEN — journalctl -f, never a .path unit
+# on a fast-changing file, which hot-loops PID 1: 2026-09-08 finding) and
+# maintains a small JSON counter the ga_manager add-on reads and rates per hour
+# (lte.wifi_hop_flapping).
+#
+# Seam S1 (this file writes, ga_manager reads):
+#   /mnt/data/supervisor/share/ga-wlan0-deauth.json
+#   {"reason3_total": <int since boot>, "boot_id": "<boot_id>",
+#    "last_event_at": "<iso>", "updated_at": "<iso>", "healer_marks": [<iso>,…],
+#    "by_reason": {"3": n, …}, "last_reason": "<n>"}
+#
+# TWO WRITERS, ONE FILE: ga_manager's H1 healer writes its OWN funcNo-1018
+# timestamps into `healer_marks` (each 1018 restarts the dongle's hostapd and
+# produces exactly one Reason-3 deauth, which the flapping rate must exclude).
+# So every write here is a read-modify-write under an flock on <file>.lock —
+# the SAME lock ga_manager takes — and PRESERVES healer_marks verbatim. The
+# write itself goes through ga-share-publish (symlink-safe: /share is writable
+# by every share:rw add-on, so a plain `>` there follows a planted symlink).
+#
+# POSIX /bin/sh (BusyBox ash) — no python on the image, and BusyBox `date` has
+# no %N. Test hook: `GA_DEAUTH_TEST=1 . ga-wlan0-deauth` sources the functions
+# without starting the follow loop; every path is env-overridable.
+set -u
+
+SHARE="${GA_DEAUTH_SHARE:-/mnt/data/supervisor/share/ga-wlan0-deauth.json}"
+LOCK="${GA_DEAUTH_LOCK:-${SHARE}.lock}"
+PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
+IFACE="${GA_DEAUTH_IFACE:-wlan0}"
+# The kernel line reason we count. Reason 3 = DEAUTH_LEAVING (AP-initiated).
+BOOT_ID_PATH="${GA_DEAUTH_BOOT_ID_PATH:-/proc/sys/kernel/random/boot_id}"
+# Republish at most this often even under a deauth storm — one write per event
+# would still be bounded (deauths are minutes apart), but a burst must not
+# thrash the SD card. 0 = write on every event (tests set this).
+MIN_WRITE_INTERVAL="${GA_DEAUTH_MIN_WRITE_INTERVAL:-2}"
+
+_now_iso() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
+_boot_id() { cat "$BOOT_ID_PATH" 2>/dev/null || echo unknown; }
+
+# A line matches when it names our iface AND "deauthenticated" AND a Reason.
+# Echoes the reason number, or nothing.
+deauth_reason() {
+    # e.g. "wlan0: deauthenticated from a0:.. (Reason: 3=DEAUTH_LEAVING)"
+    case "$1" in
+        *"$IFACE: deauthenticated"*"Reason: "*)
+            echo "$1" | sed -n 's/.*Reason: \([0-9][0-9]*\).*/\1/p' ;;
+        *) : ;;
+    esac
+}
+
+# Read the current healer_marks array (verbatim JSON inner, no brackets) from
+# the shared file so a write PRESERVES what ga_manager put there. Best-effort:
+# a missing/garbled file yields empty, never an error.
+_read_healer_marks() {
+    [ -f "$SHARE" ] || { echo ""; return; }
+    # extract the "healer_marks":[ ... ] inner content, tolerant of whitespace.
+    tr -d '\n' < "$SHARE" 2>/dev/null \
+      | sed -n 's/.*"healer_marks"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p'
+}
+
+# Render the seam JSON. Args: total boot_id last_event_at reason_json last_reason marks_inner
+render_json() {
+    _total="$1"; _bid="$2"; _last_ev="$3"; _reason_json="$4"; _last_reason="$5"; _marks="$6"
+    printf '{"reason3_total":%s,"boot_id":"%s","last_event_at":%s,"updated_at":"%s","healer_marks":[%s],"by_reason":{%s},"last_reason":%s}\n' \
+        "$_total" "$_bid" \
+        "$( [ -n "$_last_ev" ] && printf '"%s"' "$_last_ev" || printf 'null' )" \
+        "$(_now_iso)" \
+        "$_marks" \
+        "$_reason_json" \
+        "$( [ -n "$_last_reason" ] && printf '"%s"' "$_last_reason" || printf 'null' )"
+}
+
+# Publish the seam file under the shared flock, preserving healer_marks.
+# Args: total boot_id last_event_at reason_json last_reason
+publish_counter() {
+    mkdir -p "$(dirname "$LOCK")" 2>/dev/null || true
+    (
+        if command -v flock >/dev/null 2>&1; then
+            flock 9 2>/dev/null || true
+        fi
+        _marks="$(_read_healer_marks)"
+        render_json "$1" "$2" "$3" "$4" "$5" "$_marks" | "$PUBLISH" "$SHARE" 0644
+    ) 9>"$LOCK"
+}
+
+# Count Reason-3 deauths already in THIS boot's kernel journal, to seed
+# reason3_total so it is "since boot", not "since the daemon started".
+seed_from_journal() {
+    if command -v journalctl >/dev/null 2>&1; then
+        journalctl -k -b 0 --no-pager -o cat 2>/dev/null \
+          | grep -c "$IFACE: deauthenticated.*Reason: 3" 2>/dev/null || echo 0
+    else
+        echo 0
+    fi
+}
+
+main() {
+    boot_id="$(_boot_id)"
+    total="$(seed_from_journal)"; [ -n "$total" ] || total=0
+    r3=0
+    [ "$total" -gt 0 ] 2>/dev/null && r3="$total"
+    last_ev=""
+    last_reason=""
+    last_write=0
+    # First publish: the seeded count for this boot (also rewrites boot_id after
+    # a reboot — the counter restarts at this boot's journal count).
+    publish_counter "$total" "$boot_id" "$last_ev" "\"3\":$r3" "$last_reason"
+
+    # Follow the kernel journal from now on. -o cat = bare message lines.
+    journalctl -k -f -o cat --no-pager 2>/dev/null | while IFS= read -r line; do
+        rn="$(deauth_reason "$line")"
+        [ -n "$rn" ] || continue
+        [ "$rn" = "3" ] && total=$((total + 1)) && r3=$((r3 + 1))
+        last_ev="$(_now_iso)"
+        last_reason="$rn"
+        _now_epoch="$(awk '{print int($1); exit}' /proc/uptime 2>/dev/null || echo 0)"
+        if [ "$MIN_WRITE_INTERVAL" -le 0 ] || [ $((_now_epoch - last_write)) -ge "$MIN_WRITE_INTERVAL" ]; then
+            publish_counter "$total" "$boot_id" "$last_ev" "\"3\":$r3" "$last_reason"
+            last_write="$_now_epoch"
+        fi
+    done
+}
+
+[ -n "${GA_DEAUTH_TEST:-}" ] || main

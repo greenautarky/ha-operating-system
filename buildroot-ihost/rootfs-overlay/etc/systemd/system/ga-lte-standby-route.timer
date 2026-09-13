@@ -1,0 +1,15 @@
+[Unit]
+Description=Re-evaluate the LTE standby route from the health verdict (S2)
+Documentation=https://github.com/greenautarky/ga-ihost-docs/blob/main/adr/ADR-0025-health-gated-standby-uplink.md
+
+[Timer]
+# A bounded poll, not a .path unit: the stale case (the verdict STOPS being
+# rewritten) produces no file event, so only a poll can catch it. 30 s is well
+# inside the 600 s staleness bound and cheap (one file read + at most one ip
+# route call).
+OnBootSec=30
+OnUnitActiveSec=30
+AccuracySec=5
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,22 @@
+[Unit]
+Description=GreenAutarky WiFi Reason-3 deauth counter (LTE standby hop, seam S1)
+Documentation=https://github.com/greenautarky/ga-ihost-docs/blob/main/NETWORKING.md
+# Needs the kernel journal (systemd-journald) and the /mnt/data partition for
+# the /share bridge. NOT ordered on NetworkManager: it follows the kernel log,
+# which is present regardless of the network state.
+After=systemd-journald.service mnt-data.mount
+Wants=systemd-journald.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/ga-wlan0-deauth
+Restart=on-failure
+RestartSec=10
+# Tiny always-on daemon: a `journalctl -k -f` follow + a small JSON write on
+# each deauth. Event-driven — NOT a .path unit on a fast-changing file
+# (the 2026-09-08 hot-loop finding).
+MemoryMax=32M
+CPUQuota=5%
+
+[Install]
+WantedBy=multi-user.target

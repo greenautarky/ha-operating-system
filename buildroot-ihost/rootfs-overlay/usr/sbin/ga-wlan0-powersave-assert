@@ -1,0 +1,54 @@
+#!/bin/sh
+# ga-wlan0-powersave-assert — assert WiFi powersave is OFF on the dongle hop.
+#
+# The shipped OpenStick auto-connect profile sets `wifi.powersave 2` (disable),
+# because on the Realtek RTW88 chip leaving LPS on makes the AP queue ARP
+# replies during sleep windows; the station misses them and no IP traffic flows
+# though the link looks associated (the dongle hop's own flapping cause, KB230).
+# But "disabled, by whom unclear" — a profile edit or a driver default could
+# silently re-enable it. This boot oneshot ASSERTS the state and re-applies it
+# on the active wlan0 connection if it drifted, logging loudly either way
+# (a path that only runs on the event it reports is unverified — rule 53 — so
+# it logs the observed value every boot, not only on a fix).
+#
+# POSIX /bin/sh. Test hook: GA_PSAVE_TEST=1 sources without acting; nmcli is
+# overridable.
+set -u
+
+IFACE="${GA_PSAVE_IFACE:-wlan0}"
+NMCLI="${GA_PSAVE_NMCLI:-nmcli}"
+LOG_TAG="ga-wlan0-powersave-assert"
+_log() { logger -t "$LOG_TAG" -p "daemon.$1" "$2" 2>/dev/null || echo "$LOG_TAG: $2" >&2; }
+
+# The connection name active on IFACE, or empty.
+active_conn() {
+    $NMCLI -t -f NAME,DEVICE connection show --active 2>/dev/null \
+      | awk -F: -v d="$IFACE" '$2==d {print $1; exit}'
+}
+
+# The 802-11-wireless.powersave value of a connection (raw nmcli word).
+conn_powersave() {
+    $NMCLI -t -f 802-11-wireless.powersave connection show "$1" 2>/dev/null \
+      | sed 's/^802-11-wireless.powersave://'
+}
+
+# assert: read the active conn's powersave; 2 = disabled = correct. Anything
+# else is re-set to 2 and re-applied. Echoes ok|fixed|no-conn.
+assert_once() {
+    _c="$(active_conn)"
+    if [ -z "$_c" ]; then
+        _log info "no active connection on $IFACE — nothing to assert (no dongle hop up)"
+        echo no-conn; return
+    fi
+    _ps="$(conn_powersave "$_c")"
+    if [ "$_ps" = "2" ]; then
+        _log info "$IFACE powersave is disabled (802-11-wireless.powersave=2) on '$_c' — as intended"
+        echo ok; return
+    fi
+    _log warning "$IFACE powersave is '$_ps' on '$_c' (expected 2=disabled) — re-applying; RTW88 with LPS on flaps on its own"
+    $NMCLI connection modify "$_c" 802-11-wireless.powersave 2 2>/dev/null || true
+    $NMCLI connection up "$_c" 2>/dev/null || true
+    echo fixed
+}
+
+[ -n "${GA_PSAVE_TEST:-}" ] || assert_once

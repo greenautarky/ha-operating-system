@@ -1,0 +1,14 @@
+[Unit]
+Description=GreenAutarky assert WiFi powersave OFF on the LTE dongle hop
+Documentation=https://github.com/greenautarky/ga-ihost-docs/blob/main/NETWORKING.md
+After=network.target NetworkManager.service ga-openstick-autoconnect.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-wlan0-powersave-assert
+# Re-runs whenever the openstick auto-connect timer brings a hop up, so a
+# freshly-created profile is asserted too.
+
+[Install]
+WantedBy=multi-user.target
