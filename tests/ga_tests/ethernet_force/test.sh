@@ -81,6 +81,12 @@ if [ -n "$OPER" ]; then
         skip_test "ETHF-04" "link state — the boot marker is present, ETHF-01/03 already report it"
     elif grep -q '^GA_ETHERNET_ENABLED=true' /mnt/data/ga-env.conf 2>/dev/null; then
         skip_test "ETHF-04" "link state — consent is granted, up is correct"
+    elif [ "$SRC" = force-config ]; then
+        # The fleet-manager's ethernet.force_enabled is the third legitimate
+        # reason for eth0 to be up (ETHF-03 already accepted it as "not the
+        # flash-time override"). Failing here reported the remote override
+        # as a defect on every device that carries it — K55 2026-09-14.
+        skip_test "ETHF-04" "link state — remote override (force-config) is active, up is correct"
     else
         run_test "ETHF-04" "eth0 down while consent is absent" "[ \"$OPER\" = down ]"
     fi
@@ -119,6 +125,56 @@ if [ -e "$CONVERGED" ]; then
     fi
 else
     skip_test "ETHF-06" "retire outcome — device has not converged yet, nothing should have fired"
+fi
+
+# --- the remote override must work WITHOUT the legacy label file --------------
+# The gate in ga-manage-ethernet accepts the fleet marker only when it names
+# this device. Until 2026-09-14 "this device" was read from the flasher's
+# legacy /mnt/data/ga-device-label ONLY — a file nothing in the current
+# provisioning path writes (the add-on has no /mnt/data mount). So every fresh
+# enrolment / reflash refused the remote override ("no label — refusing") and,
+# once #509 retired the flash marker, went dark at the next reboot. Masked for
+# weeks because the flash marker was still there on every test device.
+# Measured K39 2026-09-09, K55 2026-09-14.
+#
+# ETHF-07 is the static half: the shipped script carries the fallback.
+# ETHF-08 is the live half: the real script, the real marker + identity, the
+# legacy file temporarily out of the way, and `status` must still say
+# force-config. `status` only reads — no state is changed except the label
+# file, which is copied aside and restored by a trap.
+MANAGE=/usr/sbin/ga-manage-ethernet
+LABEL_FILE=/mnt/data/ga-device-label
+IDENTITY=$(ls /mnt/data/supervisor/addons/data/*_ga_manager/ga-identity.json 2>/dev/null | head -1)
+REMOTE=$(ls /mnt/data/supervisor/addons/data/*_ga_manager/ga-ethernet-force 2>/dev/null | head -1)
+
+if grep -q 'ga-identity.json' "$MANAGE" 2>/dev/null; then
+    run_test "ETHF-07" "ga-manage-ethernet derives the label from ga-identity.json" "true"
+else
+    run_test "ETHF-07" "ga-manage-ethernet derives the label from ga-identity.json" "false"
+    printf '        %s reads only %s. A device without the legacy file\n' "$MANAGE" "$LABEL_FILE"
+    printf '        refuses ethernet.force_enabled and goes dark after the first reboot.\n'
+fi
+
+if [ -e "$FORCE_BOOT" ]; then
+    skip_test "ETHF-08" "remote override without legacy label — flash marker present, it would win"
+elif [ -z "$IDENTITY" ] || [ -z "$REMOTE" ]; then
+    skip_test "ETHF-08" "remote override without legacy label — needs ga-identity.json + fleet marker (identity=${IDENTITY:-none} marker=${REMOTE:-none})"
+else
+    _stash=""
+    if [ -e "$LABEL_FILE" ]; then
+        _stash="${LABEL_FILE}.ethf08"
+        cp -p "$LABEL_FILE" "$_stash" && rm -f "$LABEL_FILE"
+        # shellcheck disable=SC2064
+        trap "[ -e '$_stash' ] && mv -f '$_stash' '$LABEL_FILE'" EXIT INT TERM
+    fi
+    SRC8=$("$MANAGE" status 2>/dev/null | sed -n 's/^ethernet_source=//p')
+    if [ -n "$_stash" ]; then
+        mv -f "$_stash" "$LABEL_FILE"
+        trap - EXIT INT TERM
+    fi
+    printf '        identity=%s marker=%s legacy_label=%s -> source=%s\n' \
+        "$IDENTITY" "$REMOTE" "$([ -e "$LABEL_FILE" ] && echo present || echo absent)" "${SRC8:-?}"
+    run_test "ETHF-08" "remote override accepted without the legacy label file" "[ \"$SRC8\" = force-config ]"
 fi
 
 suite_end
