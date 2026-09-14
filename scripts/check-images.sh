@@ -435,6 +435,16 @@ if [ "$fail_count" -gt 0 ] || [ "$lockstep_count" -gt 0 ]; then
     # counter needed splitting rather than avoiding.
     if [ "$fail_count" -gt 0 ]; then
         printf "${RED}ERROR: ${fail_count} image(s) not found in registry. Fix before building.${NC}\n"
+        # The usual cause is not a broken registry but a build that never produced
+        # a RELEASE tag: an add-on publish run dispatched from a FEATURE BRANCH
+        # pushes only a branch/sha tag, because :latest and :<version> move on the
+        # add-on repo's default branch alone. That run goes green, so the pin looks
+        # publishable while the tag does not exist. Cost an hour on 2026-09-14
+        # (ga_hmvapp_addon 2.3.0), found only here, one repo away from the cause.
+        printf "${RED}Most likely: the version was built from a FEATURE BRANCH. Such a run${NC}\n"
+        printf "${RED}pushes only a branch/sha tag — :latest and :<version> move on the${NC}\n"
+        printf "${RED}add-on repo's DEFAULT branch only, and it still reports success.${NC}\n"
+        printf "${RED}Merge the version bump to that default branch, then re-run.${NC}\n"
     fi
     if [ "$lockstep_count" -gt 0 ]; then
         printf "${RED}ERROR: ${lockstep_count} add-on(s) out of lockstep with the vibe_addons store.${NC}\n"
