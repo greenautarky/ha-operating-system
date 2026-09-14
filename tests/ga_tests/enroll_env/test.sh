@@ -44,6 +44,9 @@ for a in "$@"; do
 done
 printf '%s\n' "$payload" >> "${CURL_LOG}"
 printf '%s\n' "$url" >> "${CURL_LOG}.url"
+if [ -n "${MOCK_REJECT_FLEET_ENV:-}" ] && printf '%s' "$payload" | grep -q '"fleet_env"'; then
+  exit 22   # curl -f exit code on HTTP >=400 — an fm predating ADR-0027 D4 answers 422
+fi
 printf '{"status":"pending","provisional_id":"kibu-test","enroll_count":1,"registries":{"ghcr.io":{"username":"u","password":"p"}}}'
 STUB
 chmod +x "$W/bin/curl"
@@ -51,7 +54,7 @@ chmod +x "$W/bin/curl"
 # a baked conf: the real one, so the default really is "absent"
 run_enroll() {   # run_enroll <override-file-or-empty> <logname>
   _ovr="$1"; _log="$W/$2.log"; : > "$_log"; : > "$_log.url"
-  CURL_LOG="$_log" PATH="$W/bin:$PATH" \
+  CURL_LOG="$_log" PATH="$W/bin:$PATH" MOCK_REJECT_FLEET_ENV="${MOCK_REJECT_FLEET_ENV:-}" \
   GA_ENROLL_CONF_DEFAULT="$BAKED_CONF" GA_ENROLL_CONF_OVERRIDE="${_ovr:-$W/no-such-override}" \
   GA_ENROLL_CREDS_FILE="$W/ghcr-creds.json" GA_ENROLL_STATE_FILE="$W/share/ga-enroll-state.json" \
   GA_ENROLL_NB_ENV="$W/no-nb-env" GA_ENROLL_HA_UUID_STORE="$W/no-uuid" \
@@ -86,6 +89,15 @@ run_test "ENV-FE-05" "…and the error names the value and the override file" \
 # --- ENV-FE-06: the baked file does not set it -----------------------------------
 run_test "ENV-FE-06" "baked ga-services.conf does not set GA_FLEET_ENV (absent = prod by construction)" \
   "! grep -qE '^[[:space:]]*GA_FLEET_ENV=' '$BAKED_CONF'"
+
+# --- ENV-FE-07/08: an fm predating ADR-0027 D4 rejects fleet_env (HTTP 422) →
+#     the device retries WITHOUT fleet_env and still enrols (#986 forward-compat).
+#     RED against the pre-fix script (first curl 422 -> die -> rc!=0). --------------
+MOCK_REJECT_FLEET_ENV=1 run_enroll "" reject422
+run_test "ENV-FE-07" "422 on fleet_env -> retry without it -> enrols (rc=0, two attempts)" \
+  "[ \"\$(cat '$W/reject422.rc')\" = 0 ] && [ \"\$(wc -l < '$W/reject422.log')\" -ge 2 ]"
+run_test "ENV-FE-08" "first attempt carried fleet_env; the retry dropped it (pre-D4 shape)" \
+  "[ \"\$(sed -n '1p' '$W/reject422.log' | jq -r 'has(\"fleet_env\")')\" = true ] && [ \"\$(sed -n '2p' '$W/reject422.log' | jq -r 'has(\"fleet_env\")')\" = false ]"
 
 rm -rf "$W" 2>/dev/null
 suite_end
