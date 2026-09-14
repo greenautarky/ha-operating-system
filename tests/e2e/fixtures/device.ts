@@ -44,6 +44,22 @@ export const test = base.extend<DeviceFixtures>({
 
   resetOnboarding: async ({ deviceUrl }, use) => {
     await use(() => {
+      // The opt-in gate lives HERE, not in the specs.
+      //
+      // onboarding.spec.ts and telemetry-consent.spec.ts already gated on
+      // RESET_ONBOARDING; pin-verification.spec.ts did not, and on 2026-09-14
+      // a routine regression run therefore restarted HA Core and wiped the
+      // wizard state on a canary someone was actively pairing devices on.
+      // A convention a spec can forget is a note, not a control — so the
+      // fixture itself refuses, and every caller inherits the gate.
+      if (!process.env.RESET_ONBOARDING) {
+        throw new Error(
+          'resetOnboarding() is DESTRUCTIVE: it overwrites the wizard state ' +
+            'file and restarts HA Core on the device at DEVICE_IP. Set ' +
+            'RESET_ONBOARDING=1 to allow it, and only on a dedicated test device.',
+        );
+      }
+
       // Overwrite state with fresh wizard-ready content, not delete.
       // Deleting the file makes _async_setup_common default to
       // `completed: true` (its "this is an old, pre-GA device, do not drag

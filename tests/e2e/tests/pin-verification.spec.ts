@@ -190,6 +190,12 @@ test.describe("PIN verification (onboarding)", () => {
     // the harness timing itself out (Odoo #751).
     test.setTimeout(300_000);
 
+    // DESTRUCTIVE: restarts HA Core and wipes wizard state. Gated like
+    // onboarding.spec.ts and telemetry-consent.spec.ts already were — this
+    // spec was the one that was not (2026-09-14).
+    test.skip(!process.env.RESET_ONBOARDING,
+      "Set RESET_ONBOARDING=1 to enable destructive onboarding tests");
+
     resetOnboarding();
 
     const qrUrl = `${deviceUrl}/greenautarky-setup.html?pin=${DEVICE_PIN}&device=KIB-SON-TEST`;
@@ -230,6 +236,12 @@ test.describe("PIN verification (onboarding)", () => {
     // the harness timing itself out (Odoo #751).
     test.setTimeout(300_000);
 
+    // DESTRUCTIVE: restarts HA Core and wipes wizard state. Gated like
+    // onboarding.spec.ts and telemetry-consent.spec.ts already were — this
+    // spec was the one that was not (2026-09-14).
+    test.skip(!process.env.RESET_ONBOARDING,
+      "Set RESET_ONBOARDING=1 to enable destructive onboarding tests");
+
     resetOnboarding();
 
     await page.goto(`${deviceUrl}/greenautarky-setup.html?pin=000000`);
@@ -267,6 +279,12 @@ test.describe("PIN verification (onboarding)", () => {
     // the harness timing itself out (Odoo #751).
     test.setTimeout(300_000);
 
+    // DESTRUCTIVE: restarts HA Core and wipes wizard state. Gated like
+    // onboarding.spec.ts and telemetry-consent.spec.ts already were — this
+    // spec was the one that was not (2026-09-14).
+    test.skip(!process.env.RESET_ONBOARDING,
+      "Set RESET_ONBOARDING=1 to enable destructive onboarding tests");
+
     resetOnboarding();
 
     await page.goto(`${deviceUrl}/greenautarky-setup.html`);
@@ -302,6 +320,12 @@ test.describe("PIN verification (onboarding)", () => {
     // resetOnboarding() waits up to 240 s for Core plus the page; 90 s was
     // the harness timing itself out (Odoo #751).
     test.setTimeout(300_000);
+
+    // DESTRUCTIVE: restarts HA Core and wipes wizard state. Gated like
+    // onboarding.spec.ts and telemetry-consent.spec.ts already were — this
+    // spec was the one that was not (2026-09-14).
+    test.skip(!process.env.RESET_ONBOARDING,
+      "Set RESET_ONBOARDING=1 to enable destructive onboarding tests");
 
     resetOnboarding();
 
