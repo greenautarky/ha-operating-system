@@ -119,9 +119,27 @@ payload=$(jq -cn \
     --arg ip "$netbird_ip" --arg rel "$ga_release" --arg fenv "$fleet_env" \
     '{hw_serial:$hw, ha_uuid:$uuid, netbird_hostname:$host, netbird_ip:$ip, ga_release:$rel, fleet_env:$fenv}')
 log "enrolling hw_serial=${hw_serial} at ${FLEET_URL} (ip=${netbird_ip:-none}, fleet_env=${fleet_env})"
-response=$(curl -fsS --max-time 20 -H "Content-Type: application/json" \
-    -X POST "${FLEET_URL}/api/enroll" -d "$payload") \
-    || die "fleet-manager unreachable or rejected the enrollment — will retry"
+# Forward/backward-compatible enrollment (#986). A device from rc30+ declares
+# its fleet environment (ADR-0027 D4), but a fleet-manager that predates that
+# field rejects the WHOLE enroll with HTTP 422 (EnrollPayload extra=forbid) — so
+# a producer (this script) that shipped before the consumer (fm) was deployed
+# would leave every fresh device unenrolled and invisible. On any failure of the
+# fleet_env attempt, retry once with the pre-D4 payload shape (no fleet_env): the
+# device still enrols against the older fm, and declares its env again as soon as
+# fm is upgraded. A genuine outage fails both attempts and we die (and retry).
+if response=$(curl -fsS --max-time 20 -H "Content-Type: application/json" \
+    -X POST "${FLEET_URL}/api/enroll" -d "$payload" 2>/dev/null); then
+    :
+else
+    warn "enroll with fleet_env failed (fleet-manager may predate ADR-0027 D4) — retrying without fleet_env"
+    payload_compat=$(jq -cn \
+        --arg hw "$hw_serial" --arg uuid "$ha_uuid" --arg host "$nb_hostname" \
+        --arg ip "$netbird_ip" --arg rel "$ga_release" \
+        '{hw_serial:$hw, ha_uuid:$uuid, netbird_hostname:$host, netbird_ip:$ip, ga_release:$rel}')
+    response=$(curl -fsS --max-time 20 -H "Content-Type: application/json" \
+        -X POST "${FLEET_URL}/api/enroll" -d "$payload_compat") \
+        || die "fleet-manager unreachable or rejected the enrollment — will retry"
+fi
 
 status=$(printf '%s' "$response" | jq -r '.status // empty')
 prov_id=$(printf '%s' "$response" | jq -r '.provisional_id // empty')
