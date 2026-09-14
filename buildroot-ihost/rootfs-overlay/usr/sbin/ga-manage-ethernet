@@ -82,9 +82,19 @@
 #                                      The slug prefix differs per device, hence
 #                                      the glob.
 #
-#   The device-bound check needs /mnt/data/ga-device-label to exist. If it does
-#   not, the remote override is refused — a device that cannot say who it is
-#   must not accept an instruction addressed to a name.
+#   The device-bound check needs the device's label. It comes from
+#   /mnt/data/ga-device-label (the flasher's legacy stage-72b file) or, when
+#   that is absent, from the device_id in addons/data/*_ga_manager/
+#   ga-identity.json — the ADR-0010 identity that self-enrolment and the
+#   fleet-manager's identity backfill write. Nothing in the current
+#   provisioning path writes the legacy file any more (the add-on has no
+#   mount on /mnt/data), so without the fallback every freshly enrolled or
+#   reflashed device refused the remote override and went dark at its first
+#   reboot after converge — masked until #509 started retiring the flash
+#   marker. Same fallback ga-fluent-bit-env has carried since 2026-07-15
+#   (measured on K39 2026-09-09, K55 2026-09-14).
+#   A device that cannot say who it is by EITHER route still refuses — an
+#   instruction addressed to a name must not be accepted by nobody.
 #
 # Re-enable remotely: ssh -p 22222 root@<mesh-ip> 'ga-manage-ethernet enable'
 set -e
@@ -96,6 +106,7 @@ FORCE_BOOT="/mnt/boot/ga-ethernet-force"
 CONVERGED_MARKER="$SHARE_DIR/.ga_converged"
 ADDON_DATA_GLOB="/mnt/data/supervisor/addons/data/*_ga_manager"
 LABEL_FILE="/mnt/data/ga-device-label"
+IDENTITY_GLOB="/mnt/data/supervisor/addons/data/*_ga_manager/ga-identity.json"
 LEGACY_KEY="GA_ETHERNET_DISABLED"
 ETH_IFACE="eth0"
 
@@ -132,6 +143,24 @@ set_enabled() { # $1 = true|false
   sed -i "/^${LEGACY_KEY}=/d" "$GA_ENV_FILE" 2>/dev/null || true
 }
 
+# --- who am I ---------------------------------------------------------------
+# Echoes the device label, or nothing. Legacy file first, then the device_id
+# of the ADR-0010 identity blob (see the header). Kept as one function so the
+# gate below and `status` cannot disagree about the answer.
+device_label() {
+  _l=""
+  [ -r "$LABEL_FILE" ] && _l=$(tr -d ' \t\n\r' < "$LABEL_FILE")
+  if [ -z "$_l" ]; then
+    for _idf in $IDENTITY_GLOB; do
+      [ -r "$_idf" ] || continue
+      _l=$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_idf" 2>/dev/null | head -1)
+      [ -n "$_l" ] && break
+    done
+  fi
+  [ -n "$_l" ] && echo "$_l"
+  return 0
+}
+
 # --- override gate ---------------------------------------------------------
 # Echoes the override source, or nothing.
 override_source() {
@@ -151,8 +180,7 @@ override_source() {
   [ -n "$_remote" ] || return 0
 
   # Must name THIS device, so a fleet-wide copy is inert.
-  _label=""
-  [ -r "$LABEL_FILE" ] && _label=$(tr -d ' \t\n\r' < "$LABEL_FILE")
+  _label=$(device_label)
   if [ -z "$_label" ]; then
     echo "ga-manage-ethernet: remote force marker present but this device has no label — refusing" >&2
     return 0
