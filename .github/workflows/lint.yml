@@ -268,6 +268,17 @@ jobs:
       - name: Baked add-on images (a pin that is not in the image must go red)
         run: ./tests/gates/baked_addon_images/selftest.sh
 
+      # The setup wizard is vendored, not built here: the component is pulled
+      # from GHCR at OS build time, so BLD-FE-03 only ever runs on the builder
+      # and never on a pull request. A release shipped a bundle built from a
+      # pre-rename tree — it asked for the component's retired static mount and
+      # REST namespace, so a freshly flashed device rendered a blank page while
+      # every check stayed green. This drives the REAL check over scratch
+      # fixtures: the shipped defect must go red, a correct bundle must not, and
+      # every way of inspecting nothing must fail rather than pass.
+      - name: Vendored wizard bundle (a bundle that cannot load must go red)
+        run: ./tests/gates/vendored_site_bundle/selftest.sh
+
       # Same idea, applied to the on-device provisioning checks. They normally
       # need a flashed device, so they were unprovable in CI and PROV-06 in fact
       # reported "self-check PASSED" on a device with no identity at all (K31,

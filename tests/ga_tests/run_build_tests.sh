@@ -1352,6 +1352,61 @@ else
   _skip "BLD-FE-02: onboarding component in OS overlay" "source tree (buildroot-external) not found"
 fi
 
+# BLD-FE-03: the vendored wizard must be able to LOAD, not merely be present.
+#
+# BLD-FE-02 above asks whether the component is there and declares the right
+# domain. On 2026-09-14 all of that was true and the wizard still rendered a
+# blank page on a freshly flashed device: the vendored JS bundle had been built
+# from a pre-rename tree, so it requested the component's retired static mount
+# and its retired REST namespace and every one of those requests 404'd. The same
+# artifact carried the frontend build's placeholder version — a hand-run dev
+# build vendored into a release — and an earlier one shipped two entry bundles
+# per flavour, the live one plus a stale orphan that made every grep over the
+# artifact answer about the wrong file.
+#
+# Presence is not wiring. The logic lives in scripts/check-vendored-site-bundle.sh
+# rather than inline here so that tests/gates/vendored_site_bundle/selftest.sh
+# can drive the LIVE code over scratch fixtures on every pull request — the
+# component is pulled from GHCR at build time and is absent in CI, so without
+# that self-test this check would only ever be exercised on the builder.
+#
+# It compares two declarations that already sit in the same vendored tree (the
+# component's URL_BASE and route declarations vs. what the shipped assets ask
+# for), so there is no expectation written down in this repository that a wrong
+# artifact could satisfy. Zero coverage is a failure inside the checker, not a
+# quiet pass.
+if [[ -n "$BLD_FE_SRC" ]] && [[ -d "${GA_ONBOARD_DIR:-}" ]]; then
+  VSB_CHECKER="${BLD_FE_SRC}/scripts/check-vendored-site-bundle.sh"
+  if [[ ! -x "$VSB_CHECKER" ]]; then
+    # The component is here and the checker is not: that is the gate rotting,
+    # and skipping would restore exactly the silence this was written against.
+    _fail "BLD-FE-03: greenautarky_site is vendored but scripts/check-vendored-site-bundle.sh was not found or is not executable (looked at ${VSB_CHECKER})"
+  else
+    # Status read from the command itself, never from behind a pipe — a pipe
+    # reports the pipe's status, which is how a gate looks green while failing.
+    VSB_OUT="$("$VSB_CHECKER" --component-dir "$GA_ONBOARD_DIR" --quiet 2>&1)"
+    VSB_RC=$?
+    VSB_SUMMARY="$(printf '%s\n' "$VSB_OUT" | grep -E '^vendored site bundle:' || true)"
+    if [[ "$VSB_RC" -eq 0 ]] && [[ -n "$VSB_SUMMARY" ]]; then
+      _pass "BLD-FE-03: ${VSB_SUMMARY}"
+    elif [[ -z "$VSB_SUMMARY" ]]; then
+      # No summary line means the checker changed shape or died before it could
+      # report its coverage. Either way nothing was proven.
+      printf '%s\n' "$VSB_OUT" | sed 's/^/        /'
+      _fail "BLD-FE-03: the vendored-bundle checker printed no coverage summary (rc=${VSB_RC}) — nothing was proven"
+    else
+      printf '%s\n' "$VSB_OUT" | sed 's/^/        /'
+      _fail "BLD-FE-03: the vendored wizard bundle contradicts what the component serves — ${VSB_SUMMARY} (rc=${VSB_RC})"
+    fi
+  fi
+elif [[ -n "$BLD_FE_SRC" ]]; then
+  # BLD-FE-02 already FAILs on a missing component; reporting the same root
+  # cause twice turns one defect into two findings.
+  _skip "BLD-FE-03: vendored wizard bundle" "greenautarky_site not vendored — BLD-FE-02 owns that failure"
+else
+  _skip "BLD-FE-03: vendored wizard bundle" "source tree (buildroot-external) not found"
+fi
+
 # BLD-FB-01..04: ga_frontend_bundle (de-HACS Lovelace cards) also ships inside
 # the OS rootfs-overlay (see ga-frontend-bundle + VENDORED.md). Stateless
 # integration: converge places it and activates it via the configuration.yaml
