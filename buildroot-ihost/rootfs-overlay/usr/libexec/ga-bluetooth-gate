@@ -1,6 +1,6 @@
 #!/bin/sh
-# ga-bluetooth-gate — decide at boot whether onboard Bluetooth is enabled,
-# and if so load the module so bluetoothd can attach.
+# ga-bluetooth-gate — decide at boot whether onboard Bluetooth is enabled, and
+# if so load the module so a consumer can attach.
 #
 # Two independent, equally-valid enable sources (either one turns it ON):
 #   1. Fleet-managed  — /mnt/data/supervisor/share/ga-bluetooth-enabled
@@ -9,17 +9,34 @@
 #   2. Manual/recovery — /mnt/boot/ga-bluetooth
 #      (operator marker on the boot partition; survives a data-partition wipe).
 #
-# Default OFF: with neither present the modprobe.d blacklist keeps the modules
-# unloaded and bluetooth.service stays gated off — fleet behaviour unchanged.
+# TWO MODES, because two kinds of consumer want incompatible things from hci0:
+#   * managed (default) — load the module AND run bluetoothd. For BlueZ-based
+#     consumers, e.g. Home Assistant's Bluetooth integration.
+#   * raw               — load the module but do NOT run bluetoothd, leaving the
+#     controller DOWN and unclaimed. Required by raw-HCI applications that open
+#     the HCI User Channel (bumble's hci-socket, used by the watch-telemetry
+#     add-on): bluetoothd holding hci0 makes the user channel fail with EBUSY.
 #
-# This runs Before=bluetooth.service. It sets the runtime flag
-# /run/ga-bluetooth.enabled that bluetooth.service is conditioned on, so a
-# preset-enabled bluetoothd still no-ops when BT is disabled here.
+# Mode source (checked in this order; default managed):
+#   * /mnt/data/supervisor/share/ga-bluetooth-mode  (fleet, from bluetooth.mode)
+#   * the first word of /mnt/boot/ga-bluetooth       (manual: write "raw")
+# An empty legacy marker means managed, so existing devices are unchanged.
+#
+# Default OFF: with neither enable source present the modprobe.d blacklist keeps
+# the modules unloaded and bluetooth.service stays gated off — fleet behaviour
+# unchanged.
+#
+# Runs Before=bluetooth.service. It sets the runtime flags that
+# bluetooth.service is conditioned on:
+#   /run/ga-bluetooth.enabled  — BT is on this boot (either mode)
+#   /run/ga-bluetooth.raw      — raw mode; bluetooth.service must NOT start
 set -eu
 
 SHARE_FLAG=/mnt/data/supervisor/share/ga-bluetooth-enabled
+SHARE_MODE=/mnt/data/supervisor/share/ga-bluetooth-mode
 BOOT_MARKER=/mnt/boot/ga-bluetooth
 RUN_FLAG=/run/ga-bluetooth.enabled
+RAW_FLAG=/run/ga-bluetooth.raw
 
 enabled=0
 source=none
@@ -31,17 +48,38 @@ elif [ -e "$BOOT_MARKER" ]; then
 	source=manual
 fi
 
+# Resolve the mode (default managed). Fleet flag wins; else the marker's first
+# word; anything but "raw" is treated as managed.
+mode=managed
+if [ -s "$SHARE_MODE" ]; then
+	read -r mode _ < "$SHARE_MODE" || mode=managed
+elif [ -s "$BOOT_MARKER" ]; then
+	read -r mode _ < "$BOOT_MARKER" || mode=managed
+fi
+[ "$mode" = "raw" ] || mode=managed
+
 if [ "$enabled" = 1 ]; then
-	echo "ga-bluetooth-gate: enabled (source=$source) — loading hci_uart"
+	echo "ga-bluetooth-gate: enabled (source=$source, mode=$mode) — loading hci_uart"
 	# --ignore-install bypasses the `install hci_uart /bin/true` hard-block in
 	# /usr/lib/modprobe.d/ga-bluetooth.conf (that block is what keeps BT off by
 	# default against the serdev auto-trigger). Deps load normally.
 	/usr/sbin/modprobe --ignore-install hci_uart || echo "ga-bluetooth-gate: modprobe hci_uart failed" >&2
 	mkdir -p "$(dirname "$RUN_FLAG")"
 	: > "$RUN_FLAG"
+	if [ "$mode" = "raw" ]; then
+		# bluetoothd must not run. Leave the controller DOWN so a raw-HCI
+		# consumer can open the HCI User Channel. hci0 is DOWN by default after
+		# modprobe (nothing ups it once bluetoothd is gated off); the explicit
+		# down is belt-and-suspenders against any auto-up, and harmless if the
+		# device or hciconfig is absent.
+		: > "$RAW_FLAG"
+		hciconfig hci0 down 2>/dev/null || true
+	else
+		rm -f "$RAW_FLAG"
+	fi
 else
 	echo "ga-bluetooth-gate: disabled (default OFF) — leaving BT unloaded"
-	rm -f "$RUN_FLAG"
+	rm -f "$RUN_FLAG" "$RAW_FLAG"
 fi
 
 exit 0
