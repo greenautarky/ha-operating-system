@@ -2,14 +2,22 @@ import { test, expect } from '../fixtures/device';
 import { haLogin } from '../helpers/auth';
 import { waitForHA } from '../helpers/ha-api';
 import {
+  ADVERTISED_CARD_TYPES,
   AXIS_LABELS,
   addressesInText,
   addressLikeLabels,
+  expectedElementNames,
+  firstPartyAssetIds,
   hasHeatingCard,
   leakedStockPanels,
+  missingAdvertisedCards,
+  missingElementErrors,
   missingExpectedPanels,
   personalDashboardsInSidebar,
   renderedLabels,
+  unmappedAssets,
+  unregisteredAssets,
+  type CustomCardEntry,
   type DashboardConfig,
   type PanelInfo,
 } from '../helpers/resident-surface';
@@ -29,6 +37,14 @@ import {
  *     resident is a serial number where a name belongs;
  *   - the heating plan's day curve carried the hour ONLY in a `title`
  *     attribute — a hover tooltip, i.e. nothing at all on a phone.
+ *
+ * On the same day, on a FRESHLY FLASHED canary, it was worse: not one
+ * first-party card registered at all. `window.customCards` filtered to `ga-*`
+ * was empty, `customElements.get('ga-heating-card')` was `false`, the heating
+ * plan rendered Home Assistant's red "custom element doesn't exist" card, the
+ * "Verwalten" tab did not load. Every card file was fetched and served HTTP 200
+ * with its `customElements.define` intact — fetched, never executed. Section 4
+ * below is that failure, written down.
  *
  * None of that is cosmetic and nothing looked at any of it. This file does.
  *
@@ -417,5 +433,175 @@ test.describe('Resident surface', () => {
       readout?.text,
       `Tapping a bar produced no readout (hour=${readout?.hour}, temp=${readout?.temp})`,
     ).toContain('°C');
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // 4. Do the cards the bundle ships actually REGISTER?
+  //
+  // This is the half no server can reach. `ga_manager`'s `ga.frontend_cards`
+  // check compares what the bundle SHIPS on disk with what Core REGISTERED and
+  // what those URLs SERVE — and on the canary all three of those agreed while
+  // the resident looked at a page of red error cards. "The module was delivered
+  // and did not execute" is a fact about a JavaScript runtime; only a browser
+  // can witness it.
+  //
+  // The judgements live in `helpers/resident-surface.ts` so that
+  // `resident-surface-gate.spec.ts` proves them red and green with fixtures,
+  // on every PR, with no device.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  test('every card the bundle ships is registered in the browser', async ({
+    page,
+    deviceUrl,
+  }) => {
+    await openResidentDashboard(page, deviceUrl);
+
+    // What the page was TOLD to load. There is no filesystem here, so this is
+    // "what the bundle ships" as the browser can see it.
+    //
+    // READ THIS BEFORE SIMPLIFYING IT. Home Assistant does NOT emit
+    // `<script type="module" src=...>` for its extra modules — its own index
+    // template writes `import("<url>")` inside a plain `<script>` with no
+    // `type` attribute at all (frontend `src/html/index.html.template`). A
+    // querySelector for module tags returns NOTHING on every device, and a
+    // check built on it can neither pass nor fail, which is the most useless
+    // shape a check has.
+    //
+    // So the list is a union of three readings, strongest first:
+    //   1. `performance` resource entries — the URLs the browser actually
+    //      FETCHED. This is the direct witness of the measured failure:
+    //      delivered, and never executed.
+    //   2. the `import(...)` calls in the page's own inline scripts.
+    //   3. any plain `src=` script, for a proxy that rewrites the page.
+    // The three readings arrive in different shapes (absolute vs relative);
+    // `modulePath` in the helper normalises them, and the gate proves that.
+    const moduleSrcs = (await page.evaluate(`(() => {
+      const out = new Set();
+      for (const e of performance.getEntriesByType('resource')) out.add(e.name);
+      for (const s of Array.from(document.querySelectorAll('script'))) {
+        if (s.src) out.add(s.src);
+        for (const m of (s.textContent || '').matchAll(
+              /\\bimport\\s*\\(\\s*["']([^"']+)["']\\s*\\)/g)) out.add(m[1]);
+      }
+      return Array.from(out);
+    })()`)) as (string | null)[];
+
+    const assets = firstPartyAssetIds(moduleSrcs);
+
+    // Coverage before verdict. A loop over zero assets passes every assertion
+    // inside it, and "no first-party module was injected at all" is itself the
+    // loudest possible version of this failure — not a pass.
+    expect(
+      assets.length,
+      'The page injected no first-party card module at all. Either ' +
+        'ga_frontend_bundle is not set up in Core, or it registered nothing — ' +
+        'read the device-side `ga.frontend_cards` check, which compares the ' +
+        'shipped directory against the registration and can tell those apart.\n' +
+        `Modules the page loaded: ${moduleSrcs.filter(Boolean).slice(0, 40).join(', ')}`,
+    ).toBeGreaterThan(0);
+
+    // Fails closed: a card added to the bundle that nobody mapped is a finding,
+    // never a silent skip — otherwise this check covers less every release
+    // while staying green.
+    const unmapped = unmappedAssets(assets);
+    expect(
+      unmapped,
+      `The bundle ships asset(s) this suite has never been told about: ` +
+        `${unmapped.join(', ')}. Add each to EXPECTED_ELEMENTS in ` +
+        'helpers/resident-surface.ts with the element it defines (or `null` if ' +
+        'it is a side-effect module like ga-sidebar-default). Until then they ' +
+        'are unchecked.',
+    ).toEqual([]);
+
+    const names = expectedElementNames(assets);
+    const defined = (await page.evaluate(
+      `(names => Object.fromEntries(names.map(n => [n, !!customElements.get(n)])))`,
+      names,
+    )) as Record<string, boolean>;
+
+    const unregistered = unregisteredAssets(assets, defined);
+    expect(
+      unregistered,
+      `Card modules delivered and never registered: ${unregistered.join(', ')}.\n` +
+        'Each file is served — the browser fetched it — and its ' +
+        '`customElements.define` never ran, so every dashboard that names one ' +
+        "renders Home Assistant's red \"custom element doesn't exist\" card. " +
+        'Nothing on the server side can see this: the file is on disk, it is ' +
+        'registered with the frontend, and it answers 200.',
+    ).toEqual([]);
+  });
+
+  test('the GA cards advertise themselves to the card picker', async ({
+    page,
+    deviceUrl,
+  }) => {
+    // A second, INDEPENDENT reading. A card can define its element and forget
+    // to push into `window.customCards`: it then renders where a dashboard
+    // already names it, and cannot be added to one. `window.customCards`
+    // filtered to `ga-*` was empty on the canary, which is what made the
+    // failure visible in one line.
+    await openResidentDashboard(page, deviceUrl);
+
+    const customCards = (await page.evaluate(
+      `(() => (window.customCards || []).map(c => ({ type: c.type, name: c.name })))()`,
+    )) as CustomCardEntry[];
+
+    const missing = missingAdvertisedCards(customCards);
+    expect(
+      missing,
+      `GA cards absent from window.customCards: ${missing.join(', ')}.\n` +
+        `Everything registered there: ${customCards.map(c => c.type).sort().join(', ') ||
+          '(nothing at all)'}\n` +
+        'The card picker reads this array, so a card missing here cannot be ' +
+        `added to a dashboard. Expected: ${ADVERTISED_CARD_TYPES.join(', ')}.`,
+    ).toEqual([]);
+  });
+
+  test("no card renders Home Assistant's error element", async ({ page, deviceUrl }) => {
+    // The outcome, not the mechanism. The two tests above ask whether the
+    // registry is right; this asks what the resident is actually looking at —
+    // and it catches causes neither of them models (a card that throws while
+    // constructing, a `custom:` type nobody ships at all).
+    await openResidentDashboard(page, deviceUrl);
+
+    const deadline = Date.now() + 15_000;
+    let read = { errors: 0, texts: [] as string[], total: 0 };
+    for (;;) {
+      read = (await page.evaluate(`(() => {
+        ${DEEP_QUERY}
+        const all = deep(document);
+        const bad = all.filter(e => e.tagName === 'HUI-ERROR-CARD');
+        return {
+          errors: bad.length,
+          texts: bad.map(e => (e.textContent || '').trim()).filter(Boolean),
+          total: all.length,
+        };
+      })()`)) as { errors: number; texts: string[]; total: number };
+      if (read.errors > 0 || read.total > 50 || Date.now() > deadline) break;
+      await page.waitForTimeout(500);
+    }
+
+    expect(
+      read.total,
+      'The page rendered almost no elements, so this test read nothing and a ' +
+        'pass would mean nothing.',
+    ).toBeGreaterThan(50);
+
+    const undefinedElements = missingElementErrors(read.texts);
+    expect(
+      undefinedElements,
+      `Home Assistant reports these custom elements as missing: ` +
+        `${undefinedElements.join(', ')}.\n` +
+        'This is what the resident sees in place of the card: a red box. ' +
+        'Measured on a freshly flashed canary on 2026-09-15, where the heating ' +
+        'plan and the Verwalten tab were both this.',
+    ).toEqual([]);
+
+    expect(
+      read.errors,
+      `The dashboard rendered ${read.errors} error card(s): ` +
+        `${read.texts.join(' | ')}. A resident sees each of these as a red box ` +
+        'where a card belongs.',
+    ).toBe(0);
   });
 });

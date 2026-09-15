@@ -148,3 +148,174 @@ export function hasHeatingCard(cfg: DashboardConfig | null): boolean {
     allCards(v).some(c => c.type === 'custom:ga-heating-card'),
   );
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// Do the cards the bundle ships actually REGISTER in the browser?
+//
+// MEASURED, 2026-09-15, on a freshly flashed canary. Not one first-party card
+// registered: `window.customCards` filtered to `ga-*` was empty,
+// `customElements.get('ga-heating-card')` was `false`, the heating plan
+// rendered Home Assistant's red "custom element doesn't exist" card, the
+// *Verwalten* tab never loaded. Every card file was fetched and answered
+// HTTP 200 with its `customElements.define` intact — fetched, never executed.
+//
+// This is the half no server can reach. `ga_manager`'s `ga.frontend_cards`
+// check compares what the bundle SHIPS with what Core REGISTERED and what
+// those URLs SERVE, and on that device all three of those agreed. "The module
+// was delivered and did not execute" is a fact about a JavaScript runtime, and
+// only a browser can witness it. That is what these judgements are for.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** URL base the ga_frontend_bundle component serves its own cards under. */
+export const FIRST_PARTY_URL_BASE = '/ga_frontend_bundle_first_party';
+
+/**
+ * Which custom element each shipped first-party asset is supposed to define.
+ *
+ * PINNED LITERALS, and deliberately NOT derived from the bundle — the same
+ * reason as `STOCK_PANELS` above: an audit that takes its expected value from
+ * the artifact it audits goes green on a wrong declaration.
+ *
+ * The mapping is not the identity, which is exactly why it has to be written
+ * down. `ga-home-strategy` defines `ll-strategy-dashboard-ga-home`, not an
+ * element of its own name; `ga-sidebar-default` defines NOTHING — it is a
+ * side-effect module that docks the drawer — so demanding an element from it
+ * would be a permanent red on every healthy device, which is an off switch
+ * with extra steps.
+ */
+export const EXPECTED_ELEMENTS: Record<string, string | null> = {
+  'ga-heating-card': 'ga-heating-card',
+  'ga-master-card': 'ga-master-card',
+  'ga-thermostat-card': 'ga-thermostat-card',
+  'ga-home-strategy': 'll-strategy-dashboard-ga-home',
+  'ga-sidebar-default': null,
+};
+
+/**
+ * Card types that must advertise themselves in `window.customCards`.
+ *
+ * That array is what the dashboard card picker reads, and it is what was
+ * measured empty on the canary. A card can define its element and forget to
+ * push here — then it renders but cannot be added — so this is a second,
+ * independent reading, not a restatement of `customElements.get`.
+ */
+export const ADVERTISED_CARD_TYPES = [
+  'ga-heating-card',
+  'ga-master-card',
+  'ga-thermostat-card',
+] as const;
+
+/**
+ * Home Assistant's message when a `custom:` card names an element nobody
+ * defined. This exact string is what the resident was looking at.
+ */
+export const CUSTOM_ELEMENT_ERROR = /custom element doesn'?t exist:?\s*([a-z0-9][a-z0-9-]*)/i;
+
+/** The element HA renders a broken card into. */
+export const HA_ERROR_ELEMENT = 'HUI-ERROR-CARD';
+
+export interface CustomCardEntry {
+  type?: string;
+  name?: string;
+}
+
+/**
+ * The path part of a module URL, however the page happened to spell it.
+ *
+ * The device spec collects module URLs from three places and they do not agree
+ * on shape: `performance` resource entries are ABSOLUTE
+ * (`http://host:8123/ga_.../x.js?v=1`), an `import("…")` call in the page is
+ * relative, and a `src` attribute read via `.src` is absolute again. Pulled
+ * out here so the normalisation is fixture-tested rather than living inside a
+ * `page.evaluate` string that only a device can run.
+ */
+export function modulePath(url: string): string {
+  let rest = url;
+  const scheme = rest.indexOf('://');
+  if (scheme !== -1) {
+    const slash = rest.indexOf('/', scheme + 3);
+    rest = slash === -1 ? '/' : rest.slice(slash);
+  }
+  return rest.split('?')[0].split('#')[0];
+}
+
+/**
+ * The first-party assets the running bundle injected, read off the modules the
+ * page loaded. This is "what the bundle ships" as the BROWSER can see it —
+ * there is no filesystem here.
+ */
+export function firstPartyAssetIds(moduleSrcs: (string | null)[]): string[] {
+  const prefix = FIRST_PARTY_URL_BASE + '/';
+  const out: string[] = [];
+  for (const src of moduleSrcs) {
+    if (!src) continue;
+    const path = modulePath(src);
+    if (!path.startsWith(prefix)) continue;
+    const id = path.slice(prefix.length).split('/')[0];
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/**
+ * Assets this file has never been told about.
+ *
+ * FAILS CLOSED. A card added to the bundle and not added to
+ * `EXPECTED_ELEMENTS` would otherwise be silently skipped — the check would
+ * keep passing while covering less, which is how a guard rots without ever
+ * going red. A new card is a finding until somebody maps it.
+ */
+export function unmappedAssets(assetIds: string[]): string[] {
+  return assetIds.filter(id => !(id in EXPECTED_ELEMENTS)).sort();
+}
+
+/**
+ * Shipped assets whose element never registered.
+ *
+ * `defined` is `customElements.get(name) !== undefined` per element, read in
+ * the page. Assets mapped to `null` define no element and are skipped by
+ * design, not by accident.
+ */
+export function unregisteredAssets(
+  assetIds: string[],
+  defined: Record<string, boolean>,
+): string[] {
+  const out: string[] = [];
+  for (const id of assetIds) {
+    const element = EXPECTED_ELEMENTS[id];
+    if (!element) continue;
+    if (!defined[element]) out.push(`${id} (${element})`);
+  }
+  return out.sort();
+}
+
+/** Every element name these assets are expected to have defined. */
+export function expectedElementNames(assetIds: string[]): string[] {
+  return assetIds
+    .map(id => EXPECTED_ELEMENTS[id])
+    .filter((e): e is string => Boolean(e))
+    .sort();
+}
+
+/** GA card types missing from `window.customCards`. */
+export function missingAdvertisedCards(customCards: CustomCardEntry[]): string[] {
+  const present = new Set((customCards ?? []).map(c => c?.type).filter(Boolean));
+  return (ADVERTISED_CARD_TYPES as readonly string[]).filter(t => !present.has(t));
+}
+
+/**
+ * Element names Home Assistant reported as missing, from the page's own text.
+ *
+ * Deduped: the same undefined element on four cards is ONE cause, and a list
+ * that repeats itself reads as a bigger problem than it is.
+ */
+export function missingElementErrors(texts: string[]): string[] {
+  const out = new Set<string>();
+  for (const text of texts ?? []) {
+    for (const line of (text ?? '').split('\n')) {
+      const m = line.match(CUSTOM_ELEMENT_ERROR);
+      if (m) out.add(m[1].toLowerCase());
+    }
+  }
+  return [...out].sort();
+}

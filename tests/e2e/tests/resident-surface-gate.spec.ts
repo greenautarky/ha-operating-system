@@ -34,16 +34,26 @@
 import { expect, test } from '@playwright/test';
 
 import {
+  ADVERTISED_CARD_TYPES,
   AXIS_LABELS,
+  EXPECTED_ELEMENTS,
+  FIRST_PARTY_URL_BASE,
   addressesInText,
   addressLikeLabels,
   allCards,
+  expectedElementNames,
+  firstPartyAssetIds,
+  modulePath,
   hasHeatingCard,
   leakedStockPanels,
+  missingAdvertisedCards,
+  missingElementErrors,
   missingExpectedPanels,
   personalDashboardsInSidebar,
   renderedLabels,
   sidebarPanels,
+  unmappedAssets,
+  unregisteredAssets,
   type DashboardConfig,
   type PanelInfo,
 } from '../helpers/resident-surface';
@@ -214,5 +224,207 @@ test.describe('resident-surface checks: the shapes they read', () => {
     // Pinned here as well as in the card so that changing one without the
     // other is a red, not a silent drift across two repositories.
     expect([...AXIS_LABELS]).toEqual(['0', '6', '12', '18', '24']);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The card-registration judgements, proven red and green with no device.
+//
+// MEASURED, 2026-09-15, on a freshly flashed canary: every first-party card
+// file served HTTP 200 with its `customElements.define` intact, and not one
+// element registered. The fixtures below are that shape, plus the healthy
+// shape, plus the two ways this check could quietly stop covering anything.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** The module tags a healthy bundle puts on the page, cache-buster and all. */
+const SHIPPED = ['ga-heating-card', 'ga-home-strategy', 'ga-master-card',
+  'ga-sidebar-default', 'ga-thermostat-card'];
+
+/**
+ * What the device spec actually hands these judgements — three readings that
+ * do NOT agree on shape, which is the whole reason `modulePath` exists.
+ *
+ * WHY NOT `<script type="module" src=...>`: Home Assistant does not emit that
+ * for its extra modules. Its index template writes `import("<url>")` inside a
+ * plain `<script>` with no `type` attribute (frontend
+ * `src/html/index.html.template`), and its own app entries go the same way. A
+ * first version of this check read module tags, found nothing on any device,
+ * and could therefore report neither pass nor fail. These fixtures are what
+ * make that shape impossible to reintroduce quietly.
+ */
+const MODULE_SRCS = [
+  // 1. `performance` resource entries — ABSOLUTE, with the origin.
+  'http://192.0.2.10:8123/frontend_latest/app.abc123.js',
+  ...SHIPPED.map(
+    id => `http://192.0.2.10:8123${FIRST_PARTY_URL_BASE}/${id}/${id}.js?v=1.11.0`),
+  // 2. an `import("…")` call read out of an inline script — relative.
+  `${FIRST_PARTY_URL_BASE}/ga-heating-card/ga-heating-card.js?v=1.11.0`,
+  // 3. a vendored community card, served under the OTHER base path.
+  'http://192.0.2.10:8123/ga_frontend_bundle_static/button-card/button-card.js?v=1.11.0',
+];
+
+/** Everything registered, as on a device where the loader works. */
+const ALL_DEFINED: Record<string, boolean> = {
+  'ga-heating-card': true,
+  'ga-master-card': true,
+  'ga-thermostat-card': true,
+  'll-strategy-dashboard-ga-home': true,
+};
+
+/** Nothing registered — the canary, 2026-09-15. */
+const NONE_DEFINED: Record<string, boolean> = {};
+
+const HEALTHY_CUSTOM_CARDS = [
+  { type: 'ga-heating-card', name: 'GA Heizplan' },
+  { type: 'ga-master-card', name: 'GA Verwalten' },
+  { type: 'ga-thermostat-card', name: 'GA Thermostat' },
+];
+
+test.describe('card registration: must-flag', () => {
+  test('the 2026-09-15 shape — five assets shipped, nothing registered', () => {
+    const assets = firstPartyAssetIds(MODULE_SRCS);
+    expect(assets).toEqual(SHIPPED);
+    expect(unregisteredAssets(assets, NONE_DEFINED)).toEqual([
+      'ga-heating-card (ga-heating-card)',
+      'ga-home-strategy (ll-strategy-dashboard-ga-home)',
+      'ga-master-card (ga-master-card)',
+      'ga-thermostat-card (ga-thermostat-card)',
+    ]);
+  });
+
+  test('ONE card missing is named, not merely counted', () => {
+    // A verdict of "3 of 4" sends somebody reading four files.
+    const defined = { ...ALL_DEFINED, 'ga-heating-card': false };
+    expect(unregisteredAssets(firstPartyAssetIds(MODULE_SRCS), defined)).toEqual([
+      'ga-heating-card (ga-heating-card)',
+    ]);
+  });
+
+  test('an empty window.customCards is flagged, by card type', () => {
+    expect(missingAdvertisedCards([])).toEqual([...ADVERTISED_CARD_TYPES]);
+  });
+
+  test('a card that defines its element but never advertises is still flagged', () => {
+    // Two independent readings: it renders where a dashboard already names it,
+    // and it cannot be ADDED, because the card picker reads customCards.
+    expect(
+      missingAdvertisedCards(HEALTHY_CUSTOM_CARDS.filter(c => c.type !== 'ga-master-card')),
+    ).toEqual(['ga-master-card']);
+  });
+
+  test("Home Assistant's own error message is read back, element by element", () => {
+    expect(
+      missingElementErrors([
+        'Heizplan\nCustom element doesn\'t exist: ga-heating-card.',
+        'Custom element doesn\'t exist: ga-thermostat-card.',
+      ]),
+    ).toEqual(['ga-heating-card', 'ga-thermostat-card']);
+  });
+
+  test('the same undefined element on four cards is ONE finding', () => {
+    // Identical symptoms are one cause. Four lines here would read as four
+    // separate defects and bury the second, different one.
+    const four = Array(4).fill("Custom element doesn't exist: ga-thermostat-card.");
+    expect(missingElementErrors(four)).toEqual(['ga-thermostat-card']);
+  });
+
+  test('a card added to the bundle that nobody mapped is a finding, not a skip', () => {
+    // FAILS CLOSED. Without this, a new card would be silently dropped from
+    // the comparison and the check would keep passing while covering less —
+    // a guard rotting without ever going red.
+    expect(unmappedAssets([...SHIPPED, 'ga-brand-new-card'])).toEqual(['ga-brand-new-card']);
+  });
+});
+
+test.describe('card registration: must-NOT-flag', () => {
+  test('a correctly wired bundle is clean on every one of these checks', () => {
+    const assets = firstPartyAssetIds(MODULE_SRCS);
+    expect(unregisteredAssets(assets, ALL_DEFINED)).toEqual([]);
+    expect(unmappedAssets(assets)).toEqual([]);
+    expect(missingAdvertisedCards(HEALTHY_CUSTOM_CARDS)).toEqual([]);
+    expect(missingElementErrors(['Wohnzimmer 21 °C', 'Heizplan'])).toEqual([]);
+  });
+
+  test('ga-sidebar-default is not expected to define anything', () => {
+    // It is a side-effect module that docks the drawer. Demanding an element
+    // from it would be a permanent red on every healthy device.
+    expect(EXPECTED_ELEMENTS['ga-sidebar-default']).toBeNull();
+    expect(unregisteredAssets(['ga-sidebar-default'], NONE_DEFINED)).toEqual([]);
+  });
+
+  test('the strategy is expected under its OWN element name, not its asset name', () => {
+    // `ga-home-strategy` defines `ll-strategy-dashboard-ga-home`. A check that
+    // assumed the identity mapping would flag a perfectly healthy device.
+    expect(EXPECTED_ELEMENTS['ga-home-strategy']).toBe('ll-strategy-dashboard-ga-home');
+    expect(unregisteredAssets(['ga-home-strategy'], ALL_DEFINED)).toEqual([]);
+    expect(unregisteredAssets(['ga-home-strategy'], { 'ga-home-strategy': true })).toEqual([
+      'ga-home-strategy (ll-strategy-dashboard-ga-home)',
+    ]);
+  });
+
+  test("Home Assistant's own app bundle is not one of our cards", () => {
+    expect(firstPartyAssetIds(['/frontend_latest/app.abc123.js'])).toEqual([]);
+  });
+
+  test('an absolute URL and a relative one name the same asset once', () => {
+    // `performance` gives absolute URLs, an inline `import()` gives relative
+    // ones, and the device spec unions all of them. Without normalisation the
+    // absolute form matches no prefix and every device reads as "nothing
+    // injected" — which this check would then report as a failure.
+    expect(modulePath('http://192.0.2.10:8123/a/b.js?v=1#x')).toBe('/a/b.js');
+    expect(modulePath('/a/b.js?v=1')).toBe('/a/b.js');
+    expect(firstPartyAssetIds([
+      `http://h:8123${FIRST_PARTY_URL_BASE}/ga-master-card/x.js?v=1`,
+      `${FIRST_PARTY_URL_BASE}/ga-master-card/x.js`,
+    ])).toEqual(['ga-master-card']);
+  });
+
+  test('a vendored community card is not a first-party asset', () => {
+    // Different base path, different lock, not this comparison's subject.
+    // Counting it would put an id in the list that has no expected element and
+    // turn every healthy device into an `unmappedAssets` finding.
+    expect(
+      firstPartyAssetIds(['/ga_frontend_bundle_static/button-card/button-card.js?v=1.11.0']),
+    ).toEqual([]);
+  });
+
+  test('ordinary page text is not an error report', () => {
+    expect(
+      missingElementErrors(['Custom Dashboard', 'Element: Wohnzimmer', 'doesn\'t exist']),
+    ).toEqual([]);
+  });
+});
+
+test.describe('card registration: the shapes they read', () => {
+  test('the cache-buster does not hide an asset id', () => {
+    expect(firstPartyAssetIds([`${FIRST_PARTY_URL_BASE}/ga-master-card/x.js?v=1.11.0`]))
+      .toEqual(['ga-master-card']);
+  });
+
+  test('the same asset injected twice is listed once', () => {
+    expect(firstPartyAssetIds([
+      `${FIRST_PARTY_URL_BASE}/ga-master-card/x.js?v=1.11.0`,
+      `${FIRST_PARTY_URL_BASE}/ga-master-card/x.js?v=1.10.0`,
+    ])).toEqual(['ga-master-card']);
+  });
+
+  test('the element list the device spec asks the browser about is derived, not typed', () => {
+    // The device spec calls `customElements.get` on exactly these. Pinned so
+    // that adding a card to EXPECTED_ELEMENTS cannot leave the browser probe
+    // behind.
+    expect(expectedElementNames(SHIPPED)).toEqual([
+      'ga-heating-card',
+      'ga-master-card',
+      'ga-thermostat-card',
+      'll-strategy-dashboard-ga-home',
+    ]);
+  });
+
+  test('every advertised card type is one this file expects an element for', () => {
+    // Two lists, one truth: a type in ADVERTISED_CARD_TYPES with no element
+    // mapping would be demanded in the picker and never checked for existence.
+    for (const t of ADVERTISED_CARD_TYPES) {
+      expect(Object.values(EXPECTED_ELEMENTS)).toContain(t);
+    }
   });
 });
