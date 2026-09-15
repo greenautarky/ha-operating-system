@@ -279,6 +279,19 @@ jobs:
       - name: Vendored wizard bundle (a bundle that cannot load must go red)
         run: ./tests/gates/vendored_site_bundle/selftest.sh
 
+      # The device twin of the fleet-manager's mesh prober. A NetBird client can
+      # report Connected, management up and peers connected while carrying no
+      # packets at all; netbird.service's Restart=on-failure never fires,
+      # because nothing crashes. Drives the LIVE ga-mesh-watchdog with stub
+      # curl / netbird / systemctl / ip / date, so the two fixture families run
+      # on every pull request: the incident shape MUST end in exactly one
+      # restart and the cooldown must then hold, and a WAN outage, a client
+      # that reports itself down, a mesh that answers, or any unreadable input
+      # must NOT restart anything. A watchdog that restarts on everything gets
+      # masked, which is a slower way of having none.
+      - name: Mesh watchdog (must-fire on a lying client, must-not-fire on everything else)
+        run: sh tests/ga_tests/mesh_watchdog/selftest.sh
+
       # Same idea, applied to the on-device provisioning checks. They normally
       # need a flashed device, so they were unprovable in CI and PROV-06 in fact
       # reported "self-check PASSED" on a device with no identity at all (K31,

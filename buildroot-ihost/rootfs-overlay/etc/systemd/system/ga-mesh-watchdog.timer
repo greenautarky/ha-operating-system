@@ -1,0 +1,17 @@
+[Unit]
+Description=Periodic mesh-liveness watchdog (connected-but-dead client)
+
+[Timer]
+# Boot delay: the mesh client needs time to come up and ga-resolve-ota needs to
+# publish its first verdict, and a fresh boot is exactly where a premature
+# "dead" would be wrong.
+OnBootSec=4min
+# 60 s, so three consecutive dead ticks is a three-minute statement — long
+# enough not to fire on a WireGuard rekey, short enough that a device is not
+# invisible to the fleet for a quarter of an hour.
+OnUnitActiveSec=60s
+AccuracySec=10s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
