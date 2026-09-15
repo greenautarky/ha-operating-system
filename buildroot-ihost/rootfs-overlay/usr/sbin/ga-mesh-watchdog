@@ -1,0 +1,310 @@
+#!/bin/sh
+# ga-mesh-watchdog — restart the mesh client when it CLAIMS a mesh that carries
+# no packets.
+#
+# WHY. A NetBird client can report "Connected", management up and peers
+# connected while carrying no packets at all. It has happened on GA server
+# infrastructure, where restarting the client healed it at once; the fix on
+# that side is the fleet-manager's own prober. The device has the same shape
+# with none of the defences:
+#
+#   * netbird.service has Restart=on-failure — that catches a process that
+#     CRASHES, and this process does not crash. It sits there, healthy, lying.
+#   * ga-resolve-ota notices every 5 min that the mesh path to the OTA host is
+#     gone and switches to the public one. Until this change it did that
+#     silently: no report, no restart. (It now publishes its verdict, which is
+#     the WAN half of the discriminator below — reused, not re-probed.)
+#   * ga-connectivity-recorder owns link/wan/boot and leaves the mesh rung to
+#     the ga_manager add-on, which MEASURES the mesh and never heals it.
+#
+# A device in that state looks online to itself, is invisible to the
+# fleet-manager (no jobs, no identity delivery, no OTA over the mesh) and comes
+# back only on a reboot nobody schedules. No device has been seen in that state
+# — the MECHANISM is identical, which is the whole reason this exists before a
+# first field case rather than after one (working-method rule 60).
+#
+# WHAT. Every tick (timer, 60 s) three inputs, and a restart only when ALL
+# THREE agree. Each one is there to keep a specific wrong restart out:
+#
+#   1. WAN up — the public OTA endpoint answered. Read from
+#      $OTA_STATE (ga-resolve-ota's verdict), never probed again here.
+#      Without it, a site whose internet is simply down would get its mesh
+#      client restarted every hour for nothing.
+#   2. mesh dead — a TCP connect to the fleet-manager over $MESH_IFACE failed
+#      on $DEAD_TICKS consecutive ticks. Real packets to a real peer, because
+#      the subject is the mesh and `netbird status` is only its proxy
+#      (working-method rule 10). One tick is not evidence; three is.
+#   3. the client claims to be up — daemonStatus Connected AND management
+#      connected. If the client reports itself disconnected it already knows,
+#      and its own reconnect owns that; restarting on top of it would just
+#      restart the timer it is already counting down.
+#
+# Action: `systemctl restart $RESTART_UNIT`, at most once per
+# $RESTART_COOLDOWN_S, ledger in $STATE_DIR so the limit survives a reboot. A
+# genuinely broken mesh must never become a restart loop.
+#
+# FAIL CLOSED. Any input that cannot be read — no verdict file, a stale one, no
+# jq, no route, netbird unparseable — is state `unknown`: one error line, no
+# restart, and the dead streak is RESET, so a restart always rides on three
+# fresh consecutive dead ticks and never on a streak stitched across a blind
+# spell.
+#
+# DIAGNOSABLE, not just self-healing: every tick publishes
+# /share/ga-mesh-watchdog.json through the same host->add-on bridge as
+# ga-ethernet-status.json / ga-rauc-slots.json. ga_manager turns it into the
+# `network.mesh_watchdog` check and the `mesh_watchdog` block on /info, so the
+# fleet-manager can tell one device climbing (a device fact) from many at once
+# (a server fact) — the distinction a single device cannot make about itself.
+#
+# Every command is looked up on PATH so tests/ga_tests/mesh_watchdog/selftest.sh
+# can run THIS script with stub curl / netbird / systemctl / ip.
+set -u
+
+TAG="ga-mesh-watchdog"
+
+# ---- inputs (all overridable, for the host-side suite) ----
+CONF_OVERRIDE="${GA_MESH_CONF_OVERRIDE:-/mnt/data/ga-services.conf}"
+CONF_DEFAULT="${GA_MESH_CONF_DEFAULT:-/etc/ga-services.conf}"
+OTA_STATE="${GA_OTA_STATE_FILE:-/run/ga-resolve-ota.state}"
+MESH_IFACE="${GA_MESH_IFACE:-wt0}"
+NB_SOCK="${GA_MESH_NB_SOCK:-unix:///var/run/netbird.sock}"
+
+# ---- outputs ----
+STATE_DIR="${GA_MESH_STATE_DIR:-/mnt/data/netbird}"
+STATE_FILE="${GA_MESH_STATE_FILE:-$STATE_DIR/ga-mesh-watchdog.state}"
+SHARE_FILE="${GA_MESH_SHARE_FILE:-/mnt/data/supervisor/share/ga-mesh-watchdog.json}"
+PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
+
+# ---- tunables ----
+DEAD_TICKS="${GA_MESH_DEAD_TICKS:-3}"
+RESTART_COOLDOWN_S="${GA_MESH_RESTART_COOLDOWN_S:-3600}"
+RESTART_UNIT="${GA_MESH_RESTART_UNIT:-netbird}"
+PROBE_TIMEOUT_S="${GA_MESH_PROBE_TIMEOUT_S:-4}"
+# ga-resolve-ota re-probes every 5 min. Three missed rounds and its verdict is
+# no longer a statement about now.
+OTA_STALE_S="${GA_MESH_OTA_STALE_S:-900}"
+
+NOW="$(date +%s 2>/dev/null || echo 0)"
+
+# `logger` is NOT on this image (busybox CONFIG_LOGGER is off and util-linux's
+# is not built), so a `logger -p daemon.err` call here would be a line that
+# never runs — the dead-code-path class this whole unit is about. The
+# equivalent that DOES work is systemd's stdout priority prefix: `<3>` = err,
+# `<4>` = warning, and the unit sets SyslogFacility=daemon, so these land in
+# the journal as daemon.err / daemon.warning and pass fluent-bit's PRIORITY
+# [0-4] filter to Loki. The every-60s healthy tick stays at info and does not.
+log()  { echo "$TAG: $*"; }
+logw() { echo "<4>$TAG: $*"; }
+loge() { echo "<3>$TAG: $*"; }
+
+# ---------------------------------------------------------------- prior state
+prev_consecutive=0
+prev_last_restart=0
+prev_restarts=""
+read_state() {   # key -> value, from a plain KEY=value file we wrote ourselves
+    [ -r "$STATE_FILE" ] || return 0
+    sed -n "s/^$1=//p" "$STATE_FILE" 2>/dev/null | tail -1 | tr -d '"'
+}
+if [ -r "$STATE_FILE" ]; then
+    prev_consecutive="$(read_state CONSECUTIVE_DEAD)"
+    prev_last_restart="$(read_state LAST_RESTART_TS)"
+    prev_restarts="$(read_state RESTARTS)"
+fi
+case "${prev_consecutive:-}" in ''|*[!0-9]*) prev_consecutive=0 ;; esac
+case "${prev_last_restart:-}" in ''|*[!0-9]*) prev_last_restart=0 ;; esac
+
+# restarts inside the last 24 h, and the ledger pruned to that window
+restarts_24h=0
+kept=""
+for _ts in ${prev_restarts:-}; do
+    case "$_ts" in ''|*[!0-9]*) continue ;; esac
+    if [ "$(( NOW - _ts ))" -lt 86400 ]; then
+        restarts_24h=$(( restarts_24h + 1 ))
+        kept="${kept:+$kept }$_ts"
+    fi
+done
+
+# ---------------------------------------------------------------- publishing
+# state, detail, consecutive, last_restart, restarts-ledger, restarts_24h
+publish() {
+    _state="$1"; _detail="$2"; _cons="$3"; _lr="$4"; _ledger="$5"; _r24="$6"
+    mkdir -p "$STATE_DIR" 2>/dev/null || true
+    {
+        printf 'CONSECUTIVE_DEAD=%s\n' "$_cons"
+        printf 'LAST_RESTART_TS=%s\n' "$_lr"
+        printf 'RESTARTS="%s"\n' "$_ledger"
+    } > "${STATE_FILE}.tmp" 2>/dev/null \
+        && mv -f "${STATE_FILE}.tmp" "$STATE_FILE" 2>/dev/null \
+        || loge "could not persist $STATE_FILE — the once-per-hour restart limit is NOT durable this tick"
+
+    # The /share copy is what ga_manager reads. Published through
+    # ga-share-publish: /share is writable by every share:rw add-on running as
+    # host uid 0, so a plain `>` there would follow a symlink an add-on planted
+    # and write through it as root (Vuln-2).
+    _json="$(printf '{"schema_version":1,"ts":%s,"state":"%s","detail":"%s",' \
+                "$NOW" "$_state" "$_detail"
+             printf '"consecutive_dead":%s,"dead_ticks_to_restart":%s,' \
+                "$_cons" "$DEAD_TICKS"
+             printf '"restarts_24h":%s,"last_restart_ts":%s,"restart_cooldown_s":%s,' \
+                "$_r24" "$_lr" "$RESTART_COOLDOWN_S"
+             printf '"wan_up":%s,"client_claims_connected":%s,' \
+                "$wan_up" "$claims"
+             printf '"mesh_iface":"%s","probe":"%s","unit":"%s"}\n' \
+                "$MESH_IFACE" "$probe_target" "$RESTART_UNIT")"
+    if [ -x "$PUBLISH" ]; then
+        printf '%s' "$_json" | "$PUBLISH" "$SHARE_FILE" 2>/dev/null \
+            || logw "could not publish $SHARE_FILE — ga_manager will read this as stale"
+    else
+        logw "$PUBLISH missing — $SHARE_FILE not published"
+    fi
+}
+
+# Publish an `unknown` verdict and stop. Fail-closed: the dead streak is reset,
+# never carried across a tick we could not measure.
+bail_unknown() {
+    loge "unknown: $1 — NOT restarting $RESTART_UNIT (fail closed)"
+    publish unknown "$1" 0 "$prev_last_restart" "$kept" "$restarts_24h"
+    exit 0
+}
+
+# Values the publisher interpolates; JSON null until measured.
+wan_up=null
+claims=null
+probe_target=""
+
+command -v jq >/dev/null 2>&1 || bail_unknown "jq not available — cannot read $OTA_STATE or the client status"
+
+# ------------------------------------------------- 1. WAN up (ga-resolve-ota)
+[ -r "$OTA_STATE" ] || bail_unknown "$OTA_STATE missing — ga-resolve-ota has not published a verdict, so 'is the internet up' is unmeasured"
+ota_ts="$(jq -r '.ts // 0' "$OTA_STATE" 2>/dev/null || echo 0)"
+case "$ota_ts" in ''|*[!0-9]*) ota_ts=0 ;; esac
+ota_age=$(( NOW - ota_ts ))
+[ "$ota_age" -ge 0 ] || ota_age=0
+if [ "$ota_ts" -eq 0 ] || [ "$ota_age" -gt "$OTA_STALE_S" ]; then
+    bail_unknown "$OTA_STATE is ${ota_age}s old (limit ${OTA_STALE_S}s) — ga-resolve-ota stopped probing; WAN is unknown, not up"
+fi
+wan_up="$(jq -r 'if .wan_up == true then "true" elif .wan_up == false then "false" else "null" end' "$OTA_STATE" 2>/dev/null || echo null)"
+case "$wan_up" in true|false|null) ;; *) wan_up=null ;; esac
+
+# ------------------------------------------------ 2. is the probe on the mesh
+if [ -f "$CONF_OVERRIDE" ]; then
+    # shellcheck source=/dev/null
+    . "$CONF_OVERRIDE"
+elif [ -f "$CONF_DEFAULT" ]; then
+    # shellcheck source=/dev/null
+    . "$CONF_DEFAULT"
+else
+    bail_unknown "no ga-services.conf — the fleet-manager address is unknown"
+fi
+FM_ADDR="${GA_MESH_FM_ADDR:-${GA_SERVICES_IP:-}}"
+FM_PORT="${GA_MESH_FM_PORT:-${GA_FLEET_PORT:-8090}}"
+[ -n "$FM_ADDR" ] || bail_unknown "GA_SERVICES_IP is not set in ga-services.conf — no mesh peer to probe"
+probe_target="${MESH_IFACE}:${FM_PORT}"
+
+# The routing table decides whether this probe tests the mesh. If the address
+# does not leave via $MESH_IFACE we are measuring something else entirely, and a
+# failure would say nothing about the mesh client — so it is `unknown`, not
+# `dead`. This is also why no mesh address is hardcoded in this public
+# repository: the route answers the question.
+route_dev="$(ip route get "$FM_ADDR" 2>/dev/null \
+    | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')"
+if [ -z "$route_dev" ]; then
+    bail_unknown "no route to the fleet-manager at all — $MESH_IFACE is not just dead, it is absent"
+fi
+if [ "$route_dev" != "$MESH_IFACE" ]; then
+    bail_unknown "the fleet-manager routes via '$route_dev', not $MESH_IFACE — this probe would not be a mesh probe"
+fi
+
+# ----------------------------------------------------------- 3. the TCP probe
+# There is no `nc` on this image (busybox CONFIG_NC is off), so the TCP connect
+# is made with curl — already on the image and already used by ga-resolve-ota.
+# ANY answer proves packets crossed, including an HTTP error: curl 0 (a
+# response), 22 (--fail, not used here), 52 (empty reply) and 56 (recv failure)
+# all mean the far end was TALKED to. Only a connect failure (7) or a timeout
+# (28) is a dead mesh. Distinguishing them matters: "the fleet-manager answered
+# 401" is a live mesh, and a probe that treated it as dead would restart the
+# client every hour on a perfectly healthy device.
+curl -s -o /dev/null --connect-timeout "$PROBE_TIMEOUT_S" --max-time "$PROBE_TIMEOUT_S" \
+    "http://${FM_ADDR}:${FM_PORT}/" >/dev/null 2>&1
+probe_rc=$?
+case "$probe_rc" in
+    0|22|52|56) mesh_alive=1 ;;
+    7|28)       mesh_alive=0 ;;
+    *)          mesh_alive=0 ;;   # any other curl failure is still "no answer"
+esac
+
+# --------------------------------------------- 4. what the client claims
+nb_json="$(netbird --daemon-addr "$NB_SOCK" status --json 2>/dev/null || true)"
+if [ -z "$nb_json" ]; then
+    bail_unknown "the mesh client gave no status — cannot tell a client that is down (its own problem) from one that is lying (ours)"
+fi
+daemon_status="$(printf '%s' "$nb_json" | jq -r '.daemonStatus // empty' 2>/dev/null || true)"
+# NOT `.management.connected // null`: jq's `//` yields its right-hand side
+# when the left is false OR null, so an honest "management is disconnected"
+# would come back indistinguishable from "the key is missing" and be filed as
+# schema drift. The must-not-fire fixture caught exactly that.
+mgmt_connected="$(printf '%s' "$nb_json" | jq -r 'if .management.connected == true then "true" elif .management.connected == false then "false" else "null" end' 2>/dev/null || echo null)"
+if [ -z "$daemon_status" ] || [ "$mgmt_connected" = null ]; then
+    bail_unknown "the mesh client status has no daemonStatus/management.connected — schema drift; refusing to guess"
+fi
+if [ "$daemon_status" = "Connected" ] && [ "$mgmt_connected" = "true" ]; then
+    claims=true
+else
+    claims=false
+fi
+
+# ----------------------------------------------------------------- 5. verdict
+if [ "$mesh_alive" = 1 ]; then
+    log "alive: the fleet-manager answered over $MESH_IFACE on :$FM_PORT (curl rc=$probe_rc)"
+    publish alive "fleet-manager answered over $MESH_IFACE on :$FM_PORT" \
+        0 "$prev_last_restart" "$kept" "$restarts_24h"
+    exit 0
+fi
+
+if [ "$wan_up" != true ]; then
+    # The internet is down (or was never proven up). The mesh cannot work; the
+    # client is not lying, the site is offline. Restarting would achieve
+    # nothing and would burn the once-an-hour budget before it is needed.
+    logw "outage: no answer over $MESH_IFACE and WAN is ${wan_up} — the site is offline, not the client; not restarting"
+    publish outage "no answer over $MESH_IFACE and the public OTA path is not reachable (wan_up=$wan_up) — the site is offline" \
+        0 "$prev_last_restart" "$kept" "$restarts_24h"
+    exit 0
+fi
+
+if [ "$claims" != true ]; then
+    logw "outage: no answer over $MESH_IFACE and the client reports itself down (daemonStatus=$daemon_status management=$mgmt_connected) — its own reconnect owns this"
+    publish outage "no answer over $MESH_IFACE; the client reports daemonStatus=$daemon_status management.connected=$mgmt_connected — it knows, its own reconnect owns this" \
+        0 "$prev_last_restart" "$kept" "$restarts_24h"
+    exit 0
+fi
+
+# ------------------------------- dead: the client claims a mesh that is silent
+consecutive=$(( prev_consecutive + 1 ))
+since_restart=$(( NOW - prev_last_restart ))
+last_restart="$prev_last_restart"
+ledger="$kept"
+detail="WAN up, the client claims Connected + management up, and nothing answers over $MESH_IFACE on :$FM_PORT"
+
+if [ "$consecutive" -ge "$DEAD_TICKS" ] && [ "$since_restart" -ge "$RESTART_COOLDOWN_S" ]; then
+    loge "dead for $consecutive ticks while the client claims Connected — restarting $RESTART_UNIT"
+    if systemctl restart "$RESTART_UNIT"; then
+        last_restart="$NOW"
+        consecutive=0
+        ledger="${ledger:+$ledger }$NOW"
+        restarts_24h=$(( restarts_24h + 1 ))
+        detail="$detail — restarted $RESTART_UNIT"
+        loge "restarted $RESTART_UNIT; next restart allowed in ${RESTART_COOLDOWN_S}s (${restarts_24h} restart(s) in 24 h)"
+    else
+        # A failed restart must NOT start the cooldown: the mesh is still dead
+        # and the next tick has to be allowed to try again.
+        loge "systemctl restart $RESTART_UNIT FAILED — cooldown NOT started, will retry next tick"
+        detail="$detail — restart of $RESTART_UNIT FAILED"
+    fi
+else
+    cooldown_left=$(( RESTART_COOLDOWN_S - since_restart ))
+    [ "$cooldown_left" -lt 0 ] && cooldown_left=0
+    loge "dead: nothing answers over $MESH_IFACE on :$FM_PORT while the client claims Connected (tick $consecutive/$DEAD_TICKS; restart cooldown ${cooldown_left}s)"
+fi
+
+publish dead "$detail" "$consecutive" "$last_restart" "$ledger" "$restarts_24h"
+exit 0

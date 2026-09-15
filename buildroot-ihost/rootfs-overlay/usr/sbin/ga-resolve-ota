@@ -6,6 +6,32 @@
 # to /run/ga-resolve-ota.active. If the chosen IP changed, re-triggers
 # ga-update-hosts.service so /etc/hosts reflects the new path.
 #
+# It ALSO publishes what it measured. Until now this script knew, five minutes
+# at a time, whether the mesh path to the OTA host was gone while the public one
+# answered — and it said so to nobody: it silently switched paths and exited 0.
+# That is one half of the "connected but carrying no packets" class (a NetBird
+# client can report Connected while nothing crosses the mesh). The verdict is
+# now written to $STATE_FILE so a second reader can use
+# it instead of running its own probe: ga-mesh-watchdog needs exactly this
+# WAN-is-up half of its discriminator, and re-implementing it would mean a
+# second set of requests and a second thing to keep true.
+#
+# $STATE_FILE (JSON, rewritten every run):
+#   ts        epoch of this probe round
+#   host      GA_OTA_HOST
+#   chosen    the IP written to $ACTIVE_FILE
+#   reachable true if ANY path answered this round
+#   wan_up    true  = a NON-mesh (public/internet) path answered
+#             false = every non-mesh path was probed and none answered
+#             null  = no non-mesh path was PROBED, because a mesh path answered
+#                     first and the loop stops at the first success. Not-probed
+#                     is not the same as not-reachable, and reporting it as
+#                     false would hand a reader a measurement nobody made.
+#   mesh_up   true if a path over $MESH_IFACE answered (same three-way rule)
+#   paths     [{ip, ok, via}] — `via` is the routing device from `ip route get`,
+#             so "is this path the mesh" is answered by the routing table and
+#             never by a hardcoded address.
+#
 # Called from:
 #   - ga-resolve-ota.service (boot oneshot, before ga-update-hosts)
 #   - ga-resolve-ota.timer   (every 5min while running)
@@ -19,6 +45,10 @@ set -eu
 CONF_OVERRIDE="/mnt/data/ga-services.conf"
 CONF_DEFAULT="/etc/ga-services.conf"
 ACTIVE_FILE="/run/ga-resolve-ota.active"
+# The verdict surface (see header). Overridable so the host-side suite can run
+# this script for real without touching /run.
+STATE_FILE="${GA_OTA_STATE_FILE:-/run/ga-resolve-ota.state}"
+MESH_IFACE="${GA_MESH_IFACE:-wt0}"
 PROBE_TIMEOUT=4
 
 if [ -f "$CONF_OVERRIDE" ]; then
@@ -38,28 +68,80 @@ fi
 CURRENT=""
 [ -f "$ACTIVE_FILE" ] && CURRENT=$(cat "$ACTIVE_FILE" 2>/dev/null || echo "")
 
+# route_dev <ip> — the interface the kernel would send this IP out of, or the
+# empty string when it has no route. The routing table decides what "the mesh"
+# is; this script must not carry a list of mesh addresses (that list would rot,
+# and it would be a disclosure in a public repository).
+route_dev() {
+    ip route get "$1" 2>/dev/null \
+        | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}'
+}
+
 CHOSEN=""
+PATHS=""            # JSON array elements, comma-joined at the end
+WAN_OK=""           # "" = not probed, 0 = probed and failed, 1 = answered
+MESH_OK=""
 for ip in $GA_OTA_IPS; do
+    VIA="$(route_dev "$ip")"
+    if [ "$VIA" = "$MESH_IFACE" ]; then IS_MESH=1; else IS_MESH=0; fi
+    # Not-yet-answered counts as probed-and-failed until proven otherwise; the
+    # `break` below is what leaves later entries at "" (= not probed).
+    if [ "$IS_MESH" = 1 ]; then MESH_OK="${MESH_OK:-0}"; else WAN_OK="${WAN_OK:-0}"; fi
     if curl -sk --resolve "${GA_OTA_HOST}:443:${ip}" \
             --connect-timeout "$PROBE_TIMEOUT" --max-time "$PROBE_TIMEOUT" \
             -o /dev/null -I "https://${GA_OTA_HOST}/" 2>/dev/null; then
+        OK=true
+        # Explicit if, not `a && b || c`: under `set -e` that idiom exits the
+        # script whenever both tests are false (see ga-wifi-watchdog).
+        if [ "$IS_MESH" = 1 ]; then MESH_OK=1; else WAN_OK=1; fi
         CHOSEN="$ip"
-        echo "ga-resolve-ota: ${GA_OTA_HOST} reachable via ${ip}"
-        break
+        echo "ga-resolve-ota: ${GA_OTA_HOST} reachable via ${ip} (dev ${VIA:-none})"
     else
-        echo "ga-resolve-ota: ${GA_OTA_HOST} NOT reachable via ${ip}"
+        OK=false
+        echo "ga-resolve-ota: ${GA_OTA_HOST} NOT reachable via ${ip} (dev ${VIA:-none})"
     fi
+    PATHS="${PATHS:+$PATHS,}{\"ip\":\"${ip}\",\"ok\":${OK},\"via\":\"${VIA}\"}"
+    if [ "$OK" = true ]; then break; fi
 done
+# The probe verdict, captured BEFORE the fallback below overwrites CHOSEN with
+# a path nothing answered on. Reporting that as `reachable` would be the
+# loud-fallback defect (working-method rule 44) in the reader's data instead of
+# in the log.
+REACHED=false
+if [ -n "$CHOSEN" ]; then REACHED=true; fi
+
+# Publish the verdict BEFORE the /etc/hosts side effects below, so a failure
+# there cannot cost the reader its input. Atomic (same-filesystem rename);
+# /run is tmpfs and root-only, so no publish helper is needed here.
+write_state() {   # $1 = chosen ip (the one written to $ACTIVE_FILE)
+    _tri() { case "$1" in 1) echo true ;; 0) echo false ;; *) echo null ;; esac; }
+    mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null || true
+    {
+        printf '{"schema_version":1,"ts":%s,"host":"%s","chosen":"%s",' \
+            "$(date +%s 2>/dev/null || echo 0)" "$GA_OTA_HOST" "$1"
+        printf '"reachable":%s,"wan_up":%s,"mesh_up":%s,"mesh_iface":"%s",' \
+            "$REACHED" "$(_tri "$WAN_OK")" "$(_tri "$MESH_OK")" "$MESH_IFACE"
+        printf '"paths":[%s]}\n' "$PATHS"
+    } > "${STATE_FILE}.tmp" 2>/dev/null \
+        && mv -f "${STATE_FILE}.tmp" "$STATE_FILE" 2>/dev/null \
+        || echo "ga-resolve-ota: WARN — could not publish ${STATE_FILE}"
+}
 
 if [ -z "$CHOSEN" ]; then
     if [ -n "$CURRENT" ]; then
         echo "ga-resolve-ota: WARN — no path reachable, retaining last-known ${CURRENT}"
+        # Publish before exiting. "Nothing answered at all" is the single most
+        # interesting round for a reader, and it is precisely the one this
+        # branch used to leave unrecorded.
+        write_state "$CURRENT"
         exit 0
     fi
     FIRST_IP=$(echo "$GA_OTA_IPS" | awk '{print $1}')
     echo "ga-resolve-ota: WARN — no path reachable, defaulting to first ${FIRST_IP}"
     CHOSEN="$FIRST_IP"
 fi
+
+write_state "$CHOSEN"
 
 mkdir -p "$(dirname "$ACTIVE_FILE")"
 if [ "$CHOSEN" != "$CURRENT" ]; then
