@@ -22,6 +22,17 @@ export interface DeviceFixtures {
  * device, not infer it from an HTTP response. An API that answers 200 while
  * leaving wreckage behind is the exact failure this exists to catch.
  */
+/**
+ * `-J <host>` when SSH_JUMP is set, else nothing. The bench laptop lost direct
+ * mesh reach on 2026-09-16 and every ssh-backed spec timed out (six of the ten
+ * failures of the first resident-account run) while the device was fine over a
+ * jump host. One knob, read by every ssh builder in this suite.
+ */
+export function sshJump(): string {
+  const jump = process.env.SSH_JUMP;
+  return jump ? `-J ${jump} ` : '';
+}
+
 export function sshCmd(cmd: string): string {
   const ip = process.env.DEVICE_IP;
   if (!ip) throw new Error('DEVICE_IP not set');
@@ -29,7 +40,7 @@ export function sshCmd(cmd: string): string {
     process.env.SSH_KEY ||
     process.env.HOME + '/Nextcloud2/GreenAutarky/security_store/HomeassistantGreen0.pem';
   const port = process.env.SSH_PORT || '22222';
-  const sshPrefix = `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${key} -p ${port} root@${ip}`;
+  const sshPrefix = `ssh ${sshJump()}-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${key} -p ${port} root@${ip}`;
   return execSync(`${sshPrefix} '${cmd}'`, { timeout: 60_000 }).toString().trim();
 }
 

@@ -50,6 +50,7 @@ function ssh(cmd: string): string {
   // its own quotes (python -c '…', printf '…') survive intact for the remote
   // shell — no fragile local quote-wrapping.
   const args = [
+    ...(process.env.SSH_JUMP ? ['-J', process.env.SSH_JUMP] : []),
     '-o', 'StrictHostKeyChecking=no',
     '-o', 'UserKnownHostsFile=/dev/null',
     '-o', 'PubkeyAcceptedAlgorithms=+ssh-rsa',
@@ -150,15 +151,23 @@ test.describe('Sub-User join via onboarding wizard (ADR-0006)', () => {
 
     token = await getToken(deviceUrl);
 
-    // Resolve the owner user id from the device auth store.
+    // Resolve the LOGGED-IN user's id from the device auth store — the account
+    // that mints the invite below must be the one flagged as master. This used
+    // to take the HA owner, which is the same user only when the suite runs as
+    // the admin; the first resident-account run (K31, rc39, 2026-09-16) minted
+    // as the resident, had flagged the owner, and got 403.
+    const login = (process.env.HA_ADMIN_USER || 'admin').trim().toLowerCase();
     ownerId = ssh(
-      `docker exec homeassistant python3 -c 'import json;d=json.load(open("/config/.storage/auth"))["data"];print(next(u["id"] for u in d["users"] if u.get("is_owner") and not u.get("system_generated")))'`,
+      `docker exec homeassistant python3 -c 'import json;d=json.load(open("/config/.storage/auth"))["data"];print(next(c["user_id"] for c in d["credentials"] if c["data"].get("username")=="${login}"))'`,
     );
     expect(ownerId).toMatch(/^[0-9a-f]{32}$/);
 
-    // Flag the owner as master (file read per-call → no restart needed).
+    // Flag that user as master (file read per-call → no restart needed). Keep
+    // whatever was there: on an onboarded device the wizard has already flagged
+    // the resident, and deleting that at cleanup left K31 with no master at all
+    // (measured 2026-09-16 — the resident lost the "manage sub-users" tab).
     ssh(
-      `mkdir -p /mnt/data/supervisor/homeassistant/ga && printf '%s' '{"masters":[{"ha_user_id":"${ownerId}"}]}' > /mnt/data/supervisor/homeassistant/ga/ga-master-users.json`,
+      `mkdir -p /mnt/data/supervisor/homeassistant/ga && cd /mnt/data/supervisor/homeassistant/ga && { [ -f ga-master-users.json ] && cp -p ga-master-users.json ga-master-users.json.e2e-bak || rm -f ga-master-users.json.e2e-bak; } ; printf '%s' '{"masters":[{"ha_user_id":"${ownerId}"}]}' > ga-master-users.json`,
     );
 
     // Mint an invite as the master (owner). 6-digit numeric PIN (reuses wizard PIN step).
@@ -239,10 +248,22 @@ test.describe('Sub-User join via onboarding wizard (ADR-0006)', () => {
     // Reported per condition. The single compound boolean this replaces printed
     // "False" and nothing else, so every failure needed a manual investigation
     // on the device before anyone knew which half was broken.
-    const check = ssh(
+    // The stores this reads (`auth`, `person`, `greenautarky_site`) are written
+    // by Home Assistant with a delay of a few seconds after the join answers.
+    // Read at once, `person_linked` was false on K31 (rc39, 2026-09-16) while
+    // the person was already linked in memory — so the read is retried for a
+    // bounded time and the LAST reading is what is asserted.
+    const readFacts = () =>
+      JSON.parse(
+        ssh(
       `docker exec homeassistant python3 -c 'import json;a=json.load(open("/config/.storage/auth"))["data"];u=next(x for x in a["users"] if x["id"]=="${mine.user_id}");g=u.get("group_ids",[]);st=json.load(open("/config/.storage/greenautarky_site"))["data"];rec=st.get("sub_users",{}).get("${mine.user_id}",{});ps=json.load(open("/config/.storage/person"))["data"]["items"];print(json.dumps({"not_admin":"system-admin" not in g,"not_owner":not u.get("is_owner"),"scoped_or_user":any(x.startswith("ga_scope_") for x in g) or "system-users" in g,"master_is_owner":rec.get("master")=="${ownerId}","person_linked":any(x.get("user_id")=="${mine.user_id}" for x in ps),"consent_v1":rec.get("consent",{}).get("datenschutz",{}).get("version")==1}))'`,
-    );
-    const facts = JSON.parse(check) as Record<string, boolean>;
+        ),
+      ) as Record<string, boolean>;
+    let facts = readFacts();
+    for (let i = 0; i < 6 && Object.values(facts).some(ok => !ok); i++) {
+      await new Promise(r => setTimeout(r, 3_000));
+      facts = readFacts();
+    }
     const wrong = Object.entries(facts)
       .filter(([, ok]) => !ok)
       .map(([name]) => name);
@@ -300,7 +321,10 @@ test.describe('Sub-User join via onboarding wizard (ADR-0006)', () => {
       /* best-effort */
     }
     try {
-      ssh('rm -f /mnt/data/supervisor/homeassistant/ga/ga-master-users.json');
+      // Put back the master file the device had before this suite touched it.
+      ssh(
+        'cd /mnt/data/supervisor/homeassistant/ga && if [ -f ga-master-users.json.e2e-bak ]; then mv -f ga-master-users.json.e2e-bak ga-master-users.json; else rm -f ga-master-users.json; fi',
+      );
     } catch {
       /* best-effort */
     }
