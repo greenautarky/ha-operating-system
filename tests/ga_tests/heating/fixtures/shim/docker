@@ -12,8 +12,31 @@ case "$cmd" in
       *Status*) cat "$(pick containers.txt)" ;;
       *)        cut -d' ' -f1 "$(pick containers.txt)" ;;
     esac ;;
-  exec)   # the suite's only exec is the /core/api/states fetch through ga_manager
-    cat "$(pick states.json)" ;;
+  exec)
+    # Until HEAT-09 the suite's only exec was the /core/api/states fetch. It now
+    # also WRITES a setpoint and reads ONE entity back, and those three calls
+    # must be told apart or every fixture answers the full state list to a
+    # question about one valve.
+    all="$*"
+    case "$all" in
+      *set_temperature*)
+        # The write. A fixture that wants to model "the valve ignores commands"
+        # still lets the CALL succeed — that is the whole point: HTTP 200 and no
+        # effect is exactly what a dead frame counter looks like.
+        echo "$all" >> "${GA_HEAT_SET_LOG:-/dev/null}" ;;
+      */core/api/states/*)
+        # The read-back of one entity. `setpoint-after.json` is what the fixture
+        # claims the valve reads AFTER the write; without it the base state is
+        # answered, which models a valve that did not move.
+        f="$(pick setpoint-after.json)"
+        if [ -e "$f" ]; then cat "$f"; else
+          ent="${all##*/core/api/states/}"; ent="${ent%% *}"
+          jq -c --arg e "$ent" '[ .[] | select(.entity_id == $e) ] | first // {}' \
+            "$(pick states.json)" 2>/dev/null || echo '{}'
+        fi ;;
+      *)
+        cat "$(pick states.json)" ;;
+    esac ;;
   logs)
     name=""; for a in "$@"; do case "$a" in addon_*) name="$a" ;; esac; done
     f="$(pick "logs/$name.log")"; [ -e "$f" ] && cat "$f"; : ;;

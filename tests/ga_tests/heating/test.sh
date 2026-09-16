@@ -513,5 +513,96 @@ else
   run_test_show "HEAT-08" "$H08_DESC" 'heat08'
 fi
 
+# ---------------------------------------------------------------------------
+# HEAT-09 — the valves still ACCEPT a command.
+#
+# THE DEFECT THIS EXISTS FOR, measured on K31 on 2026-09-16. After restoring a
+# Zigbee network onto a reflashed device, every valve went on REPORTING — full
+# payloads, every few seconds, five of five — and stopped ACCEPTING anything.
+# `climate.set_temperature` answered 200 and changed nothing, for three minutes,
+# in every mode. The cause was the coordinator's outgoing frame counter: the
+# restore put it back to the value the devices had already seen, so each command
+# looked like a replay and was dropped.
+#
+# Nothing in this suite could see that. Every other check reads what the device
+# SAYS, and saying was exactly the half that still worked. A whole afternoon went
+# into re-measuring product behaviour on a flat whose radios were one-way.
+#
+# So this asks for an OUTCOME in the only direction the others do not: write a
+# setpoint, read it back. It restores the previous value afterwards — a test that
+# leaves a resident's heating turned up is a defect of its own.
+#
+# Deliberately ONE valve: the failure is a property of the coordinator, not of a
+# device, so six writes would prove the same thing six times and take six times
+# as long on a sleepy end device.
+# ---------------------------------------------------------------------------
+H09_DESC="a valve ACCEPTS a setpoint (write, read back, restore) — the direction reporting cannot prove"
+
+heat09() {
+  [ -n "$GM" ] || { echo "ga_manager container not running"; exit 1; }
+  v=$(jq -r '[ .[] | select(.entity_id | startswith("climate.0x"))
+               | select(.attributes.temperature != null)
+               | .entity_id ] | first // empty' "$STATES" 2>/dev/null)
+  [ -n "$v" ] || { echo "no valve with a setpoint in Core — the skip guard above should have caught this"; exit 1; }
+
+  before=$(jq -r --arg v "$v" '[ .[] | select(.entity_id == $v) | .attributes.temperature ] | first' "$STATES")
+  case "$before" in ''|null) echo "could not read the current setpoint of $v"; exit 1;; esac
+
+  # A step the valve can represent, and away from any limit.
+  want=$(awk -v b="$before" 'BEGIN { t = b + 0.5; if (t > 29) t = b - 0.5; printf "%.1f", t }')
+
+  call() {
+    docker exec "$GM" sh -c \
+      "curl -fsS -m 20 -X POST -H \"Authorization: Bearer \$SUPERVISOR_TOKEN\" \
+            -H 'Content-Type: application/json' \
+            -d '{\"entity_id\":\"$v\",\"temperature\":$1}' \
+            http://supervisor/core/api/services/climate/set_temperature" >/dev/null 2>&1
+  }
+  read_back() {
+    docker exec "$GM" sh -c \
+      'curl -fsS -m 20 -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/api/states/'"$v" 2>/dev/null \
+      | jq -r '.attributes.temperature // empty'
+  }
+
+  call "$want" || { echo "the service call itself failed for $v"; exit 1; }
+
+  # A battery valve answers in seconds when the path is healthy; it answered in
+  # ten on the day this was written. Sixty is generous and still bounded.
+  # Overridable so the suite's own selftest does not sit through a minute per
+  # fixture. On a device the defaults apply; nothing shortens the real wait.
+  step="${GA_HEAT_SETPOINT_STEP_S:-5}"
+  tries="${GA_HEAT_SETPOINT_TRIES:-12}"
+  got=""
+  i=0
+  while [ "$i" -lt "$tries" ]; do
+    sleep "$step"; i=$((i+1))
+    got=$(read_back)
+    [ "$got" = "$want" ] && break
+  done
+
+  # Put it back whatever the outcome, and do not let the restore mask a failure.
+  call "$before" >/dev/null 2>&1 || :
+
+  if [ "$got" != "$want" ]; then
+    echo "$v did not accept the setpoint: asked for $want, still reads ${got:-<unreadable>} after $((tries*step))s."
+    echo "The valve may still be REPORTING normally — that is the trap. Check the"
+    echo "coordinator's outgoing frame counter (a restored Zigbee network resets it"
+    echo "to a value the devices have already seen, and every command is then"
+    echo "dropped as a replay): zigbee-roster-preserve.sh restore --bump-counter."
+    exit 1
+  fi
+  echo "$v accepted $want within $((i*step))s and was restored to $before"
+}
+
+# A valve with no setpoint at all is a device nothing has been asked of yet —
+# "nothing to write to" is not "the radio is dead", and failing on it would make
+# this red on every unpaired bench device until somebody switched it off.
+if [ "$(jq '[ .[] | select(.entity_id | startswith("climate.0x"))
+              | select(.attributes.temperature != null) ] | length' "$STATES" 2>/dev/null || echo 0)" -eq 0 ]; then
+  skip_test "HEAT-09" "$H09_DESC" "no zigbee2mqtt valve with a setpoint on this device — nothing to write to"
+else
+  run_test_show "HEAT-09" "$H09_DESC" 'heat09'
+fi
+
 rm -f "$STATES" "$SET_COUNTS"
 suite_end

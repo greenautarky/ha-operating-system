@@ -41,8 +41,12 @@ run() {
   local addon_data="$FIXTURES/base/addons-data"
   [[ -d "$FIXTURES/$fx/addons-data" ]] && addon_data="$FIXTURES/$fx/addons-data"
   : > "$GA_HEAT_TMP/curl-args.log"
+  # HEAT-09 polls a valve for up to a minute on a real device. In here the
+  # answer is a file and never changes, so one short try is the whole truth —
+  # waiting longer would only make the selftest slower, not more honest.
   OUT[$fx]="$(PATH="$FIXTURES/shim:$PATH" GA_HEAT_FIXTURE="$FIXTURES/$fx" \
               GA_HEAT_HA_DIR="$FIXTURES/base/ha" GA_HEAT_ADDON_DATA="$addon_data" \
+              GA_HEAT_SETPOINT_STEP_S=0 GA_HEAT_SETPOINT_TRIES=1 \
               sh "$SUITE" 2>&1)"
   cp "$GA_HEAT_TMP/curl-args.log" "$GA_HEAT_TMP/curl-args.$fx.log"
 }
@@ -149,6 +153,21 @@ echo "== must-skip-no-cred (engine present, credential not delivered) =="
 expect must-skip-no-cred HEAT-07 SKIP
 expect_detail must-skip-no-cred "no credential path for local InfluxDB from the host"
 expect must-skip-no-cred HEAT-06 PASS
+
+# HEAT-09 — the valves still ACCEPT a command. Both halves, because the failure
+# this catches (a restored Zigbee network whose frame counter was reset) leaves
+# the devices REPORTING perfectly: a suite that only proves the green path would
+# have been green all afternoon on a flat whose radios were one-way.
+expect must-pass-setpoint-accepted HEAT-09 PASS
+expect must-fail-setpoint-ignored  HEAT-09 FAIL
+expect_detail must-fail-setpoint-ignored "did not accept the setpoint"
+expect_detail must-fail-setpoint-ignored "frame counter"
+# and the base device, which carries no valve setpoint at all, must not be
+# flagged: "nothing to write to" is not "the radio is dead". A red here would
+# make the suite red on every unpaired bench device, which is how a check gets
+# switched off.
+expect base HEAT-09 SKIP
+expect_detail base "nothing to write to"
 
 # Fail closed on zero: a harness that inspected nothing is a failure, not a pass.
 if (( ran == 0 )); then
