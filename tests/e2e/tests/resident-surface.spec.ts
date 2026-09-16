@@ -604,4 +604,140 @@ test.describe('Resident surface', () => {
         'where a card belongs.',
     ).toBe(0);
   });
+  // ── what a resident MEETS, measured on rc37 and fixed in rc38 ────────────
+  //
+  // Thomas walked a commissioned flat on 2026-09-15 and listed what was wrong
+  // with the screen he was handed. Four of those became code changes; these are
+  // the assertions that stop them coming back. Each one failed on rc37 and
+  // passes on rc38 — they are not written from the fix, they are written from
+  // the complaint.
+
+  test('the card says whether the room is being heated', async ({ page, deviceUrl }) => {
+    // MEASURED rc37: the valve was 100 % open and `hvac_action` read `heating`
+    // while the card showed the current temperature, the target, and nothing
+    // else. The information had reached the browser and was not drawn.
+    await openResidentDashboard(page, deviceUrl);
+
+    const state = await page.evaluate(`(() => {
+      const hass = (document.querySelector('home-assistant') || {}).hass;
+      if (!hass) return null;
+      const climates = Object.values(hass.states)
+        .filter(s => s.entity_id.startsWith('climate.'));
+      return { count: climates.length,
+               actions: climates.map(s => s.attributes.hvac_action || s.state) };
+    })()`) as { count: number; actions: string[] } | null;
+
+    if (!state || state.count === 0) {
+      test.skip(true, 'No climate entity on this device — nothing to say a state about.');
+    }
+
+    const deadline = Date.now() + 15_000;
+    let badges: string[] = [];
+    for (;;) {
+      badges = (await page.evaluate(`(() => {
+        ${DEEP_QUERY}
+        return deep(document)
+          .filter(e => (e.className || '').toString().split(' ').includes('act'))
+          .map(e => (e.textContent || '').trim())
+          .filter(Boolean);
+      })()`)) as string[];
+      if (badges.length > 0 || Date.now() > deadline) break;
+      await page.waitForTimeout(500);
+    }
+
+    expect(
+      badges,
+      'No running-state badge is rendered anywhere. A resident cannot tell a ' +
+        'room that is heating from one that has reached its target — the two ' +
+        'looked identical on rc37, twelve seconds apart, with the valve fully ' +
+        'open in one of them. `hvac_action` is on the entity; it has to reach ' +
+        'the screen.',
+    ).not.toEqual([]);
+
+    const known = badges.filter(b => ['Heizt', 'Bereit', 'Aus'].includes(b));
+    expect(
+      known.length,
+      `Badges rendered, but none of them says anything a resident reads: ` +
+        `${badges.join(' | ')}. A colour alone is not a statement.`,
+    ).toBeGreaterThan(0);
+  });
+
+  test('the sidebar starts collapsed for a resident', async ({ page, deviceUrl }) => {
+    // MEASURED rc37: expanded on every first load, 255 px wide, and no stored
+    // preference at all — the asset meant to collapse it fired its event at an
+    // element whose listener was not attached yet and reported success, so its
+    // retry never ran. "The file was served" is not "the file worked".
+    await page.context().clearCookies();
+    await openResidentDashboard(page, deviceUrl);
+    await page.evaluate(`(() => { try { localStorage.removeItem('dockedSidebar'); } catch (e) {} })()`);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+
+    const deadline = Date.now() + 20_000;
+    let state: { expanded: boolean; docked: string | null } = { expanded: true, docked: null };
+    for (;;) {
+      state = (await page.evaluate(`(() => {
+        const main = (document.querySelector('home-assistant') || {}).shadowRoot
+          ?.querySelector('home-assistant-main');
+        let docked = null;
+        try { docked = localStorage.getItem('dockedSidebar'); } catch (e) {}
+        return { expanded: !!main?.hasAttribute('expanded'), docked };
+      })()`)) as typeof state;
+      if (!state.expanded || Date.now() > deadline) break;
+      await page.waitForTimeout(500);
+    }
+
+    expect(
+      state.expanded,
+      'The sidebar is open on a first load. ga-sidebar-default is supposed to ' +
+        'collapse it; being served is not evidence that it ran — the stored ' +
+        `preference reads ${JSON.stringify(state.docked)}.`,
+    ).toBe(false);
+  });
+
+  test('no vendor knob is offered as a resident control', async ({ page, deviceUrl }) => {
+    // MEASURED rc37: a Sonoff valve publishes `smart_temperature_control` with
+    // `entity_category: None` — the vendor calls it a primary control — so the
+    // room offered residents an English, unexplained switch that changes how the
+    // valve regulates. Its siblings `child_lock` and `open_window` carry
+    // `config` and were filtered: whether a resident saw a vendor knob depended
+    // on how the vendor had labelled it (ADR-0014 Amendment 1).
+    //
+    // Asserted on the RENDERED page rather than on the model, because that is
+    // where a resident meets it.
+    await openResidentDashboard(page, deviceUrl);
+
+    const furnished = await furnishedAreaCount(page);
+    if (furnished === 0) {
+      test.skip(true, 'No furnished area on this device — no control list to read.');
+    }
+
+    const text = (await page.evaluate(`(() => {
+      ${DEEP_QUERY}
+      return deep(document)
+        .filter(e => !['SCRIPT', 'STYLE'].includes(e.tagName))
+        .map(e => Array.from(e.childNodes)
+          .filter(n => n.nodeType === 3)
+          .map(n => n.textContent)
+          .join(' '))
+        .join('\n');
+    })()`)) as string;
+
+    expect(
+      text.trim().length,
+      'The rendered page produced no text at all — a pass here would mean nothing.',
+    ).toBeGreaterThan(0);
+
+    // Deliberately a SMALL list of things seen in the field rather than a clever
+    // pattern: this test is a tripwire for the allow-list, and a tripwire that
+    // tries to be general stops being readable.
+    const vendorKnobs = ['Smart temperature control', 'Child lock', 'Open window'];
+    const found = vendorKnobs.filter(k => text.toLowerCase().includes(k.toLowerCase()));
+    expect(
+      found,
+      `Vendor controls are on the resident's screen: ${found.join(', ')}. The ` +
+        'room view is supposed to offer a chosen set per device role, not ' +
+        'everything the hardware happens to expose — the next firmware adds one ' +
+        'and nobody decided that it should be there.',
+    ).toEqual([]);
+  });
 });
