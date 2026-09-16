@@ -147,6 +147,14 @@ async function panels(page: import('@playwright/test').Page): Promise<PanelInfo[
   })()`) as Promise<PanelInfo[]>;
 }
 
+/** Whether the logged-in user is an admin — decides which stock panels HA offers. */
+async function isAdmin(page: import('@playwright/test').Page): Promise<boolean> {
+  return page.evaluate(`(() => {
+    const hass = (document.querySelector('home-assistant') || {}).hass;
+    return !!(hass && hass.user && hass.user.is_admin);
+  })()`) as Promise<boolean>;
+}
+
 /** How many areas hold at least one entity the room strategy could show. */
 async function furnishedAreaCount(page: import('@playwright/test').Page): Promise<number> {
   return page.evaluate(`(() => {
@@ -258,11 +266,15 @@ test.describe('Resident surface', () => {
     // way of having no sweep at all.
     await openResidentDashboard(page, deviceUrl);
     const all = await panels(page);
+    const admin = await isAdmin(page);
 
-    const missing = missingExpectedPanels(all);
+    // `config` and `developer-tools` are admin-only in Home Assistant itself; a
+    // resident never had them. Measured on the first resident-account run
+    // (K31, rc39, 2026-09-16): the admin-derived list reported both "gone".
+    const missing = missingExpectedPanels(all, admin);
     expect(
       missing,
-      `Panels a resident must keep are gone: ${missing.join(', ')}. Present: ` +
+      `Panels a ${admin ? 'admin' : 'resident'} must keep are gone: ${missing.join(', ')}. Present: ` +
         `${all.map(p => p.url_path).sort().join(', ')}`,
     ).toEqual([]);
   });
@@ -514,8 +526,12 @@ test.describe('Resident surface', () => {
     ).toEqual([]);
 
     const names = expectedElementNames(assets);
+    // A real function, not a string: Playwright treats a string as an
+    // expression to evaluate and does not pass `names` into it, so the map
+    // came back undefined and this test could not pass on any device
+    // (first full resident-account run, K31 rc39, 2026-09-16).
     const defined = (await page.evaluate(
-      `(names => Object.fromEntries(names.map(n => [n, !!customElements.get(n)])))`,
+      (ns: string[]) => Object.fromEntries(ns.map(n => [n, !!customElements.get(n)])),
       names,
     )) as Record<string, boolean>;
 
@@ -719,7 +735,7 @@ test.describe('Resident surface', () => {
           .filter(n => n.nodeType === 3)
           .map(n => n.textContent)
           .join(' '))
-        .join('\n');
+        .join('\\n');
     })()`)) as string;
 
     expect(

@@ -1,4 +1,4 @@
-import { test, expect } from '../fixtures/device';
+import { test, expect, sshJump } from '../fixtures/device';
 import { getGAOnboardingStatus, waitForHA } from '../helpers/ha-api';
 
 /**
@@ -18,7 +18,7 @@ import { getGAOnboardingStatus, waitForHA } from '../helpers/ha-api';
 
 const DEVICE_IP = process.env.DEVICE_IP;
 const SSH_CMD = DEVICE_IP
-  ? `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p 22222 root@${DEVICE_IP}`
+  ? `ssh ${sshJump()}-o StrictHostKeyChecking=no -o ConnectTimeout=5 -p 22222 root@${DEVICE_IP}`
   : '';
 
 /** Read telemetry preferences from device storage via SSH */
@@ -35,7 +35,7 @@ async function getDeviceTelemetryPrefs(): Promise<{ tier1: boolean; tier2: boole
   try {
     const raw = execSync(
       `${SSH_CMD} cat /mnt/data/supervisor/homeassistant/.storage/greenautarky_telemetry 2>/dev/null`,
-      { timeout: 10_000, encoding: 'utf8' },
+      { timeout: 30_000, encoding: 'utf8' },
     );
     const data = JSON.parse(raw).data;
     if (!data) return null;
@@ -53,7 +53,7 @@ async function hasConsentMarker(marker: string): Promise<boolean> {
   if (!DEVICE_IP) return false;
   const { execSync } = await import('child_process');
   try {
-    execSync(`${SSH_CMD} test -f /mnt/data/${marker}`, { timeout: 5_000 });
+    execSync(`${SSH_CMD} test -f /mnt/data/${marker}`, { timeout: 30_000 });
     return true;
   } catch {
     return false;
@@ -113,7 +113,7 @@ test.describe('Telemetry Consent — Device markers', () => {
   test('ga-telemetry-gate script exists and is executable', async () => {
     const { execSync } = await import('child_process');
     const result = execSync(`${SSH_CMD} test -x /usr/sbin/ga-telemetry-gate && echo ok`, {
-      timeout: 5_000,
+      timeout: 30_000,
       encoding: 'utf8',
     });
     expect(result.trim()).toBe('ok');
@@ -123,7 +123,7 @@ test.describe('Telemetry Consent — Device markers', () => {
     const { execSync } = await import('child_process');
     const state = execSync(
       `${SSH_CMD} systemctl show ga-telemetry-consent -p ActiveState --value`,
-      { timeout: 5_000, encoding: 'utf8' },
+      { timeout: 30_000, encoding: 'utf8' },
     );
     expect(state.trim()).toBe('active');
   });
@@ -142,7 +142,7 @@ test.describe('Telemetry Consent — Wizard flow', () => {
     const { execSync } = await import('child_process');
     execSync(
       `${SSH_CMD} 'curl -sf -X POST http://localhost:8123/api/greenautarky_site/reset -H "Authorization: Bearer $(cat /mnt/data/supervisor/homeassistant/.storage/auth 2>/dev/null | grep -o \\"[a-f0-9]\\{64\\}\\" | head -1)" 2>/dev/null || true'`,
-      { timeout: 15_000 },
+      { timeout: 30_000 },
     );
     await waitForHA(deviceUrl, 30_000);
   });

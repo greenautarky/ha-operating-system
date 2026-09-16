@@ -1,4 +1,4 @@
-import { test, expect } from '../fixtures/device';
+import { test, expect, sshJump } from '../fixtures/device';
 import { waitForHA } from '../helpers/ha-api';
 import { haLogin } from '../helpers/auth';
 
@@ -33,7 +33,7 @@ test.describe('Reverse Proxy Config', () => {
       process.env.SSH_KEY ||
       process.env.HOME + '/Nextcloud2/GreenAutarky/security_store/HomeassistantGreen0.pem';
     const port = process.env.SSH_PORT || '22222';
-    const ssh = `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${key} -p ${port} root@${ip}`;
+    const ssh = `ssh ${sshJump()}-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${key} -p ${port} root@${ip}`;
 
     const config = execSync(
       `${ssh} 'cat /mnt/data/supervisor/homeassistant/configuration.yaml /mnt/data/supervisor/homeassistant/ga_packages/*.yaml 2>/dev/null'`,
@@ -53,7 +53,7 @@ test.describe('Reverse Proxy Config', () => {
       process.env.SSH_KEY ||
       process.env.HOME + '/Nextcloud2/GreenAutarky/security_store/HomeassistantGreen0.pem';
     const port = process.env.SSH_PORT || '22222';
-    const ssh = `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${key} -p ${port} root@${ip}`;
+    const ssh = `ssh ${sshJump()}-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${key} -p ${port} root@${ip}`;
 
     const config = execSync(
       `${ssh} 'cat /mnt/data/supervisor/homeassistant/configuration.yaml /mnt/data/supervisor/homeassistant/ga_packages/*.yaml 2>/dev/null'`,
@@ -86,7 +86,7 @@ test.describe('Reverse Proxy Config', () => {
       process.env.SSH_KEY ||
       process.env.HOME + '/Nextcloud2/GreenAutarky/security_store/HomeassistantGreen0.pem';
     const port = process.env.SSH_PORT || '22222';
-    const ssh = `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${key} -p ${port} root@${ip}`;
+    const ssh = `ssh ${sshJump()}-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${key} -p ${port} root@${ip}`;
 
     const config = execSync(
       `${ssh} 'cat /mnt/data/supervisor/homeassistant/configuration.yaml /mnt/data/supervisor/homeassistant/ga_packages/*.yaml 2>/dev/null'`,

@@ -36,6 +36,15 @@ export const STOCK_PANELS = [
 export const EXPECTED_PANELS = ['lovelace', 'config', 'developer-tools', 'profile'] as const;
 
 /**
+ * What a NON-admin keeps. Home Assistant registers `config` and
+ * `developer-tools` with `require_admin`, so a resident never has them — the
+ * first run of this suite with a resident account (K31, rc39, 2026-09-16)
+ * reported both as "gone". They were not gone; the list above was measured
+ * with the admin account and said "resident" anyway.
+ */
+export const EXPECTED_PANELS_RESIDENT = ['lovelace', 'profile'] as const;
+
+/**
  * A Zigbee IEEE address as zigbee2mqtt names a device nobody renamed —
  * 16 hex digits, with or without the `0x`.
  */
@@ -104,9 +113,10 @@ export function personalDashboardsInSidebar(panels: PanelInfo[]): string[] {
 }
 
 /** Panels a resident must keep that are not registered at all. */
-export function missingExpectedPanels(panels: PanelInfo[]): string[] {
+export function missingExpectedPanels(panels: PanelInfo[], isAdmin = true): string[] {
   const present = new Set(panels.map(p => p.url_path));
-  return (EXPECTED_PANELS as readonly string[]).filter(p => !present.has(p));
+  const expected: readonly string[] = isAdmin ? EXPECTED_PANELS : EXPECTED_PANELS_RESIDENT;
+  return expected.filter(p => !present.has(p));
 }
 
 /** Every card in a view, wherever the strategy chose to put it, nesting included. */
@@ -189,6 +199,9 @@ export const EXPECTED_ELEMENTS: Record<string, string | null> = {
   'ga-thermostat-card': 'ga-thermostat-card',
   'ga-home-strategy': 'll-strategy-dashboard-ga-home',
   'ga-sidebar-default': null,
+  // Side-effect module: watches the registry swap and reports elements that
+  // could not register (bundle 1.15.0). Defines nothing itself.
+  'ga-registry-guard': null,
 };
 
 /**

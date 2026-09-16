@@ -254,6 +254,21 @@ test.describe('Frontend version stamping', () => {
         );
       }
       await haLogin(page, deviceUrl);
+      // /config/info is admin-only in Home Assistant; a resident account has no
+      // way to read the Frontend row. Say so instead of timing out on a locator
+      // (first resident-account run, K31 rc39, 2026-09-16).
+      await page.goto(`${deviceUrl}/`, { timeout: PAGE_LOAD_MS, waitUntil: 'domcontentloaded' });
+      const admin = await page.evaluate(`(() => {
+        const hass = (document.querySelector('home-assistant') || {}).hass;
+        return !!(hass && hass.user && hass.user.is_admin);
+      })()`).catch(() => false);
+      if (!admin) {
+        test.skip(
+          true,
+          'Wizard page not served and the account is not an admin — /config/info ' +
+            'is admin-only, so the rendered Frontend version cannot be read here.',
+        );
+      }
       await page.goto(`${deviceUrl}/config/info`, {
         timeout: PAGE_LOAD_MS,
         waitUntil: 'domcontentloaded',

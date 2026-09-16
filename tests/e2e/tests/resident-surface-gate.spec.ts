@@ -107,6 +107,11 @@ test.describe('resident-surface checks: must-flag', () => {
     expect(missingExpectedPanels(withoutConfig)).toEqual(['config']);
   });
 
+  test('a resident missing the profile panel is flagged', () => {
+    const withoutProfile = HEALTHY_PANELS.filter(p => p.url_path !== 'profile');
+    expect(missingExpectedPanels(withoutProfile, false)).toEqual(['profile']);
+  });
+
   test('a radio address is flagged wherever a label can hide', () => {
     // Each of these is a real place the strategy puts text in front of a
     // resident, and each was reachable by the defect.
@@ -145,6 +150,16 @@ test.describe('resident-surface checks: must-NOT-flag', () => {
     expect(leakedStockPanels(HEALTHY_PANELS)).toEqual([]);
     expect(personalDashboardsInSidebar(HEALTHY_PANELS)).toEqual([]);
     expect(missingExpectedPanels(HEALTHY_PANELS)).toEqual([]);
+  });
+
+  test('a resident without the admin-only panels is not flagged', () => {
+    // `config` and `developer-tools` are require_admin in Home Assistant. The
+    // first resident-account run (K31, rc39, 2026-09-16) flagged both as gone.
+    const resident = HEALTHY_PANELS.filter(
+      p => p.url_path !== 'config' && p.url_path !== 'developer-tools',
+    );
+    expect(missingExpectedPanels(resident, false)).toEqual([]);
+    expect(missingExpectedPanels(resident, true)).toEqual(['config', 'developer-tools']);
   });
 
   test('a personal board that is correctly hidden is not flagged', () => {
