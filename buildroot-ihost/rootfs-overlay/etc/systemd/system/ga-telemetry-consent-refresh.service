@@ -1,0 +1,12 @@
+[Unit]
+# Triggered by ga-telemetry-consent-refresh.path on every save of the consent
+# store. Writes the markers, then lets the conditioned shippers re-evaluate:
+# `systemctl start` on a unit whose ConditionPathExists is now false is a
+# no-op, and `stop` on one whose marker just vanished ends it — so this is the
+# whole "consent revoked" path too, not only the "consent given" one.
+Description=Apply a changed telemetry consent to the shippers
+After=hassio-supervisor.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-telemetry-consent-apply

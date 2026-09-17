@@ -177,6 +177,14 @@ jobs:
         # (5 of 7 fail) before it was added.
         run: sh tests/ga_tests/enroll_env/test.sh
 
+      - name: ga-telemetry-gate + consent-apply (consent markers and shippers)
+        # Fixture-driven: the gate against v1/v2/stale stores, and the apply
+        # script with a stub systemctl — both directions (grant → start,
+        # revoke → stop), plus the two invariants that keep the store watcher
+        # from looping (no RemainAfterExit; watches the store, not the
+        # markers). This file had existed since Phase B and never run in CI.
+        run: sh tests/ga_tests/telemetry/test_consent_gate.sh
+
       # expected.env is the DECLARATION side of the os_integrity suite: the
       # release marker and the baked add-on pins the flashed device is held
       # against. It is generated repo-side and committed — and nothing checked
