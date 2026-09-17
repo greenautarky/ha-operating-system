@@ -154,6 +154,79 @@ GA_TELEMETRY_FORCE=1 STORE_PATH="$WORK/no-such-file.json" POLICY_VERSION_FILE="$
 assert_exit $? 0 "GA_TELEMETRY_FORCE=1 bypasses missing store + policy bump"
 
 # ---------------------------------------------------------------------------
+# ga-telemetry-consent-apply: the shippers follow the markers NOW, not at boot.
+# The gate is stubbed to write a chosen marker set; systemctl is stubbed to
+# record what it was asked. Asserted on the RECORDED verbs, both directions.
+# ---------------------------------------------------------------------------
+echo "--- ga-telemetry-consent-apply (start/stop decisions) ---"
+APPLY="${APPLY:-$(dirname "$0")/../../../buildroot-ihost/rootfs-overlay/usr/sbin/ga-telemetry-consent-apply}"
+if [ ! -f "$APPLY" ]; then
+    FAIL "apply script present" "not found at $APPLY"
+else
+    cat > "$WORK/systemctl" <<'STUB'
+#!/bin/sh
+echo "$1 $2" >> "$SYSTEMCTL_LOG"
+STUB
+    chmod +x "$WORK/systemctl"
+    # gate stub: markers come from the fixture, the gate only "writes" what the test says
+    cat > "$WORK/gate" <<'STUB'
+#!/bin/sh
+rm -f "$MARKER_DIR"/.ga-consent-*
+for m in $GATE_MARKERS; do touch "$MARKER_DIR/$m"; done
+STUB
+    chmod +x "$WORK/gate"
+    mkdir -p "$WORK/am"
+
+    : > "$WORK/sc.log"
+    GATE_MARKERS=".ga-consent-error_logs .ga-consent-metrics" SYSTEMCTL_LOG="$WORK/sc.log" \
+        MARKER_DIR="$WORK/am" GATE="$WORK/gate" SYSTEMCTL="$WORK/systemctl" sh "$APPLY" >/dev/null 2>&1
+    if grep -q "^start fluent-bit.service" "$WORK/sc.log" && grep -q "^start telegraf.service" "$WORK/sc.log"; then
+        PASS "both consents → both shippers started"
+    else
+        FAIL "both consents → both shippers started" "$(tr '\n' ';' < "$WORK/sc.log")"
+    fi
+
+    : > "$WORK/sc.log"
+    GATE_MARKERS=".ga-consent-error_logs" SYSTEMCTL_LOG="$WORK/sc.log" \
+        MARKER_DIR="$WORK/am" GATE="$WORK/gate" SYSTEMCTL="$WORK/systemctl" sh "$APPLY" >/dev/null 2>&1
+    if grep -q "^start fluent-bit.service" "$WORK/sc.log" && grep -q "^stop telegraf.service" "$WORK/sc.log"; then
+        PASS "tier2 revoked → telegraf STOPPED, fluent-bit kept"
+    else
+        FAIL "tier2 revoked → telegraf stopped" "$(tr '\n' ';' < "$WORK/sc.log")"
+    fi
+
+    : > "$WORK/sc.log"
+    GATE_MARKERS="" SYSTEMCTL_LOG="$WORK/sc.log" \
+        MARKER_DIR="$WORK/am" GATE="$WORK/gate" SYSTEMCTL="$WORK/systemctl" sh "$APPLY" >/dev/null 2>&1
+    if grep -q "^stop fluent-bit.service" "$WORK/sc.log" && grep -q "^stop telegraf.service" "$WORK/sc.log" && ! grep -q "^start" "$WORK/sc.log"; then
+        PASS "no consent → both shippers stopped, nothing started"
+    else
+        FAIL "no consent → both stopped" "$(tr '\n' ';' < "$WORK/sc.log")"
+    fi
+fi
+
+# The watcher must not be able to loop: the refresh unit must NOT keep itself
+# "active" (RemainAfterExit) — a .path cannot re-trigger an active unit — and
+# it must watch the store, not the marker dir the gate writes into.
+echo "--- ga-telemetry-consent-refresh units ---"
+UNITS="$(dirname "$0")/../../../buildroot-ihost/rootfs-overlay/etc/systemd/system"
+if [ -f "$UNITS/ga-telemetry-consent-refresh.service" ] && ! grep -q "RemainAfterExit" "$UNITS/ga-telemetry-consent-refresh.service"; then
+    PASS "refresh service has no RemainAfterExit (re-triggerable)"
+else
+    FAIL "refresh service re-triggerable" "missing or RemainAfterExit set"
+fi
+if grep -q "^PathChanged=/mnt/data/supervisor/homeassistant/.storage/greenautarky_telemetry$" "$UNITS/ga-telemetry-consent-refresh.path" 2>/dev/null; then
+    PASS "watcher watches the consent STORE (PathChanged)"
+else
+    FAIL "watcher watches the consent store" "PathChanged line missing or wrong"
+fi
+if [ -L "$UNITS/paths.target.wants/ga-telemetry-consent-refresh.path" ]; then
+    PASS "watcher is enabled (paths.target.wants)"
+else
+    FAIL "watcher enabled" "no paths.target.wants symlink"
+fi
+
+# ---------------------------------------------------------------------------
 echo ""
 echo "Results: $pass passed, $fail failed"
 exit "$fail"

@@ -1,0 +1,25 @@
+[Unit]
+# A consent decision takes effect when it is MADE, not at the next boot.
+#
+# ga-telemetry-consent.service evaluates the resident's consent store once at
+# boot and writes the marker files the shippers are conditioned on. The store
+# is written by the setup wizard minutes AFTER boot — so on every fresh device
+# the markers lagged the decision until somebody rebooted (measured on a bench
+# device 2026-09-13 and again 2026-09-16: tier1=true in the store, no
+# .ga-consent-tier1 on disk, e2e red). This watcher re-evaluates on change.
+#
+# PathChanged (not PathModified): Home Assistant writes its stores atomically
+# (temp file + rename), so the event is the rename into place, and it fires
+# once per save, not once per write() call. The refresh unit has NO
+# RemainAfterExit — a .path unit cannot re-trigger a unit that is still
+# "active" (the ga-ethernet-retire hot-loop lesson, 2026-09-08, the other way
+# round). And the gate writes ONLY the markers under /mnt/data, never the
+# store, so a refresh cannot trigger itself.
+Description=Re-evaluate telemetry consent when the resident's decision changes
+
+[Path]
+PathChanged=/mnt/data/supervisor/homeassistant/.storage/greenautarky_telemetry
+Unit=ga-telemetry-consent-refresh.service
+
+[Install]
+WantedBy=paths.target

@@ -1,0 +1,31 @@
+#!/bin/sh
+# ga-telemetry-consent-apply — make the shippers follow the consent markers NOW.
+#
+# Runs from ga-telemetry-consent-refresh.service whenever the resident's consent
+# store changes (see the .path unit), and can be run by hand. Two steps:
+#   1. ga-telemetry-gate write   — (re)compute the marker files from the store
+#   2. start/stop each conditioned shipper to match its marker
+# Step 2 exists because systemd evaluates ConditionPathExists only when a unit
+# is STARTED: a marker that appears after boot changes nothing until someone
+# starts the unit, and a marker that vanishes does not stop a running one.
+set -u
+
+MARKER_DIR="${MARKER_DIR:-/mnt/data}"
+GATE="${GATE:-/usr/sbin/ga-telemetry-gate}"
+SYSTEMCTL="${SYSTEMCTL:-systemctl}"
+
+"$GATE" write || echo "ga-telemetry-consent-apply: gate write returned $?"
+
+# marker → unit. The legacy marker names are the ones the shipped units
+# condition on (see fluent-bit.service / telegraf.service).
+apply() {
+    marker="$MARKER_DIR/$1"; unit="$2"
+    if [ -f "$marker" ]; then
+        "$SYSTEMCTL" start "$unit" && echo "ga-telemetry-consent-apply: $unit started ($1 present)"
+    else
+        "$SYSTEMCTL" stop "$unit" && echo "ga-telemetry-consent-apply: $unit stopped ($1 absent)"
+    fi
+}
+apply .ga-consent-error_logs fluent-bit.service
+apply .ga-consent-metrics    telegraf.service
+exit 0

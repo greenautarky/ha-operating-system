@@ -300,4 +300,14 @@ else
   skip_test "TEL-38" "consent file HA wrapper" "not yet onboarded"
 fi
 
+# TEL-39/40: a consent decision takes effect when made, not at the next boot.
+# The watcher re-runs the gate on every save of the consent store and the
+# apply script starts/stops the shippers. Measured red on K31 rc40 2026-09-17
+# (store tier2=true, no marker, telegraf inactive) and green with the watcher
+# (markers + telegraf followed within 8 s, one run per change, no loop).
+run_test "TEL-39" "consent watcher active (ga-telemetry-consent-refresh.path)" \
+  "systemctl is-active ga-telemetry-consent-refresh.path"
+run_test "TEL-40" "consent apply script present and executable" \
+  "test -x /usr/sbin/ga-telemetry-consent-apply"
+
 suite_end
