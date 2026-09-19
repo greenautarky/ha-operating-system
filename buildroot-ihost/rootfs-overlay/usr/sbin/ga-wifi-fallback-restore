@@ -1,0 +1,50 @@
+#!/bin/sh
+# ga-wifi-fallback-restore — the built-in WiFi fallbacks are never gone for good.
+#
+# WHY
+# ---
+# `hassos-config` imports a CONFIG folder from the boot partition (or a USB
+# stick labelled CONFIG) and, when that folder has a `network/` directory, it
+# does `rm -rf /etc/NetworkManager/system-connections/*` before copying the
+# operator's files in. That is how an installer puts a site WiFi on a device
+# with nothing but an SD card and a Windows PC — a real path we want to keep.
+#
+# But it also removes the two profiles the device needs to be rescued with:
+#   * GreenAutarky-Install — the install WiFi, priority -10, the last resort
+#   * openstick-auto       — the LTE stick's AP, priority 10
+#
+# `ga-overlay-init` does restore the install profile when it is missing, but it
+# runs Before=NetworkManager.service, i.e. BEFORE hassos-config wipes — so in
+# the same boot the restore happens first and the wipe second, and the fallback
+# is gone for as long as the CONFIG folder sits on the card. The openstick
+# profile is recreated by its own timer within 5 minutes, so it heals itself;
+# the install profile had nothing that did.
+#
+# Decision (Thomas, 2026-09-19): the fallback must be present even when another
+# WiFi is configured — it is what the device switches to when that other WiFi
+# is not there. NetworkManager already ranks them (Ethernet 100, OpenStick 500,
+# install WiFi 800 / priority -10), so re-adding it cannot take a working site
+# WiFi away; it only gives the device somewhere to go when the site WiFi fails.
+#
+# Runs after hassos-config, once per boot. Idempotent: it copies only what is
+# missing and reloads NetworkManager only when it changed something.
+set -u
+
+SRC="${GA_WIFI_DEFAULT:-/usr/share/ga-wifi/GreenAutarky-Install.nmconnection}"
+DST_DIR="${GA_NM_DIR:-/etc/NetworkManager/system-connections}"
+DST="${DST_DIR}/$(basename "$SRC")"
+NMCLI="${GA_NMCLI:-nmcli}"
+log() { logger -t ga-wifi-fallback-restore -p "daemon.$1" "$2" 2>/dev/null || echo "ga-wifi-fallback-restore: $2" >&2; }
+
+[ -f "$SRC" ] || { log warning "no built-in WiFi profile at $SRC — nothing to restore"; exit 0; }
+[ -d "$DST_DIR" ] || mkdir -p "$DST_DIR"
+
+if [ -f "$DST" ]; then
+    exit 0
+fi
+
+cp "$SRC" "$DST" || { log err "could not restore $DST"; exit 1; }
+chmod 600 "$DST"
+log warning "restored the built-in WiFi fallback $(basename "$DST") — it had been removed (a CONFIG/network import wipes every NetworkManager profile). The device keeps a way back even when a site WiFi is configured."
+$NMCLI connection reload >/dev/null 2>&1 || true
+exit 0
