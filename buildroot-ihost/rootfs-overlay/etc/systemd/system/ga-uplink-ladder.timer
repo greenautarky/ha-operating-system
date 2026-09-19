@@ -1,0 +1,18 @@
+[Unit]
+# A bounded poll, not a .path unit: the thing being watched is a verdict that
+# can go stale without any file changing (the 2026-09-08 hot-loop lesson, and
+# the same reasoning as ga-lte-standby-route.timer).
+Description=Check the uplink every two minutes
+
+[Timer]
+# 120 s is the reaction time; it costs nothing on a healthy device because the
+# tick reads NetworkManager's CACHED verdict. Only a tick that already smells
+# wrong forces a probe (one HTTPS request), so a metered SIM is not billed per
+# minute for being healthy.
+OnBootSec=120
+OnUnitActiveSec=120
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

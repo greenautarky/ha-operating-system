@@ -1,0 +1,165 @@
+#!/bin/sh
+# ga-uplink-ladder — stay on a rung that actually carries internet.
+#
+# THE PROBLEM THIS SOLVES
+# -----------------------
+# A device has up to four ways out: Ethernet, the customer's WiFi, the LTE
+# stick's AP, and the install WiFi. NetworkManager picks among the ones that
+# are UP, by route metric. Nothing asked whether the chosen one WORKS. An
+# associated WiFi whose router lost its line, a stick whose SIM ran dry, a
+# hotel-style portal — all of them stay the default route for ever, and the
+# device is gone with every surface reporting "connected".
+#
+# NM already knows the answer: it probes https://checkonline.greenautarky.com
+# and reports `full | limited | portal | none` (see NetworkManager.conf). What
+# was missing is someone who ACTS on it. This is that someone.
+#
+# HOW IT DECIDES
+# --------------
+#   every tick (120 s):  read NM's CACHED verdict — free, no traffic
+#   verdict not `full`:  force ONE probe (`connectivity check`) — the "fast
+#                        only when suspicious" rule: a healthy device costs
+#                        nothing extra, a metered SIM is not probed per minute
+#   3 confirmed strikes: PARK the active connection (autoconnect no + down) so
+#                        NM falls to the next rung, and record a cooldown
+#   cooldown expired:    UNPARK and let it compete again
+#
+# TWO RULES IT MUST NEVER BREAK
+# -----------------------------
+#   * Never park the LAST rung. A device with nothing else to fall to must keep
+#     what it has, however bad — parking it would be this script causing the
+#     outage it exists to prevent. It says so and keeps probing.
+#   * A single radio holds ONE association. Falling back to the stick means
+#     taking the customer WiFi down first — that is why parking is an explicit
+#     `down`, not a metric change.
+#
+# It writes /mnt/data/supervisor/share/ga-uplink.json on every change, so the
+# fleet can see which rung a device stands on and why it moved. An uplink that
+# switches silently is how we end up debugging a site instead of reading it.
+#
+# POSIX /bin/sh. Every path and command is env-overridable so the decision
+# logic runs host-side against a stub nmcli (tests/ga_tests/uplink_ladder).
+set -u
+
+NMCLI="${GA_NMCLI:-nmcli}"
+IP_BIN="${GA_IP:-ip}"
+STATE="${GA_LADDER_STATE:-/run/ga-uplink-ladder.state}"
+BOOT_MARK="${GA_LADDER_BOOT_MARK:-/run/ga-uplink-ladder.booted}"
+PARK_DIR="${GA_LADDER_PARK_DIR:-/run/ga-uplink-parked}"
+STATUS="${GA_LADDER_STATUS:-/mnt/data/supervisor/share/ga-uplink.json}"
+FAIL_THRESHOLD="${GA_LADDER_FAILS:-3}"
+COOLDOWN_S="${GA_LADDER_COOLDOWN_S:-900}"
+NOW="${GA_LADDER_NOW:-$(date -u +%s)}"
+LOG_TAG=ga-uplink-ladder
+
+log() { logger -t "$LOG_TAG" -p "daemon.$1" "$2" 2>/dev/null || echo "$LOG_TAG: $2" >&2; }
+
+# --- what NM says, without spending traffic ---------------------------------
+cached_verdict() { $NMCLI -t -f CONNECTIVITY general status 2>/dev/null | head -1; }
+forced_verdict() { $NMCLI networking connectivity check 2>/dev/null | head -1; }
+
+# The connection that currently carries the default route. Empty when there is
+# no default route at all — which is itself a "not full" situation.
+active_connection() {
+    _dev=$($IP_BIN -4 route show default 2>/dev/null | head -1 | sed -n 's/.* dev \([^ ]*\).*/\1/p')
+    [ -n "$_dev" ] || return 0
+    $NMCLI -t -f NAME,DEVICE connection show --active 2>/dev/null \
+        | awk -F: -v d="$_dev" '$2==d {print $1; exit}'
+}
+
+# Rungs that could take over: any other connection profile that is allowed to
+# autoconnect and is not parked. This is what decides "is there a next rung".
+spare_rungs() {
+    _active="$1"
+    $NMCLI -t -f NAME,AUTOCONNECT connection show 2>/dev/null \
+        | awk -F: -v a="$_active" '$1!=a && $2=="yes" {print $1}' \
+        | while read -r _c; do [ -f "$PARK_DIR/$_c" ] || echo "$_c"; done
+}
+
+park() {
+    _c="$1"; _why="$2"
+    mkdir -p "$PARK_DIR"
+    echo $((NOW + COOLDOWN_S)) > "$PARK_DIR/$_c"
+    $NMCLI connection modify "$_c" connection.autoconnect no >/dev/null 2>&1
+    $NMCLI connection down "$_c" >/dev/null 2>&1
+    log warning "parked '$_c' for ${COOLDOWN_S}s — $_why. Falling to the next uplink."
+}
+
+unpark() {
+    _c="$1"
+    rm -f "$PARK_DIR/$_c"
+    $NMCLI connection modify "$_c" connection.autoconnect yes >/dev/null 2>&1
+    log info "unparked '$_c' — its cooldown expired, it may compete again"
+}
+
+# A reboot is a fresh start: let every rung try before we judge any of them.
+# Parking persists in the keyfile (autoconnect=no), so without this a device
+# could come up with a rung disabled by a decision taken before the reboot.
+unpark_all_on_boot() {
+    [ -f "$BOOT_MARK" ] && return 0
+    [ -d "$PARK_DIR" ] && for _f in "$PARK_DIR"/*; do
+        [ -e "$_f" ] || continue
+        unpark "$(basename "$_f")"
+    done
+    mkdir -p "$(dirname "$BOOT_MARK")" 2>/dev/null
+    : > "$BOOT_MARK"
+}
+
+release_expired() {
+    [ -d "$PARK_DIR" ] || return 0
+    for _f in "$PARK_DIR"/*; do
+        [ -e "$_f" ] || continue
+        _until=$(cat "$_f" 2>/dev/null || echo 0)
+        [ "$NOW" -ge "$_until" ] 2>/dev/null && unpark "$(basename "$_f")"
+    done
+}
+
+write_status() {
+    mkdir -p "$(dirname "$STATUS")" 2>/dev/null
+    printf '{"rung":"%s","verdict":"%s","strikes":%s,"parked":"%s","updated_at":"%s"}\n' \
+        "$1" "$2" "$3" "$(ls "$PARK_DIR" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')" \
+        "$(date -u -d "@$NOW" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        > "$STATUS"
+}
+
+main() {
+    unpark_all_on_boot
+    release_expired
+
+    _active=$(active_connection)
+    _strikes=$(cat "$STATE" 2>/dev/null || echo 0)
+    case "$_strikes" in ''|*[!0-9]*) _strikes=0 ;; esac
+
+    _verdict=$(cached_verdict)
+    if [ "$_verdict" != "full" ]; then
+        # Suspicion — and only here — costs one request.
+        _verdict=$(forced_verdict)
+    fi
+
+    if [ "$_verdict" = "full" ]; then
+        [ "$_strikes" -gt 0 ] && log info "uplink '$_active' is healthy again after $_strikes strike(s)"
+        echo 0 > "$STATE"
+        write_status "${_active:-none}" "$_verdict" 0
+        return 0
+    fi
+
+    _strikes=$((_strikes + 1))
+    echo "$_strikes" > "$STATE"
+    log warning "uplink '${_active:-none}' reports '$_verdict' (strike $_strikes/$FAIL_THRESHOLD)"
+    write_status "${_active:-none}" "$_verdict" "$_strikes"
+
+    [ "$_strikes" -ge "$FAIL_THRESHOLD" ] || return 0
+    if [ -z "$_active" ]; then
+        log warning "no default route to park — waiting for a rung to come up"
+        return 0
+    fi
+    if [ -z "$(spare_rungs "$_active")" ]; then
+        log warning "'$_active' is the LAST uplink ('$_verdict') — keeping it. Parking it would take the device off the network entirely."
+        return 0
+    fi
+    park "$_active" "no internet after $_strikes checks ($_verdict)"
+    echo 0 > "$STATE"
+    write_status "switching" "$_verdict" 0
+}
+
+main "$@"

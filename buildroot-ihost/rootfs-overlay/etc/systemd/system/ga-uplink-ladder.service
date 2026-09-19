@@ -1,0 +1,12 @@
+[Unit]
+# Keeps the device on an uplink that actually carries internet. See the script
+# for the decision rules; the two it must never break are "never park the last
+# rung" and "one radio holds one association, so falling back means taking the
+# dead profile down".
+Description=Keep the device on a working uplink
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-uplink-ladder

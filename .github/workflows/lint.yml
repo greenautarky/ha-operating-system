@@ -192,6 +192,14 @@ jobs:
         # any one of the four fixes flags exactly its own check.
         run: sh tests/ga_tests/uplink_units/test.sh
 
+      - name: uplink ladder (fallback staircase decisions)
+        # Drives the real ladder script against a stub NetworkManager: healthy
+        # devices cost no probe traffic, three confirmed strikes switch, the
+        # LAST rung is never parked, cooldowns hold, a reboot clears every
+        # park. Mutation-proven — each rule has a check that fires when the
+        # rule is removed.
+        run: sh tests/ga_tests/uplink_ladder/test.sh
+
       # expected.env is the DECLARATION side of the os_integrity suite: the
       # release marker and the baked add-on pins the flashed device is held
       # against. It is generated repo-side and committed — and nothing checked

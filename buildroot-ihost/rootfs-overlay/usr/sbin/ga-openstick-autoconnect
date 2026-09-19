@@ -33,6 +33,17 @@ if [ ! -f "$KEY_FILE" ]; then
   exit 0
 fi
 
+# 2a. Respect a parked rung. ga-uplink-ladder parks a connection that carries
+# no internet (autoconnect no + down) and re-tests it after a cooldown. Without
+# this check the scan below would find the stick "not active", delete the
+# profile and recreate it — undoing the park every 5 minutes and pinning the
+# device to a dead uplink. Two mechanisms, one connection: the ladder owns
+# whether it may run, this script owns whether it exists.
+if [ -f "/run/ga-uplink-parked/$CONN_NAME" ]; then
+  log "$CONN_NAME is parked by ga-uplink-ladder (no internet on it) — leaving it alone"
+  exit 0
+fi
+
 # 2. Check if already connected — nothing to do
 if nmcli -t -f NAME connection show --active 2>/dev/null | grep -q "$CONN_NAME"; then
   exit 0
