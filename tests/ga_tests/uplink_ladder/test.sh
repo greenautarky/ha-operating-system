@@ -31,7 +31,12 @@ case "$*" in
   *"-f CONNECTIVITY general status")   cat "$NM_CACHED" ;;
   "networking connectivity check")     cat "$NM_FORCED" ;;
   *"-f NAME,DEVICE connection show --active") cat "$NM_ACTIVE" ;;
-  *"-f NAME,AUTOCONNECT connection show")     cat "$NM_PROFILES" ;;
+  *"-f NAME,TYPE,AUTOCONNECT connection show") cat "$NM_PROFILES" ;;
+  *"-f connection.interface-name connection show "*) echo "connection.interface-name:${NM_IFACE:-eth0}" ;;
+  *"-f 802-11-wireless.ssid connection show "*)
+      # the ssid of the profile named last on the command line
+      for _a in $*; do :; done; echo "802-11-wireless.ssid:${_a}" ;;
+  *"-f SSID device wifi list")          cat "${NM_SCAN:-/dev/null}" ;;
   *) : ;;
 esac
 STUB
@@ -47,7 +52,8 @@ run() {   # run <cached> <forced> <profiles-file> [now]
     printf '%s\n' "$2" > "$WORK/forced"
     NM_LOG="$WORK/nm.log" NM_CACHED="$WORK/cached" NM_FORCED="$WORK/forced" \
     NM_ACTIVE="$WORK/active" NM_PROFILES="$3" IP_ROUTE="$WORK/route" \
-    GA_NMCLI="$WORK/nmcli" GA_IP="$WORK/ip" \
+    NM_SCAN="${NM_SCAN:-$WORK/scan-two}" NM_IFACE="${NM_IFACE:-eth0}" \
+    GA_NMCLI="$WORK/nmcli" GA_IP="$WORK/ip" GA_LADDER_SYS_NET="$WORK/sys" \
     GA_LADDER_STATE="$WORK/state" GA_LADDER_BOOT_MARK="$WORK/booted" \
     GA_LADDER_PARK_DIR="$WORK/parked" GA_LADDER_STATUS="$WORK/status.json" \
     GA_LADDER_NOW="${4:-1000000}" GA_LADDER_COOLDOWN_S=900 \
@@ -59,8 +65,21 @@ probed() { grep -c "networking connectivity check" "$WORK/nm.log"; }
 # a device on the customer WiFi, with the LTE stick as a spare rung
 printf 'default dev wlan0 scope link\n' > "$WORK/route"  # no address: the script only reads the interface, and this repo is public
 printf 'home-wifi:wlan0\n' > "$WORK/active"
-printf 'home-wifi:yes\nopenstick-auto:yes\nGreenAutarky-Install:yes\n' > "$WORK/two-rungs"
-printf 'home-wifi:yes\n' > "$WORK/one-rung"
+printf 'home-wifi:802-11-wireless:yes\nopenstick-auto:802-11-wireless:yes\nGreenAutarky-Install:802-11-wireless:yes\n' > "$WORK/two-rungs"
+printf 'home-wifi:802-11-wireless:yes\n' > "$WORK/one-rung"
+
+#: What K31 actually had when the ladder parked its only uplink (rc42,
+#: 2026-09-19): an Ethernet profile with no cable, the loopback, and the mesh
+#: WireGuard link — three profiles, no way out.
+printf 'home-wifi:802-11-wireless:yes\nWired connection 1:802-3-ethernet:yes\nlo:loopback:yes\nwt0:wireguard:yes\n' > "$WORK/k31-rungs"
+#: An Ethernet spare that really is one: cable in, carrier up.
+printf 'home-wifi:802-11-wireless:yes\nWired connection 1:802-3-ethernet:yes\n' > "$WORK/eth-spare"
+
+# the SSIDs a scan can see; profiles named here are in range
+printf 'openstick-auto\nGreenAutarky-Install\n' > "$WORK/scan-two"
+printf '' > "$WORK/scan-none"
+mkdir -p "$WORK/sys/eth0" "$WORK/sys/wlan0"
+printf '0\n' > "$WORK/sys/eth0/carrier"      # no cable — the K31 case
 
 echo ""
 echo "=== uplink ladder ==="
@@ -129,6 +148,37 @@ run full full "$WORK/two-rungs"
 [ "$(parked_count)" = "0" ] \
     && PASS "after a reboot every rung gets to try again" \
     || FAIL "reboot unparks" "a decision from before the reboot still disables a rung"
+
+# ── what counts as a rung at all ────────────────────────────────────────────
+#
+# THE DEVICE CAUGHT THIS ONE. On K31 (rc42, 2026-09-19) the ladder parked the
+# only working uplink: it had counted an Ethernet profile with no cable, the
+# loopback and the mesh WireGuard link as spare rungs. Three profiles, no way
+# out, and the device took itself off the network to reach them. The host-side
+# tests could not see it because the fixture had only ever listed profiles that
+# were real uplinks — the stub was honest, the WORLD it described was not.
+echo "--- a rung needs a medium, not just a profile ---"
+rm -rf "$WORK/state" "$WORK/parked" "$WORK/booted"
+run limited limited "$WORK/k31-rungs"; run limited limited "$WORK/k31-rungs"; run limited limited "$WORK/k31-rungs"
+[ "$(parked_count)" = "0" ] \
+    && PASS "cable-less Ethernet, loopback and WireGuard are not spare rungs" \
+    || FAIL "K31 case: nothing to fall to" "the ladder parked the only working uplink"
+
+echo "--- an Ethernet spare with a cable IS a rung ---"
+rm -rf "$WORK/state" "$WORK/parked" "$WORK/booted"
+printf '1\n' > "$WORK/sys/eth0/carrier"
+run limited limited "$WORK/eth-spare"; run limited limited "$WORK/eth-spare"; run limited limited "$WORK/eth-spare"
+[ "$(parked_count)" = "1" ] && PASS "carrier present -> the dead WiFi is parked" || FAIL "eth spare with carrier" "did not park"
+printf '0\n' > "$WORK/sys/eth0/carrier"
+
+echo "--- a WiFi spare that is not in range is not a rung ---"
+rm -rf "$WORK/state" "$WORK/parked" "$WORK/booted"
+NM_SCAN="$WORK/scan-none" run limited limited "$WORK/two-rungs"
+NM_SCAN="$WORK/scan-none" run limited limited "$WORK/two-rungs"
+NM_SCAN="$WORK/scan-none" run limited limited "$WORK/two-rungs"
+[ "$(parked_count)" = "0" ] \
+    && PASS "an SSID nobody can see is not somewhere to fall to" \
+    || FAIL "out-of-range WiFi is not a spare" "parked anyway"
 
 echo ""
 echo "Results: $pass passed, $fail failed"

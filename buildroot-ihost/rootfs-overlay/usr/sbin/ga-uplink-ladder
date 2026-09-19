@@ -47,6 +47,7 @@ STATE="${GA_LADDER_STATE:-/run/ga-uplink-ladder.state}"
 BOOT_MARK="${GA_LADDER_BOOT_MARK:-/run/ga-uplink-ladder.booted}"
 PARK_DIR="${GA_LADDER_PARK_DIR:-/run/ga-uplink-parked}"
 STATUS="${GA_LADDER_STATUS:-/mnt/data/supervisor/share/ga-uplink.json}"
+SYS_NET="${GA_LADDER_SYS_NET:-/sys/class/net}"
 FAIL_THRESHOLD="${GA_LADDER_FAILS:-3}"
 COOLDOWN_S="${GA_LADDER_COOLDOWN_S:-900}"
 NOW="${GA_LADDER_NOW:-$(date -u +%s)}"
@@ -67,13 +68,47 @@ active_connection() {
         | awk -F: -v d="$_dev" '$2==d {print $1; exit}'
 }
 
-# Rungs that could take over: any other connection profile that is allowed to
-# autoconnect and is not parked. This is what decides "is there a next rung".
+# Can this profile actually carry traffic if we fall to it?
+#
+# MEASURED ON K31 (rc42, 2026-09-19) — the first thing the device said that the
+# host-side tests could not: the ladder parked the only working uplink. It had
+# counted `Wired connection 1` as a spare rung because the profile exists and
+# may autoconnect — with no cable in the socket. `lo` and `wt0` (the mesh
+# WireGuard link, which RIDES on the uplink) were candidates too. Three
+# "rungs", none of which can carry a packet, and a device that took itself off
+# the network to reach them.
+#
+# So a spare rung is not a profile that exists. It is a profile whose medium is
+# there: a cable with carrier, an SSID in range, a modem. Anything we cannot
+# PROVE carries traffic is not a spare — fail closed, because the cost of being
+# wrong here is the outage this script exists to prevent.
+eth_has_carrier() {
+    _if=$($NMCLI -t -f connection.interface-name connection show "$1" 2>/dev/null | cut -d: -f2-)
+    [ -n "$_if" ] || return 1
+    [ "$(cat "$SYS_NET/$_if/carrier" 2>/dev/null)" = "1" ]
+}
+
+wifi_in_range() {
+    _ssid=$($NMCLI -t -f 802-11-wireless.ssid connection show "$1" 2>/dev/null | cut -d: -f2-)
+    [ -n "$_ssid" ] || return 1
+    $NMCLI -t -f SSID device wifi list 2>/dev/null | grep -qx "$_ssid"
+}
+
+# Rungs that could take over: another profile, allowed to autoconnect, not
+# parked, of an uplink type, and with its medium present.
 spare_rungs() {
     _active="$1"
-    $NMCLI -t -f NAME,AUTOCONNECT connection show 2>/dev/null \
-        | awk -F: -v a="$_active" '$1!=a && $2=="yes" {print $1}' \
-        | while read -r _c; do [ -f "$PARK_DIR/$_c" ] || echo "$_c"; done
+    $NMCLI -t -f NAME,TYPE,AUTOCONNECT connection show 2>/dev/null | while IFS=: read -r _n _t _a; do
+        [ "$_n" = "$_active" ] && continue
+        [ "$_a" = "yes" ] || continue
+        [ -f "$PARK_DIR/$_n" ] && continue
+        case "$_t" in
+            802-3-ethernet)  eth_has_carrier "$_n" && echo "$_n" ;;
+            802-11-wireless) wifi_in_range "$_n" && echo "$_n" ;;
+            gsm|cdma)        echo "$_n" ;;
+            *) ;;   # loopback, wireguard, bridge, tun — not a way out
+        esac
+    done
 }
 
 park() {
