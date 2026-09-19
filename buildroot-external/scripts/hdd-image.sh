@@ -49,8 +49,9 @@ function create_disk_image() {
     DATA_IMAGE=$(path_data_img)
     export SYSTEM_IMAGE DATA_IMAGE
 
-    trap 'rm -rf "${ROOTPATH_TMP}" "${GENIMAGE_TMPPATH}"' EXIT
+    trap 'rm -rf "${ROOTPATH_TMP}" "${BOOTPATH_OTA:-}" "${GENIMAGE_TMPPATH}"' EXIT
     ROOTPATH_TMP="$(mktemp -d)"
+    BOOTPATH_OTA=""
 
     rm -rf "${GENIMAGE_TMPPATH}"
     # Generate boot FS image - run in a separate step with specific rootpath
@@ -59,6 +60,42 @@ function create_disk_image() {
       --configdump - \
       --includepath "${BOARD_DIR}:${BR2_EXTERNAL_HASSOS_PATH}/genimage" \
       --config images-boot.cfg
+
+    # Generate the OTA bundle's boot FS image — the SAME tree minus
+    # /ga-ethernet-force. Two artifacts because the two destinations differ:
+    #
+    #   boot.vfat      -> the SD image. Carries the marker: provisioning runs
+    #                     over the LAN socket (operator decision 2026-07-30).
+    #   boot-ota.vfat  -> the RAUC bundle. Must NOT carry it. install_boot
+    #                     copies the bundle's boot partition over /mnt/boot
+    #                     wholesale, keeping only *.txt and grubenv, so a
+    #                     marker in here is re-created on EVERY device an
+    #                     update reaches -- customer units included, where the
+    #                     socket was never on and nobody asked for it.
+    #
+    # Measured on the rc43 bundle 2026-09-19 (unsquashfs -> boot.vfat ->
+    # `GA-ETH~1  112  ga-ethernet-force`). It was harmless only while
+    # ga-ethernet-retire.path won its race with the guard; #582 fixed the race
+    # and thereby made the marker effective fleet-wide. The durable switch is
+    # the fleet's (`ethernet.force_enabled`), not the image's.
+    #
+    # A copy rather than a delete-and-restore: mutating path_boot_dir() would
+    # make the SD image depend on the order of two genimage runs, and the one
+    # that loses is silently wrong.
+    BOOTPATH_OTA="$(mktemp -d)"
+    cp -a "$(path_boot_dir)/." "${BOOTPATH_OTA}/"
+    rm -f "${BOOTPATH_OTA}/ga-ethernet-force"
+    if [ -e "${BOOTPATH_OTA}/ga-ethernet-force" ]; then
+        echo "hdd-image: FAILED to strip ga-ethernet-force from the OTA boot tree" >&2
+        exit 1
+    fi
+
+    rm -rf "${GENIMAGE_TMPPATH}"
+    genimage \
+      --rootpath "${BOOTPATH_OTA}" \
+      --configdump - \
+      --includepath "${BOARD_DIR}:${BR2_EXTERNAL_HASSOS_PATH}/genimage" \
+      --config images-boot-ota.cfg
 
     rm -rf "${GENIMAGE_TMPPATH}"
     # Generate OS image (no files are copied to temporary rootpath here)

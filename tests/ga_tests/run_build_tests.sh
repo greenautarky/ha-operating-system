@@ -404,6 +404,66 @@ else
   fi
 fi
 
+# BLD-ETH-01: the OTA bundle must NOT carry the ethernet-force marker.
+#
+# The SD image carries it on purpose (CFG-49a); the bundle must not, because
+# RAUC's install_boot copies the bundle's boot partition over /mnt/boot
+# wholesale and keeps only *.txt and grubenv. A marker inside the bundle is
+# therefore RE-CREATED on every device an update reaches — customer units where
+# the LAN socket was never on included. Measured on the rc43 bundle 2026-09-19,
+# where it was exactly that:
+#   unsquashfs …raucb -> boot.vfat -> `GA-ETH~1  112  ga-ethernet-force`
+# It had been harmless only while ga-ethernet-retire.path beat
+# ga-ethernet-guard.service to the file; #582 fixed that race and made the
+# restored marker effective, fleet-wide, with nobody deciding it.
+#
+# TWO FIXTURES, ONE RUN, and neither is padding:
+#   must-NOT-flag  the bundle's boot.vfat  -> the regression this guards
+#   must-flag      the SD image's boot.vfat -> proof the detector still works
+# A detector that silently stopped matching would pass the first half forever.
+# So if the SD half does not match, this FAILS and says the detector is broken
+# — it never reports the bundle clean on the strength of a check that cannot
+# find anything anywhere.
+#
+# Discriminator: the FAT 8.3 alias `GA-ETH~1`. The long name is stored UTF-16LE
+# and a plain grep misses it — measured on the live artifact, where the UTF-16
+# probe scored 0 and the alias scored 1.
+_ETH_NEEDLE='GA-ETH'
+_eth_sd_vfat="${OUT}/images/boot.vfat"
+_eth_bundle="$(ls -t "${OUT}"/images/*.raucb 2>/dev/null | head -1)"
+_eth_rootfs="${OUT}/images/rootfs.erofs"
+_eth_unsq="$(find "${OUT}/host" -name unsquashfs -type f -perm -u+x 2>/dev/null | head -1)"
+[[ -n "$_eth_unsq" ]] || _eth_unsq="$(command -v unsquashfs 2>/dev/null || true)"
+
+if [[ -n "$_eth_bundle" && -f "$_eth_rootfs" && ! "$_eth_bundle" -nt "$_eth_rootfs" ]]; then
+  _fail "BLD-ETH-01: the newest bundle ($(basename "$_eth_bundle")) is OLDER than rootfs.erofs — left over from an earlier build. This run produced no bundle to inspect."
+elif [[ -z "$_eth_bundle" || -z "$_eth_unsq" || ! -f "$_eth_sd_vfat" ]]; then
+  if [[ "${GA_ENV:-dev}" == "prod" ]]; then
+    _fail "BLD-ETH-01: could not run on a PROD build (bundle='${_eth_bundle:-none}' unsquashfs='${_eth_unsq:-none}' sd_vfat='${_eth_sd_vfat}') — a prod release may not ship without this evidence."
+  else
+    _skip "BLD-ETH-01: OTA bundle carries no ethernet-force marker" "no bundle, no unsquashfs, or no SD boot.vfat in this run"
+  fi
+else
+  _eth_tmp="$(mktemp -d)"
+  if "$_eth_unsq" -q -n -d "${_eth_tmp}/x" "$_eth_bundle" boot.vfat >/dev/null 2>&1 \
+     && [[ -f "${_eth_tmp}/x/boot.vfat" ]]; then
+    # must-flag half first: if the detector cannot find the marker where it is
+    # KNOWN to be, nothing it says about the bundle is evidence.
+    if grep -aq "$_ETH_NEEDLE" "$_eth_sd_vfat" 2>/dev/null; then
+      if grep -aq "$_ETH_NEEDLE" "${_eth_tmp}/x/boot.vfat" 2>/dev/null; then
+        _fail "BLD-ETH-01: the OTA bundle CARRIES /ga-ethernet-force — every device this update reaches gets its LAN socket forced up at the next boot, whether or not anyone asked. The bundle must be built from boot-ota.vfat."
+      else
+        _pass "BLD-ETH-01: OTA bundle has no ethernet-force marker, SD image still does (detector verified against the SD artifact in the same run)"
+      fi
+    else
+      _fail "BLD-ETH-01: DETECTOR BROKEN — '$_ETH_NEEDLE' not found in the SD boot.vfat either, where the marker is known to be (CFG-49a). Refusing to call the bundle clean on the strength of a check that matches nothing."
+    fi
+  else
+    _fail "BLD-ETH-01: could not extract boot.vfat from $(basename "$_eth_bundle") — the bundle's boot partition could not be inspected."
+  fi
+  rm -rf "$_eth_tmp"
+fi
+
 if [[ -x "$(dirname "${BASH_SOURCE[0]}")/ethernet_force/test.sh" ]]; then
   _pass "CFG-49b: the shipping gate exists (tests/ga_tests/ethernet_force)"
 else
