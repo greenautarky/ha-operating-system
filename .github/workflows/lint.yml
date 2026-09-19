@@ -185,6 +185,13 @@ jobs:
         # markers). This file had existed since Phase B and never run in CI.
         run: sh tests/ga_tests/telemetry/test_consent_gate.sh
 
+      - name: uplink door (ethernet override, LTE key, WiFi fallback)
+        # Runs the real scripts host-side with every path redirected into a temp
+        # dir, and reads the shipped unit files. Guards the three ways a device
+        # can still be reached after it has converged. Mutation-proven: removing
+        # any one of the four fixes flags exactly its own check.
+        run: sh tests/ga_tests/uplink_units/test.sh
+
       # expected.env is the DECLARATION side of the os_integrity suite: the
       # release marker and the baked add-on pins the flashed device is held
       # against. It is generated repo-side and committed — and nothing checked

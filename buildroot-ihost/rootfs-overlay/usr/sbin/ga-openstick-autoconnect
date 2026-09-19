@@ -23,7 +23,13 @@ LOG_TAG="ga-openstick"
 log() { echo "$LOG_TAG: $1"; }
 
 # 1. Check if secret exists (feature disabled without key)
+# This used to `exit 0` in silence. The key is injected at BUILD time from
+# secrets/openstick-wifi.key and the post-build step only warns in the build
+# log, so an image built without it disables the LTE fallback on every device
+# it ships to — and no device ever says so (working-method rule 44), on the one
+# uplink a site may have nothing else but.
 if [ ! -f "$KEY_FILE" ]; then
+  log "NO SHARED KEY at $KEY_FILE — the LTE/OpenStick fallback is DISABLED on this device. This image was built without secrets/openstick-wifi.key; a site whose only uplink is the stick cannot come online."
   exit 0
 fi
 

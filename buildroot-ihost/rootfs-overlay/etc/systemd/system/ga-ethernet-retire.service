@@ -1,5 +1,22 @@
 [Unit]
 Description=Delete /mnt/boot/ga-ethernet-force (device is converged; the fleet-manager owns this switch now)
+# The marker must be HONOURED for the boot in which it exists, and only then
+# retired. Without this ordering the retirement outran the reader: measured on
+# a converged bench device 2026-09-19, retire finished 12:48:11.850 and
+# ga-ethernet-guard (which reads the marker) started 12:48:14.940 and found
+# nothing — "no enable flag, keeping Ethernet down". The .path unit is pulled
+# in by paths.target and its trigger (.ga_converged) is already true at boot,
+# while the guard waits for NetworkManager, so retire won every time.
+#
+# The consequence was not cosmetic: the on-site override this file documents
+# (the office case where Ethernet is the only uplink) could not work on any
+# device that had ever converged. Recreating the marker on the SD card was a
+# no-op, and a device moved to an Ethernet-only site came up dark with no way
+# in — KIB-SON-00000037 in the field, 2026-09-18.
+#
+# Ordering only — no Requires: when the .path triggers minutes after boot the
+# guard has long finished and this is satisfied immediately.
+After=ga-ethernet-guard.service
 # The link is deliberately NOT reconciled here — see `do_retire` in
 # ga-manage-ethernet. The device is provisioned over this very interface.
 #

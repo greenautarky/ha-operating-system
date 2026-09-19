@@ -99,13 +99,15 @@
 # Re-enable remotely: ssh -p 22222 root@<mesh-ip> 'ga-manage-ethernet enable'
 set -e
 
-GA_ENV_FILE="/mnt/data/ga-env.conf"
-SHARE_DIR="/mnt/data/supervisor/share"
+# Paths are env-overridable so the decision logic can be exercised host-side
+# (tests/ga_tests/uplink_units). Defaults are the on-device paths, unchanged.
+GA_ENV_FILE="${GA_ENV_FILE:-/mnt/data/ga-env.conf}"
+SHARE_DIR="${GA_SHARE_DIR:-/mnt/data/supervisor/share}"
 STATUS_FILE="$SHARE_DIR/ga-ethernet-status.json"
-FORCE_BOOT="/mnt/boot/ga-ethernet-force"
+FORCE_BOOT="${GA_FORCE_BOOT:-/mnt/boot/ga-ethernet-force}"
 CONVERGED_MARKER="$SHARE_DIR/.ga_converged"
-ADDON_DATA_GLOB="/mnt/data/supervisor/addons/data/*_ga_manager"
-LABEL_FILE="/mnt/data/ga-device-label"
+ADDON_DATA_GLOB="${GA_ADDON_DATA_GLOB:-/mnt/data/supervisor/addons/data/*_ga_manager}"
+LABEL_FILE="${GA_LABEL_FILE:-/mnt/data/ga-device-label}"
 IDENTITY_GLOB="/mnt/data/supervisor/addons/data/*_ga_manager/ga-identity.json"
 LEGACY_KEY="GA_ETHERNET_DISABLED"
 ETH_IFACE="eth0"
@@ -339,6 +341,15 @@ do_retire() {
       exit 1
     fi
     echo "retired the flash-time override $FORCE_BOOT (link untouched; effective until next boot)"
+    # A silent retirement is how a device becomes unreachable weeks later, at
+    # its next boot, somewhere else (working-method rule 44: a fallback must be
+    # loud). If nothing but this marker was keeping Ethernet up, say so at
+    # WARNING with the consequence spelled out.
+    if ! is_enabled_flag && [ -z "$(override_source)" ]; then
+      _msg="Ethernet stays UP for this boot but will be OFF at the next one: the flash-time override is gone and the fleet has declared nothing for this device. Declare it (ga_manager option ethernet.force_enabled, or GA_ETHERNET_ENABLED=true in $GA_ENV_FILE) BEFORE this device is rebooted or moved."
+      logger -t ga-manage-ethernet -p daemon.warning "$_msg" 2>/dev/null || true
+      echo "WARNING: $_msg" >&2
+    fi
   else
     echo "no flash-time override present ($FORCE_BOOT) — nothing to retire"
   fi

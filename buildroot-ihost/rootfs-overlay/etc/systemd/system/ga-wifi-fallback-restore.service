@@ -1,0 +1,16 @@
+[Unit]
+# Re-add the built-in WiFi fallback after a CONFIG/network import removed it.
+# Must run AFTER hassos-config (which does the removal) — ga-overlay-init runs
+# before NetworkManager and therefore before that wipe, so its restore does not
+# survive the same boot.
+Description=Restore the built-in WiFi fallback profile
+After=hassos-config.service NetworkManager.service
+Wants=hassos-config.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-wifi-fallback-restore
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
