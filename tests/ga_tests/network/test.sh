@@ -215,4 +215,20 @@ else
   skip_test "NET-22" "scan-time MAC randomization off (no nmcli host run)"
 fi
 
+# --- uplink ladder (NET-23..25) ---------------------------------------------
+# The staircase that keeps the device on a rung that carries internet. NET-25
+# reads the ladder's own verdict rather than "is the timer running": a timer
+# that runs and decides nothing looks identical to a healthy device.
+run_test "NET-23" "uplink ladder installed" \
+  "test -x /usr/sbin/ga-uplink-ladder"
+run_test "NET-24" "uplink ladder scheduled" \
+  "systemctl is-active ga-uplink-ladder.timer"
+UPLINK_STATUS=/mnt/data/supervisor/share/ga-uplink.json
+if [ -f "$UPLINK_STATUS" ]; then
+  run_test "NET-25" "uplink ladder published a rung and a verdict" \
+    "grep -q '\"rung\"' $UPLINK_STATUS && grep -q '\"verdict\"' $UPLINK_STATUS"
+else
+  skip_test "NET-25" "uplink status file" "ladder has not run yet (first 2 min after boot)"
+fi
+
 suite_end
