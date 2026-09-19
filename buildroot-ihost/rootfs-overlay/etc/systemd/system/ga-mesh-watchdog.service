@@ -1,0 +1,20 @@
+[Unit]
+Description=Restart the mesh client when it claims a mesh that carries no packets
+# The mesh client must have had a chance to come up, and the OTA resolver must
+# have had a chance to publish the WAN verdict this watchdog reads. Neither is
+# a hard dependency: a missing input is `unknown`, which never restarts
+# anything, so an ordering miss costs a tick and not a wrong action.
+After=netbird.service ga-resolve-ota.service network-online.target
+# Nothing to watch on an image without the mesh client.
+ConditionPathExists=/usr/bin/netbird
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-mesh-watchdog
+Nice=10
+TimeoutStartSec=60
+# The script marks its own lines with systemd's priority prefix (<3> err,
+# <4> warning); this puts them on the daemon facility, which is where an
+# operator and fluent-bit's PRIORITY filter look for them.
+SyslogIdentifier=ga-mesh-watchdog
+SyslogFacility=daemon
