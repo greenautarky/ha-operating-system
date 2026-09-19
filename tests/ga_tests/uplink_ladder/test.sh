@@ -57,7 +57,7 @@ parked_count() { ls "$WORK/parked" 2>/dev/null | wc -l | tr -d ' '; }
 probed() { grep -c "networking connectivity check" "$WORK/nm.log"; }
 
 # a device on the customer WiFi, with the LTE stick as a spare rung
-printf 'default via 10.0.0.1 dev wlan0\n' > "$WORK/route"
+printf 'default dev wlan0 scope link\n' > "$WORK/route"  # no address: the script only reads the interface, and this repo is public
 printf 'home-wifi:wlan0\n' > "$WORK/active"
 printf 'home-wifi:yes\nopenstick-auto:yes\nGreenAutarky-Install:yes\n' > "$WORK/two-rungs"
 printf 'home-wifi:yes\n' > "$WORK/one-rung"
