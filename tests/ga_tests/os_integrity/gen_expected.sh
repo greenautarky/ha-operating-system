@@ -22,8 +22,25 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-OUT="$(dirname "$0")/expected.env"
+# ABSOLUTE, and derived from REPO_ROOT rather than from the caller's cwd.
+#
+# It used to be `$(dirname "$0")/expected.env` — relative to wherever the
+# caller happened to stand — and the very next line cd's to REPO_ROOT, pulling
+# the ground out from under it. So the generator worked only when invoked from
+# the repo root, and failed everywhere else with:
+#
+#   _os/tests/ga_tests/os_integrity/gen_expected.sh: line NNN:
+#   _os/tests/ga_tests/os_integrity/expected.env: No such file or directory
+#
+# Which is how ga-ops' release-train checks the OS tree out — into `_os/`, and
+# runs from the workspace above it. The train's testgate therefore failed on
+# EVERY run since the step was added, and the real-boot device suites behind it
+# have never executed once. A red gate that is red for a path bug is worse than
+# no gate: it trains everyone to read past the colour, which is exactly what
+# happened across rc41, rc42 and rc43.
+OUT="$REPO_ROOT/tests/ga_tests/os_integrity/expected.env"
 cd "$REPO_ROOT"
+[ -d "$(dirname "$OUT")" ] || { echo "gen_expected: ERROR: $(dirname "$OUT") does not exist — is $REPO_ROOT really the repo root?" >&2; exit 1; }
 
 fail() { echo "gen_expected: ERROR: $*" >&2; exit 1; }
 
