@@ -53,16 +53,25 @@ LEGACY_COMMENT="# GreenAutarky services — fallback when NetBird DNS is unavail
 # stale IP until the next reconnect/reboot, while tier-0 + telegraf re-resolved.
 ENDPOINT_BOUND_SERVICES="fluent-bit-tier0.service fluent-bit.service telegraf.service"
 
+# The override LAYERS ON TOP of the baked default — it does not replace it.
+# Replacing turned a one-line override into a silent kill switch (see the
+# comment in ga-enroll for the measured shape); ga-publish-services has read
+# override-then-baked per key since it was written, so this is the intended
+# semantics, not a new invention.
+_loaded=""
+if [ -f "$CONF_DEFAULT" ]; then
+    . "$CONF_DEFAULT"
+    _loaded="$CONF_DEFAULT"
+fi
 if [ -f "$CONF_OVERRIDE" ]; then
     . "$CONF_OVERRIDE"
-    echo "ga-update-hosts: loaded override config from $CONF_OVERRIDE"
-elif [ -f "$CONF_DEFAULT" ]; then
-    . "$CONF_DEFAULT"
-    echo "ga-update-hosts: loaded default config from $CONF_DEFAULT"
-else
+    _loaded="${_loaded:+$_loaded + }$CONF_OVERRIDE"
+fi
+if [ -z "$_loaded" ]; then
     echo "ga-update-hosts: ERROR — no ga-services.conf found"
     exit 1
 fi
+echo "ga-update-hosts: loaded config from $_loaded"
 
 if [ -z "${GA_SERVICES_IP:-}" ]; then
     echo "ga-update-hosts: ERROR — GA_SERVICES_IP not set in config"

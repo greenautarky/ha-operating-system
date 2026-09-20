@@ -66,12 +66,30 @@ log()  { echo "${LOG_TAG}: $*"; }
 warn() { echo "${LOG_TAG}: WARNING: $*" >&2; }
 die()  { echo "${LOG_TAG}: ERROR: $*" >&2; exit 1; }
 
-# 1. Endpoint config — runtime override wins (same precedence as
-#    ga-update-hosts / ga-resolve-ota).
+# 1. Endpoint config — the override LAYERS ON TOP of the baked default.
+#
+#    It used to REPLACE it (`if override; then . override; else . default; fi`),
+#    which made the one-line override everybody actually writes a silent kill
+#    switch: a file containing only `GA_FLEET_ENV=staging` left GA_FLEET_HOST
+#    unset, and the branch below then exited 0 with "enrollment disabled on
+#    this image". No error, no retry, no fleet row — the device simply never
+#    enrolled again. The documented procedure (copy the whole file and edit)
+#    hides it, and so did this suite's fixture, which wrote a complete
+#    override. The shape a human writes under time pressure is the partial one.
+#
+#    ga-publish-services has read override-then-baked PER KEY since it was
+#    written, so layering is the intended semantics here, not a new invention
+#    — these three file-sourcing consumers were simply never swept.
 # shellcheck disable=SC1090
-if [ -f "$CONF_OVERRIDE" ]; then . "$CONF_OVERRIDE"; else . "$CONF_DEFAULT"; fi
+[ -f "$CONF_DEFAULT" ] && . "$CONF_DEFAULT"
+# shellcheck disable=SC1090
+[ -f "$CONF_OVERRIDE" ] && . "$CONF_OVERRIDE"
 if [ -z "${GA_FLEET_HOST:-}" ]; then
-    log "GA_FLEET_HOST not set in ga-services.conf — enrollment disabled on this image"
+    # Reachable now only when BOTH files lack the key, which is a broken image
+    # rather than a configuration choice. Still exit 0 — an image may legitimately
+    # ship without enrolment — but say it at WARNING with the consequence, because
+    # a fallback nobody can see is how a device goes missing for weeks (rule 44).
+    warn "GA_FLEET_HOST is set in neither $CONF_DEFAULT nor $CONF_OVERRIDE — this device will NEVER enrol and will not appear in any fleet-manager. If you meant to move it between fleets, set GA_FLEET_ENV in the override; do not replace the file."
     exit 0
 fi
 FLEET_URL="http://${GA_FLEET_HOST}:${GA_FLEET_PORT:-8090}"
