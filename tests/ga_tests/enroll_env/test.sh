@@ -13,6 +13,10 @@
 #   ENV-FE-04  a value that is neither prod nor staging → exit 1, NO request made
 #   ENV-FE-05  …and the error names the override file
 #   ENV-FE-06  the baked default file does not set GA_FLEET_ENV (absent = prod, by construction)
+#   ENV-FE-09  a PARTIAL override (only GA_FLEET_ENV) still enrols — it LAYERS on
+#              the baked default instead of replacing it
+#   ENV-FE-10  …and keeps the baked host, so the request still has a destination
+#   ENV-FE-11  with the key in NEITHER file the skip is LOUD and names the cause
 #
 # Needs sh, jq, coreutils. No device.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -98,6 +102,38 @@ run_test "ENV-FE-07" "422 on fleet_env -> retry without it -> enrols (rc=0, two 
   "[ \"\$(cat '$W/reject422.rc')\" = 0 ] && [ \"\$(wc -l < '$W/reject422.log')\" -ge 2 ]"
 run_test "ENV-FE-08" "first attempt carried fleet_env; the retry dropped it (pre-D4 shape)" \
   "[ \"\$(sed -n '1p' '$W/reject422.log' | jq -r 'has(\"fleet_env\")')\" = true ] && [ \"\$(sed -n '2p' '$W/reject422.log' | jq -r 'has(\"fleet_env\")')\" = false ]"
+
+# --- ENV-FE-09/10: the override LAYERS, it does not replace ---------------------
+# The shape a human writes. Until 2026-09-20 ga-enroll did
+#   if [ -f override ]; then . override; else . default; fi
+# so a file containing only GA_FLEET_ENV=staging left GA_FLEET_HOST unset and the
+# script exited 0 with "enrollment disabled on this image" — no error, no retry,
+# no fleet row. The device simply never enrolled again. This suite could not see
+# it because ENV-FE-02's fixture writes a COMPLETE override; the partial one is
+# what the migration runbook's reader actually produces.
+printf 'GA_FLEET_ENV=staging\n' > "$W/override-partial.conf"
+run_enroll "$W/override-partial.conf" partial
+run_test "ENV-FE-09" "a partial override (only GA_FLEET_ENV) still enrols and declares staging" \
+  "[ \"\$(cat '$W/partial.rc')\" = 0 ] && [ \"\$(jq -r .fleet_env '$W/partial.log')\" = staging ]"
+run_test "ENV-FE-10" "…and keeps the BAKED host, so the request still has a destination" \
+  "grep -q 'fleet.greenautarky.com' '$W/partial.log.url'"
+
+# --- ENV-FE-11: the one remaining skip must be loud -----------------------------
+# With layering, an unset GA_FLEET_HOST means BOTH files lack it — a broken image,
+# not a configuration choice. It still exits 0 (an image may legitimately ship
+# without enrolment) but it must SAY so: a fallback nobody can see is how a device
+# goes missing for weeks (working-method rule 44).
+printf '# deliberately empty\n' > "$W/empty-default.conf"
+CURL_LOG="$W/loud.log" PATH="$W/bin:$PATH" \
+  GA_ENROLL_CONF_DEFAULT="$W/empty-default.conf" \
+  GA_ENROLL_CONF_OVERRIDE="$W/no-such-override" \
+  GA_ENROLL_CREDS_FILE="$W/ghcr-creds.json" \
+  GA_ENROLL_STATE_FILE="$W/share/ga-enroll-state2.json" \
+  GA_ENROLL_NB_ENV="$W/no-nb-env" GA_ENROLL_HA_UUID_STORE="$W/no-uuid" \
+  GA_SHARE_PUBLISH="$PUB" GA_SHARE_STAGE_DIR="$W/stage" \
+  sh "$ENROLL" > "$W/loud.out" 2>&1
+run_test "ENV-FE-11" "no GA_FLEET_HOST anywhere → WARNING naming the consequence, not an info line" \
+  "grep -qi 'WARNING' '$W/loud.out' && grep -q 'NEVER enrol' '$W/loud.out'"
 
 rm -rf "$W" 2>/dev/null
 suite_end
