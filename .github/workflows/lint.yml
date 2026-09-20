@@ -167,6 +167,17 @@ jobs:
       - name: ga-share-publish (/share symlink hardening)
         run: sh tests/ga_tests/share_publish/test.sh
 
+      - name: gen_expected.sh works from any cwd (the release-train's call shape)
+        # The generator computed its output path relative to the CALLER's cwd and
+        # then cd'd to the repo root. So it worked from the repo root — how every
+        # human runs it — and failed from ga-ops' release-train, which checks the
+        # tree out into `_os/` and runs from above it. The testgate therefore
+        # failed on every train since that step was added, and the real-boot
+        # device suites behind it never executed once. Red-proven against the
+        # pre-fix generator (GEN-CWD-02 fails with the exact line from the train
+        # log) before this was added.
+        run: bash tests/gates/gen_expected_cwd/selftest.sh
+
       - name: ga-enroll declares its fleet environment (ADR-0027 D4)
         # Drives the REAL enroll script with a stub curl on PATH and every
         # device path moved into a temp dir. Asserts the seam to the
