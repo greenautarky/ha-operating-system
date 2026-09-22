@@ -1,0 +1,49 @@
+# GA sshd — OpenSSH on the host port, replacing dropbear (ADR-0019, step 1).
+#
+# Step 1 of 2: authentication is unchanged — authorized_keys under
+# /root/.ssh, seeded from /usr/share/ga-ssh exactly as under dropbear. Only
+# the server changed. Step 2 (BOSv1.4.0) adds the certificate plane here —
+# TrustedUserCAKeys + AuthorizedPrincipalsFile — and retires the static key.
+# Nothing below refers to a CA on purpose: a CA directive pointing at an empty
+# file would make every sensor (ga-ssh-posture, SSH-06) report a half-state
+# that means nothing.
+
+Port 22222
+
+# Where the shared key is read from. /root/.ssh is bind-mounted from the
+# overlay (root-.ssh.mount) and seeded on first boot by hassos-overlay.
+AuthorizedKeysFile /root/.ssh/authorized_keys
+
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+UsePAM no
+
+# Algorithms stay at OpenSSH defaults — deliberately not widened. The shared
+# key is RSA-2048; a modern client signs with rsa-sha2-256/512 and is accepted.
+# Only a client that insists on SHA-1 (`ssh-rsa`) is refused, and that is the
+# client to fix, not the server.
+
+# The ONE host key, generated on first boot by ga-sshd-prepare and persisted
+# on the overlay through etc-ssh-keys.mount. NOT /etc/ssh itself: that
+# directory is baked read-only and holds this config. Only the per-device,
+# writable part is bind-mounted, as its own subdirectory — binding the whole
+# of /etc/ssh (the dropbear layout, safe there because /etc/dropbear held
+# nothing but keys) would hide this file behind an empty overlay directory.
+HostKey /etc/ssh/keys/ssh_host_ed25519_key
+
+X11Forwarding no
+AllowAgentForwarding no
+AllowTcpForwarding no
+
+# VERBOSE, not INFO: at VERBOSE sshd logs the fingerprint of the key that was
+# accepted — and, once certificates arrive in step 2, the certificate's key ID
+# and serial, which is the whole access-audit chain.
+LogLevel VERBOSE
+
+PrintMotd no
+# No external helper: sshd carries SFTP in-process (dropbear needed
+# gesftpserver for the same job, and scp on an OpenSSH >= 9.0 client rides
+# SFTP, so this subsystem is load-bearing).
+Subsystem sftp internal-sftp

@@ -61,6 +61,7 @@ STATE_FILE="${GA_ENROLL_STATE_FILE:-/mnt/data/supervisor/share/ga-enroll-state.j
 NB_ENV="${GA_ENROLL_NB_ENV:-/mnt/data/netbird/netbird.env}"
 HA_UUID_STORE="${GA_ENROLL_HA_UUID_STORE:-/mnt/data/supervisor/homeassistant/.storage/core.uuid}"
 SHARE_PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
+SSH_POSTURE="${GA_ENROLL_SSH_POSTURE:-/usr/libexec/ga-ssh-posture}"
 
 log()  { echo "${LOG_TAG}: $*"; }
 warn() { echo "${LOG_TAG}: WARNING: $*" >&2; }
@@ -205,9 +206,21 @@ ga_env=""
 # fleet_env (prod/staging — the FLEET, ADR-0027) rides next to ga_env (the
 # BUILD MODE): two different facts that are easy to conflate, side by side so
 # a reader of the bridge sees both.
+#
+# ssh_auth (ADR-0019) rides in the bridge for the same reason ga_release does:
+# an addon container cannot see /etc/ssh or /root/.ssh, so the observation has
+# to be made here, host-side, and mirrored across. fleet-manager compares this
+# against what ga_release promises — reporting only one of the two would leave
+# the contradiction we care about unassertable.
+# Empty when the sensor is absent (every pre-cut image): fleet-manager reads an
+# absent value as "pre-cut device", not as a finding. The sensor's stderr is
+# NOT swallowed: when it falls back to "shared" it says why, and that line
+# belongs in the journal next to the enrolment it rode in on (rule 44).
+ssh_auth=""
+[ -x "$SSH_POSTURE" ] && ssh_auth=$("$SSH_POSTURE")
 jq -cn --arg hw "$hw_serial" --arg url "$FLEET_URL" --arg ipurl "$FLEET_URL_IP" \
        --arg pid "$prov_id" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-       --arg rel "$ga_release" --arg env "$ga_env" --arg fenv "$fleet_env" \
-       '{hw_serial:$hw, fleet_url:$url, fleet_url_ip:$ipurl, provisional_id:$pid, enrolled_at:$at, ga_release:$rel, ga_env:$env, fleet_env:$fenv}' \
+       --arg rel "$ga_release" --arg env "$ga_env" --arg fenv "$fleet_env" --arg ssh "$ssh_auth" \
+       '{hw_serial:$hw, fleet_url:$url, fleet_url_ip:$ipurl, provisional_id:$pid, enrolled_at:$at, ga_release:$rel, ga_env:$env, fleet_env:$fenv, ssh_auth:$ssh}' \
     | "$SHARE_PUBLISH" "$STATE_FILE" 0644
 log "state written to ${STATE_FILE}"

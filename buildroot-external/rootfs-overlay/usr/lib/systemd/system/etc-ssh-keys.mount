@@ -1,0 +1,14 @@
+[Unit]
+Description=OpenSSH per-device host key (persisted on the overlay)
+Requires=mnt-overlay.mount
+After=mnt-overlay.mount
+Before=sshd.service
+
+[Mount]
+What=/mnt/overlay/etc/ssh/keys
+Where=/etc/ssh/keys
+Type=none
+Options=bind
+
+[Install]
+WantedBy=hassos-bind.target

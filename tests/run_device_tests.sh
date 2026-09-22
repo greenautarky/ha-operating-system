@@ -22,7 +22,7 @@
 #
 # Environment:
 #   SSH_KEY         - Path to SSH private key (optional, uses agent by default)
-#   SSH_PORT        - SSH port (default: 22222 for HAOS dropbear)
+#   SSH_PORT        - SSH port (default: 22222, the host sshd)
 #   DEVICE_IP       - Override device IP for runner mode
 # =============================================================================
 set -euo pipefail
@@ -228,7 +228,7 @@ run_ssh() {
     ssh $SSH_OPTS "$SSH_TARGET" "rm -rf $REMOTE_DIR" 2>/dev/null || true
     ssh $SSH_OPTS "$SSH_TARGET" "mkdir -p $REMOTE_DIR"
 
-    # Copy test files using tar (scp -r may not work with dropbear)
+    # Copy test files using tar (one stream, no per-file round-trips)
     (cd "$TESTS_DIR" && tar cf - --exclude='*.md' --exclude='__pycache__' .) | \
         ssh $SSH_OPTS "$SSH_TARGET" "tar xf - -C $REMOTE_DIR"
 

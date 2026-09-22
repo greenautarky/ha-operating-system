@@ -1,0 +1,116 @@
+#!/bin/sh
+# =============================================================================
+# ga-ssh-posture — which SSH access plane does this device actually run?
+# =============================================================================
+# ADR-0019. Prints exactly one word on stdout: "ca" or "shared".
+#
+# "ca" requires BOTH of:
+#   1. sshd trusts a user CA — TrustedUserCAKeys names a file that exists and
+#      is not empty, and
+#   2. the pre-cut fleet-wide operator key is ABSENT from authorized_keys.
+#
+# The WEAKER path wins. A device that trusts a CA and still carries the
+# fleet-wide key is on the shared plane in every way that matters; reporting
+# "ca" there would announce the exact state the cut exists to eliminate as
+# fixed, which is worse than reporting nothing at all.
+#
+# FAILS CLOSED. Anything missing, unreadable or ambiguous prints "shared" and
+# says why on stderr. This must never print "ca" on a guess: fleet-manager
+# compares this word against what the release marker promises, and a false
+# "ca" is precisely what makes the contradiction disappear.
+#
+# The known-bad key is pinned HERE as a fingerprint constant, never read out of
+# the file being inspected (norm N7 — an audit that derives its expectation
+# from its subject goes green on a wrong subject).
+#
+# Run it by hand on a device to see the reasoning:  ga-ssh-posture -v
+# -----------------------------------------------------------------------------
+set -u
+
+# The pre-cut fleet-wide operator key: RSA-2048, comment rsa-key-20240404,
+# baked into every image up to and including the BOSv1.3.0 line. Its presence
+# is what "shared" means.
+GA_LEGACY_FLEET_KEY_FP="SHA256:T+Pt2vUEG+lYv0t5qTMdFyd2Kchx6mjkOR3YZaVqcjE"
+
+# Overridable for the gate self-test ONLY. Never set on a device.
+SSHD_CONFIG="${GA_SSHD_CONFIG:-/etc/ssh/sshd_config}"
+SSHD_CONFIG_DIR="${GA_SSHD_CONFIG_DIR:-/etc/ssh/sshd_config.d}"
+AUTHORIZED_KEYS="${GA_AUTHORIZED_KEYS:-/root/.ssh/authorized_keys}"
+
+VERBOSE=0
+[ "${1:-}" = "-v" ] && VERBOSE=1
+
+note() { [ "$VERBOSE" = "1" ] && printf 'ga-ssh-posture: %s\n' "$*" >&2; return 0; }
+# A fallback must be loud (norm N44): substituting the weaker verdict for a
+# value we could not read is a finding, not a detail.
+warn() { printf 'ga-ssh-posture: %s\n' "$*" >&2; }
+
+shared() { printf 'shared\n'; exit 0; }
+
+# --- 1. does sshd trust a user CA? -------------------------------------------
+# Last-wins is not how sshd reads TrustedUserCAKeys (first wins), but any
+# non-empty CA file at all is what we are asking about here.
+ca_path=""
+for cfg in "$SSHD_CONFIG" "$SSHD_CONFIG_DIR"/*.conf; do
+    [ -r "$cfg" ] || continue
+    value=$(sed -nE 's/^[[:space:]]*TrustedUserCAKeys[[:space:]]+(.+)$/\1/p' "$cfg" \
+            | head -1 | tr -d '\r"')
+    if [ -n "$value" ]; then
+        ca_path="$value"
+        note "TrustedUserCAKeys from $cfg -> $ca_path"
+        break
+    fi
+done
+
+if [ -z "$ca_path" ]; then
+    note "no TrustedUserCAKeys configured"
+    shared
+fi
+if [ ! -s "$ca_path" ]; then
+    warn "TrustedUserCAKeys points at '$ca_path' which is missing or empty — \
+reporting 'shared'. sshd will not accept a single certificate in this state."
+    shared
+fi
+
+# --- 2. is the pre-cut fleet-wide key gone? ----------------------------------
+if [ ! -r "$AUTHORIZED_KEYS" ]; then
+    # No authorized_keys at all means no static key, including no legacy one.
+    note "no readable $AUTHORIZED_KEYS — no static keys present"
+    printf 'ca\n'
+    exit 0
+fi
+
+if ! command -v ssh-keygen >/dev/null 2>&1; then
+    warn "ssh-keygen not available — cannot fingerprint $AUTHORIZED_KEYS, \
+reporting 'shared'. This is a fail-closed guess, not a measurement."
+    shared
+fi
+
+tmp=$(mktemp) || shared
+# shellcheck disable=SC2064
+trap "rm -f '$tmp'" EXIT INT TERM
+
+checked=0
+# `|| [ -n "$line" ]` is load-bearing: a file whose last line has no
+# trailing newline otherwise loses that line entirely — and an
+# authorized_keys written by hand very often looks exactly like that.
+# Without it the legacy key hides in the one position it is most likely
+# to occupy, and the sensor reports 'ca' while it is sitting right there.
+while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+        ''|'#'*) continue ;;
+    esac
+    printf '%s\n' "$line" > "$tmp"
+    fp=$(ssh-keygen -lf "$tmp" 2>/dev/null | awk '{print $2}')
+    [ -n "$fp" ] || continue
+    checked=$((checked + 1))
+    if [ "$fp" = "$GA_LEGACY_FLEET_KEY_FP" ]; then
+        warn "the pre-cut fleet-wide operator key is STILL PRESENT in \
+$AUTHORIZED_KEYS ($fp) — reporting 'shared'."
+        shared
+    fi
+    note "authorized key $fp is not the legacy fleet key"
+done < "$AUTHORIZED_KEYS"
+
+note "checked $checked key(s), none is the legacy fleet key"
+printf 'ca\n'

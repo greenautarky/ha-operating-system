@@ -1,0 +1,31 @@
+#!/bin/sh
+# ga-sshd-prepare — make the per-device SSH state exist before sshd starts.
+# Runs as sshd's ExecStartPre (ADR-0019, step 1: OpenSSH on the shared plane).
+#
+# /etc/ssh itself is baked read-only (sshd_config). Only the per-device,
+# writable part lives on the overlay and is bind-mounted in as a
+# subdirectory. Generating the host key HERE rather than baking one is the
+# point: a host key baked into an image is the same key on every device, which
+# makes host verification meaningless while looking exactly like it works.
+set -u
+KEYDIR=/etc/ssh/keys
+
+# sshd's privilege-separation directory is compiled in as /var/empty, and
+# /var on this image is a fresh zram filesystem on every boot — whatever the
+# build put there is gone by the time this runs. Without it sshd exits at
+# startup with "Missing privilege separation directory" and the device has no
+# SSH at all. Owned by root, not writable by anyone else, or sshd refuses it.
+mkdir -p /var/empty && chown root:root /var/empty && chmod 0755 /var/empty \
+    || { echo "ga-sshd-prepare: cannot prepare /var/empty — sshd will not start" >&2; exit 1; }
+
+mkdir -p "$KEYDIR" || { echo "ga-sshd-prepare: cannot create $KEYDIR" >&2; exit 1; }
+chmod 0755 "$KEYDIR"
+
+if [ ! -s "$KEYDIR/ssh_host_ed25519_key" ]; then
+    ssh-keygen -q -t ed25519 -N '' -f "$KEYDIR/ssh_host_ed25519_key" \
+        || { echo "ga-sshd-prepare: host key generation FAILED" >&2; exit 1; }
+    echo "ga-sshd-prepare: generated a fresh ed25519 host key" >&2
+fi
+chmod 0600 "$KEYDIR/ssh_host_ed25519_key"
+chmod 0644 "$KEYDIR/ssh_host_ed25519_key.pub" 2>/dev/null || true
+exit 0
