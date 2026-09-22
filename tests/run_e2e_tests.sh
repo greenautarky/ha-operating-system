@@ -71,7 +71,12 @@ while [[ $# -gt 0 ]]; do
     --admin-user)       HA_ADMIN_USER="$2";  shift 2 ;;
     --admin-pass)       HA_ADMIN_PASS="$2";  shift 2 ;;
     --token)            HA_TOKEN="$2";       shift 2 ;;
-    --project)          PROJECT_ARGS=(--project "$2"); shift 2 ;;
+    # ONE token, not two. Playwright's --project is variadic, so
+    # `--project desktop tests/x.spec.ts` names TWO projects and the file is
+    # never run: `Project(s) "tests/x.spec.ts" not found`. Measured against
+    # KIB-SON-00000031 on 2026-09-22 — --suite and --project could never be
+    # combined, which is exactly the combination a single-spec run needs.
+    --project)          PROJECT_ARGS=("--project=$2"); shift 2 ;;
     --suite)            SUITE_ARG="tests/$2.spec.ts"; shift 2 ;;
     --headed)           HEADED="--headed";   shift ;;
     --reset-onboarding) RESET_ONBOARDING="1"; shift ;;
@@ -81,6 +86,20 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -z "$MODE" ]] && { echo "ERROR: Specify --ssh root@<ip> or --runner N"; echo ""; usage; }
+
+# The argv this run would hand to Playwright, composed once so a fixture can
+# assert it without a device (tests/e2e/test_runner_argv.sh). Rule: a flag that
+# takes a value must reach the CLI as ONE token when the CLI treats it as
+# variadic.
+PLAYWRIGHT_ARGV=("${PROJECT_ARGS[@]}")
+[[ -n "${HEADED}" ]] && PLAYWRIGHT_ARGV+=("${HEADED}")
+[[ -n "${SUITE_ARG}" ]] && PLAYWRIGHT_ARGV+=("${SUITE_ARG}")
+if [[ -n "${GA_E2E_PRINT_ARGV:-}" ]]; then
+  printf '%s\n' "${PLAYWRIGHT_ARGV[@]}"
+  exit 0
+fi
+
+
 
 # Install Node dependencies and Playwright browsers if needed
 if [[ ! -d "$E2E_DIR/node_modules" ]]; then
@@ -158,11 +177,7 @@ echo ""
 
 cd "$E2E_DIR"
 set +e
-npx playwright test \
-  "${PROJECT_ARGS[@]}" \
-  ${HEADED} \
-  ${SUITE_ARG} \
-  2>&1
+npx playwright test "${PLAYWRIGHT_ARGV[@]}" 2>&1
 EXIT_CODE=$?
 set -e
 
