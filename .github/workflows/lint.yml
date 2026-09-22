@@ -191,6 +191,14 @@ jobs:
       - name: every suite directory is registered or explicitly excluded
         run: sh tests/ga_tests/run_all.sh --selftest
 
+      - name: the e2e runner hands Playwright an argv it can parse
+        # `--suite X --project desktop` composed `--project desktop tests/X.spec.ts`,
+        # and Playwright's --project is variadic: it read BOTH words as project
+        # names and answered `Project(s) "tests/X.spec.ts" not found`, having run
+        # nothing. Measured against KIB-SON-00000031 on 2026-09-22 while taking
+        # the load-budget measurement, which needs exactly that combination.
+        run: bash tests/e2e/test_runner_argv.sh
+
       - name: ga-telemetry-gate + consent-apply (consent markers and shippers)
         # Fixture-driven: the gate against v1/v2/stale stores, and the apply
         # script with a stub systemctl — both directions (grant → start,
