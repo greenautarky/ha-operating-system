@@ -15,6 +15,7 @@
 # their rootfs locations by systemd `*.mount` units:
 #
 #   /root/.ssh                 ← /mnt/overlay/root/.ssh        (root-.ssh.mount)
+#   /etc/ssh/keys              ← /mnt/overlay/etc/ssh/keys     (etc-ssh-keys.mount)
 #   /etc/hostname              ← /mnt/overlay/etc/hostname     (etc-hostname.mount)
 #   /etc/hosts                 ← /mnt/overlay/etc/hosts        (etc-hosts.mount)
 #   /etc/systemd/timesyncd.conf ← /mnt/overlay/etc/systemd/... (etc-systemd-timesyncd.conf.mount)
@@ -23,7 +24,7 @@
 #   /etc/udev/rules.d, /etc/sysctl.d, /etc/default, ...
 #
 # On a FRESHLY-FLASHED device the overlay partition is empty. The bind mounts
-# would then shadow rootfs files with nothing — dropbear can't start (empty
+# would then shadow rootfs files with nothing — sshd can't start (empty
 # authorized_keys), NM has no connections, /etc/hostname is empty, etc.
 #
 # This script runs BEFORE the bind mounts (hassos-overlay.service is ordered
@@ -57,7 +58,7 @@
 #   in source) — never put authorized_keys directly under /root/.ssh in the
 #   rootfs overlay, that location is bind-shadowed at runtime.
 # - Permissions matter for SSH: /root/.ssh must be 0700 and authorized_keys 0600,
-#   otherwise dropbear silently rejects them.
+#   otherwise sshd (StrictModes) silently rejects them.
 # ===========================================================================
 
 mkdir -p /mnt/overlay/etc/
@@ -97,10 +98,18 @@ if [ ! -L /mnt/overlay/etc/localtime ]; then
     ln -sf /usr/share/zoneinfo/Etc/UTC /mnt/overlay/etc/localtime
 fi
 
+# --- SSH host key dir (GA-specific) -----------------------------------------
+# etc-ssh-keys.mount binds /mnt/overlay/etc/ssh/keys onto /etc/ssh/keys, where
+# ga-sshd-prepare generates the per-device host key on first boot. systemd
+# creates a bind mount's source directory itself, but that is an implementation
+# detail the whole SSH path would hang on — so it is made explicit here, next
+# to the other overlay seeds.
+mkdir -p /mnt/overlay/etc/ssh/keys
+
 # --- SSH operator keys (GA-specific) ----------------------------------------
-# Seeds /mnt/overlay/root/.ssh/authorized_keys so dropbear (port 22222) can
+# Seeds /mnt/overlay/root/.ssh/authorized_keys so sshd (port 22222) can
 # start on first boot with the operator's pubkey already authorized. Without
-# this, dropbear's `ConditionFileNotEmpty=/root/.ssh/authorized_keys` fails
+# this, sshd's `ConditionFileNotEmpty=/root/.ssh/authorized_keys` fails
 # and SSH never comes up — the device is unreachable except via serial.
 #
 # Source: /usr/share/ga-ssh/authorized_keys (baked into the rootfs from

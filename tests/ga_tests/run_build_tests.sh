@@ -2597,10 +2597,11 @@ fi
 # =========================================================================
 # SSH-01..05: operator SSH key baked into image + seeded on first boot
 # =========================================================================
-# Why: HAOS dropbear has `ConditionFileNotEmpty=/root/.ssh/authorized_keys`.
+# Why: the host SSH server (dropbear up to BOSv1.3.0-rc46, OpenSSH sshd
+# after) carries `ConditionFileNotEmpty=/root/.ssh/authorized_keys`.
 # /root/.ssh is bind-mounted from /mnt/overlay/root/.ssh (sdc7 overlay
 # partition), which is EMPTY on a freshly-flashed device. Without an
-# authorized_keys seed the bind mount shadows the rootfs default → dropbear
+# authorized_keys seed the bind mount shadows the rootfs default → the server
 # never starts → port 22222 closed → device unreachable except via serial.
 # Discovered live on KIB-SON-31 on 2026-05-27 — root cause of "device is up
 # but SSH doesn't work after fresh flash".
@@ -2685,7 +2686,13 @@ GA_CA_PLACEHOLDER="PLACEHOLDER-REPLACE-AT-KEY-CEREMONY"
 
 GA_SSHD_CONFIG_T="${TARGET}/etc/ssh/sshd_config"
 GA_CA_PUB_T="${TARGET}/etc/ssh/ga_user_ca.pub"
+# The shared plane's no-orphan-listener invariant lives in the unit drop-in of
+# WHICHEVER server serves port 22222: dropbear's up to BOSv1.3.0-rc46, sshd's
+# after the swap (ADR-0019 step 1). Either satisfies SSH-05 — the invariant is
+# about the condition, not the daemon. An image carrying BOTH is a mistake
+# (two servers, one port) and is refused below.
 DROPBEAR_UNIT="${TARGET}/usr/lib/systemd/system/dropbear.service.d/hassos.conf"
+SSHD_UNIT="${TARGET}/usr/lib/systemd/system/sshd.service.d/hassos.conf"
 
 # ---- helpers -------------------------------------------------------------
 # "1.4.0" <= "$1" ?  (numeric, field by field; -rcN already stripped)
@@ -2737,18 +2744,48 @@ fi
 # no-orphan-listener invariant must hold. A device that listens on 22222 with
 # nothing authorised is the failure both planes are guarding against.
 if [[ "$SSH_CONTENT_PLANE" == "shared" ]]; then
-  if [[ -f "$DROPBEAR_UNIT" ]]; then
-    grep -qE 'ConditionFileNotEmpty=/root/\.ssh/authorized_keys' "$DROPBEAR_UNIT" \
+  if [[ -f "$DROPBEAR_UNIT" && -f "$SSHD_UNIT" ]]; then
+    _fail "SSH-05: image carries BOTH a dropbear and an sshd drop-in — two servers for one port; the swap is half done"
+  elif [[ -f "$SSHD_UNIT" ]]; then
+    grep -qE '^ConditionFileNotEmpty=/root/\.ssh/authorized_keys' "$SSHD_UNIT" \
+      && _pass "SSH-05: sshd unit gates on authorized_keys (no orphan-listener risk)" \
+      || _fail "SSH-05: sshd ConditionFileNotEmpty=/root/.ssh/authorized_keys missing — SSH could listen with no keys!"
+  elif [[ -f "$DROPBEAR_UNIT" ]]; then
+    grep -qE '^ConditionFileNotEmpty=/root/\.ssh/authorized_keys' "$DROPBEAR_UNIT" \
       && _pass "SSH-05: dropbear unit still gates on authorized_keys (no orphan-listener risk)" \
       || _fail "SSH-05: dropbear ConditionFileNotEmpty=/root/.ssh/authorized_keys removed — SSH could listen with no keys!"
   else
-    _fail "SSH-05: image is on the shared plane but the dropbear unit is missing"
+    _fail "SSH-05: image is on the shared plane but neither the dropbear nor the sshd unit drop-in exists"
   fi
 else
   if [[ -r "$GA_SSHD_CONFIG_T" ]] && grep -qE '^[[:space:]]*AuthorizedPrincipalsFile[[:space:]]+' "$GA_SSHD_CONFIG_T"; then
     _pass "SSH-05: sshd scopes certificates per device (AuthorizedPrincipalsFile set)"
   else
     _fail "SSH-05: certificate plane without AuthorizedPrincipalsFile — one cert would open EVERY device"
+  fi
+fi
+
+# SSH-08: the server the image actually ships (ADR-0019 step 1). Only when
+# the sshd drop-in is what serves the shared plane — a dropbear image is not
+# held to this. Four things, each of which has a concrete fresh-device failure
+# behind it: sshd itself; ssh-keygen, which BOTH ga-sshd-prepare (host key)
+# and ga-ssh-posture (fingerprinting authorized_keys) call at boot; the
+# upstream `ssh-keygen -A` ExecStartPre cleared, or the unit tries to write
+# host keys into the read-only /etc/ssh; and no second server left behind.
+if [[ -f "$SSHD_UNIT" ]]; then
+  _ssh08_bad=()
+  [[ -x "${TARGET}/usr/sbin/sshd" ]]        || _ssh08_bad+=("/usr/sbin/sshd missing")
+  [[ -x "${TARGET}/usr/bin/ssh-keygen" ]]   || _ssh08_bad+=("/usr/bin/ssh-keygen missing (ga-sshd-prepare and ga-ssh-posture need it)")
+  [[ -x "${TARGET}/usr/libexec/ga-sshd-prepare" ]] || _ssh08_bad+=("/usr/libexec/ga-sshd-prepare missing")
+  [[ -f "${TARGET}/usr/lib/systemd/system/sshd.service" ]] || _ssh08_bad+=("sshd.service unit missing")
+  grep -qE '^ExecStartPre=$' "$SSHD_UNIT"   || _ssh08_bad+=("drop-in does not clear the upstream ExecStartPre (ssh-keygen -A would write into read-only /etc/ssh)")
+  [[ -e "${TARGET}/usr/sbin/dropbear" ]]    && _ssh08_bad+=("/usr/sbin/dropbear still in the image — two servers for one port")
+  [[ -e "${TARGET}/usr/lib/systemd/system/etc-dropbear.mount" ]] && _ssh08_bad+=("etc-dropbear.mount still in the image")
+  [[ -e "${TARGET}/usr/libexec/gesftpserver" || -e "${TARGET}/usr/bin/gesftpserver" ]] && _ssh08_bad+=("gesftpserver still in the image (sshd carries internal-sftp)")
+  if (( ${#_ssh08_bad[@]} == 0 )); then
+    _pass "SSH-08: OpenSSH server complete — sshd, ssh-keygen, ga-sshd-prepare, upstream ExecStartPre cleared, no dropbear/gesftpserver left"
+  else
+    _fail "SSH-08: OpenSSH server incomplete — $(IFS='; '; echo "${_ssh08_bad[*]}")"
   fi
 fi
 

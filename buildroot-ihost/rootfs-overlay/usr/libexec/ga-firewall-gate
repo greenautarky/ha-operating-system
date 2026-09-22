@@ -44,7 +44,7 @@
 # Docker here runs with userland-proxy at its default (enabled), so a published
 # container port is terminated by a docker-proxy process ON THE HOST. That
 # traffic hits the `input` hook and is never DNAT'd forward traffic. The
-# allowlist therefore lives in `input` and covers both the host port (dropbear
+# allowlist therefore lives in `input` and covers both the host port (sshd
 # :22222) and the container port (HA Core :8123).
 # The `forward` chain is kept as defence in depth for the case where
 # userland-proxy is turned off — then the same connections really do arrive as
@@ -64,7 +64,7 @@ TABLE="inet ga_firewall"
 LAN_IFACES='"eth0", "wlan0"'
 
 # What stays reachable from those interfaces.
-HOST_ALLOW_TCP='22222'          # dropbear — on-site + local diagnostics
+HOST_ALLOW_TCP='22222'          # sshd — on-site + local diagnostics
 # Comma-separated ON PURPOSE: these expand into nft sets `{ ... }` and a JSON
 # array below. A space instead of a comma yields `{ 22222, 80 8123 }`, which
 # nft rejects — `nft -f` then deletes the table and the device ships

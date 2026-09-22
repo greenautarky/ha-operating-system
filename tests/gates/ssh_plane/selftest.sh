@@ -57,19 +57,28 @@ REAL_CA="$(cat "$WORK/ca.pub")"
 LEGACY="$(cat "$LEGACY_KEY")"
 
 DROPBEAR_OK=$'[Unit]\nConditionFileNotEmpty=/root/.ssh/authorized_keys\n'
+SSHD_OK=$'[Unit]\nConditionFileNotEmpty=/root/.ssh/authorized_keys\n[Service]\nExecStartPre=\nExecStartPre=/usr/libexec/ga-sshd-prepare\n'
+SSHD_NOCLEAR=$'[Unit]\nConditionFileNotEmpty=/root/.ssh/authorized_keys\n[Service]\nExecStartPre=/usr/libexec/ga-sshd-prepare\n'
+SSHD_BINS="usr/sbin/sshd,usr/bin/ssh-keygen,usr/libexec/ga-sshd-prepare,usr/lib/systemd/system/sshd.service"
+SSHD_SHARED=$'Port 22222\nAuthorizedKeysFile /root/.ssh/authorized_keys\nPasswordAuthentication no\n'
 SSHD_FULL=$'TrustedUserCAKeys /etc/ssh/ga_user_ca.pub\nAuthorizedPrincipalsFile /etc/ssh/principals/%u\nPasswordAuthentication no\n'
 
-# mk <name> <ga-release> <authorized_keys|-> <sshd_config|-> <ca_pub|-> <dropbear|->
+# mk <name> <ga-release> <authorized_keys|-> <sshd_config|-> <ca_pub|-> <dropbear|-> [<sshd-dropin|->] [<files>]
+#   <files>: comma-separated paths created (executable, non-empty) under target/
 mk() {
   local d="$WORK/$1"; shift
-  local rel="$1" ak="$2" cfg="$3" ca="$4" db="$5"
+  local rel="$1" ak="$2" cfg="$3" ca="$4" db="$5" sd="${6:--}" files="${7:-}"
   mkdir -p "$d/target/etc/ssh" "$d/target/usr/share/ga-ssh" \
-           "$d/target/usr/lib/systemd/system/dropbear.service.d"
+           "$d/target/usr/lib/systemd/system/dropbear.service.d" \
+           "$d/target/usr/lib/systemd/system/sshd.service.d"
   printf '%s\n' "$rel" > "$d/target/etc/ga-release"
   [[ "$ak"  != "-" ]] && printf '%s\n' "$ak"  > "$d/target/usr/share/ga-ssh/authorized_keys"
   [[ "$cfg" != "-" ]] && printf '%s'   "$cfg" > "$d/target/etc/ssh/sshd_config"
   [[ "$ca"  != "-" ]] && printf '%s\n' "$ca"  > "$d/target/etc/ssh/ga_user_ca.pub"
   [[ "$db"  != "-" ]] && printf '%s'   "$db"  > "$d/target/usr/lib/systemd/system/dropbear.service.d/hassos.conf"
+  [[ "$sd"  != "-" ]] && printf '%s'   "$sd"  > "$d/target/usr/lib/systemd/system/sshd.service.d/hassos.conf"
+  local f; IFS=, read -ra _fl <<< "$files"
+  for f in "${_fl[@]}"; do [[ -n "$f" ]] || continue; mkdir -p "$d/target/$(dirname "$f")"; printf 'x\n' > "$d/target/$f"; chmod +x "$d/target/$f"; done
   printf '%s' "$d"
 }
 
@@ -116,13 +125,46 @@ expect FAIL "$d" SSH-05 "cert plane without AuthorizedPrincipalsFile — one cer
 d="$(mk dropbear-weakened BOSv1.3.0-rc10 "$LEGACY" - - $'[Unit]\n')"
 expect FAIL "$d" SSH-05 "shared plane with the dropbear authorized_keys condition removed"
 
+# ADR-0019 step 1: OpenSSH serves the SHARED plane. Same invariant, new unit.
+d="$(mk sshd-weakened BOSv1.3.0-rc47 "$LEGACY" "$SSHD_SHARED" - - $'[Unit]\nRequiresMountsFor=/etc/ssh/keys\n')"
+expect FAIL "$d" SSH-05 "shared plane on sshd with the authorized_keys condition removed"
+
+d="$(mk both-servers BOSv1.3.0-rc47 "$LEGACY" "$SSHD_SHARED" - "$DROPBEAR_OK" "$SSHD_OK")"
+expect FAIL "$d" SSH-05 "dropbear AND sshd drop-ins both present — the swap is half done"
+
+d="$(mk no-server-unit BOSv1.3.0-rc47 "$LEGACY" "$SSHD_SHARED" - - -)"
+expect FAIL "$d" SSH-05 "shared plane with no server drop-in at all"
+
+# SSH-08: the sshd image must be COMPLETE. Each case removes exactly one thing.
+d="$(mk sshd-no-keygen BOSv1.3.0-rc47 "$LEGACY" "$SSHD_SHARED" - - "$SSHD_OK" "usr/sbin/sshd,usr/libexec/ga-sshd-prepare,usr/lib/systemd/system/sshd.service")"
+expect FAIL "$d" SSH-08 "sshd image without ssh-keygen (prepare + posture would both fail at boot)"
+
+d="$(mk sshd-keygen-A-kept BOSv1.3.0-rc47 "$LEGACY" "$SSHD_SHARED" - - "$SSHD_NOCLEAR" "$SSHD_BINS")"
+expect FAIL "$d" SSH-08 "drop-in does not clear the upstream ssh-keygen -A ExecStartPre"
+
+d="$(mk sshd-dropbear-left BOSv1.3.0-rc47 "$LEGACY" "$SSHD_SHARED" - - "$SSHD_OK" "$SSHD_BINS,usr/sbin/dropbear")"
+expect FAIL "$d" SSH-08 "dropbear binary left in an sshd image"
+
+d="$(mk sshd-gesftp-left BOSv1.3.0-rc47 "$LEGACY" "$SSHD_SHARED" - - "$SSHD_OK" "$SSHD_BINS,usr/libexec/gesftpserver")"
+expect FAIL "$d" SSH-08 "gesftpserver left in an sshd image"
+
 echo "── must PASS (a gate that only fails is a blocked pipeline, not a check) ──"
 
 # The shape the repository is in TODAY. If this goes red the gate blocks every
 # build on the pre-cut line from the day it lands.
 d="$(mk todays-image BOSv1.3.0-rc10 "$LEGACY" - - "$DROPBEAR_OK")"
-expect PASS "$d" SSH-05 "today's image — dropbear condition intact"
-expect PASS "$d" SSH-06 "today's image — marker and content both say shared"
+expect PASS "$d" SSH-05 "pre-swap image — dropbear condition intact"
+expect PASS "$d" SSH-06 "pre-swap image — marker and content both say shared"
+expect ABSENT "$d" SSH-08 "pre-swap image — the sshd completeness check does not apply to dropbear"
+
+# The shape the repository is in TODAY (ADR-0019 step 1): sshd on the shared
+# plane, no CA directive, legacy key still baked. If this goes red the gate
+# blocks every build on the current line from the day it lands.
+d="$(mk todays-image-sshd BOSv1.3.0-rc47 "$LEGACY" "$SSHD_SHARED" - - "$SSHD_OK" "$SSHD_BINS")"
+expect PASS "$d" SSH-05 "today's image — sshd condition intact on the shared plane"
+expect PASS "$d" SSH-06 "today's image — marker and content both say shared (sshd, no CA)"
+expect ABSENT "$d" SSH-07 "today's image — the CA check does not apply on the shared plane"
+expect PASS "$d" SSH-08 "today's image — OpenSSH server complete, nothing of dropbear left"
 
 # The shape BOSv1.4.0-rc1 is meant to have.
 d="$(mk cut-image BOSv1.4.0-rc1 "$BREAKGLASS" "$SSHD_FULL" "$REAL_CA" -)"

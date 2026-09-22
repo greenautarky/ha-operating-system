@@ -98,10 +98,24 @@ BR2_PACKAGE_BLUEZ5_UTILS_TOOLS=y
 BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_AUDIO=y
 BR2_PACKAGE_DHCP=y
 BR2_PACKAGE_DHCP_CLIENT=y
-BR2_PACKAGE_DROPBEAR=y
-BR2_PACKAGE_DROPBEAR_DISABLE_REVERSEDNS=y
-# SFTP server for Dropbear (Dropbear has no built-in SFTP support)
-BR2_PACKAGE_GESFTPSERVER=y
+# OpenSSH replaces dropbear (ADR-0019, step 1 of 2). This step swaps ONLY the
+# server: the fleet-wide operator key stays in authorized_keys and nothing
+# changes for a client. Step 2 (BOSv1.4.0) adds the certificate plane, which
+# dropbear cannot serve — no OpenSSH-certificate support at all (verified on
+# 2025.89: zero cert-v01 occurrences in its source; the 2026.91 in this tree
+# was not re-checked and is not relied on). Splitting the swap from the
+# credential change means a fresh device that cannot be reached is a server
+# problem, and a certificate that is refused is a credential problem — never
+# both at once. sshd_config lives in buildroot-external/rootfs-overlay/etc/ssh.
+BR2_PACKAGE_OPENSSH=y
+BR2_PACKAGE_OPENSSH_SERVER=y
+BR2_PACKAGE_OPENSSH_CLIENT=y
+BR2_PACKAGE_OPENSSH_KEY_UTILS=y
+# No separate SFTP helper: sshd has internal-sftp built in, which is what
+# sshd_config declares. gesftpserver existed only because dropbear has no SFTP
+# of its own and needed an external binary behind SFTPSERVER_PATH. scp on an
+# OpenSSH >= 9.0 client rides SFTP, so this path is load-bearing — a stale
+# second implementation of it would be a hazard, not just dead weight.
 # BR2_PACKAGE_IFUPDOWN_SCRIPTS is not set
 BR2_PACKAGE_IPROUTE2=y
 BR2_PACKAGE_IPTABLES_NFTABLES=y

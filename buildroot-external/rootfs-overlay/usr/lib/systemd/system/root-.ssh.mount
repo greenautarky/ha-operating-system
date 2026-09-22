@@ -1,8 +1,8 @@
 [Unit]
-Description=Dropbear persistent user
+Description=SSH persistent root user dir (authorized_keys)
 Requires=mnt-overlay.mount
 After=mnt-overlay.mount
-Before=dropbear.service hassos-config.service
+Before=sshd.service hassos-config.service
 
 [Mount]
 What=/mnt/overlay/root/.ssh
