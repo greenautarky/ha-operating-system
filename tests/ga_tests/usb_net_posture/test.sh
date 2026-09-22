@@ -18,6 +18,27 @@ NMCONF="$REPO/buildroot-external/rootfs-overlay/etc/NetworkManager/NetworkManage
 
 suite_start "USB + MAC posture (build)"
 
+# The subject of this suite is the SOURCE TREE, not a running device: every
+# check reads an overlay file out of the checkout. Shipped to a device by
+# run_device_tests.sh only tests/ travels, so those paths do not exist, every
+# check fails for the same reason, and — worse — each RED-proof PASSES
+# vacuously, because a mutation of a file that is not there flags just as
+# happily as a real one. Measured on K31 on 2026-09-22: six honest failures
+# next to four proofs that proved nothing.
+#
+# So: if the definitions are not readable, this suite FAILS as one finding and
+# stops. It never skips (a skipped posture check reads as "fine"), and it never
+# runs its own red proofs against absent files.
+MISSING=""
+for f in "$CMDLINE" "$RULE" "$HELPER" "$ALLOW" "$NMCONF"; do
+    [ -r "$f" ] || MISSING="$MISSING $(basename "$f")"
+done
+if [ -n "$MISSING" ]; then
+    run_test "BLD-USB-00" "source tree readable (this is a BUILD-lane suite) — missing:$MISSING — run it from a checkout (run_all.sh emu/all), not over a device" "false"
+    suite_end
+    exit 1
+fi
+
 # The extraction under test, as ONE function each, run against the live file AND
 # a mutation. must-pass = the shipped file; must-flag = the mutation.
 usb_closed()  { grep -qE 'usbcore\.authorized_default=0' "$1"; }
