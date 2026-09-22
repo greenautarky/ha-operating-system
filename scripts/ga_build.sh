@@ -2336,6 +2336,25 @@ elif [[ "$MODE" == "update" ]]; then
   # (Buildroot doesn't track overlay/config file changes as package dependencies)
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" \
     telegraf-dirclean fluent-bit-config-dirclean 2>/dev/null || true
+  # Rebuild target/ from the per-package build dirs on EVERY update build.
+  #
+  # An incremental Buildroot run only ever ADDS to target/: a package removed
+  # from the defconfig keeps its installed files (nothing owns their removal),
+  # and the rootfs overlay is rsync'ed WITHOUT --delete, so a file deleted from
+  # the overlay stays in the image too. Both are invisible to a green build.
+  # Measured 2026-09-22 on the rc47 bake: the defconfig had dropped dropbear
+  # and gesftpserver for OpenSSH, .config carried no BR2_PACKAGE_DROPBEAR, and
+  # target/ still held /usr/sbin/dropbear, etc-dropbear.mount and the dropbear
+  # unit drop-in next to sshd — caught only because SSH-05/SSH-08 assert the
+  # server set. Deleting the target-install stamps makes Buildroot re-run the
+  # install step of every package from its finished build dir (no configure,
+  # no compile — minutes), then re-apply skeleton, overlay and finalize onto an
+  # empty target/. `full` gets this for free from its rm -rf "$OUT".
+  if [[ -d "$OUT/target" ]]; then
+    echo "update: rebuilding target/ from build dirs (removed packages and deleted overlay files do not survive)"
+    rm -rf "$OUT/target"
+    find "$OUT/build" -maxdepth 2 -name .stamp_target_installed -delete
+  fi
   # Force hassio to re-check container image digests from registry
   # Without this, Buildroot skips the fetch step and uses stale cached tars
   # (same Docker tag can have new content after a Core/Frontend rebuild)
