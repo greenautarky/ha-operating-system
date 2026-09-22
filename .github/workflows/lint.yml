@@ -188,6 +188,9 @@ jobs:
         # (5 of 7 fail) before it was added.
         run: sh tests/ga_tests/enroll_env/test.sh
 
+      - name: every suite directory is registered or explicitly excluded
+        run: sh tests/ga_tests/run_all.sh --selftest
+
       - name: ga-telemetry-gate + consent-apply (consent markers and shippers)
         # Fixture-driven: the gate against v1/v2/stale stores, and the apply
         # script with a stub systemctl — both directions (grant → start,

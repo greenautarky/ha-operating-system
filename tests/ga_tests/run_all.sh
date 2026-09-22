@@ -30,14 +30,57 @@ SUITES_EMU="environment crash_detection boot_timing disk_guard supervisor_health
 # idle_perf runs BEFORE stress: the 5-min load average and per-process CPU it
 # measures were still carrying the stress suite (K31 rc19+rc20: IDLE-04 got 2.96
 # and 3.01 right after stress — an ordering artefact, not an idle device).
-SUITES_DEVICE="os_integrity addons_running heating health ha_config_applied telemetry network ping config_verify dns_config onboarding ga_frontend_bundle provisioning tailscale watchdog idle_perf stress telemetry_buffering hardware openstick ota_update connectivity_recorder rc19_device firewall audio_disabled rauc_slots ethernet_force lte_standby usb_net_posture"
-SUITES_ALL="crash_detection os_integrity addons_running heating health ha_config_applied telemetry environment network ping boot_timing disk_guard watchdog config_verify dns_config idle_perf stress onboarding ga_frontend_bundle provisioning tailscale telemetry_buffering hardware openstick ota_update supervisor_health connectivity_recorder rc19_device firewall share_publish audio_disabled rauc_slots stage_components ethernet_force publish_services lte_standby usb_net_posture"
+SUITES_DEVICE="os_integrity ssh_access addons_running heating health ha_config_applied telemetry network ping config_verify dns_config onboarding ga_frontend_bundle provisioning tailscale watchdog idle_perf stress telemetry_buffering hardware openstick ota_update connectivity_recorder rc19_device firewall audio_disabled rauc_slots ethernet_force lte_standby usb_net_posture"
+SUITES_ALL="crash_detection os_integrity ssh_access addons_running heating health ha_config_applied telemetry environment network ping boot_timing disk_guard watchdog config_verify dns_config idle_perf stress onboarding ga_frontend_bundle provisioning tailscale telemetry_buffering hardware openstick ota_update supervisor_health connectivity_recorder rc19_device firewall share_publish audio_disabled rauc_slots stage_components ethernet_force publish_services lte_standby usb_net_posture"
+
+# Every suite directory is EITHER in a category above OR named here, with the
+# reason. Nothing else is allowed, and `--selftest` proves it — otherwise a
+# suite that is simply forgotten looks exactly like one that is excluded on
+# purpose. Paid for on 2026-09-22: ssh_access shipped with the OpenSSH swap,
+# carried the two checks that catch its boot-time traps, and never ran in a
+# full device pass because no list mentioned it; the run still reported
+# "ALL PASS" over the suites it did know.
+SUITES_EXCLUDED="
+  emmc_erase      destructive: wipes the eMMC, only for a deliberate first-boot test
+  power_cycle     destructive: cuts power in a loop, host-side bench fixture
+  reboot          destructive: reboots the device, host-side, run on demand
+  e2e_user_flows  own lane: run_e2e_tests.sh, needs a resident account
+  enroll_env      host suite: CI lint.yml host-suites
+  uplink_ladder   host suite: CI lint.yml host-suites
+  uplink_units    host suite: CI lint.yml host-suites
+  apparmor_profile host suite: CI lint.yml host-suites
+  device_features on demand: feature surface, not a per-run gate
+  ha_init         superseded by ha_config_applied on the device lane
+  netbird_reg     on demand: registration is proven by enrolment itself
+  services_config superseded by publish_services on the device lane
+"
+
+selftest() {
+  rc=0
+  for d in "$SCRIPT_DIR"/*/test.sh; do
+    [ -e "$d" ] || continue
+    name=$(basename "$(dirname "$d")")
+    if echo " $SUITES_ALL " | grep -q " $name "; then continue; fi
+    if echo "$SUITES_EXCLUDED" | awk '{print $1}' | grep -qx "$name"; then continue; fi
+    echo "FAIL: suite '$name' has a test.sh but is in no category and in no exclusion — add it to SUITES_DEVICE/SUITES_ALL or to SUITES_EXCLUDED with a reason" >&2
+    rc=1
+  done
+  n=$(ls -d "$SCRIPT_DIR"/*/test.sh 2>/dev/null | wc -l)
+  if [ "$n" -lt 10 ]; then
+    echo "FAIL: found $n suites — the glob is broken, refusing to report a pass over nothing" >&2
+    rc=1
+  fi
+  [ "$rc" = 0 ] && echo "OK: all $n suite directories are registered or explicitly excluded"
+  return $rc
+}
+
 
 # Parse arguments
 CATEGORY=""
 SUITES=""
 for arg in "$@"; do
   case "$arg" in
+    --selftest) selftest; exit $? ;;
     --category) CATEGORY="next" ;;
     *)
       if [ "$CATEGORY" = "next" ]; then
