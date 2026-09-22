@@ -229,4 +229,43 @@ else
   skip_test "OTA-09..11" "Set RAUCB_PATH to run full OTA install + rollback test"
 fi
 
+# ---------------------------------------------------------------------------
+# OTA-12..16 — the SEAM: what this device would fetch if the fleet dispatched
+# an update right now. Everything above tests RAUC on a bundle someone already
+# put on the device; none of it looks at the URL the helper builds, and that is
+# the half that broke in the field. Measured 2026-09-22: the production slot
+# had served an eleven-week-old bundle the whole time, and every OTA check on
+# every device was green throughout, because none of them asked the server
+# anything.
+#
+# Read-only: HEAD requests and one small sidecar. Nothing is installed.
+# ---------------------------------------------------------------------------
+OTA_BASE="https://ota.greenautarky.com/releases/${VERSION_ID}"
+DEV_RELEASE=$(head -1 /etc/ga-release 2>/dev/null | tr -d '[:space:]')
+
+run_test "OTA-12" "the OTA host resolves and answers" \
+  "curl -fsS --max-time 20 -o /dev/null -w '%{http_code}' '$OTA_BASE/PROMOTED.json' | grep -q '^200$'"
+
+run_test "OTA-13" "the production slot names the release it serves" \
+  "curl -fsS --max-time 20 '$OTA_BASE/PROMOTED.json' | grep -q '\"ga_release\"'"
+
+# The bundle a version-only dispatch would install must exist AND be the size
+# its own checksum file describes a real file to be. A 404 here is a fleet that
+# cannot update at all; both are silent until someone dispatches.
+run_test "OTA-14" "the production bundle is downloadable" \
+  "curl -fsS -I --max-time 30 '$OTA_BASE/haos_ihost-${VERSION_ID}.raucb' | grep -qi '200'"
+
+run_test "OTA-15" "the production bundle ships its checksum" \
+  "curl -fsS --max-time 20 '$OTA_BASE/haos_ihost-${VERSION_ID}.raucb.sha256' | grep -qE '^[0-9a-f]{64}  haos_ihost'"
+
+# The rc slot for the release THIS device runs. A device on an rc whose slot
+# was pruned cannot be re-installed or rolled forward without a re-stage — the
+# check says so while it is cheap to fix, not during an incident.
+if [ -n "$DEV_RELEASE" ]; then
+  run_test "OTA-16" "this device's own release ($DEV_RELEASE) is still staged" \
+    "curl -fsS -I --max-time 30 '$OTA_BASE/$DEV_RELEASE/haos_ihost-${VERSION_ID}.raucb' | grep -qi '200'"
+else
+  skip_test "OTA-16" "/etc/ga-release is empty — cannot ask for this device's slot"
+fi
+
 suite_end

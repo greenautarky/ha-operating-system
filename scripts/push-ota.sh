@@ -72,14 +72,17 @@ SSH_PORT="${SSH_PORT:-22222}"
 # OTA server: SSH target alias, NOT the public hostname.
 # Post-Hetzner-migration (2026-06) the OTA server is ga-newhost, and
 # ota.greenautarky.com is served by Caddy from the named volume
-# caddy_caddy_data (mounted at /data in the container). The host-side path of
-# that volume is /var/lib/docker/volumes/caddy_caddy_data/_data/ota, so we scp
-# there directly. (The old ga-tools_tailscale target + /data/ota/releases was
+# caddy_caddy_data (mounted at /data in the container). The bundles USED to
+# live inside that volume, next to Caddy's ACME certificates; since 2026-09-22
+# they live on the host at /srv/ota, bind-mounted into the old location, so a
+# caller that still carries the old path keeps working while it is corrected.
+# ga-ops release-train.yml carries the same value as OTA_ROOT and proves before
+# staging that this is the tree Caddy actually serves. (The old ga-tools_tailscale target + /data/ota/releases was
 # stale — /data/ota on the ga-newhost host is a DIFFERENT dir, not the served
 # one.) A cleaner long-term fix is a bind-mount or `docker cp` into caddy.
 # Override both via OTA_SSH_HOST / OTA_SERVER_PATH if your setup differs.
 OTA_SSH_HOST="${OTA_SSH_HOST:-ga-newhost}"
-OTA_SERVER_PATH="${OTA_SERVER_PATH:-/var/lib/docker/volumes/caddy_caddy_data/_data/ota/releases}"
+OTA_SERVER_PATH="${OTA_SERVER_PATH:-/srv/ota/releases}"
 # Display name used in URLs / log output (Caddy-served hostname)
 OTA_PUBLIC_HOST="${OTA_PUBLIC_HOST:-ota.greenautarky.com}"
 
