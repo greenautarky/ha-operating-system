@@ -71,8 +71,18 @@ done
 run_test "OS-04" "WiFi scan completed" \
   "nmcli -t -f SSID dev wifi list 2>/dev/null | head -1 | grep -q '.' "
 
-run_test "OS-05" "OpenStick GA-* SSID detected in range" \
-  "[ -n '$GA_SSIDS' ]"
+# No GA-* SSID in range means no stick is powered near this device — a bench
+# fact, not a defect, and OS-06..09 below already skip for exactly that reason.
+# Failing here while skipping there made every bench run end in a red suite
+# whose only finding was "no hardware attached", which is how a colour stops
+# being read. A stick that IS in range still has to be a valid GA-#### one:
+# that is OS-06, and it still fails.
+if [ -n "$GA_SSIDS" ]; then
+  run_test "OS-05" "OpenStick GA-* SSID detected in range" "[ -n '$GA_SSIDS' ]"
+else
+  skip_test "OS-05" "OpenStick GA-* SSID detected in range" \
+    "no GA-* SSID in scan range — no OpenStick powered near this device"
+fi
 
 # OS-06..09 only make sense when an actual GA-* SSID is in scan range.
 # OS-10..23 (static checks + persistent-connection-state checks) can still

@@ -194,9 +194,26 @@ run_test "LSB-30" "powersave wrong (1) -> re-applied to 2 (disabled)" \
 DPS2="$( ( export GA_PSAVE_TEST=1 GA_PSAVE_NMCLI="$FAKENM"; . "$PSAVE"; assert_once ) )"
 run_test "LSB-31" "powersave already 2 -> ok, no change" "test '$DPS2' = ok"
 
-# the shipped openstick profile still pins powersave 2 on the created hop
-run_test "LSB-32" "openstick auto-connect still sets wifi.powersave 2 on the hop" \
-  "grep -q 'wifi.powersave 2' '$OVL/usr/sbin/ga-openstick-autoconnect'"
+# The shipped openstick profile still pins powersave 2 on the created hop.
+#
+# Read the DEVICE's copy when there is one, the overlay only as a fallback —
+# the same two-line shape PSAVE uses above. Hardcoding $OVL made this fail on
+# every device run, because run_device_tests.sh ships tests/ and not the
+# buildroot overlay: the assertion was false about a file that is not there,
+# while the property it asserts was true on the device all along (measured on
+# K31, 2026-09-22 — /usr/sbin/ga-openstick-autoconnect carries the line).
+# A red that says nothing about the device is worse than no check: it teaches
+# people that this suite is red anyway.
+OSAC="/usr/sbin/ga-openstick-autoconnect"
+[ -r "$OSAC" ] || OSAC="$OVL/usr/sbin/ga-openstick-autoconnect"
+if [ -r "$OSAC" ]; then
+  run_test "LSB-32" "openstick auto-connect still sets wifi.powersave 2 on the hop" \
+    "grep -q 'wifi.powersave 2' '$OSAC'"
+else
+  # Never silently pass: if neither copy is readable, the check inspected
+  # nothing and says so.
+  run_test "LSB-32" "openstick auto-connect readable (device or overlay)" "false"
+fi
 
 rm -rf "$TMPD"
 suite_end
