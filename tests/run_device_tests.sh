@@ -236,7 +236,12 @@ run_ssh() {
     echo ""
 
     # Execute
-    local suite_args=""
+    # Default to the DEVICE category, not to run_all.sh's own default of
+    # SUITES_ALL. Without this the lane names mean nothing: usb_net_posture was
+    # taken out of SUITES_DEVICE on 2026-09-22 because it reads the source tree,
+    # and it still ran here the same evening — SUITES_ALL was what arrived. The
+    # suite then failed closed, correctly, about a tree that is never shipped.
+    local suite_args="--category device"
     [[ -n "$SUITES" ]] && suite_args="$SUITES"
 
     # shellcheck disable=SC2086
