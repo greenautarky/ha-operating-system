@@ -207,6 +207,17 @@ jobs:
         # run is never blocked. Red-proven against origin/master's runner:
         # 10 of 16 fail, and the three must-pass checks stay green.
         run: sh tests/ga_tests/device_run_lock/test.sh
+      - name: the pre-bake gate says what a bake will NOT contain
+        # A bake turns the current pins into an image and never looks at what is
+        # waiting beside it. Measured on 2026-09-23 against the live repo, the
+        # gate refused for two real reasons: two open PRs change the pins, and
+        # ga_hmvapp_addon is published at 2.4.0 while the image pins 2.3.1 — so
+        # a bake that day would have shipped without the heating fix released
+        # that morning. Fixtures: must-flag, must-not-flag, and two fail-closed
+        # cases, because "no open PRs" and "I could not ask" must not look alike.
+        # Red-proven by mutation: removing the draft filter fails PBO-03 alone;
+        # swallowing the query error fails PBO-05 alone.
+        run: bash tests/gates/prebake_open_work/selftest.sh
 
       - name: every suite directory is registered or explicitly excluded
         run: sh tests/ga_tests/run_all.sh --selftest
