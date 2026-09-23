@@ -604,5 +604,53 @@ else
   run_test_show "HEAT-09" "$H09_DESC" 'heat09'
 fi
 
+# ---------------------------------------------------------------------------
+# HEAT-10/11 — an override a resident cannot see
+#
+# ga_heating's own source says it: "a bounded override nobody can see is
+# indistinguishable from an unbounded one". From 0.10.0 a room publishes what is
+# overriding it, and ga_manager 0.200.0 watches that the override is actually
+# carried out. Both halves are asserted HERE, at the seam, because the unit tests
+# on either side pass whether or not the two ever meet:
+#
+#   HEAT-10  the producer  — every room entity publishes an `override` attribute
+#   HEAT-11  the consumer  — ga.heating_override reports, and is not `unknown`
+#
+# HEAT-11 is the half that catches the real regression. `unknown` is what the
+# check returns when no room carries the attribute, i.e. when a device ships a
+# ga_heating older than the pin claims — the "declared is not served" shape this
+# project paid for four times on 2026-09-23 alone.
+# ---------------------------------------------------------------------------
+H10_DESC="every room thermostat publishes its override state (ga_heating >= 0.10.0)"
+GA_ROOMS=$(jq -r '[ .[] | select(.entity_id | startswith("climate."))
+                    | select(.attributes.valves != null) ] | length' "$STATES" 2>/dev/null || echo 0)
+if [ "${GA_ROOMS:-0}" -eq 0 ]; then
+  skip_test "HEAT-10" "$H10_DESC" "no room thermostat on this device — nothing to override"
+else
+  run_test_show "HEAT-10" "$H10_DESC" \
+    '_n=$(jq -r "[ .[] | select(.entity_id | startswith(\"climate.\"))
+                    | select(.attributes.valves != null)
+                    | select(.attributes | has(\"override\")) ] | length" "'"$STATES"'");
+     _t='"$GA_ROOMS"';
+     [ "$_n" = "$_t" ] || { echo "only $_n of $_t room(s) publish an override attribute — ga_heating predates 0.10.0"; exit 1; }
+     echo "$_n/$_t rooms publish their override state"'
+fi
+
+H11_DESC="ga.heating_override reports a verdict (never 'unknown', which means the attribute never arrived)"
+if [ -z "$GM" ]; then
+  skip_test "HEAT-11" "$H11_DESC" "ga_manager container absent — no health engine to ask"
+elif [ "${GA_ROOMS:-0}" -eq 0 ]; then
+  skip_test "HEAT-11" "$H11_DESC" "no room thermostat on this device"
+else
+  run_test_show "HEAT-11" "$H11_DESC" \
+    '_j=$(docker exec '"$GM"' sh -c "curl -fsS -m 20 http://127.0.0.1:8099/health" 2>/dev/null);
+     [ -n "$_j" ] || { echo "ga_manager health endpoint returned nothing"; exit 1; }
+     _s=$(printf "%s" "$_j" | jq -r ".checks[]? | select(.name==\"ga.heating_override\") | .state" 2>/dev/null | head -1);
+     [ -n "$_s" ] || { echo "ga.heating_override is not in the health report — ga_manager predates 0.200.0"; exit 1; }
+     [ "$_s" != "unknown" ] || { echo "ga.heating_override is unknown: no room carries the attribute, so nothing can be concluded"; exit 1; }
+     _v=$(printf "%s" "$_j" | jq -r ".checks[]? | select(.name==\"ga.heating_override\") | .value" 2>/dev/null | head -1);
+     echo "state=$_s value=$_v"'
+fi
+
 rm -f "$STATES" "$SET_COUNTS"
 suite_end
