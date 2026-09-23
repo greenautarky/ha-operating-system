@@ -51,6 +51,7 @@ SUITES_EXCLUDED="
   e2e_user_flows  own lane: run_e2e_tests.sh, needs a resident account
   enroll_env      host suite: CI lint.yml host-suites
   wifi_probe_verdict host suite: CI lint.yml host-suites — HW-02b's fixtures
+  device_run_lock host suite: CI lint.yml host-suites — the runner's one-run-per-device lock
   uplink_ladder   host suite: CI lint.yml host-suites
   uplink_units    host suite: CI lint.yml host-suites
   apparmor_profile host suite: CI lint.yml host-suites

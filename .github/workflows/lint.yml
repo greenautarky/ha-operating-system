@@ -199,6 +199,15 @@ jobs:
         # selection: WPV-09 + WPV-11 fail, the other nine stay green.
         run: sh tests/ga_tests/wifi_probe_verdict/test.sh
 
+      - name: the runner refuses a second run against the same device
+        # Its first act against a device is `rm -rf /tmp/ga_tests`, so an
+        # overlapping run deletes the suites out from under the first one. Drives
+        # the REAL runner with a stub ssh: the refusal, its ordering BEFORE the
+        # destructive step, the loud stale takeover, and that an ordinary single
+        # run is never blocked. Red-proven against origin/master's runner:
+        # 10 of 16 fail, and the three must-pass checks stay green.
+        run: sh tests/ga_tests/device_run_lock/test.sh
+
       - name: every suite directory is registered or explicitly excluded
         run: sh tests/ga_tests/run_all.sh --selftest
 
