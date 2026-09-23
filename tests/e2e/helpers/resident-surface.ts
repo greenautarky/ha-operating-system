@@ -197,6 +197,8 @@ export const EXPECTED_ELEMENTS: Record<string, string | null> = {
   'ga-heating-card': 'ga-heating-card',
   'ga-master-card': 'ga-master-card',
   'ga-thermostat-card': 'ga-thermostat-card',
+  // The whole-home heating controls on the Profil view (bundle 1.18.0).
+  'ga-heating-actions-card': 'ga-heating-actions-card',
   'ga-home-strategy': 'll-strategy-dashboard-ga-home',
   'ga-sidebar-default': null,
   // Side-effect module: watches the registry swap and reports elements that

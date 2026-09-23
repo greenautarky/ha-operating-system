@@ -121,6 +121,27 @@ async function waitForRenderedConfig(
  * A permanent red that everybody knows to ignore is worse than a skip that
  * says why, because it is the colour people stop reading.
  */
+/** area_id of every area holding a climate entity — directly or through its device. */
+async function radiatorAreaIds(page: import('@playwright/test').Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const hass = (document.querySelector('home-assistant') as HTMLElement & {
+      hass?: {
+        entities?: Record<string, { entity_id: string; area_id?: string; device_id?: string }>;
+        devices?: Record<string, { id: string; area_id?: string }>;
+      };
+    })?.hass;
+    if (!hass) return [];
+    const devices = Object.values(hass.devices ?? {});
+    const ids = new Set<string>();
+    for (const e of Object.values(hass.entities ?? {})) {
+      if (!e.entity_id.startsWith('climate.')) continue;
+      const area = e.area_id || devices.find(d => d.id === e.device_id)?.area_id;
+      if (area) ids.add(area);
+    }
+    return [...ids].sort();
+  });
+}
+
 async function furnishedAreaCount(page: import('@playwright/test').Page): Promise<number> {
   return page.evaluate(() => {
     const hass = (document.querySelector('home-assistant') as HTMLElement & {
@@ -248,21 +269,29 @@ test.describe('Resident UI', () => {
     }
 
     const views = cfg?.views ?? [];
-    // Room views are the ones the strategy builds per area. The fixed views
-    // (overview, manage, roomless) are excluded by path so this does not
-    // silently pass on a device with no rooms at all.
-    const fixed = new Set(['haushalt', 'verwalten', 'ohne-raum']);
-    const rooms = views.filter(v => v.path && !fixed.has(v.path));
+    // A room is an AREA that holds a radiator, and its view's path is that
+    // area's id (/lovelace/office -> area `office`). This used to exclude the
+    // fixed views by name — ['haushalt', 'verwalten', 'ohne-raum'] — and every
+    // one of those names went stale in one day: `haushalt` became
+    // `einstellungen`, `verwalten` was removed and `profil` was added, so the
+    // test reported the Profil and Einstellungen views as "rooms without a
+    // thermostat". Deriving the rooms from the areas cannot go stale that way.
+    const radiatorAreas = await radiatorAreaIds(page);
 
     // Coverage first. A loop over zero rooms passes every assertion inside it,
     // which is exactly how a broken dashboard reports itself as healthy.
     expect(
-      rooms.length,
-      `No room views in the dashboard. Views found: ${views
+      radiatorAreas.length,
+      `No area holds a climate entity, so there is no room to check. Views found: ${views
         .map(v => v.path)
         .join(', ') || '(none)'}`,
     ).toBeGreaterThan(0);
 
+    const byPath = new Map(views.map(v => [v.path, v]));
+    const withoutView = radiatorAreas.filter(a => !byPath.has(a));
+    expect(withoutView, `Rooms with a radiator but no room view: ${withoutView.join(', ')}`).toEqual([]);
+
+    const rooms = radiatorAreas.map(a => byPath.get(a)!);
     const withoutThermostat = rooms
       .filter(v => !cardTypes(v).some(t => t.includes('ga-thermostat-card')))
       .map(v => `${v.path} → [${cardTypes(v).join(', ') || 'no cards at all'}]`);

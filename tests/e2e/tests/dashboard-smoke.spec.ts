@@ -130,7 +130,39 @@ async function assertDashboardRenders(page: Page, url: string, shot: string) {
     `${url}: cards whose custom element is not registered (frontend bundle not loaded?)`,
   ).toEqual([]);
   expect(probe.errorCards, `${url}: hui-error-card rendered`).toEqual([]);
-  expect(probe.cards, `${url}: no card element rendered`).toBeGreaterThan(0);
+  if (probe.cards > 0) return;
+  // Zero cards is not yet a verdict. A personal board (ADR-0006 v2) is made
+  // visible to its OWNER per view, so anyone else — the admin this suite logs
+  // in as — is shown an empty page by Home Assistant, correctly. Read the
+  // board's config over the same connection and tell the two apart: a board
+  // with no cards at all is empty (a defect); a board whose every carded view
+  // is restricted to someone else is working as designed.
+  const urlPath = new URL(url).pathname.replace(/^\//, '').split('/')[0];
+  const cfg = await page.evaluate(async (p: string) => {
+    const hass = (document.querySelector('home-assistant') as HTMLElement & {
+      hass?: { callWS: (m: object) => Promise<any>; user?: { id: string } };
+    })?.hass;
+    if (!hass) return null;
+    try {
+      const c = await hass.callWS({ type: 'lovelace/config', url_path: p });
+      return { views: (c?.views ?? []).map((v: any) => ({
+        cards: (v.cards ?? []).length + (v.sections ?? []).reduce((n: number, s: any) => n + (s.cards ?? []).length, 0),
+        visibleTo: Array.isArray(v.visible) ? v.visible.map((x: any) => x.user) : null,
+      })), me: hass.user?.id ?? '' };
+    } catch (e) { return { error: String(e) }; }
+  }, urlPath);
+  expect(cfg && !('error' in cfg), `${url}: no card rendered and its config could not be read: ${JSON.stringify(cfg)}`).toBe(true);
+  const carded = (cfg as any).views.filter((v: any) => v.cards > 0);
+  expect(carded.length, `${url}: no card element rendered, and the board has no cards at all`).toBeGreaterThan(0);
+  const shownToMe = carded.filter((v: any) => v.visibleTo === null || v.visibleTo.includes((cfg as any).me));
+  expect(
+    shownToMe.length,
+    `${url}: ${shownToMe.length} view(s) with cards are visible to this user, yet nothing rendered`,
+  ).toBe(0);
+  test.info().annotations.push({
+    type: 'owner-only',
+    description: `${url}: ${carded.length} carded view(s), all restricted to their owner — not rendered for this user by design`,
+  });
 }
 
 /** url_path of every GA home dashboard the frontend knows about. */
