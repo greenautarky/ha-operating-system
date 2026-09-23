@@ -33,6 +33,12 @@ run_test "DRL-00" "the runner is where this suite drives it" "test -x '$RUNNER'"
 W="$(mktemp -d 2>/dev/null || echo /tmp/drl_$$)"
 mkdir -p "$W/bin" "$W/dev"
 
+# The target is 198.51.100.9 — RFC 5737 TEST-NET-2, reserved for documentation.
+# Not an RFC1918 address: this repository is public and the disclosure gate flags
+# 10/8, 172.16/12, 192.168/16 and the mesh range in added lines, correctly. A
+# fixture needs an address that is obviously nowhere, not one that could be a
+# real device.
+#
 # stub ssh — the last argument is the remote command, as the runner always calls
 # it. Everything the runner asks of a device that is not a file operation is
 # answered here; file operations are EVALUATED, with the device's /tmp/ga_tests
@@ -59,7 +65,7 @@ runner() {   # runner <logname> -> exit code in $RC, output in $OUT, ssh log in 
   LOG="$W/$1.ssh.log"; : > "$LOG"
   OUT=$(SSH_LOG="$LOG" FAKE_DEV="$W/dev" PATH="$W/bin:$PATH" \
         GA_TEST_RUN_OWNER="${2:-tester@laptop}" \
-        bash "$RUNNER" --ssh root@10.0.0.9 --no-preflight ${3:-} 2>&1) && RC=0 || RC=$?
+        bash "$RUNNER" --ssh root@198.51.100.9 --no-preflight ${3:-} 2>&1) && RC=0 || RC=$?
 }
 
 # plant a lock as another run would have left it: <age-in-seconds> <owner>
@@ -111,26 +117,40 @@ runner forced "tester@laptop" "--force-unlock"
 run_test "DRL-06" "--force-unlock clears a fresh lock and the run proceeds" "[ '$RC' = 0 ]"
 
 # --- DRL-07 — release must not delete a lock that is no longer ours ----------
-# A run whose lock was taken over as stale must not, on finishing, delete the
-# NEW owner's lock — that would open the door for a third run behind it.
+# A run whose lock was taken over as stale must not, on finishing, delete the NEW
+# owner's lock — that would open the door for a third run behind it.
+#
+# The first version of this raced: it started the runner in the background, polled
+# for the stamp, and rewrote it. That passed here and FAILED in CI, because the
+# whole stubbed run finishes in milliseconds and `sleep 0.05` is not portable. A
+# test that depends on winning a race tells you about the race, not the rule.
+#
+# So the STUB does the stealing, at a point the runner itself defines: the moment
+# it ships the suites, the lock changes hands. No timing, no polling.
 rm -rf "$LOCK"
-LOG="$W/handover.ssh.log"; : > "$LOG"
-cat > "$W/bin/steal" <<STEAL
+cat > "$W/bin/ssh" <<'STUB2'
 #!/bin/sh
-{ echo 'owner=other@runner'; echo 'started=now'; echo "epoch=\$(date +%s)"; } > "$LOCK/stamp"
-STEAL
-chmod +x "$W/bin/steal"
-# run once to acquire, then rewrite the stamp behind it, then let it release
-( SSH_LOG="$LOG" FAKE_DEV="$W/dev" PATH="$W/bin:$PATH" GA_TEST_RUN_OWNER="tester@laptop" \
-  bash -c "bash '$RUNNER' --ssh root@10.0.0.9 --no-preflight >/dev/null 2>&1" ) &
-_pid=$!
-# wait for the lock to appear, steal it, then let the run finish
-_n=0
-while [ ! -f "$LOCK/stamp" ] && [ $_n -lt 100 ]; do _n=$((_n+1)); sleep 0.05; done
-if [ -f "$LOCK/stamp" ]; then "$W/bin/steal"; fi
-wait $_pid 2>/dev/null
-run_test "DRL-07" "a lock taken over by another run survives this run's release" \
+last=""
+for a in "$@"; do last="$a"; done
+printf '%s\n' "$last" >> "$SSH_LOG"
+case "$last" in
+  *os-release*)  printf 'NAME="GA OS"\nVARIANT="iHost"\nGA_BUILD=1\n'; exit 0 ;;
+  *run_all.sh*)  echo "RAN_SUITES"; exit 0 ;;
+  *"tar xf"*)
+      cat >/dev/null
+      # another run takes the lock over, right here
+      { echo 'owner=other@runner'; echo 'started=now'; echo "epoch=$(date +%s)"; } \
+        > "$FAKE_DEV/ga_tests.lock/stamp"
+      exit 0 ;;
+  *"docker ps"*) exit 0 ;;
+esac
+eval "$(printf '%s' "$last" | sed "s#/tmp/ga_tests#$FAKE_DEV/ga_tests#g")"
+STUB2
+chmod +x "$W/bin/ssh"
+runner handover
+run_test "DRL-07a" "a lock taken over by another run survives this run's release" \
   "test -f '$LOCK/stamp' && grep -qx 'owner=other@runner' '$LOCK/stamp'"
+run_test "DRL-07b" "…and the run itself still finished normally" "[ '$RC' = 0 ]"
 
 rm -rf "$W"
 suite_end

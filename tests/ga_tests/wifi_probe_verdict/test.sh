@@ -95,7 +95,7 @@ selection() {   # selection <journal> <dmesg>
 run_test "WPV-09" "MUST NOT FLAG: rotated journal + dmesg with the probe → clean (the K31 state, through the live selection)" \
   "[ \"\$(selection \"\$ROTATED\" \"\$K31_DMESG\")\" = clean ]"
 
-run_test "WPV-10" "a device whose journal DOES reach boot still answers from the journal" \
+run_test "WPV-10" "a device whose journal DOES reach boot is answered from the journal" \
   "[ \"\$(selection \"\$K31_DMESG\" '')\" = clean ]"
 
 run_test "WPV-11" "MUST FLAG: an eFuse failure only dmesg still has is not lost" \
