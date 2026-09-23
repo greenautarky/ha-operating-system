@@ -415,6 +415,154 @@ test.describe('Resident surface', () => {
     ).toEqual([...AXIS_LABELS]);
   });
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // 4. What the thermostat card leads with, and that the plan is never a blank form
+  // ───────────────────────────────────────────────────────────────────────────
+  //
+  // Both asked for on 2026-09-23, and both are about the FIRST thing a resident
+  // sees rather than about a capability:
+  //
+  //   the thermostat card led with the room's measured temperature and buried
+  //   the setpoint — the one number a resident can act on — in a small row;
+  //
+  //   the weekly plan came back empty and offered "+ Zeit hinzufügen" as the
+  //   only way in, so a fresh flat showed a blank form and a blank curve.
+  //
+  // Asserted here, in the browser, because the unit tests in ga-frontend-bundle
+  // prove what the functions return and this proves what the page shows. The two
+  // together are the seam; either alone is half of it.
+
+  test('the thermostat card leads with the target, not with the measurement', async ({
+    page,
+    deviceUrl,
+  }) => {
+    await openResidentDashboard(page, deviceUrl);
+
+    const deadline = Date.now() + 20_000;
+    let read: {
+      found: boolean;
+      cur: number;
+      targets: number;
+      variant: string;
+      text: string;
+    } | null = null;
+    for (;;) {
+      read = (await page.evaluate(`(() => {
+        ${DEEP_QUERY}
+        const card = deep(document).find(e => e.tagName === 'GA-THERMOSTAT-CARD');
+        if (!card) return { found: false, cur: 0, targets: 0, text: '' };
+        const root = card.shadowRoot || card;
+        return {
+          found: true,
+          // The card ships three looks and the strategy picks one per device.
+          // Measured on the canary 2026-09-23: it renders the DIAL — so a check
+          // written for '.cur' alone passes on the very variant it was meant to
+          // cover. Every element that carries the MEASUREMENT is counted:
+          //   .cur    the "aktuell …" line   (setpoint)
+          //   .d-cur  the small SVG readout  (dial)
+          cur: root.querySelectorAll('.cur, .d-cur').length,
+          // …and every element that carries the TARGET. Three variants, three
+          // class names, and the canary renders the THIRD one:
+          //   .target   classic          .d-tgt  dial          .sp .t  setpoint
+          // A selector that knows only the first two reports 0 on a card that is
+          // working perfectly — which is what this check did on its first run.
+          targets: root.querySelectorAll('.target, .d-tgt, .sp .t').length,
+          variant: root.querySelector('svg.dial') ? 'dial'
+                 : (root.querySelector('.sp') ? 'setpoint' : 'classic'),
+          text: (root.textContent || '').trim(),
+        };
+      })()`)) as typeof read;
+      if (read && read.found) break;
+      if (Date.now() > deadline) break;
+      await page.waitForTimeout(500);
+    }
+
+    if (!read || !read.found) {
+      test.skip(
+        true,
+        'No ga-thermostat-card on this dashboard — no room has a climate entity. ' +
+          'Pair a thermostat to an area first. NOT a defect.',
+      );
+    }
+
+    expect(
+      read!.cur,
+      `The thermostat card (variant: ${read!.variant}) still renders the measured ` +
+        'room temperature. It was ' +
+        'asked to lead with the TARGET on 2026-09-23: the measurement answers a ' +
+        'question nobody asked while burying the only control on the card. If ' +
+        'this is deliberate for a diagnostic view, that view passes ' +
+        '`show_current: true` — the default must stay off.',
+    ).toBe(0);
+
+    expect(
+      read!.targets,
+      `The card (variant: ${read!.variant}) must carry EXACTLY ONE target readout: ` +
+        'that is how ' +
+        '`_showPending` finds the number to update after a press. Two of them, or ' +
+        'none, and an optimistic press silently stops showing — with nothing else ' +
+        'broken and no other test failing.',
+    ).toBe(1);
+
+    expect(
+      read!.text.toLowerCase(),
+      'The word "aktuell" is the label of the measured value. It must not be on ' +
+        'the card by default.',
+    ).not.toContain('aktuell');
+  });
+
+  test('the weekly plan is never an empty form — five times are always offered', async ({
+    page,
+    deviceUrl,
+  }) => {
+    const cfg = await openResidentDashboard(page, deviceUrl);
+
+    if (!hasHeatingCard(cfg)) {
+      test.skip(true, 'No climate entity on this device — no Heizplan card.');
+    }
+
+    const deadline = Date.now() + 20_000;
+    let read: { slots: number; empty: number; add: number } | null = null;
+    for (;;) {
+      read = (await page.evaluate(`(() => {
+        ${DEEP_QUERY}
+        const card = deep(document).find(e => e.tagName === 'GA-HEATING-CARD');
+        if (!card) return null;
+        return {
+          slots: card.querySelectorAll('.slot').length,
+          empty: card.querySelectorAll('.empty').length,
+          // The control that used to be the only way in is gone.
+          add: Array.from(card.querySelectorAll('button'))
+            .filter(b => (b.textContent || '').includes('hinzufügen')).length,
+        };
+      })()`)) as typeof read;
+      if (read && read.slots) break;
+      if (Date.now() > deadline) break;
+      await page.waitForTimeout(500);
+    }
+
+    expect(
+      read,
+      'The heating card never mounted. Read the browser console before reading ' +
+        'this as a missing plan.',
+    ).not.toBeNull();
+
+    expect(
+      read!.slots,
+      `The plan offers ${read!.slots} times for the selected day; it must offer at ` +
+        'least five. An empty scheduler asks the resident to invent a plan before ' +
+        'the card can show one — measured on a fresh flat on 2026-09-23. A day ' +
+        'that already carries MORE than five is left alone, so this is a floor, ' +
+        'not an equality.',
+    ).toBeGreaterThanOrEqual(5);
+
+    expect(
+      read!.add,
+      'The "+ Zeit hinzufügen" control is back. The week is five fixed times; a ' +
+        'way to add a sixth reopens the empty-form state this replaced.',
+    ).toBe(0);
+  });
+
   test('a bar carries its value so a tap can show it', async ({ page, deviceUrl }) => {
     const cfg = await openResidentDashboard(page, deviceUrl);
 
