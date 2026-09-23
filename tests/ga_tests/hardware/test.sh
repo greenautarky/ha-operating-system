@@ -11,12 +11,22 @@ suite_start "Hardware"
 run_test "HW-01" "WiFi interface wlan0 present" \
   "ip link show wlan0 >/dev/null 2>&1"
 
-# HW-02 reads the kernel log from the journal: the dmesg ring buffer rotates
-# (K31 rc20 after 3 h uptime started at 6452 s — the probe lines were gone and
-# the test went red on a healthy driver).
-run_test "HW-02" "rtw88_8723ds driver loaded (no eFuse errors)" \
-  "K=\$(journalctl -k -b --no-pager -q 2>/dev/null); [ -n \"\$K\" ] || K=\$(dmesg 2>/dev/null); \
-    echo \"\$K\" | grep -q 'rtw_8723ds' && ! echo \"\$K\" | grep -q 'failed to dump efuse'"
+# HW-02 asserts the DURABLE fact; HW-02b asserts the volatile one and skips with
+# a reason when the device can no longer see it. wifi_probe.sh carries the why,
+# the K31 measurement behind the split, and the log-selection defect it fixes.
+. "$SCRIPT_DIR/wifi_probe.sh"
+
+run_test "HW-02" "rtw88_8723ds driver loaded" \
+  "[ -d /sys/module/rtw88_8723ds ]"
+
+_hw_verdict=$(wifi_kernel_log | wifi_probe_verdict)
+if [ "$_hw_verdict" = uncovered ]; then
+  skip_test "HW-02b" "No eFuse dump failures during the WiFi probe" \
+    "no kernel log still reaches back to the probe (uptime $(cut -d. -f1 /proc/uptime 2>/dev/null)s) — HW-02 above answers whether the driver is loaded"
+else
+  run_test "HW-02b" "No eFuse dump failures during the WiFi probe" \
+    "[ \"$_hw_verdict\" = clean ]"
+fi
 
 # RTL8723DS produces benign SDIO warnings during probe — filter those out
 warn_test "HW-03" "No unexpected SDIO/MMC errors in dmesg" \

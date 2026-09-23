@@ -50,6 +50,7 @@ SUITES_EXCLUDED="
   reboot          destructive: reboots the device, host-side, run on demand
   e2e_user_flows  own lane: run_e2e_tests.sh, needs a resident account
   enroll_env      host suite: CI lint.yml host-suites
+  wifi_probe_verdict host suite: CI lint.yml host-suites — HW-02b's fixtures
   uplink_ladder   host suite: CI lint.yml host-suites
   uplink_units    host suite: CI lint.yml host-suites
   apparmor_profile host suite: CI lint.yml host-suites
