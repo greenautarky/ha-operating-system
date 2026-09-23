@@ -188,6 +188,26 @@ jobs:
         # (5 of 7 fail) before it was added.
         run: sh tests/ga_tests/enroll_env/test.sh
 
+      - name: HW-02b reads the kernel log it can actually see
+        # HW-02 was one check over a VOLATILE source and went red on a healthy
+        # K31 whose logs had aged past boot. Split into a durable half
+        # (/sys/module) and a log half that SKIPS with a reason. These fixtures
+        # drive the live wifi_probe.sh: must-flag (eFuse failures) and
+        # must-not-flag (every false red it produced, including the exact K31
+        # state where a non-empty but rotated journal shadowed a dmesg that
+        # still had the probe line). Red-proven by injecting the pre-fix
+        # selection: WPV-09 + WPV-11 fail, the other nine stay green.
+        run: sh tests/ga_tests/wifi_probe_verdict/test.sh
+
+      - name: the runner refuses a second run against the same device
+        # Its first act against a device is `rm -rf /tmp/ga_tests`, so an
+        # overlapping run deletes the suites out from under the first one. Drives
+        # the REAL runner with a stub ssh: the refusal, its ordering BEFORE the
+        # destructive step, the loud stale takeover, and that an ordinary single
+        # run is never blocked. Red-proven against origin/master's runner:
+        # 10 of 16 fail, and the three must-pass checks stay green.
+        run: sh tests/ga_tests/device_run_lock/test.sh
+
       - name: every suite directory is registered or explicitly excluded
         run: sh tests/ga_tests/run_all.sh --selftest
 

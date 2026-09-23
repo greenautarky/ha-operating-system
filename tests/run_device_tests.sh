@@ -60,6 +60,7 @@ usage() {
     echo "  --suites 'a b c'     Run only specified suites"
     echo "  --settle-timeout S   Wait up to S s for add-ons to be Up (default: 300, 0 = do not wait)"
     echo "  --no-preflight       Skip the release-match and settled checks"
+    echo "  --force-unlock       Take over a run lock left behind on the device"
     echo "  --allow-release-mismatch  Run even if the tree declares a different release than the device"
     echo "  --key PATH            SSH private key path"
     echo "  -h, --help            Show this help"
@@ -77,6 +78,8 @@ usage() {
 PREFLIGHT="${PREFLIGHT:-1}"
 SETTLE_TIMEOUT="${SETTLE_TIMEOUT:-300}"
 ALLOW_RELEASE_MISMATCH="${ALLOW_RELEASE_MISMATCH:-0}"
+FORCE_UNLOCK="${FORCE_UNLOCK:-0}"
+STALE_AFTER="${STALE_AFTER:-3600}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -89,6 +92,7 @@ while [[ $# -gt 0 ]]; do
         --key)      SSH_KEY="$2"; shift 2 ;;
         --settle-timeout) SETTLE_TIMEOUT="$2"; shift 2 ;;
         --no-preflight)   PREFLIGHT=0; shift ;;
+        --force-unlock)   FORCE_UNLOCK=1; shift ;;
         --allow-release-mismatch) ALLOW_RELEASE_MISMATCH=1; shift ;;
         -h|--help)  usage ;;
         *)          echo "Unknown option: $1"; usage ;;
@@ -126,6 +130,124 @@ setup_serial() {
     fi
 }
 
+
+# --- One run per device ------------------------------------------------------
+# Two runs against the same device destroy each other's evidence, and the very
+# first thing this script does to a device is `rm -rf /tmp/ga_tests` — so a
+# second run deletes the suites out from under the first one MID-RUN. On
+# 2026-09-23 a device pass overlapping another lane reported 220 passed / 18
+# failed where the same device alone reported 463 / 5: eighteen failures that
+# were about the act of measuring, not about the device. A report whose whole
+# purpose is to judge a device must not contain failures the measurement caused.
+#
+# The lock lives ON THE DEVICE, because the device is the shared resource. A
+# lock file on this laptop would not see a run started from ga-builder, from CI,
+# or from a second worktree — which is exactly how the collision happened.
+# `mkdir` is the atomic part: two runners racing here cannot both win, whatever
+# their timing.
+LOCK_DIR="${REMOTE_DIR}.lock"
+LOCK_OWNER=""
+
+release_device_lock() {
+    [[ -n "$LOCK_OWNER" ]] || return 0
+    # Only remove a lock that is STILL OURS. If a later run took it over as
+    # stale, this one finishing must not delete the new owner's lock and let a
+    # third run in behind it.
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "$SSH_TARGET" \
+        "grep -qx 'owner=$LOCK_OWNER' $LOCK_DIR/stamp 2>/dev/null && rm -rf $LOCK_DIR" \
+        2>/dev/null || true
+}
+
+acquire_device_lock() {
+    local me now out state owner started epoch dev_now age
+    me="${GA_TEST_RUN_OWNER:-$(id -un 2>/dev/null || echo unknown)@$(hostname 2>/dev/null || echo unknown)}"
+    # Local time with an explicit offset: unambiguous across machines AND readable
+    # by the person who hits the refusal. A bare UTC stamp is neither.
+    now="$(date '+%Y-%m-%dT%H:%M:%S%:z')"
+
+    if [[ "$FORCE_UNLOCK" == "1" ]]; then
+        echo "  --force-unlock given: removing any run lock on the device first"
+        # shellcheck disable=SC2086
+        ssh $SSH_OPTS "$SSH_TARGET" "rm -rf $LOCK_DIR" 2>/dev/null || true
+    fi
+
+    # One round trip: try to take the lock, and report the device's own clock so
+    # the age is computed against the clock that wrote the stamp.
+    # shellcheck disable=SC2086
+    out=$(ssh $SSH_OPTS "$SSH_TARGET" "
+        if mkdir $LOCK_DIR 2>/dev/null; then
+            { echo 'owner=$me'; echo 'started=$now'; echo \"epoch=\$(date +%s)\"; } > $LOCK_DIR/stamp
+            echo state=acquired
+        else
+            echo state=held
+            cat $LOCK_DIR/stamp 2>/dev/null
+        fi
+        echo now=\$(date +%s)" 2>/dev/null | tr -d '\r') || out=""
+
+    state=$(printf '%s\n' "$out" | sed -n 's/^state=//p' | head -1)
+
+    # Could not take the lock AND could not read one: say so at the level of the
+    # failure and run unprotected, rather than silently pretending to be locked.
+    if [[ "$state" != "acquired" && "$state" != "held" ]]; then
+        echo ""
+        echo "  WARNING: could not establish a run lock on the device."
+        echo "           This run is NOT protected against a second run against"
+        echo "           the same device. If two runs overlap, read neither report."
+        echo ""
+        return 0
+    fi
+
+    if [[ "$state" == "acquired" ]]; then
+        LOCK_OWNER="$me"
+        trap release_device_lock EXIT
+        echo "  Run lock taken ($LOCK_DIR)"
+        return 0
+    fi
+
+    owner=$(printf '%s\n' "$out" | sed -n 's/^owner=//p' | head -1)
+    started=$(printf '%s\n' "$out" | sed -n 's/^started=//p' | head -1)
+    epoch=$(printf '%s\n' "$out" | sed -n 's/^epoch=//p' | head -1)
+    dev_now=$(printf '%s\n' "$out" | sed -n 's/^now=//p' | head -1)
+    age=""
+    [[ "$epoch" =~ ^[0-9]+$ && "$dev_now" =~ ^[0-9]+$ ]] && age=$((dev_now - epoch))
+
+    # A run killed on a device that then stays up leaves its lock behind, and a
+    # lock nobody can clear is its own outage. Take it over past a generous
+    # ceiling — three times the longest full pass — but LOUDLY: a silent
+    # takeover would put the collision back exactly when two runs are slow.
+    if [[ -n "$age" && "$age" -gt "$STALE_AFTER" ]]; then
+        echo ""
+        echo "  WARNING: taking over a run lock that is ${age}s old (ceiling ${STALE_AFTER}s)."
+        echo "           It was made by : ${owner:-unknown}"
+        echo "           at             : ${started:-unknown}"
+        echo "           That run is presumed dead. If it is NOT, two runs are now"
+        echo "           writing over each other and both reports are worthless."
+        echo ""
+        # shellcheck disable=SC2086
+        ssh $SSH_OPTS "$SSH_TARGET" \
+            "{ echo 'owner=$me'; echo 'started=$now'; echo \"epoch=\$(date +%s)\"; } > $LOCK_DIR/stamp" \
+            2>/dev/null || true
+        LOCK_OWNER="$me"
+        trap release_device_lock EXIT
+        return 0
+    fi
+
+    echo "ERROR: another test run is already using this device."
+    echo "       owner   : ${owner:-unknown}"
+    echo "       started : ${started:-unknown}${age:+   (${age}s ago)}"
+    echo "       lock    : $SSH_TARGET:$LOCK_DIR"
+    echo ""
+    echo "       Not starting. This script's first act is to delete"
+    echo "       $REMOTE_DIR on the device, which would remove the suites the"
+    echo "       other run is executing — and both reports would then describe"
+    echo "       the collision rather than the device."
+    echo ""
+    echo "       Wait for it, or if you know that run is dead:"
+    echo "         $0 <same options> --force-unlock"
+    echo "       A reboot also clears it — the lock lives in the device's tmpfs."
+    exit 3
+}
 
 # --- Preflight ---------------------------------------------------------------
 # THIS SCRIPT SHIPS THE LOCAL tests/ TREE TO THE DEVICE, so the suites' pinned
@@ -221,6 +343,9 @@ run_ssh() {
     machine=$(echo "$device_check" | grep -i "^VARIANT\|^GA_MACHINE\|^MACHINE" | head -1 || true)
     echo "  OK — ${machine:-GA OS detected}"
     echo ""
+
+    # Before anything is read, waited for, or deleted on the device.
+    acquire_device_lock
 
     [[ "$PREFLIGHT" == "1" ]] && preflight_release_match && preflight_wait_settled
     echo "Copying test scripts to device..."
