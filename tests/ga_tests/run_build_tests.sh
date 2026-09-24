@@ -3564,44 +3564,21 @@ fi
 # =========================================================================
 # RAUC keyring CONTENTS — what actually shipped, not what rauc.sh intended
 # =========================================================================
-# RAUC-LEGACY-01 above proves the gate FUNCTION honours the flag against a
-# scratch file; RAUC-LEGACY-02 only proves the flag is declared. Neither looks
-# at the image. This one does: it runs the audit over ${TARGET}/etc/rauc/
-# keyring.pem and compares every trust anchor, by SHA-256 fingerprint, against
-# the certificates the build declared. It is the only check that notices a
-# FOURTH certificate — e.g. the self-signed cert install_rauc_certs() appends
-# without comment whenever /build/cert.pem does not verify against dev-ca.pem.
-# [Odoo #624]
+# Runs the audit over ${TARGET}/etc/rauc/keyring.pem. The audit compares every
+# certificate, by SHA-256 fingerprint, against the ONE OTA root pinned as a
+# constant in the audit itself (ADR-0027 D9) — never against the build inputs,
+# and never against a mode the caller or the image claims. There is no mode:
+# before D9 the expected anchor depended on GA_ENV, and a check whose verdict
+# depends on who ran it was red on good images and silenceable by a variable.
+# It is the only check that notices an extra certificate in the shipped trust
+# set. [Odoo #624]
 _kr_script="${SRC:-}/scripts/verify-rauc-keyring.sh"
 
-# Which environment is this image? The audit picks its pinned fingerprint from
-# that answer, so getting it from the ambient shell was wrong twice over:
-#
-#   * it made the result depend on who ran the suite. A prod image checked from
-#     a normal shell defaulted to dev, was measured against the DEV pin, and
-#     KEYRING-07 failed on a perfectly good image. That is also why the failure
-#     injection harness could never start: it aborts on a red baseline.
-#   * it meant the one check standing between a mis-signed image and the fleet
-#     could be silenced by an environment variable.
-#
-# ENV-02 already read the value the build stamped into the image. Use it, and
-# CROSS-CHECK it against an explicitly passed GA_ENV rather than letting either
-# one win silently. Two independent sources that must agree is stronger than
-# either alone: the image cannot quietly claim to be dev, and the caller cannot
-# quietly assert prod over a dev artefact.
-_kr_env="${GA_ENV:-${GA_ENV_VAL:-dev}}"
-if [[ -n "${GA_ENV:-}" && -n "${GA_ENV_VAL:-}" && "$GA_ENV" != "$GA_ENV_VAL" ]]; then
-  _fail "RAUC-KEYRING-01: caller says GA_ENV=$GA_ENV but the image says GA_ENV=$GA_ENV_VAL — refusing to guess which trust anchor this image is supposed to carry"
-  _kr_env=""
-fi
-
-if [[ -z "$_kr_env" ]]; then
-  : # already failed above; do not run the audit against an unknown expectation
-elif [[ -x "$_kr_script" && -f "${TARGET}/etc/rauc/keyring.pem" ]]; then
-  _kr_out="$(REPO_ROOT="${SRC}" GA_ENV="$_kr_env" "$_kr_script" "$OUT" 2>&1)"
+if [[ -x "$_kr_script" && -f "${TARGET}/etc/rauc/keyring.pem" ]]; then
+  _kr_out="$(REPO_ROOT="${SRC}" "$_kr_script" "$OUT" 2>&1)"
   _kr_rc=$?
   case "$_kr_rc" in
-    0) _pass "RAUC-KEYRING-01: shipped keyring holds exactly the declared trust anchors" ;;
+    0) _pass "RAUC-KEYRING-01: shipped keyring holds exactly the pinned OTA root" ;;
     2) _fail "RAUC-KEYRING-01: keyring audit could not run (exit 2) — trust set UNVERIFIED$(printf '\n%s' "$_kr_out" | sed 's/^/      /')" ;;
     *) _fail "RAUC-KEYRING-01: keyring audit found trust-anchor problem(s)$(printf '\n%s' "$_kr_out" | sed 's/^/      /')" ;;
   esac

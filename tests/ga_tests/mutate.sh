@@ -85,8 +85,8 @@ copy_source() {
     # not acceptable even for a second.
     #
     # By CONTENT, not by extension. The first version swept every *.pem, which
-    # also removed ota/dev-ca.pem — a public X.509 certificate, not a secret,
-    # and the baseline RAUC-KEYRING-01 derives its expected trust set from.
+    # also removed the public CA certificate under ota/ — not a secret, and at
+    # the time the baseline RAUC-KEYRING-01 derived its expected trust set from.
     # Every mutated run therefore failed that check as well, on all six
     # mutations, for a reason that had nothing to do with the mutation. This
     # script's own rule says a mutation tripping several checks measures noise
