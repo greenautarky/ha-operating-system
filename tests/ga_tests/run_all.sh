@@ -59,6 +59,7 @@ SUITES_EXCLUDED="
   ha_init         superseded by ha_config_applied on the device lane
   netbird_reg     on demand: registration is proven by enrolment itself
   services_config superseded by publish_services on the device lane
+  ota_trust       on demand, device-only: needs a throwaway-signed bundle staged first (make-throwaway-bundle.sh); verdict logic runs in CI host-suites
 "
 
 selftest() {

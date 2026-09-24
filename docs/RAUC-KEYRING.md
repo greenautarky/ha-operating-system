@@ -7,8 +7,18 @@ be repaired in the field, and the one ordering that makes a key rotation
 survivable.
 
 Guarded by `scripts/verify-rauc-keyring.sh` (`KEYRING-02`, `-03`, `-05`, `-06`),
-which runs fail-closed on every prod build, plus `SRC-17a/b`, `SRC-21` and
-`RAUC-KEYRING-01` in `tests/ga_tests/run_build_tests.sh`.
+which runs fail-closed on every build, plus `SRC-17a/b`, `SRC-21` and
+`RAUC-KEYRING-01` in `tests/ga_tests/run_build_tests.sh`. The audit's verdicts
+are proven red and green on every pull request by
+`tests/gates/rauc_keyring/selftest.sh`; what a *device* does with a foreign
+signature is asked by the `ota_trust` device suite (`KEYRING-NEG-*`).
+
+> **Updated 2026-09-24 — one key, one build mode (ADR-0027 Amendment 1, D9).**
+> There is no dev CA, no dev signing key and no `GA_ENV=dev|prod` build mode any
+> more. Every build ships a keyring holding exactly one certificate — the OTA
+> root, whose SHA-256 fingerprint is pinned as a constant in the audit — and
+> signs with the one signing certificate issued under it. See
+> [One key, one build mode](#one-key-one-build-mode-adr-0027-d9) below.
 
 > **Updated 2026-07-30 — the retired-CA bridge is GONE, not switched off.**
 > `GA_LEGACY_CA_BRIDGE`, `ota/legacy-signing-cert.pem` and
@@ -23,29 +33,77 @@ which runs fail-closed on every prod build, plus `SRC-17a/b`, `SRC-21` and
 ## How the keyring is assembled
 
 `install_rauc_certs()` in `buildroot-external/scripts/rauc.sh` writes it from
-three independent sources:
+two sources:
 
 | # | Source | Condition |
 |---|--------|-----------|
-| 1 | `buildroot-external/ota/rel-ca.pem` (or `dev-ca.pem`) | always; `DEPLOYMENT` in `buildroot-external/meta` selects which |
-| 2 | the local signing cert `/build/cert.pem` | **appended silently** whenever it does not verify against `dev-ca.pem` |
+| 1 | `buildroot-external/ota/rel-ca.pem` — the OTA root | always; the only intended anchor |
+| 2 | the signing cert `/secrets/cert.pem` | appended only if it does **not** chain to the root — which `KEYRING-02` then fails, because the keyring may hold exactly one certificate |
 | ~~3~~ | ~~`buildroot-external/ota/legacy-signing-cert.pem`~~ | **removed 2026-07-30** — source, flag and bake function all deleted |
 
-Source 2 is the one to watch. On any machine that lacks the real signing key,
-`prepare_rauc_signing()` generates a throwaway self-signed certificate and
-source 2 promotes it to a fleet trust anchor — with no warning in the build log
-beyond one line. `rel-ca.pem` is gitignored and lives only on the build server,
-so "did the real key get used" is not answerable from the repository.
+Signing material (`key.pem`, `cert.pem`) is read from the read-only secrets
+mount `/secrets` **only** (`GA_SECRETS_DIR`). The fallback to the source
+checkout and the on-the-fly generation of a self-signed key are gone (D9): a
+missing mount fails the pre-flight in `ga_build.sh` and `prepare_rauc_signing()`.
 
-`rel-ca.pem` / `dev-ca.pem` are not in git (`.gitignore`: `*.pem`). The former
-exception for `legacy-signing-cert.pem` was removed with the bridge. They are
-staged on ga-builder; `docs/REPRODUCIBILITY.md` documents the copy step.
+`rel-ca.pem` is not in git (`.gitignore`: `*.pem`); it is staged on the build
+server, and `docs/REPRODUCIBILITY.md` documents the copy step. Because the
+repository cannot hold it, the repository holds its **fingerprint** instead:
+`ga_build.sh` refuses to start unless `rel-ca.pem` is that certificate
+(`verify-rauc-keyring.sh --check-root`), and the audit refuses to pass a keyring
+that holds anything else.
 
-⚠️ `dev-ca.pem` is a **symlink to `rel-ca.pem`**, and `prepare_rauc_signing()`
-uses `/build/key.pem` unconditionally. So a `dev` build is signed with the
-PRODUCTION key against the PRODUCTION anchor: dev and prod are not separated in
-trust, and a dev bundle is one every production device accepts. Do not treat
-`dev` as a safety boundary. Tracked as a follow-up.
+## One key, one build mode (ADR-0027 D9)
+
+Decided 2026-09-14 and implemented 2026-09-24. Measured before the decision:
+every v1.3 device trusts exactly the one OTA root; the dev CA was in no device
+keyring, and the last dev bake was on 2026-08-31. The dev key protected nothing
+in the fleet and needed four guards to keep apart from the real one.
+
+- `ga_build.sh [full|partial|kernel|update]` — no environment argument. A
+  leftover `prod` (argument or `GA_ENV=prod`) is accepted and ignored with a
+  deprecation banner so in-flight callers keep working; `dev`/`test` are
+  refused. Every build requires `ROOT_PW_HASH` and runs SBOM, CVE gate
+  (`scan-cves.sh --strict`), keyring audit and build tests.
+- The on-device `GA_ENV` in `/etc/ga-env.conf` and `/etc/os-release` is now a
+  constant `prod` **runtime label** for telemetry; D10 replaces it with
+  `fleet_env`. It selects nothing at build time.
+- `verify-rauc-keyring.sh` pins the root fingerprint as a constant
+  (`GA_OTA_ROOT_FP`). It no longer reads `rel-ca.pem` to decide what to expect:
+  an audit must never derive its expectation from the artefact it audits.
+- The checks, each stricter than before D9:
+
+| Check | Asserts | Stricter since D9 |
+|---|---|---|
+| `KEYRING-02` | nothing but the pinned root; exactly one certificate block; every block parses | no tolerated "locally generated dev cert"; duplicates and unparseable blocks fail |
+| `KEYRING-03` | the pinned root is present and is `CA:TRUE` | pinned constant instead of the declared input; CA flag checked |
+| `KEYRING-05` | the root is not expired (warn inside 365 days) | an unreadable expiry is a finding, not a silent skip |
+| `KEYRING-06` | retired signing paths are absent from the tree | also the dev-key selector, the dev CA and the checkout fallback in `rauc.sh` / `hdd-image.sh` |
+
+`KEYRING-07` (dev vs prod pin) is gone: with one anchor there is no pair to
+keep apart; `KEYRING-02`/`-03` cover it. The symlink / byte-identity /
+pair-selection guards in `ga_build.sh` went for the same reason.
+
+### Negative test on a device
+
+The KEYRING checks inspect the build. Whether a device actually *refuses* a
+foreign signature is a separate question, asked by
+`tests/ga_tests/ota_trust/test.sh` (device-only, on demand):
+
+```bash
+tests/ga_tests/ota_trust/make-throwaway-bundle.sh /tmp/trust   # host: key is deleted after signing
+scp /tmp/trust/throwaway.raucb /tmp/trust/throwaway-cert.pem <device>:/tmp/
+# on the device, with the test tree staged by run_device_tests.sh:
+THROWAWAY_RAUCB=/tmp/throwaway.raucb THROWAWAY_CERT=/tmp/throwaway-cert.pem \
+  sh /tmp/ga_tests/ota_trust/test.sh
+```
+
+`KEYRING-NEG-01` proves the bundle is well-formed (it verifies against its own
+cert), `-02` that `rauc info` rejects it with a signature error, `-03` that
+`rauc install` does, `-04` that the slot status did not move. If the device
+accepts the signature at `-02`, the install is never attempted, and the bundle's
+only image targets a slot class no GA system defines. Its verdict logic runs in
+CI against a stub `rauc` (`ota_trust/selftest.sh`). **Not yet run on hardware.**
 
 ## The keyring cannot be fixed over SSH
 
@@ -163,8 +221,8 @@ scp <device>:/etc/rauc/keyring.pem /tmp/dev.pem && \
 ```
 
 `--print` lists every certificate with its SHA-256 fingerprint, subject and
-expiry. Compare fingerprints, never subjects: the retired CA and a freshly
-generated development key share the subject
+expiry. `--print` marks the pinned OTA root. Compare fingerprints, never subjects: the
+retired CA and a freshly generated development key share the subject
 `O=HassOS, CN=HassOS Self-signed Development Certificate`, because both come
 out of `scripts/generate-signing-key.sh`.
 
@@ -173,7 +231,7 @@ Do not use `openssl x509 -in keyring.pem`: the bundle is written with
 command reads only the **first** certificate — and reports success. That is how
 an extra anchor stays invisible.
 
-## The 2026 CA (generated 2026-07-29, not yet in use)
+## The 2026 CA (generated 2026-07-29) — the OTA root the audit pins
 
 `scripts/ops/gen-ota-ca.sh` mints the replacement hierarchy. Run on ga-builder
 as root; it refuses to overwrite existing key material.
@@ -198,7 +256,7 @@ rotating the signing key meant migrating the fleet's trust anchor — which is
 the hole `GA_LEGACY_CA_BRIDGE` exists to patch. With a root CA in the keyring,
 a signing-key rotation is a build-server change the fleet never sees.
 
-## Current state (2026-07-29)
+## Historical state before the clean cut (2026-07-29)
 
 Measured on the last prod build output on ga-builder (2026-07-29 16:20), the
 shipped keyring holds **three** anchors — one of them undeclared:
