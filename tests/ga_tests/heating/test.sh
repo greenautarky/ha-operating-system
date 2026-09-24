@@ -643,8 +643,10 @@ elif [ "${GA_ROOMS:-0}" -eq 0 ]; then
   skip_test "HEAT-11" "$H11_DESC" "no room thermostat on this device"
 else
   run_test_show "HEAT-11" "$H11_DESC" \
-    '_j=$(docker exec '"$GM"' sh -c "curl -fsS -m 20 http://127.0.0.1:8099/health" 2>/dev/null);
-     [ -n "$_j" ] || { echo "ga_manager health endpoint returned nothing"; exit 1; }
+    '_tok=$(docker exec '"$GM"' cat /data/auth.token 2>/dev/null);
+     [ -n "$_tok" ] || { echo "no ga_manager API token at /data/auth.token — cannot ask the health engine"; exit 1; }
+     _j=$(docker exec '"$GM"' curl -fsS -m 20 -H "Authorization: Bearer $_tok" http://127.0.0.1:8099/health 2>/dev/null);
+     [ -n "$_j" ] || { echo "ga_manager health endpoint returned nothing (with a valid token)"; exit 1; }
      _s=$(printf "%s" "$_j" | jq -r ".checks[]? | select(.name==\"ga.heating_override\") | .state" 2>/dev/null | head -1);
      [ -n "$_s" ] || { echo "ga.heating_override is not in the health report — ga_manager predates 0.200.0"; exit 1; }
      [ "$_s" != "unknown" ] || { echo "ga.heating_override is unknown: no room carries the attribute, so nothing can be concluded"; exit 1; }
