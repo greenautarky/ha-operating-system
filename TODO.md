@@ -100,6 +100,10 @@ before next major fleet expansion. **Trigger**: first customer outside
 the founder/pilot circle, OR pre-CRA-deadline (mid-2027).
 
 ### Dev/Prod Configuration Strategy (documented 2026-04-01)
+> **Superseded 2026-09-24 by ADR-0027 D9 — one build mode.** The build-time
+> dev/prod matrix below is historical: every build now does what the Prod column
+> says (SBOM, CVE gate, legal-info, `_prod_` filename, `GA_ENV=prod` baked as a
+> runtime label). Runtime overrides via `/mnt/data/ga-env.conf` are unchanged.
 - [x] Define which configs/behaviors differ between dev and prod builds
 - [x] Document the dev vs prod matrix for all services
 
@@ -135,7 +139,7 @@ the founder/pilot circle, OR pre-CRA-deadline (mid-2027).
 - [x] Verify CA certificates in `buildroot-external/ota/` are non-expired
   - Signing cert (`cert.pem`): expires 2035-09-18 (3457 days left)
   - Keyring CA (`rel-ca.pem`): expires 2035-08-31 (3439 days left)
-  - `dev-ca.pem`: symlink → `rel-ca.pem`
+  - ~~`dev-ca.pem`: symlink → `rel-ca.pem`~~ — historical; no dev CA since ADR-0027 D9
   - Both self-signed, 10-year validity, no renewal needed until ~2034
 - [ ] Document key rotation procedure
   - When: ~2034 (1 year before expiry)
@@ -567,8 +571,8 @@ Runs as a container with Supervisor API access (`hassio` role).
 - [x] Add eMMC flasher (`ga_flasher`) with `--secure-erase` full wipe mode
 - [x] Add SFTP support via `gesftpserver` (Dropbear has no built-in SFTP)
 - [x] Add dev/prod environment flag (`/etc/ga-env.conf` + `/mnt/data/ga-env.conf` override)
-- [x] Add dev/prod tag to image filenames (`ga_build.sh [mode] [dev|prod]`, default: dev)
-- [x] Skip post-build artifacts for dev builds (SBOMs, config archive) — faster iteration
+- [x] Add dev/prod tag to image filenames (`ga_build.sh [mode] [dev|prod]`, default: dev) — superseded by ADR-0027 D9: one build mode, tag is always `prod`
+- [x] Skip post-build artifacts for dev builds (SBOMs, config archive) — faster iteration — superseded by ADR-0027 D9: no build skips a gate
 - [x] Fluent-bit and Telegraf use `${GA_ENV}` from ga-env.conf instead of hardcoded `prod`
 - [x] Fix CycloneDX SBOM error handling (split pipe, log errors)
 - [x] Fix CycloneDX SBOM empty output: clear stale `MAKEFLAGS` (jobserver FDs) before `make show-info`

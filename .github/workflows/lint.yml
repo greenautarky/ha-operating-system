@@ -178,6 +178,14 @@ jobs:
         # log) before this was added.
         run: bash tests/gates/gen_expected_cwd/selftest.sh
 
+      - name: KEYRING-NEG verdict logic (ADR-0027 D9 — a foreign signature must be refused)
+        # The device test itself needs hardware and a staged throwaway bundle.
+        # Its verdicts do not: this drives the LIVE ota_trust/test.sh with a
+        # stub rauc that answers with RAUC's real rejection text. A rejection
+        # for any other reason must not count, and a device that ACCEPTS the
+        # foreign signature must never reach `rauc install`.
+        run: sh tests/ga_tests/ota_trust/selftest.sh
+
       - name: ga-enroll declares its fleet environment (ADR-0027 D4)
         # Drives the REAL enroll script with a stub curl on PATH and every
         # device path moved into a temp dir. Asserts the seam to the
@@ -340,6 +348,21 @@ jobs:
 
       - name: ssh-plane build-gate self-test (ADR-0019 — both directions)
         run: ./tests/gates/ssh_plane/selftest.sh
+
+      # ADR-0027 D9: one OTA key. The keyring audit normally runs only over a
+      # real build on the builder, so no pull request ever saw it fire. This
+      # drives the LIVE audit over minted keyrings: a second anchor, a duplicate
+      # block, a non-CA or expired root, and every retired signing path must go
+      # red with the NAMED guard; the pinned root alone must stay green — and
+      # that green case runs against the live rauc.sh, so re-adding the checkout
+      # fallback or a build-mode key selector fails here.
+      - name: RAUC keyring audit (one pinned root — red on anything else)
+        run: ./tests/gates/rauc_keyring/selftest.sh
+
+      # ADR-0027 D9: one build mode. `dev` must be refused however it is asked
+      # for; every real mode and a leftover `prod` (accepted, loud) must work.
+      - name: Build mode (dev refused, real modes and deprecated prod still build)
+        run: ./tests/gates/build_mode/selftest.sh
 
       # A pinned add-on that never made it into the image used to count as
       # "skipped" while the build suite still printed a pass line — and

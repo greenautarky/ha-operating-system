@@ -48,17 +48,17 @@ mkdir -p secrets
 # Copy from secure storage:
 cp <secure>/wifi-install.psk secrets/
 cp <secure>/openstick-wifi.key secrets/
-cp <secure>/cert.pem .
-cp <secure>/key.pem .
 cp <secure>/rel-ca.pem buildroot-external/ota/
-ln -sf rel-ca.pem buildroot-external/ota/dev-ca.pem
+# The signing pair is NOT copied into the checkout: it is mounted read-only at
+# /secrets in the build container (docker run -v <dir with cert.pem+key.pem>:/secrets:ro).
+# There is no dev-ca.pem any more (ADR-0027 D9).
 ```
 
 ### Step 3: Build
 
 ```bash
-# Same command as original build
-./scripts/ga_build.sh full prod
+# Same command as original build — one build mode since ADR-0027 D9
+./scripts/ga_build.sh full
 ```
 
 The pre-build validation will check all required files are present.

@@ -438,8 +438,11 @@ _eth_unsq="$(find "${OUT}/host" -name unsquashfs -type f -perm -u+x 2>/dev/null 
 if [[ -n "$_eth_bundle" && -f "$_eth_rootfs" && ! "$_eth_bundle" -nt "$_eth_rootfs" ]]; then
   _fail "BLD-ETH-01: the newest bundle ($(basename "$_eth_bundle")) is OLDER than rootfs.erofs — left over from an earlier build. This run produced no bundle to inspect."
 elif [[ -z "$_eth_bundle" || -z "$_eth_unsq" || ! -f "$_eth_sd_vfat" ]]; then
-  if [[ "${GA_ENV:-dev}" == "prod" ]]; then
-    _fail "BLD-ETH-01: could not run on a PROD build (bundle='${_eth_bundle:-none}' unsquashfs='${_eth_unsq:-none}' sd_vfat='${_eth_sd_vfat}') — a prod release may not ship without this evidence."
+  # A build output with a rootfs is a release candidate (one build mode,
+  # ADR-0027 D9): there a skip is not acceptable. A source-tree-only run (CI,
+  # no rootfs) legitimately has nothing to inspect.
+  if [[ -f "$_eth_rootfs" ]]; then
+    _fail "BLD-ETH-01: could not run on a build output (bundle='${_eth_bundle:-none}' unsquashfs='${_eth_unsq:-none}' sd_vfat='${_eth_sd_vfat}') — an image may not ship without this evidence."
   else
     _skip "BLD-ETH-01: OTA bundle carries no ethernet-force marker" "no bundle, no unsquashfs, or no SD boot.vfat in this run"
   fi
@@ -866,15 +869,17 @@ echo "--- Environment ---"
   && _pass "ENV-01: ga-env.conf exists" \
   || _fail "ENV-01: ga-env.conf missing"
 
-# ENV-02: GA_ENV value
+# ENV-02: the baked GA_ENV runtime label. One build mode since ADR-0027 D9, so
+# the baked value is always `prod` (a device may still override it at runtime
+# in /mnt/data/ga-env.conf; D10 replaces the label with fleet_env).
 GA_ENV_VAL="$(grep '^GA_ENV=' "${TARGET}/etc/ga-env.conf" 2>/dev/null | cut -d= -f2)"
 case "$GA_ENV_VAL" in
-  dev|prod) _pass "ENV-02: GA_ENV=$GA_ENV_VAL" ;;
-  *) _fail "ENV-02: GA_ENV invalid: '$GA_ENV_VAL'" ;;
+  prod) _pass "ENV-02: GA_ENV=$GA_ENV_VAL" ;;
+  *) _fail "ENV-02: baked GA_ENV is '$GA_ENV_VAL', expected 'prod' (one build mode, ADR-0027 D9)" ;;
 esac
 
-# ENV-03: Prod build safety checks
-if [[ "$GA_ENV_VAL" == "prod" ]]; then
+# ENV-03: release safety checks — every build since ADR-0027 D9
+if [[ -f "${TARGET}/etc/ga-env.conf" ]]; then
   # VERSION_SUFFIX must be set (not empty) for prod builds
   OS_RELEASE="${TARGET}/etc/os-release"
   [[ -f "$OS_RELEASE" ]] || OS_RELEASE="${TARGET}/usr/lib/os-release"
@@ -1700,7 +1705,7 @@ if [[ -n "$SRC" ]]; then
     fi
   fi
 
-  # SRC-07: ga_build.sh exports GA_BUILD_TIMESTAMP and GA_ENV
+  # SRC-07: ga_build.sh exports GA_BUILD_TIMESTAMP
   GA_BUILD="${SRC}/scripts/ga_build.sh"
   if [[ -f "$GA_BUILD" ]]; then
     grep -q 'export GA_BUILD_TIMESTAMP' "$GA_BUILD" \
@@ -1944,11 +1949,12 @@ if [[ -n "$SRC" ]]; then
       _fail "RAUC-SIG-01: the bundle does NOT verify against the keyring this image ships — a device with this keyring would REJECT this update. Signing key and trust anchor disagree."
       printf '%s\n' "$_sig_out" | head -4 | sed 's/^/        /'
     fi
-  elif [[ "${GA_ENV:-dev}" == "prod" ]]; then
-    # On prod a skip is not an acceptable outcome. The one check standing
+  elif [[ -f "$_rootfs" ]]; then
+    # On a build output a skip is not an acceptable outcome (one build mode,
+    # ADR-0027 D9 — every build is a release candidate). The one check standing
     # between a mis-signed bundle and a fleet that cannot install it must not
     # be allowed to quietly not run.
-    _fail "RAUC-SIG-01: could not run on a PROD build (rauc binary, bundle or keyring missing) — a prod release may not ship without this evidence."
+    _fail "RAUC-SIG-01: could not run on a build output (rauc binary, bundle or keyring missing) — an image may not ship without this evidence."
   else
     _skip "RAUC-SIG-01: bundle verifies against its own keyring" "no rauc binary, bundle or keyring in this run"
   fi
@@ -3478,25 +3484,17 @@ else
 fi
 
 # =========================================================================
-# Root password — fail-closed: a prod image must never ship passwordless root
+# Root password — fail-closed: no image may ship passwordless root. One build
+# mode since ADR-0027 D9, so there is no "non-prod" image this may pass on.
 # =========================================================================
 _shadow="$TARGET/etc/shadow"
-_gaenv=$(sed -n 's/^GA_ENV=//p' "$TARGET/etc/ga-env.conf" 2>/dev/null | tr -d '"' | head -1)
-[ -n "$_gaenv" ] || _gaenv=dev
 if [ -f "$_shadow" ]; then
   _rootpw=$(awk -F: '$1=="root"{print $2}' "$_shadow")
-  if [ "$_gaenv" = "prod" ]; then
-    case "$_rootpw" in
-      '$6$'*) _pass "ROOTPW-01: prod image ships a SHA-512 root password hash" ;;
-      '')     _fail "ROOTPW-01: prod image ships EMPTY (passwordless) root — set ROOT_PW_HASH" ;;
-      *)      _fail "ROOTPW-01: prod root password is not a \$6\$ hash ('${_rootpw}')" ;;
-    esac
-  else
-    case "$_rootpw" in
-      '$6$'*) _pass "ROOTPW-01: root password hash set (GA_ENV=${_gaenv})" ;;
-      *)      _pass "ROOTPW-01: root password unset/locked — OK for non-prod (GA_ENV=${_gaenv})" ;;
-    esac
-  fi
+  case "$_rootpw" in
+    '$6$'*) _pass "ROOTPW-01: image ships a SHA-512 root password hash" ;;
+    '')     _fail "ROOTPW-01: image ships EMPTY (passwordless) root — set ROOT_PW_HASH" ;;
+    *)      _fail "ROOTPW-01: root password is not a \$6\$ hash ('${_rootpw}')" ;;
+  esac
 else
   _skip "ROOTPW-01: root password fail-closed" "no ${_shadow} (source tree only)"
 fi
@@ -3564,44 +3562,21 @@ fi
 # =========================================================================
 # RAUC keyring CONTENTS — what actually shipped, not what rauc.sh intended
 # =========================================================================
-# RAUC-LEGACY-01 above proves the gate FUNCTION honours the flag against a
-# scratch file; RAUC-LEGACY-02 only proves the flag is declared. Neither looks
-# at the image. This one does: it runs the audit over ${TARGET}/etc/rauc/
-# keyring.pem and compares every trust anchor, by SHA-256 fingerprint, against
-# the certificates the build declared. It is the only check that notices a
-# FOURTH certificate — e.g. the self-signed cert install_rauc_certs() appends
-# without comment whenever /build/cert.pem does not verify against dev-ca.pem.
-# [Odoo #624]
+# Runs the audit over ${TARGET}/etc/rauc/keyring.pem. The audit compares every
+# certificate, by SHA-256 fingerprint, against the ONE OTA root pinned as a
+# constant in the audit itself (ADR-0027 D9) — never against the build inputs,
+# and never against a mode the caller or the image claims. There is no mode:
+# before D9 the expected anchor depended on GA_ENV, and a check whose verdict
+# depends on who ran it was red on good images and silenceable by a variable.
+# It is the only check that notices an extra certificate in the shipped trust
+# set. [Odoo #624]
 _kr_script="${SRC:-}/scripts/verify-rauc-keyring.sh"
 
-# Which environment is this image? The audit picks its pinned fingerprint from
-# that answer, so getting it from the ambient shell was wrong twice over:
-#
-#   * it made the result depend on who ran the suite. A prod image checked from
-#     a normal shell defaulted to dev, was measured against the DEV pin, and
-#     KEYRING-07 failed on a perfectly good image. That is also why the failure
-#     injection harness could never start: it aborts on a red baseline.
-#   * it meant the one check standing between a mis-signed image and the fleet
-#     could be silenced by an environment variable.
-#
-# ENV-02 already read the value the build stamped into the image. Use it, and
-# CROSS-CHECK it against an explicitly passed GA_ENV rather than letting either
-# one win silently. Two independent sources that must agree is stronger than
-# either alone: the image cannot quietly claim to be dev, and the caller cannot
-# quietly assert prod over a dev artefact.
-_kr_env="${GA_ENV:-${GA_ENV_VAL:-dev}}"
-if [[ -n "${GA_ENV:-}" && -n "${GA_ENV_VAL:-}" && "$GA_ENV" != "$GA_ENV_VAL" ]]; then
-  _fail "RAUC-KEYRING-01: caller says GA_ENV=$GA_ENV but the image says GA_ENV=$GA_ENV_VAL — refusing to guess which trust anchor this image is supposed to carry"
-  _kr_env=""
-fi
-
-if [[ -z "$_kr_env" ]]; then
-  : # already failed above; do not run the audit against an unknown expectation
-elif [[ -x "$_kr_script" && -f "${TARGET}/etc/rauc/keyring.pem" ]]; then
-  _kr_out="$(REPO_ROOT="${SRC}" GA_ENV="$_kr_env" "$_kr_script" "$OUT" 2>&1)"
+if [[ -x "$_kr_script" && -f "${TARGET}/etc/rauc/keyring.pem" ]]; then
+  _kr_out="$(REPO_ROOT="${SRC}" "$_kr_script" "$OUT" 2>&1)"
   _kr_rc=$?
   case "$_kr_rc" in
-    0) _pass "RAUC-KEYRING-01: shipped keyring holds exactly the declared trust anchors" ;;
+    0) _pass "RAUC-KEYRING-01: shipped keyring holds exactly the pinned OTA root" ;;
     2) _fail "RAUC-KEYRING-01: keyring audit could not run (exit 2) — trust set UNVERIFIED$(printf '\n%s' "$_kr_out" | sed 's/^/      /')" ;;
     *) _fail "RAUC-KEYRING-01: keyring audit found trust-anchor problem(s)$(printf '\n%s' "$_kr_out" | sed 's/^/      /')" ;;
   esac
@@ -3712,7 +3687,7 @@ CVEEOF
 CVEEOF
     set +e
     PATH="${_cve_tmp}/bin:$PATH" GA_SBOM="${_cve_tmp}/sbom.json" \
-      OUTPUT_DIR="${_cve_tmp}/out" GA_ENV=dev ALLOW_FILE="${_cve_tmp}/none" \
+      OUTPUT_DIR="${_cve_tmp}/out" ALLOW_FILE="${_cve_tmp}/none" \
       "$_cve_sh" --sbom >"${_cve_tmp}/log" 2>&1
     _cve_rc=$?
     set -e
@@ -3760,7 +3735,7 @@ exit 0
 CVEEOF
   chmod +x "${_img_tmp}/bin/trivy"
   set +e
-  PATH="${_img_tmp}/bin:$PATH" OUTPUT_DIR="${_img_tmp}/out" GA_ENV=dev \
+  PATH="${_img_tmp}/bin:$PATH" OUTPUT_DIR="${_img_tmp}/out" \
     ALLOW_FILE="${_img_tmp}/none" "$_cve_sh" --images >"${_img_tmp}/mf.log" 2>&1
   _img_rc=$?
   set -e
@@ -3781,7 +3756,7 @@ exit 0
 CVEEOF
   chmod +x "${_img_tmp}/bin/trivy"
   set +e
-  PATH="${_img_tmp}/bin:$PATH" OUTPUT_DIR="${_img_tmp}/out" GA_ENV=dev \
+  PATH="${_img_tmp}/bin:$PATH" OUTPUT_DIR="${_img_tmp}/out" \
     ALLOW_FILE="${_img_tmp}/none" "$_cve_sh" --images >"${_img_tmp}/mp.log" 2>&1
   _img_rc=$?
   set -e
@@ -3821,14 +3796,14 @@ if [[ -f "${_cve_src}/scripts/scan-cves.sh" ]] && command -v jq >/dev/null 2>&1;
     "ratings":[{"severity":"critical"}],"affects":[{"ref":"b"}]}]}
 CVEEOF
   set +e
-  GA_SBOM="${_cve_tmp}/enriched.json" OUTPUT_DIR="${_cve_tmp}/out" GA_ENV=prod \
-    ALLOW_FILE="${_cve_tmp}/none" "${_cve_src}/scripts/scan-cves.sh" --sbom \
+  GA_SBOM="${_cve_tmp}/enriched.json" OUTPUT_DIR="${_cve_tmp}/out" \
+    ALLOW_FILE="${_cve_tmp}/none" "${_cve_src}/scripts/scan-cves.sh" --sbom --strict \
     >"${_cve_tmp}/log" 2>&1
   _cve_rc=$?
   set -e
   if [[ "$_cve_rc" -eq 1 ]] && grep -q 'CVE-2026-7777' "${_cve_tmp}/log" \
      && ! grep -q 'CVE-2026-6666' "${_cve_tmp}/log"; then
-    _pass "CVE-SCAN-05: enriched SBOM — exploitable finding fails prod, resolved one does not"
+    _pass "CVE-SCAN-05: enriched SBOM — exploitable finding fails --strict, resolved one does not"
   else
     _fail "CVE-SCAN-05: enriched-SBOM path returned ${_cve_rc} (expected 1, only CVE-2026-7777 reported)"
   fi
@@ -3837,30 +3812,23 @@ else
   _skip "CVE-SCAN-05: enriched-SBOM path" "scan-cves.sh or jq not available"
 fi
 
-# CVE-SCAN-06: ga_build.sh hands GA_ENV to scan-cves.sh explicitly.
-# GA_ENV already reaches the child today (ga_build.sh runs `set -a` and also
-# exports it alongside GA_BUILD_TIMESTAMP), so this is belt-and-braces: a later
-# refactor that drops `set -a` would otherwise silently downgrade the prod gate
-# to report-only, and the build would still print "CVE scan complete".
+# CVE-SCAN-06: ga_build.sh arms the CVE gate with an explicit --strict on the
+# scan-cves.sh call itself. Before ADR-0027 D9 the gate was armed by GA_ENV=prod
+# reaching the child through the environment — a build-mode variable that could
+# silently disarm it. scan-cves.sh is report-only by default, so the flag on the
+# call line is the ONLY thing that makes the build fail on findings.
 _cve_build="${_cve_src}/scripts/ga_build.sh"
 if [[ -f "$_cve_build" ]]; then
-  # Extract the env-assignment block that precedes the delegation (from the
-  # `_cve_rc=0` line up to the scan-cves.sh invocation) and require a real
-  # GA_ENV assignment in it. Deliberately block-scoped, not a proximity grep:
-  # the surrounding comment mentions GA_ENV and would satisfy a sloppy match.
   # Comments are stripped first: the explanatory comments around this call
-  # mention both GA_ENV and scan-cves.sh, and would otherwise satisfy (or
-  # prematurely terminate) the match. Three earlier versions of this test were
-  # useless for exactly that reason.
-  if sed 's/#.*//' "$_cve_build" \
-     | awk '/_cve_rc=0/{inblk=1} inblk && /^[[:space:]]*GA_ENV=/{found=1}
-            inblk && /scan-cves\.sh/{exit} END{exit !found}'; then
-    _pass "CVE-SCAN-06: ga_build.sh passes GA_ENV to scan-cves.sh (prod gate stays armed)"
+  # mention scan-cves.sh and --strict, and would satisfy a sloppy match. The
+  # match is the invocation line (the one naming scan-cves.sh with --sbom).
+  if sed 's/#.*//' "$_cve_build" | grep -E 'scan-cves\.sh"?[[:space:]]' | grep -- '--sbom' | grep -q -- '--strict'; then
+    _pass "CVE-SCAN-06: ga_build.sh calls scan-cves.sh --sbom with --strict (gate armed on every build)"
   else
-    _fail "CVE-SCAN-06: GA_ENV not passed to scan-cves.sh — prod findings would silently not gate"
+    _fail "CVE-SCAN-06: ga_build.sh calls scan-cves.sh without --strict — findings would silently not gate"
   fi
 else
-  _skip "CVE-SCAN-06: GA_ENV propagation" "ga_build.sh not found (no source tree)"
+  _skip "CVE-SCAN-06: --strict on the build's CVE scan" "ga_build.sh not found (no source tree)"
 fi
 
 # CVE-SCAN-07: the scan-cves.sh pipeline must not be followed by `|| true`.
@@ -3926,16 +3894,16 @@ if command -v jq &>/dev/null && [[ -f "$_gab" ]] && grep -q 'assert_prod_sbom()'
   sed -n '/^assert_prod_sbom() {/,/^}/p' "$_gab" > "${_sb_tmp}/fn.sh"
   printf '. "$1"\nassert_prod_sbom "${2:-0}"\n' > "${_sb_tmp}/drive.sh"
   mkdir -p "${_sb_tmp}/images"
-  # (a) prod + no SBOM -> non-zero
-  _rc_absent=$(GA_ENV=prod OUT="${_sb_tmp}" bash "${_sb_tmp}/drive.sh" "${_sb_tmp}/fn.sh" >/dev/null 2>&1; echo $?)
-  # (b) prod + zero-component SBOM -> non-zero
+  # (a) no SBOM -> non-zero (no GA_ENV set: the gate must not depend on one)
+  _rc_absent=$(OUT="${_sb_tmp}" bash "${_sb_tmp}/drive.sh" "${_sb_tmp}/fn.sh" >/dev/null 2>&1; echo $?)
+  # (b) zero-component SBOM -> non-zero
   echo '{"components":[]}' > "${_sb_tmp}/images/sbom-cyclonedx.json"
-  _rc_zero=$(GA_ENV=prod OUT="${_sb_tmp}" bash "${_sb_tmp}/drive.sh" "${_sb_tmp}/fn.sh" >/dev/null 2>&1; echo $?)
-  # (c) prod + real SBOM (1 component) -> zero (green)
+  _rc_zero=$(OUT="${_sb_tmp}" bash "${_sb_tmp}/drive.sh" "${_sb_tmp}/fn.sh" >/dev/null 2>&1; echo $?)
+  # (c) real SBOM (1 component) -> zero (green)
   echo '{"components":[{"name":"busybox","version":"1.36"}]}' > "${_sb_tmp}/images/sbom-cyclonedx.json"
-  _rc_ok=$(GA_ENV=prod OUT="${_sb_tmp}" bash "${_sb_tmp}/drive.sh" "${_sb_tmp}/fn.sh" >/dev/null 2>&1; echo $?)
+  _rc_ok=$(OUT="${_sb_tmp}" bash "${_sb_tmp}/drive.sh" "${_sb_tmp}/fn.sh" >/dev/null 2>&1; echo $?)
   if [[ "$_rc_absent" -ne 0 && "$_rc_zero" -ne 0 && "$_rc_ok" -eq 0 ]]; then
-    _pass "SBOM-03: assert_prod_sbom red on absent + zero-component SBOM, green on a real one (prod)"
+    _pass "SBOM-03: assert_prod_sbom red on absent + zero-component SBOM, green on a real one (no build mode)"
   else
     _fail "SBOM-03: assert_prod_sbom fail-closed broken (absent=${_rc_absent} zero=${_rc_zero} ok=${_rc_ok}; want !0 !0 0)"
   fi

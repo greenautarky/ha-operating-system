@@ -4,7 +4,7 @@
 # Usage:
 #   ./scripts/scan-cves.sh                    # scan all
 #   ./scripts/scan-cves.sh --images           # container images only
-#   ./scripts/scan-cves.sh --sbom             # SBOM only (after prod build)
+#   ./scripts/scan-cves.sh --sbom             # SBOM only (after a build)
 #   ./scripts/scan-cves.sh --severity HIGH    # filter by min severity
 #   ./scripts/scan-cves.sh --strict           # findings over budget are fatal too
 #
@@ -43,9 +43,10 @@ ALLOW_FILE="${ALLOW_FILE:-${REPO_ROOT}/.cve-allowlist}"
 # Minimum share of SBOM components a scanner must actually evaluate before we
 # believe its verdict. Below this the result is treated as "not scanned".
 COVERAGE_MIN_PCT="${COVERAGE_MIN_PCT:-50}"
-# prod builds gate by default; dev/test report only
+# Report-only by default for ad-hoc runs. The build arms the gate with an
+# explicit --strict at its call site (ga_build.sh, CVE-SCAN-06) — not through an
+# ambient variable, which is how a build-mode switch could silently disarm it.
 STRICT=false
-[[ "${GA_ENV:-dev}" == "prod" ]] && STRICT=true
 
 EXIT_CODE=0
 SCAN_BROKEN=false
@@ -81,7 +82,7 @@ mkdir -p "$OUTPUT_DIR"
 echo "=== GA OS CVE Scan ==="
 echo "  Date:     $(date -Iseconds)"
 echo "  Severity: ${SEVERITY}"
-echo "  Strict:   ${STRICT} (GA_ENV=${GA_ENV:-dev})"
+echo "  Strict:   ${STRICT}"
 echo ""
 
 # -----------------------------------------------------------------------------
@@ -425,11 +426,11 @@ EOF
     fi
   else
     echo "  SKIP: no SBOM found at ${GA_SBOM}"
-    echo "        (run a prod build first: ./scripts/ga_build.sh prod)"
+    echo "        (run a build first: ./scripts/ga_build.sh)"
     SBOM_STATUS="missing"
-    # On a prod build a missing SBOM is a failure, not a skip.
-    if [[ "${GA_ENV:-dev}" == "prod" ]]; then
-      echo "  ERROR: GA_ENV=prod requires an SBOM — refusing to report success without one"
+    # As a gate (--strict) a missing SBOM is a failure, not a skip.
+    if [[ "$STRICT" == "true" ]]; then
+      echo "  ERROR: --strict requires an SBOM — refusing to report success without one"
       SCAN_BROKEN=true
     fi
   fi

@@ -12,7 +12,7 @@ if [[ -f "$LOCAL_ENV" ]]; then
   set +a
   echo "Loaded local.env (ROOT_PW_HASH will be applied if set)."
 else
-  echo "No local.env found (ROOT_PW_HASH not set; root password unchanged)."
+  echo "No local.env found — ROOT_PW_HASH must come from the environment or the pre-flight refuses."
 fi
 
 # -----------------------------------------------------------------------------
@@ -24,7 +24,7 @@ fi
 #  3) Disables Buildroot netbird package (because NetBird v0.60.x requires Go >= 1.24.10)
 #  4) Builds NetBird standalone with Go 1.24.10 (SHA256-verified) and injects it into O/target
 #  5) Writes build timestamp to /etc/ga-build-id and /etc/os-release in target rootfs
-#  6) Ensures rel-ca.pem satisfies post-build expectation for dev-ca.pem (symlink/copy)
+#  6) Refuses to build unless ota/rel-ca.pem is the pinned OTA root (no auto-creation)
 #  7) Re-finalizes target and rebuilds artifacts using 'all' (this tree has no 'images' target)
 #  8) Renames output images with ga-build-id timestamp suffix (haos_ -> bos_)
 #  9) Creates provisioning image (factory image with embedded .img.xz)
@@ -73,11 +73,8 @@ fi
 #       - MANIFEST.txt
 #       - LICENSE-SUMMARY.txt
 #
-# Usage (order-independent):
-#   ./scripts/ga_build.sh [full|partial|kernel|update] [dev|test|prod]
-#   ./scripts/ga_build.sh dev full   # same as "full dev"
-#   ./scripts/ga_build.sh dev        # shorthand for "full dev" (default mode=full)
-#   ./scripts/ga_build.sh prod       # shorthand for "full prod"
+# Usage:
+#   ./scripts/ga_build.sh [full|partial|kernel|update]     (default: full)
 #
 # Modes (default: full):
 #   full    - Clean build from scratch (rm -rf $OUT)
@@ -85,15 +82,11 @@ fi
 #   kernel  - Rebuild with linux-dirclean only
 #   update  - Incremental build (reconfigure only)
 #
-# Environment (default: dev):
-#   dev  - Development build: fast, skips post-build artifacts
-#          (no SBOMs, no config archive, no provisioning image)
-#   test - Alias for dev — use for canary / bench-test bakes (e.g. flashing K31
-#          to gegencheck a change). Fast, no SBOM. Identical to dev.
-#   prod - Production build: full artifacts for release (SBOMs, config archive,
-#          provisioning if enabled). Use ONLY for actual fleet releases —
-#          SBOMs are required for OSS-license compliance, so don't waste them
-#          on throwaway canary bakes (use dev/test for those).
+# There is ONE build (ADR-0027 Amendment 1, D9) — no dev/prod choice. Every
+# bake is signed with the one signing certificate under the one OTA root,
+# requires ROOT_PW_HASH, and runs SBOM + CVE gate + keyring audit + build tests.
+# A leftover `prod` argument is accepted and ignored with a deprecation banner;
+# `dev`/`test` are refused. Parsing lives in scripts/lib/ga-build-args.sh.
 #
 # Environment Variables (override defaults):
 #   BUILDROOT_DIR    - Path to Buildroot source (default: /build/buildroot)
@@ -102,9 +95,8 @@ fi
 #   OUT              - Output directory (default: /build/ga_output)
 #   NETBIRD_TAG      - NetBird version tag (default: v0.71.4)
 #   GA_BUILD_TIMESTAMP - Override build timestamp (default: auto-generated)
-#   GA_ENV           - Environment stamp (default: from 2nd argument, or "dev")
+#   GA_SECRETS_DIR   - Read-only signing-material mount (default: /secrets)
 #   GA_PROVISIONING  - Set to "true" to create provisioning image (default: false)
-#   GA_LEGAL_INFO    - Set to "true" to generate legal-info archive (default: false)
 #
 # -----------------------------------------------------------------------------
 
@@ -128,51 +120,13 @@ unset BR2_EXTERNAL
 declare -a MAKE_OVERRIDES=()
 [ -n "${HASSIO_VERSION_URL:-}" ] && MAKE_OVERRIDES+=("HASSIO_VERSION_URL=${HASSIO_VERSION_URL}")
 
-# Parse arguments: order-independent, e.g. "full dev" and "dev full" are equivalent.
-#   Mode args:  full | partial | kernel | update  (default: full)
-#   Env args:   dev | prod                        (default: dev)
-#   Shorthands: "dev" alone => "update dev", "prod" alone => "update prod"
-MODE=""
-_CLI_ENV=""
-for arg in "${@}"; do
-  case "$arg" in
-    full|partial|kernel|update)
-      [[ -z "$MODE" ]] || { echo "ERROR: Duplicate mode argument: '$arg' (already have '$MODE')." >&2; exit 1; }
-      MODE="$arg"
-      ;;
-    dev|test|prod)
-      [[ -z "$_CLI_ENV" ]] || { echo "ERROR: Duplicate environment argument: '$arg' (already have '$_CLI_ENV')." >&2; exit 1; }
-      _CLI_ENV="$arg"
-      # 'test' = fast canary/bench build — pure alias for dev (no SBOM/archive/provisioning)
-      [[ "$_CLI_ENV" == "test" ]] && _CLI_ENV="dev"
-      ;;
-    *)
-      echo "ERROR: Unknown argument '$arg'. Usage: $0 [full|partial|kernel|update] [dev|test|prod]" >&2
-      exit 1
-      ;;
-  esac
-done
-# CLI arg overrides GA_ENV env var
-[[ -n "$_CLI_ENV" ]] && GA_ENV="$_CLI_ENV"
-MODE="${MODE:-full}"
-GA_ENV="${GA_ENV:-dev}"
-
-# GA_ENV decides which signing key, which trust anchor, whether an SBOM is
-# produced and how strict the CVE gate is. Every consumer compares it to the
-# literal "prod", so ANY other spelling silently means dev — including
-# "production", which reads like it worked and is the obvious thing to type.
-# The CLI parser above already rejects a bad positional argument; this closes
-# the same hole for `GA_ENV=production ./scripts/ga_build.sh full`.
-case "$GA_ENV" in
-  dev|prod) ;;
-  *)
-    echo "ERROR: GA_ENV='$GA_ENV' is not a valid environment." >&2
-    echo "       Use exactly 'dev' or 'prod'. Anything else would silently" >&2
-    echo "       build as dev with dev signing material." >&2
-    exit 1
-    ;;
-esac
-echo "Building with MODE=$MODE GA_ENV=$GA_ENV"
+# Parse arguments — one build mode (ADR-0027 D9). The parser refuses dev/test,
+# ignores a leftover `prod` loudly, and unsets GA_ENV so nothing below can key
+# a decision on it. See scripts/lib/ga-build-args.sh.
+# shellcheck source=lib/ga-build-args.sh
+. "${SCRIPT_DIR}/lib/ga-build-args.sh"
+ga_parse_build_args "$@" || exit 1
+echo "Building with MODE=$MODE (one build mode, ADR-0027 D9)"
 
 # ---- Paths inside container ----
 BUILDROOT_DIR="${BUILDROOT_DIR:-/build/buildroot}"
@@ -187,10 +141,11 @@ if [[ "$OUT" != /* ]]; then OUT="/build/${OUT}"; fi
 # ---- NetBird version (built via Buildroot golang-package) ----
 NETBIRD_TAG="${NETBIRD_TAG:-v0.71.4}"
 
-# ---- CA files expected by post-build script ----
+# ---- Trust anchor and signing material ----
+# One OTA root in the keyring, one signing certificate under it (ADR-0027 D9).
 OTA_DIR="${OTA_DIR:-${BR2EXT_NETBIRD}/ota}"
 REL_CA_PEM="${REL_CA_PEM:-${OTA_DIR}/rel-ca.pem}"
-DEV_CA_PEM="${DEV_CA_PEM:-${OTA_DIR}/dev-ca.pem}"
+GA_SECRETS_DIR="${GA_SECRETS_DIR:-/secrets}"
 
 echo "Using OUT=$OUT"
 echo "Using BUILDROOT_DIR=$BUILDROOT_DIR"
@@ -199,7 +154,7 @@ echo "Using BR2_EXTERNAL=$BR2_EXTERNAL_PATH"
 echo "Using NETBIRD_TAG=$NETBIRD_TAG"
 echo "Using OTA_DIR=$OTA_DIR"
 echo "Using REL_CA_PEM=$REL_CA_PEM"
-echo "Using DEV_CA_PEM=$DEV_CA_PEM"
+echo "Using GA_SECRETS_DIR=$GA_SECRETS_DIR"
 
 # Sanity: if scripts/sync-components.sh exists, the host (= the LXC / VM
 # that runs the docker build invocation) must have run it BEFORE entering
@@ -308,25 +263,27 @@ PREFLIGHT_FAIL=0
   echo "FAIL: Buildroot utils/config not found: ${BUILDROOT_DIR}/utils/config" >&2; PREFLIGHT_FAIL=1;
 }
 
-# Signing material for RAUC bundles — which pair depends on the build mode.
-#
-# A dev build must NOT reach for the production key. Before 2026-07-30 it did:
-# rauc.sh used /build/key.pem unconditionally and ota/dev-ca.pem was a symlink
-# to ota/rel-ca.pem, so a dev build produced a bundle every production device
-# would install. The preflight below now asks for the pair that will actually
-# be used, so a missing dev key fails here rather than silently falling through
-# to the production one.
-if [[ "$GA_ENV" == "prod" ]]; then
-  _sign_cert="cert.pem"; _sign_key="key.pem"
-else
-  _sign_cert="dev-cert.pem"; _sign_key="dev-key.pem"
+# Signing material for RAUC bundles: the one pair, from the read-only secrets
+# mount and nowhere else (ADR-0027 D9). rauc.sh and hdd-image.sh read exactly
+# these paths; asking here means a missing mount fails in seconds instead of
+# after the rootfs build. The source checkout is deliberately NOT a fallback.
+for _sign_file in cert.pem key.pem; do
+  [[ -f "${GA_SECRETS_DIR}/${_sign_file}" ]] || {
+    echo "FAIL: RAUC signing material ${GA_SECRETS_DIR}/${_sign_file} not found." >&2
+    echo "      The build reads signing material from the read-only secrets mount" >&2
+    echo "      only (docker run -v <secrets>:/secrets:ro). Mount it; do not copy" >&2
+    echo "      keys into the source checkout." >&2
+    PREFLIGHT_FAIL=1
+  }
+done
+
+# The root password hash is required on every build (ADR-0027 D9). The post-build hooks
+# refuse too, but only after the rootfs is built — fail here, in seconds.
+if [[ -z "${ROOT_PW_HASH:-}" ]]; then
+  echo "FAIL: ROOT_PW_HASH is not set — every image needs a root password hash." >&2
+  echo "      Put it in scripts/local.env (gitignored) as ROOT_PW_HASH='\$6\$...'." >&2
+  PREFLIGHT_FAIL=1
 fi
-[[ -f "/build/${_sign_cert}" ]] || [[ -f "${_sign_cert}" ]] || {
-  echo "FAIL: RAUC signing cert (${_sign_cert}) not found for GA_ENV=${GA_ENV}" >&2; PREFLIGHT_FAIL=1;
-}
-[[ -f "/build/${_sign_key}" ]] || [[ -f "${_sign_key}" ]] || {
-  echo "FAIL: RAUC signing key (${_sign_key}) not found for GA_ENV=${GA_ENV}" >&2; PREFLIGHT_FAIL=1;
-}
 
 # Secrets required for build
 [[ -f "/build/secrets/wifi-install.psk" ]] || [[ -f "secrets/wifi-install.psk" ]] || {
@@ -345,8 +302,8 @@ fi
 
 # Version suffix set (not empty for release builds)
 VERSION_SUFFIX_CHECK=$(grep 'VERSION_SUFFIX=' "$BR2EXT_NETBIRD/meta" 2>/dev/null | cut -d'"' -f2)
-if [[ "$GA_ENV" == "prod" ]] && [[ -z "$VERSION_SUFFIX_CHECK" ]]; then
-  echo "WARN: VERSION_SUFFIX is empty in meta — prod build will use base version only" >&2
+if [[ -z "$VERSION_SUFFIX_CHECK" ]]; then
+  echo "WARN: VERSION_SUFFIX is empty in meta — the build will use base version only" >&2
 fi
 
 # NetBird version consistency: NETBIRD_TAG (ga_build.sh) must match netbird.mk
@@ -370,49 +327,35 @@ fi
 echo "Pre-build validation passed."
 echo ""
 
-# Refuse to build without the trust anchor this environment is supposed to use,
-# and refuse to build if the two anchors are the same file.
+# Refuse to build unless ota/rel-ca.pem is THE OTA root — the one whose
+# fingerprint is pinned in scripts/verify-rauc-keyring.sh.
 #
-# This replaces ensure_dev_ca_from_rel_ca(), which created dev-ca.pem as a
-# SYMLINK to rel-ca.pem whenever it was missing. That is exactly the defect the
-# 2026-07-30 clean cut removed elsewhere: it made a dev image ship the
-# PRODUCTION root CA while every log line said "dev". Both *.pem files are
-# gitignored, so a fresh checkout on a new builder has neither — and the old
-# function turned that ordinary state into a silent trust merge.
+# rel-ca.pem is gitignored; a fresh builder has none. Auto-creating trust
+# material is never the right recovery, and a wrong file here becomes the
+# keyring of every device flashed from this image. The keyring audit catches it
+# at the end of the build; this catches it before the build starts, using the
+# same pinned constant (one definition, asked through --check-root).
 #
-# Auto-creating signing trust material is never the right recovery. The keys
-# live in /home/builder/secrets on the build host; if one is not there, the
-# operator has to say which key this image should be installable with.
+# The dev/prod pair guards that used to live here (symlink, hardlink,
+# byte-identity, pair selection) went with the dev CA (ADR-0027 D9): with one
+# anchor there is no second one to keep apart. KEYRING-02 in the audit fails on
+# ANY anchor beyond the pinned root, which covers what they covered.
 require_base_ca() {
-  local _want _other
-  if [[ "$GA_ENV" == "prod" ]]; then
-    _want="$REL_CA_PEM"; _other="$DEV_CA_PEM"
-  else
-    _want="$DEV_CA_PEM"; _other="$REL_CA_PEM"
-  fi
-
-  if [[ ! -f "$_want" ]]; then
-    echo "ERROR: GA_ENV=$GA_ENV needs $_want and it is not there." >&2
-    echo "       Place the correct root CA (it is gitignored on purpose)." >&2
-    echo "       Do NOT substitute the other environment's CA — that is how a" >&2
-    echo "       dev image ends up installable with the production key." >&2
+  if [[ ! -f "$REL_CA_PEM" ]]; then
+    echo "ERROR: the OTA root CA $REL_CA_PEM is not there." >&2
+    echo "       Place the production OTA root certificate (gitignored on purpose)." >&2
     exit 1
   fi
-
-  # A symlink, a hardlink or a byte-identical copy all collapse the dev/prod
-  # trust separation while looking like two distinct files in `ls`.
-  if [[ -f "$_other" ]] && [[ "$(readlink -f "$_want")" == "$(readlink -f "$_other")" ]]; then
-    echo "ERROR: $DEV_CA_PEM and $REL_CA_PEM resolve to the SAME file." >&2
-    echo "       dev and prod would share one trust anchor. Refusing." >&2
+  if ! "${SCRIPT_DIR}/verify-rauc-keyring.sh" --check-root "$REL_CA_PEM"; then
+    echo "ERROR: $REL_CA_PEM is not the pinned OTA root — refusing to build an image" >&2
+    echo "       whose keyring would trust something else." >&2
     exit 1
   fi
-  if [[ -f "$_other" ]] && cmp -s "$_want" "$_other"; then
-    echo "ERROR: $DEV_CA_PEM and $REL_CA_PEM are byte-identical." >&2
-    echo "       dev and prod would share one trust anchor. Refusing." >&2
-    exit 1
+  if [[ -e "${OTA_DIR}/dev-ca.pem" ]]; then
+    echo "WARN: ${OTA_DIR}/dev-ca.pem still exists. Nothing reads it since ADR-0027 D9;" >&2
+    echo "      archive it and delete it from the builder." >&2
   fi
-
-  echo "Base CA for GA_ENV=$GA_ENV: $_want"
+  echo "OTA root CA: $REL_CA_PEM (matches the pinned fingerprint)"
 }
 
 # Global build timestamp (compact format for filenames, set once at script start)
@@ -487,7 +430,7 @@ echo "    source: $GA_RELEASE_SOURCE"
 echo "===================================================="
 echo ""
 
-export GA_BUILD_TIMESTAMP GA_ENV GA_RELEASE
+export GA_BUILD_TIMESTAMP GA_RELEASE
 
 assert_ga_release_stamped() {
   # Post-bake guard: confirm /etc/ga-release in the produced rootfs matches
@@ -566,10 +509,16 @@ write_build_id_into_target() {
   fi
 
   # Stamp environment config into /etc/ga-env.conf
+  #
+  # GA_ENV here is a RUNTIME label read by telemetry (the `env` tag) and by
+  # ga-enroll's bridge, not a build selector. Since ADR-0027 D9 there is one
+  # build, so the baked value is the constant every bake since 2026-08-31
+  # stamped. D10 replaces the label with fleet_env; until then it stays so
+  # dashboards and add-ons keep working. /mnt/data/ga-env.conf still overrides.
   local ga_env_conf="${OUT}/target/etc/ga-env.conf"
-  local env_val="${GA_ENV:-dev}"
-  local log_level="$([ "$env_val" = "prod" ] && echo "warning" || echo "debug")"
-  local telemetry="$([ "$env_val" = "prod" ] && echo "minimal" || echo "verbose")"
+  local env_val="prod"
+  local log_level="warning"
+  local telemetry="minimal"
   cat > "$ga_env_conf" <<ENVEOF
 # GreenAutarky environment configuration
 # Baked at build time — override at runtime via /mnt/data/ga-env.conf
@@ -590,12 +539,12 @@ ENVEOF
 # Stamp GA build info into /etc/os-release (DEFINED but NEVER CALLED — kept
 # for reference; the actual stamping happens in
 # buildroot-external/scripts/post-build.sh via BR2_ROOTFS_POST_BUILD_SCRIPT,
-# which DOES see the exported GA_BUILD_TIMESTAMP / GA_ENV / GA_RELEASE env vars).
+# which DOES see the exported GA_BUILD_TIMESTAMP / GA_RELEASE env vars).
 stamp_os_release() {
   local os_release="${OUT}/target/etc/os-release"
   local ts_human
   ts_human="$(date '+%F %T')"
-  local env_val="${GA_ENV:-dev}"
+  local env_val="prod"   # runtime label, constant since ADR-0027 D9
 
   if [[ -f "$os_release" ]]; then
     # Remove any previous GA entries to avoid duplicates on rebuilds
@@ -865,7 +814,7 @@ verify_build_integrity() {
 rebuild_artifacts() {
   # Your tree has no 'images' target; use 'all' after target-finalize
   # Note: post-build.sh (called by target-finalize) writes os-release including
-  # GA_BUILD_ID via GA_BUILD_TIMESTAMP and GA_ENV env vars exported by ga_build.sh
+  # GA_BUILD_ID via GA_BUILD_TIMESTAMP exported by ga_build.sh (GA_ENV is a constant label)
   make -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "${MAKE_OVERRIDES[@]}" target-finalize
   make -C "$BUILDROOT_DIR" O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "${MAKE_OVERRIDES[@]}" -j"$(nproc)" all
 }
@@ -1340,28 +1289,26 @@ PKGEOF
   # promotion time would therefore collect whatever happened to be built last,
   # not what is being promoted.
   #
-  # So a prod build files its own evidence under a version+build-id directory that
+  # So every build files its own evidence under a version+build-id directory that
   # nothing overwrites and ota-cleanup.sh never touches. Promotion then only has
   # to publish the one directory matching the artefact it is promoting.
   #
   # Failure here does NOT fail the build: the image is already built and valid,
   # and refusing it over a bookkeeping step would be the wrong trade. It is loud
   # instead, and the promotion step is where absence becomes fatal.
-  if [[ "$GA_ENV" == "prod" ]]; then
-    local _ev_script="${SCRIPT_DIR}/ops/collect-release-evidence.sh"
-    local _ev_root="${GA_EVIDENCE_ROOT:-/build/release-evidence}"
-    local _ev_ver
-    _ev_ver="$(sed -n 's/^gaos_release:[[:space:]]*\([^[:space:]#]*\).*/\1/p' "${SCRIPT_DIR}/../version.yaml" 2>/dev/null | head -1)"
-    if [[ -x "$_ev_script" && -n "$_ev_ver" ]]; then
-      mkdir -p "${_ev_root}"
-      if "$_ev_script" "$OUT" "$_ev_ver" "${_ev_root}/${GA_BUILD_TIMESTAMP}"; then
-        echo "Release evidence filed: ${_ev_root}/${GA_BUILD_TIMESTAMP}/${_ev_ver}"
-      else
-        echo "WARNING: release-evidence collection FAILED — this build cannot be promoted until it is re-run" >&2
-      fi
+  local _ev_script="${SCRIPT_DIR}/ops/collect-release-evidence.sh"
+  local _ev_root="${GA_EVIDENCE_ROOT:-/build/release-evidence}"
+  local _ev_ver
+  _ev_ver="$(sed -n 's/^gaos_release:[[:space:]]*\([^[:space:]#]*\).*/\1/p' "${SCRIPT_DIR}/../version.yaml" 2>/dev/null | head -1)"
+  if [[ -x "$_ev_script" && -n "$_ev_ver" ]]; then
+    mkdir -p "${_ev_root}"
+    if "$_ev_script" "$OUT" "$_ev_ver" "${_ev_root}/${GA_BUILD_TIMESTAMP}"; then
+      echo "Release evidence filed: ${_ev_root}/${GA_BUILD_TIMESTAMP}/${_ev_ver}"
     else
-      echo "WARNING: release-evidence collector or gaos_release missing — nothing filed for this build" >&2
+      echo "WARNING: release-evidence collection FAILED — this build cannot be promoted until it is re-run" >&2
     fi
+  else
+    echo "WARNING: release-evidence collector or gaos_release missing — nothing filed for this build" >&2
   fi
 
   # -------------------------------------------------------------------------
@@ -1724,7 +1671,9 @@ generate_sbom() {
 # an SBOM that is absent, empty, or has zero components is a failure. Asserted on
 # the ARTIFACT (and its component count) rather than a return code, so the
 # `generate_sbom 2>&1 | tee` pipeline at the call site cannot hide it — a bare
-# `return 1` there reports tee's status, not the SBOM's (#772). Dev builds warn.
+# `return 1` there reports tee's status, not the SBOM's (#772). Every build is a
+# release build since ADR-0027 D9, so there is no warn-only branch any more; the
+# name is kept because SBOM-03 extracts and drives this function by name.
 assert_prod_sbom() {
   local gen_rc="${1:-0}"
   local sbom="${OUT}/images/sbom-cyclonedx.json"
@@ -1732,28 +1681,22 @@ assert_prod_sbom() {
   if [[ -s "$sbom" ]] && command -v jq &>/dev/null; then
     components="$(jq '(.components // []) | length' "$sbom" 2>/dev/null || echo 0)"
   fi
-  if [[ "${GA_ENV:-dev}" == "prod" ]]; then
-    if [[ ! -s "$sbom" ]]; then
-      echo "ERROR: prod build produced no CycloneDX SBOM (${sbom} absent or empty)"
-      echo "       A prod release must not ship without an SBOM. See Odoo #772."
-      exit 1
-    fi
-    if [[ "${components:-0}" -eq 0 ]]; then
-      echo "ERROR: prod CycloneDX SBOM has ZERO components (${sbom})"
-      echo "       Coverage, not exit code: a generator that ran over zero packages"
-      echo "       is a failure. See Odoo #772."
-      exit 1
-    fi
-    if [[ "${gen_rc}" -ne 0 ]]; then
-      echo "ERROR: SBOM generation returned ${gen_rc} on a prod build — refusing to continue (#772)"
-      exit 1
-    fi
-    echo "SBOM OK: ${components} components (prod, fail-closed)"
-  else
-    if [[ ! -s "$sbom" ]] || [[ "${components:-0}" -eq 0 ]]; then
-      echo "WARN: SBOM absent/empty/zero-components (non-prod build — continuing)"
-    fi
+  if [[ ! -s "$sbom" ]]; then
+    echo "ERROR: the build produced no CycloneDX SBOM (${sbom} absent or empty)"
+    echo "       An image must not ship without an SBOM. See Odoo #772."
+    exit 1
   fi
+  if [[ "${components:-0}" -eq 0 ]]; then
+    echo "ERROR: CycloneDX SBOM has ZERO components (${sbom})"
+    echo "       Coverage, not exit code: a generator that ran over zero packages"
+    echo "       is a failure. See Odoo #772."
+    exit 1
+  fi
+  if [[ "${gen_rc}" -ne 0 ]]; then
+    echo "ERROR: SBOM generation returned ${gen_rc} — refusing to continue (#772)"
+    exit 1
+  fi
+  echo "SBOM OK: ${components} components (fail-closed)"
 }
 
 # -----------------------------------------------------------------------------
@@ -1776,16 +1719,20 @@ get_original_image_basename() {
   echo "$img"
 }
 
-# Rename images with ga-build-id timestamp suffix and environment tag
-# haos_ihost-16.3.1.1.img.xz -> bos_ihost-16.3.1.1_dev_20260119123045.img.xz
+# Rename images with ga-build-id timestamp suffix and the `prod` tag
+# haos_ihost-16.3.1.1.img.xz -> bos_ihost-16.3.1.1_prod_20260119123045.img.xz
 # haos_ihost-16.3.1.1.raucb  -> bos_ihost-16.3.1.1_prod_20260119123045.raucb
+#
+# The tag is a constant since ADR-0027 D9 (one build). It stays in the name
+# because consumers match on it: ga-ops release-train refuses to stage a bundle
+# that is not `*_prod_*`, and release.sh / push-ota.sh examples use it.
 rename_images_with_build_id() {
   local orig_base new_base
   orig_base="$(get_original_image_basename)" || return 1
 
   # Convert haos_ prefix to bos_ and append environment + timestamp
   local orig_name new_name
-  local env_tag="${GA_ENV:-dev}"
+  local env_tag="prod"
   orig_name="$(basename "$orig_base")"
   new_name="${orig_name/haos_/bos_}_${env_tag}_${GA_BUILD_TIMESTAMP}"
   new_base="$(dirname "$orig_base")/${new_name}"
@@ -2254,20 +2201,19 @@ run_logged() {
 cd "$BUILDROOT_DIR"
 DEFCONFIG="ga_ihost_full_defconfig"
 
-# Fail closed if this environment's trust anchor is missing, or if dev and prod
-# resolve to the same file. Never auto-create one from the other.
+# Fail closed unless ota/rel-ca.pem is the pinned OTA root. Never auto-create it.
 require_base_ca
 
 # Pre-flight: verify all container images exist in registries AND that the
 # vibe_addons store versions are in lock-step with addon-images.json before
-# building. Runs on full/partial AND on `update prod` (release builds): the
-# addon-images.json pins DO change on incremental release builds, and a
-# version mismatch there ships a device onto the wrong addon version silently
-# (the 0.23.0 converge no-op and the 0.23.2 near-miss both slipped through
-# precisely because `update prod` skipped this). `update dev` still skips it so
-# fast dev iteration isn't gated on network. Set GA_SKIP_IMAGE_CHECK=1 to
-# bypass when you KNOW the registry is fine but transiently unreachable.
-if [[ "$MODE" == "full" || "$MODE" == "partial" || ( "$MODE" == "update" && "$GA_ENV" == "prod" ) ]]; then
+# building. Runs on full, partial AND update: the addon-images.json pins DO
+# change on incremental builds, and a version mismatch there ships a device
+# onto the wrong addon version silently (the 0.23.0 converge no-op and the
+# 0.23.2 near-miss both slipped through while `update` could skip this). Only
+# `kernel` skips it — it does not touch the add-on images. Set
+# GA_SKIP_IMAGE_CHECK=1 to bypass when you KNOW the registry is fine but
+# transiently unreachable.
+if [[ "$MODE" == "full" || "$MODE" == "partial" || "$MODE" == "update" ]]; then
   if [[ "${GA_SKIP_IMAGE_CHECK:-0}" == "1" ]]; then
     echo ""
     echo "=== Pre-flight image check SKIPPED (GA_SKIP_IMAGE_CHECK=1) ==="
@@ -2398,9 +2344,7 @@ elif [[ "$MODE" == "update" ]]; then
   echo "for the channel the defconfig declares) + old container tars"
 
 else
-  echo "Usage: $0 [full|partial|kernel|update|dev|prod] [dev|prod]"
-  echo "       $0 dev   # shorthand for 'update dev'"
-  echo "       $0 prod  # shorthand for 'update prod'"
+  ga_build_usage >&2
   exit 1
 fi
 
@@ -2434,137 +2378,124 @@ rename_images_with_build_id
 log_build_step "Post-bake assertion: /etc/ga-release stamped"
 assert_ga_release_stamped
 
-# --- Post-build artifacts (prod only for faster dev builds) ---
-if [[ "$GA_ENV" == "prod" ]]; then
-  # 7) Create provisioning image (factory image with embedded .img.xz)
-  #    Disabled by default — enable with GA_PROVISIONING=true
-  if [[ "${GA_PROVISIONING:-false}" == "true" ]]; then
-    log_build_step "Ensure genimage"
-    ensure_host_genimage
-    log_build_step "Create provisioning image"
-    create_provisioning_image
+# --- Post-build artifacts and gates — on EVERY build (ADR-0027 D9) ---
+# There used to be a dev branch that skipped all of this, including the gates.
+# A bake may skip artefacts, never a gate (D11); the only optional artefact left
+# here is the provisioning image.
+# 7) Create provisioning image (factory image with embedded .img.xz)
+#    Disabled by default — enable with GA_PROVISIONING=true
+if [[ "${GA_PROVISIONING:-false}" == "true" ]]; then
+  log_build_step "Ensure genimage"
+  ensure_host_genimage
+  log_build_step "Create provisioning image"
+  create_provisioning_image
+else
+  echo "Skipping provisioning image (set GA_PROVISIONING=true to enable)"
+fi
+
+# 8) Archive build configurations and pin all sources
+log_build_step "Archive build configs"
+archive_build_configs
+
+# 9) Archive legal-info (licenses) — always (the skip flag is D11 step 1)
+log_build_step "Archive legal-info"
+archive_legal_info
+
+# 10) Generate Software Bill of Materials (SBOM)
+log_build_step "Generate SBOM"
+# NO `|| true` on this pipeline — it would make `true` the last command and
+# RESET PIPESTATUS to (0), masking a failed generation (same trap as the CVE
+# scan below). `set +e` survives a non-zero exit while keeping PIPESTATUS.
+set +e
+generate_sbom 2>&1 | tee -a "$BUILD_LOG"
+_sbom_rc=${PIPESTATUS[0]}
+set -e
+# Fail-closed, asserted on the ARTIFACT (not the pipe's exit): every image
+# must carry a CycloneDX SBOM with real coverage (#772).
+assert_prod_sbom "$_sbom_rc"
+
+# 11) CVE scan of SBOM — coverage-verified, fail-closed
+#
+# Delegated to scripts/scan-cves.sh so the coverage assertion lives in ONE
+# place. Until 2026-07-28 this step ran trivy directly and printed "CVE scan
+# complete" while scanning 0 of 208 OS packages (trivy has no matcher for
+# `family="buildroot"`), and the empty report was shipped as release evidence.
+# A scan without coverage now exits 2 and fails the build — the same
+# fail-closed rule as the root password (#239).
+mkdir -p "${OUT}/images/reports"
+if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]]; then
+  log_build_step "CVE scan (SBOM)"
+  # Trivy doesn't support CycloneDX component type "firmware" — patch to "operating-system"
+  if command -v jq &>/dev/null; then
+    jq '(.metadata.component.type) = "operating-system"' "${OUT}/images/sbom-cyclonedx.json" \
+      > "${OUT}/images/sbom-cyclonedx.json.tmp" 2>/dev/null \
+      && mv "${OUT}/images/sbom-cyclonedx.json.tmp" "${OUT}/images/sbom-cyclonedx.json"
   else
-    echo "Skipping provisioning image (set GA_PROVISIONING=true to enable)"
+    sed -i 's/"type": "firmware"/"type": "operating-system"/' "${OUT}/images/sbom-cyclonedx.json"
   fi
-
-  # 8) Archive build configurations and pin all sources
-  log_build_step "Archive build configs"
-  archive_build_configs
-
-  # 9) Archive legal-info (licenses)
-  #    Auto-enabled for prod builds; for dev builds, set GA_LEGAL_INFO=true to enable
-  if [[ "${GA_LEGAL_INFO:-false}" == "true" ]] || [[ "$GA_ENV" == "prod" ]]; then
-    log_build_step "Archive legal-info"
-    archive_legal_info
-  else
-    echo "Skipping legal-info archive (set GA_LEGAL_INFO=true to enable)"
-  fi
-
-  # 10) Generate Software Bill of Materials (SBOM)
-  log_build_step "Generate SBOM"
-  # NO `|| true` on this pipeline — it would make `true` the last command and
-  # RESET PIPESTATUS to (0), masking a failed generation (same trap as the CVE
-  # scan below). `set +e` survives a non-zero exit while keeping PIPESTATUS.
-  set +e
-  generate_sbom 2>&1 | tee -a "$BUILD_LOG"
-  _sbom_rc=${PIPESTATUS[0]}
-  set -e
-  # Fail-closed on prod, asserted on the ARTIFACT (not the pipe's exit): a prod
-  # release must carry a CycloneDX SBOM with real coverage (#772).
-  assert_prod_sbom "$_sbom_rc"
-
-  # 11) CVE scan of SBOM — coverage-verified, fail-closed on prod
+  echo "Scanning SBOM for CRITICAL/HIGH vulnerabilities..."
+  _cve_rc=0
+  # --strict is passed HERE, at the call site: scan-cves.sh defaults to
+  # report-only for ad-hoc use, and the build must not depend on an ambient
+  # variable to arm its gate (CVE-SCAN-06 asserts this flag is present).
   #
-  # Delegated to scripts/scan-cves.sh so the coverage assertion lives in ONE
-  # place. Until 2026-07-28 this step ran trivy directly and printed "CVE scan
-  # complete" while scanning 0 of 208 OS packages (trivy has no matcher for
-  # `family="buildroot"`), and the empty report was shipped as release evidence.
-  # A scan without coverage now exits 2 and, on prod, fails the build — the same
-  # fail-closed rule as the root password (#239).
-  mkdir -p "${OUT}/images/reports"
-  if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]]; then
-    log_build_step "CVE scan (SBOM)"
-    # Trivy doesn't support CycloneDX component type "firmware" — patch to "operating-system"
-    if command -v jq &>/dev/null; then
-      jq '(.metadata.component.type) = "operating-system"' "${OUT}/images/sbom-cyclonedx.json" \
-        > "${OUT}/images/sbom-cyclonedx.json.tmp" 2>/dev/null \
-        && mv "${OUT}/images/sbom-cyclonedx.json.tmp" "${OUT}/images/sbom-cyclonedx.json"
-    else
-      sed -i 's/"type": "firmware"/"type": "operating-system"/' "${OUT}/images/sbom-cyclonedx.json"
-    fi
-    echo "Scanning SBOM for CRITICAL/HIGH vulnerabilities..."
-    _cve_rc=0
-    # GA_ENV is already exported (set -a at the top, plus the explicit export at
-    # the GA_BUILD_TIMESTAMP line); passed again here so the dependency is
-    # visible at the call site rather than implied 1700 lines away.
-    #
-    # NO `|| true` on this pipeline: appending it makes `true` the last executed
-    # command, which RESETS PIPESTATUS to (0) — so `_cve_rc` read 0 even when
-    # scan-cves.sh exited 2, and the prod abort below never fired. Verified live
-    # on the 2026-07-28 bake: the log shows "Result: BROKEN SCAN (exit 2)"
-    # immediately followed by "CVE scan complete". `set +e` is the correct way
-    # to survive a non-zero exit while keeping PIPESTATUS intact.
-    set +e
-    GA_SBOM="${OUT}/images/sbom-cyclonedx.json" \
-    OUTPUT_DIR="${OUT}/images/reports" \
-    GA_ENV="${GA_ENV:-dev}" \
-      "${SCRIPT_DIR:-/build/scripts}/scan-cves.sh" --sbom --severity CRITICAL,HIGH \
-        2>&1 | tee "${OUT}/images/reports/cve-scan-sbom.txt"
-    _cve_rc=${PIPESTATUS[0]}
-    set -e
-    if [[ "$_cve_rc" -eq 2 ]]; then
-      # Broken scan — never report this as clean.
-      if [[ "${GA_ENV:-dev}" == "prod" ]]; then
-        echo "ERROR: OS CVE scan produced no coverage — refusing to build a prod image"
-        echo "       An empty CVE report must not ship as release evidence. See KB #172."
-        exit 1
-      fi
-      echo "WARN: OS CVE scan produced no coverage (non-prod build — continuing)"
-    elif [[ "$_cve_rc" -eq 0 ]]; then
-      echo "CVE scan complete — results in ${OUT}/images/reports/cve-scan-sbom.txt"
-    else
-      echo "CVE scan found vulnerabilities — see ${OUT}/images/reports/cve-scan-sbom.txt"
-    fi
-
-    # 11b) Scan downloaded container image tars (covers private GHCR images)
-    _cve_images_dir="$(ls -d "${OUT}/build/hassio-"*/images 2>/dev/null | head -n 1 || true)"
-    if [[ -d "$_cve_images_dir" ]]; then
-      echo ""
-      echo "Scanning container image tars for CRITICAL/HIGH vulnerabilities..."
-      _cve_scan_file="${OUT}/images/reports/cve-scan-containers.txt"
-      : > "$_cve_scan_file"
-      _cve_img_total=0 _cve_img_clean=0 _cve_img_findings=0
-      for tarball in "$_cve_images_dir"/*.tar; do
-        [[ -f "$tarball" ]] || continue
-        _cve_img_name="$(basename "$tarball" .tar)"
-        _cve_img_total=$((_cve_img_total + 1))
-        echo "  Scanning: ${_cve_img_name}..." | tee -a "$_cve_scan_file"
-        if trivy image --severity CRITICAL,HIGH --format table --input "$tarball" 2>&1 | tee -a "$_cve_scan_file"; then
-          _cve_count=$(grep -cE "CRITICAL|HIGH" "$_cve_scan_file" 2>/dev/null || echo 0)
-          if [[ "$_cve_count" -gt 0 ]]; then
-            _cve_img_findings=$((_cve_img_findings + 1))
-          else
-            _cve_img_clean=$((_cve_img_clean + 1))
-          fi
-        else
-          echo "    WARN: could not scan ${_cve_img_name}" | tee -a "$_cve_scan_file"
-        fi
-      done
-      echo "" | tee -a "$_cve_scan_file"
-      echo "Container image scan: ${_cve_img_clean} clean, ${_cve_img_findings} with findings (${_cve_img_total} total)" | tee -a "$_cve_scan_file"
-    fi
-  elif [[ "${GA_ENV:-dev}" == "prod" ]]; then
-    # Fail closed: a prod release must not ship without a scanned SBOM.
-    command -v trivy &>/dev/null \
-      || { echo "ERROR: trivy not installed — a prod build cannot skip the CVE scan"; exit 1; }
-    echo "ERROR: no SBOM at ${OUT}/images/sbom-cyclonedx.json — a prod build must produce one"
+  # NO `|| true` on this pipeline: appending it makes `true` the last executed
+  # command, which RESETS PIPESTATUS to (0) — so `_cve_rc` read 0 even when
+  # scan-cves.sh exited 2, and the abort below never fired. Verified live
+  # on the 2026-07-28 bake: the log shows "Result: BROKEN SCAN (exit 2)"
+  # immediately followed by "CVE scan complete". `set +e` is the correct way
+  # to survive a non-zero exit while keeping PIPESTATUS intact.
+  set +e
+  GA_SBOM="${OUT}/images/sbom-cyclonedx.json" \
+  OUTPUT_DIR="${OUT}/images/reports" \
+    "${SCRIPT_DIR:-/build/scripts}/scan-cves.sh" --sbom --strict --severity CRITICAL,HIGH \
+      2>&1 | tee "${OUT}/images/reports/cve-scan-sbom.txt"
+  _cve_rc=${PIPESTATUS[0]}
+  set -e
+  if [[ "$_cve_rc" -eq 2 ]]; then
+    # Broken scan — never report this as clean.
+    echo "ERROR: OS CVE scan produced no coverage — refusing to build the image"
+    echo "       An empty CVE report must not ship as release evidence. See KB #172."
     exit 1
+  elif [[ "$_cve_rc" -eq 0 ]]; then
+    echo "CVE scan complete — results in ${OUT}/images/reports/cve-scan-sbom.txt"
   else
-    echo "Skipping CVE scan (trivy not installed or no SBOM)"
+    echo "CVE scan found vulnerabilities — see ${OUT}/images/reports/cve-scan-sbom.txt"
+  fi
+
+  # 11b) Scan downloaded container image tars (covers private GHCR images)
+  _cve_images_dir="$(ls -d "${OUT}/build/hassio-"*/images 2>/dev/null | head -n 1 || true)"
+  if [[ -d "$_cve_images_dir" ]]; then
+    echo ""
+    echo "Scanning container image tars for CRITICAL/HIGH vulnerabilities..."
+    _cve_scan_file="${OUT}/images/reports/cve-scan-containers.txt"
+    : > "$_cve_scan_file"
+    _cve_img_total=0 _cve_img_clean=0 _cve_img_findings=0
+    for tarball in "$_cve_images_dir"/*.tar; do
+      [[ -f "$tarball" ]] || continue
+      _cve_img_name="$(basename "$tarball" .tar)"
+      _cve_img_total=$((_cve_img_total + 1))
+      echo "  Scanning: ${_cve_img_name}..." | tee -a "$_cve_scan_file"
+      if trivy image --severity CRITICAL,HIGH --format table --input "$tarball" 2>&1 | tee -a "$_cve_scan_file"; then
+        _cve_count=$(grep -cE "CRITICAL|HIGH" "$_cve_scan_file" 2>/dev/null || echo 0)
+        if [[ "$_cve_count" -gt 0 ]]; then
+          _cve_img_findings=$((_cve_img_findings + 1))
+        else
+          _cve_img_clean=$((_cve_img_clean + 1))
+        fi
+      else
+        echo "    WARN: could not scan ${_cve_img_name}" | tee -a "$_cve_scan_file"
+      fi
+    done
+    echo "" | tee -a "$_cve_scan_file"
+    echo "Container image scan: ${_cve_img_clean} clean, ${_cve_img_findings} with findings (${_cve_img_total} total)" | tee -a "$_cve_scan_file"
   fi
 else
-  echo "Skipping post-build artifacts for dev build (SBOMs, config archive, provisioning)"
-  echo "  Use 'prod' environment for full artifact generation"
+  # Fail closed: no image ships without a scanned SBOM.
+  command -v trivy &>/dev/null \
+    || { echo "ERROR: trivy not installed — the build cannot skip the CVE scan"; exit 1; }
+  echo "ERROR: no SBOM at ${OUT}/images/sbom-cyclonedx.json — every build must produce one"
+  exit 1
 fi
 
 # Post-build integrity checks
@@ -2574,7 +2505,7 @@ verify_build_integrity
 # RAUC keyring audit — assert the trust anchors that actually landed in the
 # image, not the ones rauc.sh intended to put there.
 #
-# Fail-closed on prod, same rule as the root password (#239) and the CVE scan
+# Fail-closed on every build, same rule as the root password (#239) and the CVE scan
 # coverage assertion. A wrong keyring is expensive to repair: /etc/rauc is not
 # overlay-backed, and `rauc install` verifies against the keyring the device
 # already runs — so the supported update path is precisely what a bad keyring
@@ -2586,18 +2517,15 @@ keyring_audit="${SCRIPT_DIR}/verify-rauc-keyring.sh"
 if [[ -x "$keyring_audit" ]]; then
   log_build_step "RAUC keyring audit"
   set +e
-  REPO_ROOT="${SCRIPT_DIR%/scripts}" GA_ENV="$GA_ENV" "$keyring_audit" "$OUT" 2>&1 | tee -a "$BUILD_LOG"
+  REPO_ROOT="${SCRIPT_DIR%/scripts}" "$keyring_audit" "$OUT" 2>&1 | tee -a "$BUILD_LOG"
   _kr_rc=${PIPESTATUS[0]}
   set -e
   if (( _kr_rc == 2 )); then
     echo "ERROR: RAUC keyring audit could not run (exit 2) — refusing to ship an unverified trust set"
     exit 1
   elif (( _kr_rc != 0 )); then
-    if [[ "$GA_ENV" == "prod" ]]; then
-      echo "ERROR: RAUC keyring audit found a trust-anchor problem — a prod image must not ship it"
-      exit 1
-    fi
-    echo "WARNING: RAUC keyring audit findings above (non-fatal for GA_ENV=${GA_ENV}; a prod build WILL fail here)"
+    echo "ERROR: RAUC keyring audit found a trust-anchor problem — the image must not ship it"
+    exit 1
   fi
 else
   echo "ERROR: ${keyring_audit} missing or not executable — the keyring trust set would ship unverified"
@@ -2632,7 +2560,7 @@ buildroot_ver="$(grep -E '^export BR2_VERSION :=' "${BUILDROOT_DIR}/Makefile" 2>
 nb_ver="$("${OUT}/target/usr/bin/netbird" version 2>/dev/null || echo "${NETBIRD_TAG}")"
 
 echo "  Build ID:       ${GA_BUILD_TIMESTAMP}"
-echo "  Environment:    ${GA_ENV}"
+echo "  Build:          one mode (ADR-0027 D9) — signed by the OTA root chain, all gates"
 echo "  Mode:           ${MODE}"
 echo "  Defconfig:      ${DEFCONFIG}"
 echo "  Buildroot:      ${buildroot_ver}"
@@ -2678,11 +2606,7 @@ if [[ "${GA_PROVISIONING:-false}" == "true" ]]; then
 else
   echo "  Provisioning image: skipped (GA_PROVISIONING=true to enable)"
 fi
-if [[ "${GA_LEGAL_INFO:-false}" == "true" ]] || [[ "$GA_ENV" == "prod" ]]; then
-  echo "  Legal info: ${OUT}/images/legal-info/"
-else
-  echo "  Legal info: skipped (auto-enabled for prod, or set GA_LEGAL_INFO=true)"
-fi
+echo "  Legal info: ${OUT}/images/legal-info/"
 echo ""
 echo "  Build log: ${BUILD_LOG}"
 echo ""
@@ -2776,7 +2700,7 @@ cat > "$_report" <<HTMLEOF
   <table>
   <tr><td>Build ID</td><td class="mono">${GA_BUILD_TIMESTAMP}</td></tr>
   <tr><td>Date</td><td>${GA_BUILD_DATE:-$(date '+%Y-%m-%d %H:%M:%S')}</td></tr>
-  <tr><td>Environment</td><td><span class="badge badge-${GA_ENV}">${GA_ENV}</span></td></tr>
+  <tr><td>Build</td><td>one mode (ADR-0027 D9)</td></tr>
   <tr><td>Mode</td><td>${MODE}</td></tr>
   <tr><td>Duration</td><td>${_build_duration}</td></tr>
   </table>

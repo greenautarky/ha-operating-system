@@ -34,7 +34,8 @@
 # -------------------------------
 # Two fleet-managers run on the same host, one port apart: production and
 # staging. Which one this device belongs to is PROVISIONED DATA, not something
-# an image can know (GA_ENV is the build mode — canaries run prod-mode images
+# an image can know (GA_ENV is a baked telemetry label, `prod` on every image
+# since ADR-0027 D9 — canaries run the same images
 # and live in staging). It is `GA_FLEET_ENV` in ga-services.conf, normally set
 # in the /mnt/data override next to `GA_FLEET_PORT=8091`; ABSENT MEANS
 # PRODUCTION. The resolved value rides in the enroll payload as `fleet_env`,
@@ -203,8 +204,8 @@ mkdir -p "$(dirname "$STATE_FILE")"
 ga_env=""
 [ -r /mnt/data/ga-env.conf ] && ga_env=$(sed -n 's/^GA_ENV=//p' /mnt/data/ga-env.conf | head -1 | tr -d '\r\n"'"'"'')
 [ -n "$ga_env" ] || { [ -r /etc/ga-env.conf ] && ga_env=$(sed -n 's/^GA_ENV=//p' /etc/ga-env.conf | head -1 | tr -d '\r\n"'"'"''); }
-# fleet_env (prod/staging — the FLEET, ADR-0027) rides next to ga_env (the
-# BUILD MODE): two different facts that are easy to conflate, side by side so
+# fleet_env (prod/staging — the FLEET, ADR-0027) rides next to ga_env (a
+# baked label, constant `prod` since D9): two different facts that are easy to conflate, side by side so
 # a reader of the bridge sees both.
 #
 # ssh_auth (ADR-0019) rides in the bridge for the same reason ga_release does:

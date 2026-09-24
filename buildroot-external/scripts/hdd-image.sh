@@ -22,18 +22,15 @@ function create_disk_image() {
     fi
     # variables from meta file
     export DISK_SIZE BOOTLOADER KERNEL_FILE PARTITION_TABLE_TYPE BOOT_SIZE BOOT_SPL BOOT_SPL_SIZE
-    # Signing material for the RAUC bundle, selected by build mode.
-    #
-    # genimage's rauc block used to hardcode /build/key.pem, so the bundle was
-    # signed with the production key even when the image installed the dev trust
-    # anchor — a bundle that cannot verify against its own keyring, and a build
-    # that stays green because the failure only appears at install time on a
-    # device. Same selector as rauc.sh (ga_is_prod, defined there and sourced
-    # alongside this file by post-image.sh).
+    # Signing material for the RAUC bundle: the one pair from the read-only
+    # secrets mount (ADR-0027 D9). The paths come from rauc.sh (sourced
+    # alongside this file by post-image.sh), so the key genimage signs with and
+    # the anchor install_rauc_certs() ships are defined in ONE place; a literal
+    # path in the genimage config is what once made them disagree (SRC-22).
     GA_SIGN_KEY="$(ga_signing_key)"
     GA_SIGN_CERT="$(ga_signing_cert)"
     export GA_SIGN_KEY GA_SIGN_CERT
-    echo "RAUC signing material: ${GA_SIGN_CERT} (GA_ENV=${GA_ENV:-dev})"
+    echo "RAUC signing material: ${GA_SIGN_CERT}"
 
     # variables used in raucb manifest template
     ota_compatible="$(hassos_rauc_compatible)"
