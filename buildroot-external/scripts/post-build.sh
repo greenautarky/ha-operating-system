@@ -34,14 +34,16 @@ setup_localtime
     echo "SUPERVISOR_ARCH=${SUPERVISOR_ARCH}"
     # GreenAutarky build info (set by ga_build.sh via env vars)
     if [ -n "${GA_BUILD_TIMESTAMP:-}" ]; then
-        echo "GA_BUILD_ID=\"$(date '+%F %T') (${GA_ENV:-dev})\""
+        # GA_ENV is a runtime label (telemetry `env`), constant since
+        # ADR-0027 D9 — there is one build. D10 replaces it with fleet_env.
+        echo "GA_BUILD_ID=\"$(date '+%F %T') (prod)\""
         echo "GA_BUILD_TIMESTAMP=\"${GA_BUILD_TIMESTAMP}\""
-        echo "GA_ENV=\"${GA_ENV:-dev}\""
+        echo "GA_ENV=\"prod\""
     fi
     # GA-side release identifier (e.g. "BOSv1.2.0") alongside the cryptic
     # HAOS-internal VERSION_ID. Operators + fleet-manager read this; nothing
     # in the supervisor cares about it. Set via GA_RELEASE env var on the
-    # build invocation (`GA_RELEASE=BOSv1.2.0 ./scripts/ga_build.sh update prod`).
+    # build invocation (`GA_RELEASE=BOSv1.2.0 ./scripts/ga_build.sh update`).
     if [ -n "${GA_RELEASE:-}" ]; then
         echo "GA_RELEASE=\"${GA_RELEASE}\""
     fi

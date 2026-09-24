@@ -68,7 +68,7 @@ if [[ -z "$IMAGE" ]]; then
   [[ -n "$IMAGE" ]] || IMAGE="$(ls -t "${REPO_ROOT}"/ga_output/images/*.img 2>/dev/null | head -1 || true)"
 fi
 if [[ -z "$IMAGE" || ! -f "$IMAGE" ]]; then
-  echo "ERROR: no image found. Build one first (./scripts/ga_build.sh update prod)"
+  echo "ERROR: no image found. Build one first (./scripts/ga_build.sh update)"
   echo "       or pass --image <path>."
   exit 2
 fi

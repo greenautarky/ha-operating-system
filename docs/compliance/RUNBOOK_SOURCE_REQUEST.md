@@ -87,7 +87,9 @@ for the tag. If `ga-os-${VER}-source-bundle.tar.gz` exists, use it.
 git clone https://github.com/greenautarky/ha-operating-system /tmp/ga-os-src
 cd /tmp/ga-os-src
 git checkout ${VER}
-./scripts/ga_build.sh prod        # Produces ga_output/images/configs/
+./scripts/ga_build.sh full        # Produces ga_output/images/configs/
+                                  # (a tag before ADR-0027 D9 needs `prod` as 2nd argument;
+                                  #  later tags have one build mode and ignore it)
 # Bundle the configs + buildroot legal-info + the source-pins
 ./scripts/bundle-source.sh ${VER} > /tmp/ga-os-${VER}-source-bundle.tar.gz
 # (see TODO at the bottom — scripts/bundle-source.sh not yet written)

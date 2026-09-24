@@ -10,7 +10,7 @@
 #   6. ha-operating-system/buildroot-external/meta   VERSION_{MAJOR,MINOR,SUFFIX}
 #
 # After this runs, the next steps are MANUAL (intentionally):
-#   a. SSH ga-builder, run: ./scripts/ga_build.sh update prod
+#   a. SSH to the build host ($GA_BUILDER_HOST), run: ./scripts/ga_build.sh update
 #      (GA_RELEASE env is no longer needed — ga_build.sh reads version.yaml.
 #       Or use --bake-async on this script to kick the bake automatically.)
 #   b. Locally:    ./scripts/push-ota.sh --server --raucb <bundle>.raucb
@@ -339,7 +339,7 @@ docker run -d --privileged \\
     -v /home/builder/secrets:/secrets:ro \\
     -v /root/.docker/config.json:/root/.docker/config.json:ro \\
     --name ga-build \\
-    hassos:local bash -c "export FORCE_UNSAFE_CONFIGURE=1 && cd /build && ./scripts/ga_build.sh update prod"
+    hassos:local bash -c "export FORCE_UNSAFE_CONFIGURE=1 && cd /build && ./scripts/ga_build.sh update"
 echo "Bake kicked. Container: ga-build"
 REMOTE
 )
@@ -360,7 +360,7 @@ fi
 echo "Next steps (manual):"
 if [[ "$BAKE_ASYNC" != "true" ]]; then
     echo "  1. Build on ga-builder:"
-    echo "       ssh ga-builder 'cd /home/builder/ha-operating-system && git pull && ./scripts/ga_build.sh update prod'"
+    echo "       ssh ${GA_BUILDER_HOST} 'cd ${GA_BUILDER_REPO_PATH} && git pull && ./scripts/ga_build.sh update'"
     echo "     (or re-run with --bake-async to kick it from here)"
 fi
 echo "  2. Once .img.xz + .raucb are produced, copy to laptop + upload:"

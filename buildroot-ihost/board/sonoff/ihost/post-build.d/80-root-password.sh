@@ -10,18 +10,14 @@ if [ -z "$TARGET_DIR" ] || [ ! -d "$TARGET_DIR" ]; then
 fi
 
 if [ -z "$ROOT_PW_HASH" ]; then
-  # Fail closed on prod: a customer image must NEVER ship a passwordless root.
+  # Fail closed on EVERY build: an image must NEVER ship a passwordless root.
+  # Since ADR-0027 D9 there is one build mode, so there is no "non-prod" image
+  # that may be passwordless — every image is installable by the fleet.
   # CI writes ROOT_PW_HASH from a secret; an unset/empty secret must break the
   # build loudly rather than silently produce `root::` (passwordless console —
-  # anyone with brief physical/serial access on a shipped device gets root).
-  # dev/bench builds may legitimately be passwordless (serial recovery with a
-  # locally-set hash, throwaway images), so those are left unchanged. [Vuln-7]
-  if [ "${GA_ENV:-dev}" = "prod" ]; then
-    echo "ERROR: ROOT_PW_HASH not set for a prod build (GA_ENV=prod) — refusing to ship passwordless root" >&2
-    exit 1
-  fi
-  echo "WARN: ROOT_PW_HASH not set (GA_ENV=${GA_ENV:-dev}); root password left unchanged (passwordless). NON-PROD builds only."
-  exit 0
+  # anyone with brief physical/serial access on a shipped device gets root). [Vuln-7]
+  echo "ERROR: ROOT_PW_HASH not set — refusing to ship passwordless root (ADR-0027 D9: every build)" >&2
+  exit 1
 fi
 
 case "$ROOT_PW_HASH" in

@@ -115,8 +115,8 @@ The labels are what address the jobs:
 | `mesh` | `testgate.yml`, `chatops-cohorts.yml`, release-train stage/roll jobs — need mesh reach to devices and the fleet-manager |
 
 There is no build workflow in this repository. The productive OS build is
-`bake.yml` in `ga-ops` (`workflow_dispatch`, inputs `ga_release` +
-`build_mode`); it reuses the builder's clone at
+`bake.yml` in `ga-ops` (`workflow_dispatch`, input `ga_release`; there is no
+build mode since ADR-0027 D9); it reuses the builder's clone at
 `/home/builder/ha-operating-system`, runs `scripts/sync-components.sh`, then
 `ga_build.sh` inside the `hassos:local` container. The legacy `build-os.yml`
 that used to live here was removed in 2026-07 — it addressed the bare
@@ -134,8 +134,8 @@ cd /build
 git submodule update --init
 
 # Build
-./scripts/ga_build.sh dev    # dev build (~60 min)
-./scripts/ga_build.sh prod   # prod build (~90 min)
+./scripts/ga_build.sh full     # clean build (~90 min) — the one build mode (ADR-0027 D9)
+./scripts/ga_build.sh update   # incremental
 ```
 
 ## Secrets
@@ -146,9 +146,12 @@ These files must exist on the builder (gitignored, manually copied):
 |------|---------|
 | `secrets/wifi-install.psk` | GreenAutarky-Install WiFi PSK |
 | `secrets/openstick-wifi.key` | HMAC shared secret for OpenStick WiFi PSK derivation |
-| `scripts/local.env` | Root password hash for device provisioning |
-| `buildroot-external/ota/rel-ca.pem` | RAUC OTA signing CA certificate |
-| `buildroot-external/ota/dev-ca.pem` | Symlink → `rel-ca.pem` |
+| `scripts/local.env` | Root password hash (`ROOT_PW_HASH`) — required, every build refuses without it |
+| `buildroot-external/ota/rel-ca.pem` | RAUC OTA root CA certificate — must match the fingerprint pinned in `scripts/verify-rauc-keyring.sh` |
+| `<secrets>/cert.pem`, `<secrets>/key.pem` | RAUC signing pair — mounted read-only at `/secrets` in the build container, never in the checkout |
+
+There is no `dev-ca.pem` any more (ADR-0027 D9); `ga_build.sh` warns if one is
+still lying in `buildroot-external/ota/`.
 
 These live persistently on the builder. The `ga-ops` bake reuses the builder's
 own clone, so it picks them up from disk — they are not injected from GitHub
@@ -163,7 +166,7 @@ are cached in `/build/ga_output/`.
 To clean and rebuild from scratch:
 ```bash
 rm -rf /build/ga_output
-./scripts/ga_build.sh full prod
+./scripts/ga_build.sh full
 ```
 
 ## Container Management
