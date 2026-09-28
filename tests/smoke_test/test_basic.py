@@ -66,8 +66,8 @@ def test_supervisor_logs(shell):
 
 
 @pytest.mark.dependency(depends=["test_init"])
-def test_landing_page(shell):
-    web_index = shell.run_check("curl http://localhost:8123")
+def test_landing_page(shell, ha_url):
+    web_index = shell.run_check(f"curl {ha_url()}")
     assert "</html>" in " ".join(web_index)
 
 

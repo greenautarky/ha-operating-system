@@ -75,15 +75,29 @@ ssh $ssh_opts "$target" 'echo SSH_OK' >/dev/null || {
 # NOT a failure. Probe via `/manifest.json` (= public) and accept any 2xx/3xx.
 # A 401 on `/api/` would also count; we use manifest.json because it doesn't
 # pollute the auth-ban log with WARNING lines.
-log "2/5  waiting up to ${WAIT_FOR_HA}s for HA Core to respond on :8123 ..."
+# Core's port (80 on 2026.8+, 8123 before), from the device's own Supervisor —
+# lib/ha_port.sh, ADR-0038. Asked in the loop below, because on a fresh flash
+# `ha core info` itself may not answer yet.
+# shellcheck source=ha_port.sh
+. "${SCRIPT_DIR}/ha_port.sh"
+# shellcheck disable=SC2034  # read by _ga_ha_port_resolve via eval
+GA_HA_INFO_CMD="ssh $ssh_opts '$target' 'ha core info --raw-json --no-progress'"
+log "2/5  waiting up to ${WAIT_FOR_HA}s for HA Core to respond on its port ..."
 deadline=$(( $(date +%s) + WAIT_FOR_HA ))
 while :; do
   # shellcheck disable=SC2086
-  code=$(ssh $ssh_opts "$target" "curl -s -o /dev/null -m 3 -w '%{http_code}' http://localhost:8123/manifest.json" 2>/dev/null || echo "000")
+  code="000"
+  if [ -n "${GA_HA_PORT:-}" ] || _ga_ha_port_resolve 2>/dev/null; then
+    code=$(ssh $ssh_opts "$target" "curl -s -o /dev/null -m 3 -w '%{http_code}' http://localhost:${GA_HA_PORT}/manifest.json" 2>/dev/null || echo "000")
+  fi
   case "$code" in
     2*|3*) log "      HA Core responded (HTTP $code)"; break;;
   esac
-  [ "$(date +%s)" -ge "$deadline" ] && { echo "ERROR: HA Core never responded within ${WAIT_FOR_HA}s (last HTTP $code)" >&2; exit 67; }
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    [ -n "${GA_HA_PORT:-}" ] || _ga_ha_port_resolve || true
+    echo "ERROR: HA Core never responded within ${WAIT_FOR_HA}s (port ${GA_HA_PORT:-unresolved}, last HTTP $code)" >&2
+    exit 67
+  fi
   sleep 5
 done
 
@@ -98,7 +112,8 @@ ssh $ssh_opts "$target" "
     /tmp/provision_test_fixture.sh
 " || { echo "ERROR: fixture exited non-zero" >&2; exit 68; }
 
-# 4. Push the E2E suite. Intentionally do NOT ship lib/test_helpers.sh —
+# 4. Push the E2E suite + lib/ha_port.sh (the port rule; pure functions, no
+# test framework). Intentionally do NOT ship lib/test_helpers.sh —
 # e2e_user_flows/test.sh has a fallback path that defines _pass/_fail/_skip
 # inline when ../lib/test_helpers.sh is absent. The shipped helpers file
 # uses different function names (run_test, run_test_show) that the e2e
@@ -106,12 +121,16 @@ ssh $ssh_opts "$target" "
 log "4/5  uploading e2e_user_flows/test.sh ..."
 # shellcheck disable=SC2086
 scp $scp_opts "$E2E" "$target:/tmp/e2e_user_flows_test.sh" >/dev/null
-# Stage so /tmp/../lib/test_helpers.sh resolves to "absent" (= inline path)
+# shellcheck disable=SC2086
+scp $scp_opts "${SCRIPT_DIR}/ha_port.sh" "$target:/tmp/ha_port.sh" >/dev/null
+# Stage so /tmp/lib/test_helpers.sh resolves to "absent" (= inline path) while
+# /tmp/lib/ha_port.sh is present.
 # shellcheck disable=SC2086
 ssh $ssh_opts "$target" '
   rm -rf /tmp/e2e_user_flows /tmp/lib 2>/dev/null
   mkdir -p /tmp/e2e_user_flows
   mv /tmp/e2e_user_flows_test.sh /tmp/e2e_user_flows/test.sh
+  mkdir -p /tmp/lib && mv /tmp/ha_port.sh /tmp/lib/ha_port.sh
   chmod +x /tmp/e2e_user_flows/test.sh
 ' >/dev/null
 

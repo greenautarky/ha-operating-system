@@ -137,6 +137,12 @@ _device_label=$(cat /etc/ga-device-label 2>/dev/null \
   || sed -n 's/.*"device_id": *"\([^"]*\)".*/\1/p' /mnt/data/supervisor/addons/data/*_ga_manager/ga-identity.json 2>/dev/null | head -1)
 _device_label=${_device_label:-unknown}
 _os_version=$(. /etc/os-release 2>/dev/null && echo "${GA_BUILD_TIMESTAMP:-unknown}" || echo "unknown")
+# Home Assistant's port, resolved ONCE for the whole run and exported to every
+# suite (ADR-0038: Core 2026.8+ serves on :80, older Core on :8123). A suite
+# that finds it unresolved records its own failure; see lib/ha_port.sh.
+. "$SCRIPT_DIR/lib/ha_port.sh"
+_ga_ha_port_resolve 2>/dev/null || true
+_ha_port_line=$(ga_ha_port_explain)
 
 echo "=============================================="
 echo "  GA OS Test Runner"
@@ -149,6 +155,7 @@ echo "  Env:      $_ga_env"
 echo "  Kernel:   $_kernel"
 echo "  RAM:      $_mem_total"
 echo "  HA Core:  $_ha_ver"
+echo "  HA port:  $_ha_port_line"
 echo "  Uptime:   $_uptime"
 echo "  Suites:   $SUITES"
 echo "=============================================="

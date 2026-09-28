@@ -85,7 +85,7 @@ wait_for_ha_api() {
     local start=$SECONDS
     while (( SECONDS - start < timeout )); do
         local code
-        code=$(ssh_cmd "curl -sf -o /dev/null -w '%{http_code}' --connect-timeout 3 http://127.0.0.1:8123/api/ 2>/dev/null" || echo "000")
+        code=$(ssh_cmd "curl -sf -o /dev/null -w '%{http_code}' --connect-timeout 3 http://127.0.0.1:${GA_HA_PORT:-unresolved}/api/ 2>/dev/null" || echo "000")
         if [[ "$code" == "200" || "$code" == "401" ]]; then
             echo $(( SECONDS - start ))
             return 0
@@ -407,6 +407,17 @@ SSH_AVAILABLE=false
 if ssh_cmd "echo ok" &>/dev/null; then
     SSH_AVAILABLE=true
     echo "  Device reachable via SSH. Full verification enabled."
+    # Core's port (80 on 2026.8+, 8123 before), resolved ONCE before any reboot
+    # — the Supervisor that answers `ha core info` is not up yet while
+    # wait_for_ha_api polls. lib/ha_port.sh, ADR-0038.
+    # shellcheck source=../lib/ha_port.sh
+    . "$SCRIPT_DIR/../lib/ha_port.sh"
+    GA_HA_INFO_CMD="ssh_cmd 'ha core info --raw-json --no-progress'"
+    if ! _ga_ha_port_resolve; then
+        echo "ERROR: cannot resolve the Home Assistant port on ${DEVICE_IP} — set GA_HA_PORT to override"
+        exit 1
+    fi
+    echo "  HA Core: $(ga_ha_port_explain)"
 else
     echo "  Device reachable via ping only (SSH unavailable). Ping-only mode."
 fi

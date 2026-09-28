@@ -227,6 +227,26 @@ jobs:
         # swallowing the query error fails PBO-05 alone.
         run: bash tests/gates/prebake_open_work/selftest.sh
 
+      - name: one rule for Home Assistant's port (ADR-0038)
+        # Core 2026.8+ serves on :80, older Core on :8123, and the fleet is mixed.
+        # Every suite and runner resolves the port through lib/ha_port.sh: the
+        # Supervisor's port, else the Core version (>= 2026.8 -> 80, older ->
+        # 8123), else refuse. Both parse paths (jq and sed). Red-proven by
+        # mutation: defaulting a 2026.8 Core to 8123 fails 4 cases per path;
+        # guessing 80 when nothing is readable fails the 3 refusal cases.
+        run: sh tests/ga_tests/lib/ha_port_selftest.sh
+
+      - name: CFG-32..34 judge the HTTP config Core RUNS, not the YAML it ignores
+        # Core 2026.8 imports a YAML `http:` block once and then ignores it, so
+        # the old YAML greps were green while Core refused every proxied request.
+        # The verdict (http_config_verdict.sh) reads Core's own `http/config`
+        # answer. Fixtures: the measured fresh-flash state, unpromoted and
+        # failed pending configs, a default-slot fallback, look-alike addresses,
+        # and three "could not ask" shapes that must fail, not skip. Red-proven
+        # by mutation: substring matching fails the look-alikes; judging the
+        # stable slot regardless of what runs fails three cases.
+        run: sh tests/ga_tests/config_verify/selftest.sh
+
       - name: every suite directory is registered or explicitly excluded
         run: sh tests/ga_tests/run_all.sh --selftest
 

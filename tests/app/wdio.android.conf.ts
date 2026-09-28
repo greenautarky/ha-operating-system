@@ -27,7 +27,11 @@ import fs from 'fs';
  */
 
 const DEVICE_IP = process.env.DEVICE_IP || 'homeassistant.local';
-export const APP_URL = process.env.DEVICE_URL || `http://${DEVICE_IP}:8123`;
+// Core's own port (ADR-0038): run_app_tests.sh exports DEVICE_URL; else
+// GA_HA_PORT, else 80. 8123 only for a device known to run Core < 2026.8.
+const HA_PORT = process.env.GA_HA_PORT || '80';
+export const APP_URL =
+  process.env.DEVICE_URL || (HA_PORT === '80' ? `http://${DEVICE_IP}` : `http://${DEVICE_IP}:${HA_PORT}`);
 
 const AVD_NAME = process.env.AVD_NAME || 'ga-test';
 const APK_PATH =

@@ -29,7 +29,7 @@ def _check_connectivity(shell, *, connected):
 
 @pytest.mark.timeout(120)
 @pytest.mark.usefixtures("without_internet")
-def test_ha_runs_offline(shell):
+def test_ha_runs_offline(shell, ha_url):
     def check_container_running(container_name):
         out = shell.run_check(
             f"docker container inspect -f '{{{{.State.Status}}}}' {container_name} || true"
@@ -61,5 +61,5 @@ def test_ha_runs_offline(shell):
         shell.run_check("docker logs hassio_supervisor")
         raise AssertionError("homeassistant or hassio_cli not running after 60s")
 
-    web_index = shell.run_check("curl http://localhost:8123")
+    web_index = shell.run_check(f"curl {ha_url()}")
     assert "</html>" in " ".join(web_index)

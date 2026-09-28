@@ -1,5 +1,6 @@
 import { test, expect, sshJump } from '../fixtures/device';
 import { getGAOnboardingStatus, waitForHA } from '../helpers/ha-api';
+import { haPort } from '../helpers/ha-url';
 
 /**
  * Telemetry Consent — E2E tests
@@ -141,7 +142,7 @@ test.describe('Telemetry Consent — Wizard flow', () => {
     // Reset onboarding via admin API
     const { execSync } = await import('child_process');
     execSync(
-      `${SSH_CMD} 'curl -sf -X POST http://localhost:8123/api/greenautarky_site/reset -H "Authorization: Bearer $(cat /mnt/data/supervisor/homeassistant/.storage/auth 2>/dev/null | grep -o \\"[a-f0-9]\\{64\\}\\" | head -1)" 2>/dev/null || true'`,
+      `${SSH_CMD} 'curl -sf -X POST http://localhost:${haPort()}/api/greenautarky_site/reset -H "Authorization: Bearer $(cat /mnt/data/supervisor/homeassistant/.storage/auth 2>/dev/null | grep -o \\"[a-f0-9]\\{64\\}\\" | head -1)" 2>/dev/null || true'`,
       { timeout: 30_000 },
     );
     await waitForHA(deviceUrl, 30_000);

@@ -23,7 +23,6 @@
 
 set -eu
 
-HA="${HA:-http://localhost:8123}"
 CFG_DIR="/mnt/data/supervisor/homeassistant"
 CFG="${CFG_DIR}/configuration.yaml"
 BUNDLE_DIR="${CFG_DIR}/custom_components/ga_frontend_bundle"
@@ -33,6 +32,18 @@ SYNTH_END="# === end ga_frontend_bundle synthetic block ==="
 
 log()  { printf '[synth] %s\n' "$*"; }
 fail() { printf '[synth] ERROR: %s\n' "$*" >&2; exit 1; }
+
+# HA may be given; otherwise Core's own port (80 on 2026.8+, 8123 before),
+# resolved by lib/ha_port.sh from the suite tree (ADR-0038). Run outside the
+# tree without HA set, it stops rather than guess. Never a hard-coded port.
+if [ -z "${HA:-}" ]; then
+  _lib="$(cd "$(dirname "$0")" && pwd)/../lib/ha_port.sh"
+  # shellcheck source=../lib/ha_port.sh
+  [ -f "$_lib" ] && . "$_lib"
+  command -v ga_ha_port >/dev/null 2>&1 || fail "lib/ha_port.sh not found — set HA=http://localhost:<port> explicitly"
+  _port=$(ga_ha_port) || fail "cannot resolve the Home Assistant port — set HA=http://localhost:<port> explicitly"
+  HA="http://localhost:${_port}"
+fi
 
 [ -f "$CARDS_JSON" ] || fail "$CARDS_JSON missing — ga_frontend_bundle not placed yet"
 
