@@ -51,6 +51,8 @@ define HASSIO_CONFIGURE_CMDS
 	# armv7 in late 2025, so the stock image is frozen at 2025.11.3.
 	# check-core-image.sh refuses the upstream image, a pre-2026 tag, and an
 	# image without the labels + s6 entrypoint the Supervisor needs.
+	# check-supervisor-image.sh refuses a non-GA Supervisor image, a tag other
+	# than the version.yaml pin, and an image whose io.hass labels disagree.
 	@VJ=$(@D)/version.json; \
 	SUP=$$(jq -r '.supervisor' $$VJ); \
 	CORE=$$(jq -r '.core' $$VJ); \
@@ -64,6 +66,7 @@ define HASSIO_CONFIGURE_CMDS
 	if ! echo "$$SUP_IMG" | grep -q greenautarky; then echo "ERROR: version.json supervisor image='$$SUP_IMG' (must use greenautarky)"; FAIL=1; fi; \
 	if ! $(BR2_EXTERNAL_HASSOS_PATH)/package/hassio/check-core-image.sh $$VJ $(BR2_PACKAGE_HASSIO_MACHINE); then FAIL=1; fi; \
 	PIN=$$(sed -nE 's/^[[:space:]]*homeassistant_supervisor:[[:space:]]*"?([^"[:space:]#]+)"?.*/\1/p' $(BR2_EXTERNAL_HASSOS_PATH)/../version.yaml | head -1); \
+	if ! $(BR2_EXTERNAL_HASSOS_PATH)/package/hassio/check-supervisor-image.sh $$VJ $(BR2_PACKAGE_HASSIO_ARCH) "$$PIN"; then FAIL=1; fi; \
 	if [ -n "$$PIN" ] && [ "$$SUP" != "$$PIN" ]; then \
 	  echo "ERROR: version.json supervisor='$$SUP' but version.yaml pins '$$PIN'"; \
 	  echo "       The BAKED supervisor would differ from the pin. A device whose"; \
