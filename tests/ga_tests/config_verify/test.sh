@@ -143,40 +143,108 @@ fi
 run_test "CFG-31" "WiFi power save disabled via NM config" \
   "grep -rq 'wifi.powersave.*=.*2' /etc/NetworkManager/ 2>/dev/null"
 
-# --- HA reverse proxy config (trusted proxies + external URL) ---
-# These are set by ga-flasher stage 69 step 3c during provisioning.
-# On non-provisioned devices (fresh flash, no flasher run), these will fail — that's expected.
+# --- HA reverse proxy trust (CFG-32..34) + external URL (CFG-35) ---
+# Set by ga_manager (ADR-0038). Asserted on what Core RUNS, not on a file.
+#
+# Core 2026.8+ keeps its HTTP settings in storage and imports a YAML `http:`
+# block once, at the first start — on a fresh flash, before ga_manager has
+# written ga_packages/ga_http.yaml — then ignores it. Until 2026-09-28 these
+# checks grepped that YAML: on a device where Core trusted no proxy at all
+# (every request through the services host refused) they were green or red
+# depending on a file Core never read. On 2026.8+ they now ask Core itself
+# through the websocket command `http/config`; on older Core, which still
+# reads YAML, the YAML checks stay — that is the bridge (Odoo #1099).
+#
+# The services address comes from the /share bridge the OS publishes
+# (ga-publish-services) — the same source ga_manager reads — never a constant.
 
 HA_CFG="/mnt/data/supervisor/homeassistant/configuration.yaml"
-# converge writes its managed HA entries into ga_packages/*.yaml (pulled in by
-# `packages: !include_dir_named ga_packages`), not into configuration.yaml
-# itself. Assert on what Core loads: the main file plus the packages dir.
 HA_CFG_ALL="$HA_CFG /mnt/data/supervisor/homeassistant/ga_packages/*.yaml"
-if [ -f "$HA_CFG" ]; then
-  run_test "CFG-32" "HA use_x_forwarded_for enabled (configuration.yaml or ga_packages/)" \
-    "cat $HA_CFG_ALL 2>/dev/null | grep -q 'use_x_forwarded_for.*true'"
+SERVICES_JSON="${GA_SERVICES_JSON:-/mnt/data/supervisor/share/ga-services.json}"
+VERDICT="$SCRIPT_DIR/http_config_verdict.sh"
+HTTP_CFG_JSON="${TMPDIR:-/tmp}/ga-http-config.json"
+PROXY_LOG_WINDOW="${CFG_PROXY_LOG_WINDOW:-30m}"
 
-  # Read expected IP from ga-services.conf
-  GA_IP=$(grep '^GA_SERVICES_IP=' /mnt/data/ga-services.conf 2>/dev/null \
-       || grep '^GA_SERVICES_IP=' /etc/ga-services.conf 2>/dev/null)
-  GA_IP="${GA_IP#GA_SERVICES_IP=}"
+_core_ver=$(ha core info --raw-json --no-progress 2>/dev/null | ga_ha_parse_core_info)
+_core_ver="${_core_ver#*|}"
+ga_ha_core_is_storage_era "$_core_ver"; _era=$?
 
-  run_test "CFG-33" "HA trusted_proxies has 127.0.0.1 (Tailscale Funnel)" \
-    "cat $HA_CFG_ALL 2>/dev/null | grep -A10 'trusted_proxies' | grep -q '127.0.0.1'"
+GA_IP=""
+if [ -s "$SERVICES_JSON" ]; then
+  GA_IP=$(jq -r '.ga_services_ip // empty' "$SERVICES_JSON" 2>/dev/null)
+fi
 
-  if [ -n "$GA_IP" ]; then
-    run_test "CFG-34" "HA trusted_proxies has GA_SERVICES_IP ($GA_IP)" \
-      "cat $HA_CFG_ALL 2>/dev/null | grep -A10 'trusted_proxies' | grep -q '$GA_IP'"
+if [ "$_era" -eq 1 ]; then
+  # --- Core < 2026.8 (known old): YAML is what Core reads ----------------------
+  if [ -f "$HA_CFG" ]; then
+    run_test "CFG-32" "HA use_x_forwarded_for enabled (Core $_core_ver reads YAML)" \
+      "cat $HA_CFG_ALL 2>/dev/null | grep -q 'use_x_forwarded_for.*true'"
+    run_test "CFG-33" "HA trusted_proxies has 127.0.0.1 (Core $_core_ver reads YAML)" \
+      "cat $HA_CFG_ALL 2>/dev/null | grep -A10 'trusted_proxies' | grep -q '127.0.0.1'"
+    if [ -n "$GA_IP" ]; then
+      run_test "CFG-34" "HA trusted_proxies has the services address $GA_IP (Core $_core_ver reads YAML)" \
+        "cat $HA_CFG_ALL 2>/dev/null | grep -A10 'trusted_proxies' | grep -qF '$GA_IP'"
+    else
+      skip_test "CFG-34" "HA trusted_proxies has the services address" "no ga_services_ip in $SERVICES_JSON"
+    fi
   else
-    skip_test "CFG-34" "HA trusted_proxies has GA_SERVICES_IP (no ga-services.conf)"
+    skip_test "CFG-32" "HA use_x_forwarded_for enabled" "no configuration.yaml"
+    skip_test "CFG-33" "HA trusted_proxies has 127.0.0.1" "no configuration.yaml"
+    skip_test "CFG-34" "HA trusted_proxies has the services address" "no configuration.yaml"
   fi
+else
+  # --- Core >= 2026.8, or version unreadable (the default is the new world) ----
+  [ "$_era" -eq 0 ] || echo "        Core version unreadable ('${_core_ver}') — judging as Core >= 2026.8 (ADR-0038 default)"
+  GM=$(docker ps --filter name=ga_manager --format '{{.Names}}' 2>/dev/null | head -1)
+  if [ -n "$GM" ]; then
+    docker exec -i "$GM" python3 - < "$SCRIPT_DIR/http_config_query.py" > "$HTTP_CFG_JSON" 2>/dev/null
+  else
+    echo '{"error": "ga_manager container not running — no SUPERVISOR_TOKEN to ask Core with"}' > "$HTTP_CFG_JSON"
+  fi
+  # Readability first, and it FAILS: the three checks below have nothing to
+  # judge without it, and a run that silently skips them is the failure mode
+  # this block was rewritten to end.
+  run_test_show "CFG-32a" "Core answers http/config (running HTTP settings readable via Supervisor websocket)" \
+    "sh '$VERDICT' readable '$HTTP_CFG_JSON'"
+  run_test_show "CFG-32" "Core RUNS use_x_forwarded_for=true (http/config)" \
+    "sh '$VERDICT' xff '$HTTP_CFG_JSON'"
+  run_test_show "CFG-33" "Core RUNS trusted_proxies with 127.0.0.1 (http/config)" \
+    "sh '$VERDICT' loopback '$HTTP_CFG_JSON'"
+  if [ -n "$GA_IP" ]; then
+    run_test_show "CFG-34" "Core RUNS trusted_proxies with the services address $GA_IP (from $SERVICES_JSON)" \
+      "sh '$VERDICT' services '$HTTP_CFG_JSON' '$GA_IP'"
+  elif [ -s "$SERVICES_JSON" ]; then
+    skip_test "CFG-34" "Core RUNS trusted_proxies with the services address" "publisher reports no ga_services_ip in $SERVICES_JSON"
+  else
+    run_test_show "CFG-34" "Core RUNS trusted_proxies with the services address" \
+      "echo '$SERVICES_JSON missing — the OS did not publish the services address (see publish_services)'; false"
+  fi
+  # A config configured but not promoted auto-reverts in 5 min; one that failed
+  # its trial is kept as pending with an error. Either way what runs is not
+  # what was meant to be settled.
+  run_test_show "CFG-32b" "HTTP config settled: pending=null, server runs the stable slot (http/config)" \
+    "sh '$VERDICT' settled '$HTTP_CFG_JSON'"
+fi
 
+# The OUTCOME, whatever the Core version: Core logs an ERROR for every proxied
+# request it refuses (and answers it 400). Zero log lines in the window is not
+# evidence either way (a quiet Core), so it WARNs rather than passes.
+_core_log=$(docker logs --since "$PROXY_LOG_WINDOW" homeassistant 2>&1)
+_core_lines=$(printf '%s\n' "$_core_log" | grep -c .)
+# Both refusals Core raises in http/forwarded.py (2026.8.2): proxying without
+# use_x_forwarded_for, and proxying from an address not in trusted_proxies.
+_proxy_refusals=$(printf '%s\n' "$_core_log" | grep -cE 'not set-up for reverse proxies|X-Forwarded-For header from an untrusted proxy')
+if [ "$_core_lines" -eq 0 ]; then
+  warn_test "CFG-32c" "Core refused no proxied request (last $PROXY_LOG_WINDOW: 0 log lines to inspect)" "false"
+else
+  run_test_show "CFG-32c" "Core refused no proxied request: no 'not set-up for reverse proxies' / 'untrusted proxy' in its log (last $PROXY_LOG_WINDOW)" \
+    "echo '$_core_lines lines inspected, $_proxy_refusals proxy refusals'; [ '$_proxy_refusals' -eq 0 ]"
+fi
+
+if [ -f "$HA_CFG" ]; then
   run_test "CFG-35" "HA external_url set to ki-butler domain" \
     "grep -q 'ki-butler.greenautarky.com' $HA_CFG"
 else
-  skip_test "CFG-32" "HA use_x_forwarded_for enabled (no configuration.yaml)"
-  skip_test "CFG-33" "HA trusted_proxies has 127.0.0.1 (no configuration.yaml)"
-  skip_test "CFG-34" "HA trusted_proxies has GA_SERVICES_IP (no configuration.yaml)"
   skip_test "CFG-35" "HA external_url set to ki-butler domain (no configuration.yaml)"
 fi
 

@@ -1,14 +1,15 @@
 import { test, expect, sshJump } from '../fixtures/device';
 import { waitForHA } from '../helpers/ha-api';
 import { haLogin } from '../helpers/auth';
+import { readHttpTrust, readHttpYaml, servicesAddress, trustsProxy } from '../helpers/ha-http-config';
 
 /**
  * Reverse Proxy — verify HA is accessible via Tailscale Funnel and Caddy proxy
  *
  * Tests that the device is configured for reverse proxy access:
- * - trusted_proxies set correctly in configuration.yaml or ga_packages/*.yaml
- *   (converge writes the managed http: block into ga_packages/ga_http.yaml,
- *   pulled in by `packages: !include_dir_named ga_packages` — 2026-09-02, K31 rc19)
+ * - Core RUNS use_x_forwarded_for + trusted_proxies (127.0.0.1 and the GA services
+ *   address): Core >= 2026.8 asked via `http/config`, older Core via the YAML it
+ *   reads (ADR-0038; helpers/ha-http-config.ts)
  * - external_url points to ki-butler domain
  * - Tailscale Funnel responds (if TAILSCALE_URL is set)
  * - Caddy proxy responds (if CADDY_URL is set)
@@ -21,60 +22,40 @@ import { haLogin } from '../helpers/auth';
  */
 
 test.describe('Reverse Proxy Config', () => {
-  test('configuration.yaml has use_x_forwarded_for enabled', async ({ deviceUrl }) => {
+  // What Core RUNS (ADR-0038): on Core >= 2026.8 via `http/config`, on older
+  // Core the YAML it still reads. Until 2026-09-28 both tests grepped the YAML
+  // on every Core — green while Core 2026.8 ignored the file and refused every
+  // proxied request. helpers/ha-http-config.ts.
+  test('Core runs use_x_forwarded_for=true', async ({ deviceUrl }) => {
     await waitForHA(deviceUrl);
+    if (!process.env.DEVICE_IP) test.skip(true, 'DEVICE_IP not set');
 
-    // Read config via SSH
-    const ip = process.env.DEVICE_IP;
-    if (!ip) test.skip(true, 'DEVICE_IP not set');
-
-    const { execSync } = await import('child_process');
-    const key =
-      process.env.SSH_KEY ||
-      process.env.HOME + '/Nextcloud2/GreenAutarky/security_store/HomeassistantGreen0.pem';
-    const port = process.env.SSH_PORT || '22222';
-    const ssh = `ssh ${sshJump()}-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${key} -p ${port} root@${ip}`;
-
-    const config = execSync(
-      `${ssh} 'cat /mnt/data/supervisor/homeassistant/configuration.yaml /mnt/data/supervisor/homeassistant/ga_packages/*.yaml 2>/dev/null'`,
-      { timeout: 15_000 },
-    ).toString();
-
-    expect(config).toContain('use_x_forwarded_for');
-    expect(config).toMatch(/use_x_forwarded_for.*true/);
+    const trust = readHttpTrust();
+    if (trust.era === 'yaml') {
+      expect(readHttpYaml()).toMatch(/use_x_forwarded_for.*true/);
+      return;
+    }
+    expect(trust.running?.use_x_forwarded_for, `Core ${trust.coreVersion} runs slot ${trust.activeConfigType}`).toBe(true);
+    expect(trust.pending, 'no unpromoted/failed pending HTTP config').toBeNull();
+    expect(trust.activeConfigType).toBe('stable');
   });
 
-  test('trusted_proxies includes 127.0.0.1 and GA_SERVICES_IP', async () => {
-    const ip = process.env.DEVICE_IP;
-    if (!ip) test.skip(true, 'DEVICE_IP not set');
+  test('Core trusts 127.0.0.1 and the GA services address as proxies', async () => {
+    if (!process.env.DEVICE_IP) test.skip(true, 'DEVICE_IP not set');
 
-    const { execSync } = await import('child_process');
-    const key =
-      process.env.SSH_KEY ||
-      process.env.HOME + '/Nextcloud2/GreenAutarky/security_store/HomeassistantGreen0.pem';
-    const port = process.env.SSH_PORT || '22222';
-    const ssh = `ssh ${sshJump()}-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${key} -p ${port} root@${ip}`;
-
-    const config = execSync(
-      `${ssh} 'cat /mnt/data/supervisor/homeassistant/configuration.yaml /mnt/data/supervisor/homeassistant/ga_packages/*.yaml 2>/dev/null'`,
-      { timeout: 15_000 },
-    ).toString();
-
-    expect(config).toContain('trusted_proxies');
-    expect(config).toContain('127.0.0.1');
-
-    // Check GA_SERVICES_IP is in trusted_proxies
-    const gaIp = execSync(
-      `${ssh} 'grep "^GA_SERVICES_IP=" /mnt/data/ga-services.conf 2>/dev/null || grep "^GA_SERVICES_IP=" /etc/ga-services.conf 2>/dev/null || echo ""'`,
-      { timeout: 15_000 },
-    )
-      .toString()
-      .trim()
-      .split('=')[1];
-
-    if (gaIp) {
-      expect(config).toContain(gaIp);
+    const svc = servicesAddress();
+    const trust = readHttpTrust();
+    if (trust.era === 'yaml') {
+      const yaml = readHttpYaml();
+      expect(yaml).toContain('trusted_proxies');
+      expect(yaml).toContain('127.0.0.1');
+      if (svc) expect(yaml).toContain(svc);
+      return;
     }
+    const proxies = trust.running?.trusted_proxies;
+    expect(trustsProxy(proxies, '127.0.0.1'), `running trusted_proxies=${JSON.stringify(proxies)}`).toBe(true);
+    expect(svc, 'services address published to /share/ga-services.json').not.toBe('');
+    expect(trustsProxy(proxies, svc), `running trusted_proxies=${JSON.stringify(proxies)}, want ${svc}`).toBe(true);
   });
 
   test('external_url set to ki-butler domain', async () => {
