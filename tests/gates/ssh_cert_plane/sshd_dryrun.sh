@@ -19,6 +19,15 @@
 # ga_manager, and the device's OpenSSH build.
 #
 # Usage: sshd_dryrun.sh [-v]    (needs /usr/sbin/sshd, ssh, ssh-keygen)
+#
+# TOKEN MODE (key ceremony, step "prove the token before it is baked"):
+#   GA_DRYRUN_TOKEN_CA_PUB=<the token's exported CA .pub> \
+#   GA_DRYRUN_PKCS11=<path to libykcs11.so> sshd_dryrun.sh
+# replaces software CA A with the REAL YubiKey: the image trusts the real CA
+# public key and the accepting certificates are signed ON the token through
+# the sign script's PKCS#11 path (PIN + touch per signature). Proves the
+# token, the exported public key and the sign script agree before anything is
+# baked.
 # -----------------------------------------------------------------------------
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -56,6 +65,13 @@ ssh-keygen -q -t ed25519      -N '' -C rogue-ca      -f "$W/keys/rogue"
 ssh-keygen -q -t ed25519      -N '' -C breakglass    -f "$W/keys/bg"
 ssh-keygen -q -t ed25519      -N '' -C operator      -f "$W/keys/op"
 ssh-keygen -q -t ed25519      -N '' -C shared-plain  -f "$W/keys/plain"
+TOKEN=0
+if [[ -n "${GA_DRYRUN_TOKEN_CA_PUB:-}" || -n "${GA_DRYRUN_PKCS11:-}" ]]; then
+  [[ -r "${GA_DRYRUN_TOKEN_CA_PUB:-}" && -r "${GA_DRYRUN_PKCS11:-}" ]] \
+    || { echo "FATAL: token mode needs BOTH GA_DRYRUN_TOKEN_CA_PUB and GA_DRYRUN_PKCS11"; exit 1; }
+  TOKEN=1; cp "$GA_DRYRUN_TOKEN_CA_PUB" "$W/keys/ca_a.pub"; rm -f "$W/keys/ca_a"
+  echo "  TOKEN MODE: CA A is the hardware token ($(ssh-keygen -lf "$W/keys/ca_a.pub" | awk '{print $2}'))"
+fi
 cat "$W/keys/ca_a.pub" "$W/keys/ca_b.pub" > "$W/secrets/ssh/ga_user_ca.pub"
 cp "$W/keys/bg.pub" "$W/secrets/ssh/ga_breakglass.pub"
 echo "  CA A: $(ssh-keygen -lf "$W/keys/ca_a.pub" | awk '{print $2, $NF}')"
@@ -145,10 +161,17 @@ expect() {  # <accept|refuse> <why-regex|-> <desc> <try-args...>
 sign() {  # <ca-key> <out-name> <args...>  (LIVE sign script, file CA allowed for the dry run)
   local ca="$1" name="$2"; shift 2
   cp "$W/keys/op" "$W/$name"; cp "$W/keys/op.pub" "$W/$name.pub"
+  if (( TOKEN )) && [[ "$ca" == "$W/keys/ca_a" ]]; then
+    echo "  [token] signing $name — enter the PIV PIN and touch the key when it blinks"
+    GA_SSH_CA_PUB="$W/keys/ca_a.pub" GA_SSH_PKCS11="$GA_DRYRUN_PKCS11" GA_CERT_LEDGER="$W/ledger" \
+    GA_CERT_SERIAL_STATE="$W/serial" GA_CERT_IDENTITY=dryrun-operator "$SIGN" "$@" "$W/$name.pub" > "$W/sign-$name.out" 2>&1
+    return
+  fi
   GA_SSH_CA_KEY="$ca" GA_SSH_ALLOW_FILE_CA=1 GA_CERT_LEDGER="$W/ledger" GA_CERT_SERIAL_STATE="$W/serial" \
   GA_CERT_IDENTITY=dryrun-operator "$SIGN" "$@" "$W/$name.pub" > "$W/sign-$name.out" 2>&1
 }
 raw() {  # <ca-key> <out-name> <principals> <validity>  (bypasses the script's refusals)
+  local ca="$1"; (( TOKEN )) && [[ "$ca" == "$W/keys/ca_a" ]] && ca="$W/keys/ca_b"; set -- "$ca" "${@:2}"
   cp "$W/keys/op" "$W/$2"; cp "$W/keys/op.pub" "$W/$2.pub"
   ssh-keygen -q -s "$1" -I raw -n "$3" -V "$4" "$W/$2.pub" 2>/dev/null
 }
@@ -167,11 +190,11 @@ echo "── 5. sign-script refusals ──"
 for bad_args in "kibu" "*" "KIB-SON-31" "--anchor kibu $LABEL"; do
   ran=$((ran+1)); cp "$W/keys/op.pub" "$W/x.pub"
   # shellcheck disable=SC2086
-  if GA_SSH_CA_KEY="$W/keys/ca_a" GA_SSH_ALLOW_FILE_CA=1 GA_CERT_LEDGER="$W/l2" GA_CERT_SERIAL_STATE="$W/s2" "$SIGN" $bad_args "$W/x.pub" >/dev/null 2>&1
+  if GA_SSH_CA_KEY="$W/keys/ca_b" GA_SSH_ALLOW_FILE_CA=1 GA_CERT_LEDGER="$W/l2" GA_CERT_SERIAL_STATE="$W/s2" "$SIGN" $bad_args "$W/x.pub" >/dev/null 2>&1
   then bad "sign script signed for '$bad_args'"; else ok "sign script refuses '$bad_args'"; fi
 done
-ran=$((ran+1)); if GA_SSH_CA_KEY="$W/keys/ca_a" GA_CERT_LEDGER="$W/l2" "$SIGN" "$LABEL" "$W/x.pub" >/dev/null 2>&1; then bad "file CA accepted without the test switch"; else ok "sign script refuses a file-backed CA without GA_SSH_ALLOW_FILE_CA=1"; fi
-ran=$((ran+1)); if GA_CERT_VALIDITY=+48h GA_SSH_CA_KEY="$W/keys/ca_a" GA_SSH_ALLOW_FILE_CA=1 GA_CERT_LEDGER="$W/l2" GA_CERT_SERIAL_STATE="$W/s2" "$SIGN" "$LABEL" "$W/x.pub" >/dev/null 2>&1; then bad "48 h certificate issued"; else ok "sign script refuses validity +48h"; fi
+ran=$((ran+1)); if GA_SSH_CA_KEY="$W/keys/ca_b" GA_CERT_LEDGER="$W/l2" "$SIGN" "$LABEL" "$W/x.pub" >/dev/null 2>&1; then bad "file CA accepted without the test switch"; else ok "sign script refuses a file-backed CA without GA_SSH_ALLOW_FILE_CA=1"; fi
+ran=$((ran+1)); if GA_CERT_VALIDITY=+48h GA_SSH_CA_KEY="$W/keys/ca_b" GA_SSH_ALLOW_FILE_CA=1 GA_CERT_LEDGER="$W/l2" GA_CERT_SERIAL_STATE="$W/s2" "$SIGN" "$LABEL" "$W/x.pub" >/dev/null 2>&1; then bad "48 h certificate issued"; else ok "sign script refuses validity +48h"; fi
 
 echo "── 6. accept / refuse against the running sshd ──"
 expect accept - "cert by CA A (PIV-shaped P-256), principal = label $LABEL"   "$W/c_label"   "$W/c_label-cert.pub"
