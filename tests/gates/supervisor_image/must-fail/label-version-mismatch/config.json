@@ -1,0 +1,24 @@
+{
+  "architecture": "arm",
+  "variant": "v7",
+  "config": {
+    "Labels": {
+      "io.hass.arch": "armv7",
+      "io.hass.base.arch": "armv7",
+      "io.hass.base.image": "ghcr.io/home-assistant/armv7-base:3.22",
+      "io.hass.base.name": "python",
+      "io.hass.base.version": "2025.11.1",
+      "io.hass.type": "supervisor",
+      "io.hass.version": "2025.11.5.3",
+      "org.greenautarky.build-mode": "RELEASE",
+      "org.greenautarky.staging-tag": "ci-3e5059b",
+      "org.opencontainers.image.created": "2025-11-21 09:47:16+00:00",
+      "org.opencontainers.image.source": "https://github.com/greenautarky/ha-supervisor",
+      "org.opencontainers.image.title": "Home Assistant Supervisor",
+      "org.opencontainers.image.version": "2025.11.5.4"
+    },
+    "Entrypoint": [
+      "/init"
+    ]
+  }
+}

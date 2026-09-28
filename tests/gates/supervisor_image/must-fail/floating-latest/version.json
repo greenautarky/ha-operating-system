@@ -1,0 +1,6 @@
+{
+  "supervisor": "latest",
+  "images": {
+    "supervisor": "ghcr.io/greenautarky/{arch}-hassio-supervisor"
+  }
+}
