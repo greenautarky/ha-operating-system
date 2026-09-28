@@ -33,8 +33,12 @@ unmodified upstream source built for armv7, pinned at `2026.8.2`.
   refuses pre-2026 tags, VER-07/VER-11 find the Core tar by name + tag (the
   old glob never matched the GA name and skipped). On-device OB-01/OB-02 follow.
 
-Requires, before the bake: haos-version `beta.json` naming this image and a
-Supervisor whose default Core image follows the channel.
+rc53 is a **dev-channel canary image**: the defconfig switches to
+`BR2_PACKAGE_HASSIO_CHANNEL_DEV`, and the bake reads haos-version `dev.json`
+(beta plus Core 2026.8.2 and Supervisor 2025.11.5.4, whose default Core image
+follows the channel). No fleet device polls dev; `beta.json` is unchanged.
+Switching this line back to beta is a separate change once 2026.x is proven
+and promoted.
 
 ## Unreleased — rides in the next rc after rc29
 

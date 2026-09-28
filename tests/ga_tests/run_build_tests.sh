@@ -2566,7 +2566,7 @@ if [[ -n "$SRC" ]]; then
     # XVER-03 (2026-09-28): the channel this build bakes from must name the GA
     # armv7 Core build — upstream stopped building armv7 Core in late 2025.
     # It used to assert stock upstream on stable.json, which says nothing about
-    # a beta bake and would refuse the promotion. Only the baked channel is
+    # a beta or dev bake and would refuse the promotion. Only the baked channel is
     # asserted; stable may lag until it is promoted.
     CH_CORE_IMG="$(echo "${BUILD_CHANNEL_JSON:-}" | jq -r '.images.core // "unknown"' 2>/dev/null || echo unknown)"
     [[ "$CH_CORE_IMG" == ghcr.io/greenautarky/home-assistant-armv7 ]] \
