@@ -14,6 +14,16 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased — rides in the next rc after rc29
 
+### Fixed — a cut-off weekly digest no longer reaches the team as if complete
+
+`scripts/ops/weekly_digest.py` returned whatever text the model sent, without
+checking why it stopped. An answer cut at the token limit (HTML ending mid-list)
+or a refusal (no text) was posted to Odoo chatter and the run exited 0. It now
+treats any stop other than a normal end, and any empty answer, as a failure, so
+the existing fallback posts the raw PR list with a WARN line. The token cap goes
+from 1800 to 16000 so a normal week does not hit it. `release.sh` commit
+trailers name the current model. Test: `scripts/ops/test_weekly_digest.py`.
+
 ### Added — the device declares its fleet environment on enrolment (ADR-0027 D4)
 
 Two fleet-managers now run on the services host, production and staging, one

@@ -112,7 +112,7 @@ def synthesise(prs: list[dict], since: str, model: str) -> str:
             + "\n".join(lines))
     body = json.dumps({
         "model": model,
-        "max_tokens": 1800,
+        "max_tokens": 16000,
         "system": _SYSTEM,
         "messages": [{"role": "user", "content": user}],
     }).encode()
@@ -123,7 +123,15 @@ def synthesise(prs: list[dict], since: str, model: str) -> str:
     )
     with urllib.request.urlopen(req, timeout=120) as r:
         data = json.load(r)
-    return "".join(b.get("text", "") for b in data.get("content", [])).strip()
+    stop = data.get("stop_reason")
+    if stop not in ("end_turn", None):
+        # max_tokens cuts the HTML mid-<li>, refusal returns nothing; either
+        # would be posted to the team as if complete. Raise -> raw PR list.
+        raise RuntimeError(f"digest not complete: stop_reason={stop!r}")
+    html = "".join(b.get("text", "") for b in data.get("content", [])).strip()
+    if not html:
+        raise RuntimeError("model returned no text content")
+    return html
 
 
 def plain_list(prs: list[dict], since: str) -> str:
