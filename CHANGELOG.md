@@ -12,6 +12,46 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased — ADR-0019 step 2: the SSH certificate plane (BOSv1.4.0+ only)
+
+### Added — a BOSv1.4.0+ image trusts an offline user CA instead of a shared key
+
+Selected by the image's release marker alone: **below BOSv1.4.0 nothing
+changes** (no CA directive, no principals, the shared plane exactly as rc47
+shipped it), even if CA keys are present in the build's secrets mount.
+
+At or above the cut, `post-build.d/87-ssh-cert-plane.sh` reads two PUBLIC keys
+from the read-only secrets mount (`${GA_SECRETS_DIR}/ssh/ga_user_ca.pub`, 1–2
+lines — one per hardware token — and `ga_breakglass.pub`, exactly one) and
+bakes: the CA public key, `sshd_config.d/50-ga-cert-plane.conf`
+(`TrustedUserCAKeys` + `AuthorizedPrincipalsFile /etc/ssh/principals/%u`), and
+an `authorized_keys` holding only the break-glass key. `sshd_config` now
+`Include`s `sshd_config.d/*.conf` first. A missing, placeholder, duplicated or
+unparseable key fails the build — in the preflight (`ga_build.sh`, seconds) and
+again in the hook.
+
+Principals: `ga-sshd-prepare` writes the hardware serial as the anchor (never
+`/etc/machine-id`); `ga-ssh-principal-label` (path unit on the `/share` bridge)
+applies the fleet label `KIB-SON-XXXXXXXX` written by ga_manager's REST-only
+`ssh-principals-write` worker; `ga-ssh-principals` validates both and rebuilds
+the file atomically. The principals bind mount is *wanted*, not required: if it
+fails, sshd still starts for break-glass. `ga-enroll` publishes the host public
+key in the enrol-state bridge (certificate plane only) for the fleet-manager
+host-key register.
+
+Ops: `scripts/ops/ga-sign-ssh-cert.sh` (YubiKey PIV via PKCS#11; file CAs only
+for tests; label + anchor principals; ≤24 h; ledger + fleet-manager mirror) and
+`scripts/ops/ga-ssh-cert-plane-verify.sh` (the login matrix against a device).
+
+Gates: `SSH-05/06` read the drop-ins sshd actually includes; new `SSH-09`
+(exactly one static key, principals plumbing present). Self-tests:
+`tests/gates/ssh_principals`, `tests/gates/ssh_cert_plane/selftest.sh` (the
+hook, both ways, through the live build gate) and
+`tests/gates/ssh_cert_plane/sshd_dryrun.sh` (a real sshd with throwaway CAs:
+accept/refuse asserted by the reason sshd logs). Device: `SSH-D-19..26`.
+
+---
+
 ## Unreleased — rides in the next rc after rc29
 
 ### Added — the device declares its fleet environment on enrolment (ADR-0027 D4)

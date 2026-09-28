@@ -1,6 +1,6 @@
 #!/bin/sh
 # ga-sshd-prepare — make the per-device SSH state exist before sshd starts.
-# Runs as sshd's ExecStartPre (ADR-0019, step 1: OpenSSH on the shared plane).
+# Runs as sshd's ExecStartPre (ADR-0019: OpenSSH; step 2 adds the principals).
 #
 # /etc/ssh itself is baked read-only (sshd_config). Only the per-device,
 # writable part lives on the overlay and is bind-mounted in as a
@@ -8,15 +8,26 @@
 # point: a host key baked into an image is the same key on every device, which
 # makes host verification meaningless while looking exactly like it works.
 set -u
-KEYDIR=/etc/ssh/keys
+KEYDIR="${GA_SSHD_KEYDIR:-/etc/ssh/keys}"
+# Certificate plane (ADR-0019 step 2) — only acted on when the image carries a
+# user CA, i.e. BOSv1.4.0+ (post-build.d/87-ssh-cert-plane.sh). The overrides
+# exist for tests/gates/ssh_principals/selftest.sh ONLY; never set on a device.
+CA_PUB="${GA_SSH_CA_PUB:-/etc/ssh/ga_user_ca.pub}"
+PRINCIPALS="${GA_SSH_PRINCIPALS_DIR:-/etc/ssh/principals}"
+PRINCIPALS_BIN="${GA_SSH_PRINCIPALS_BIN:-/usr/libexec/ga-ssh-principals}"
+DT_SERIAL="${GA_DT_SERIAL:-/sys/firmware/devicetree/base/serial-number}"
+CPUINFO="${GA_CPUINFO:-/proc/cpuinfo}"
+PREPARE_VAR_EMPTY="${GA_SSHD_PREPARE_VAR_EMPTY:-1}"
 
 # sshd's privilege-separation directory is compiled in as /var/empty, and
 # /var on this image is a fresh zram filesystem on every boot — whatever the
 # build put there is gone by the time this runs. Without it sshd exits at
 # startup with "Missing privilege separation directory" and the device has no
 # SSH at all. Owned by root, not writable by anyone else, or sshd refuses it.
-mkdir -p /var/empty && chown root:root /var/empty && chmod 0755 /var/empty \
-    || { echo "ga-sshd-prepare: cannot prepare /var/empty — sshd will not start" >&2; exit 1; }
+if [ "$PREPARE_VAR_EMPTY" = "1" ]; then
+    mkdir -p /var/empty && chown root:root /var/empty && chmod 0755 /var/empty \
+        || { echo "ga-sshd-prepare: cannot prepare /var/empty — sshd will not start" >&2; exit 1; }
+fi
 
 mkdir -p "$KEYDIR" || { echo "ga-sshd-prepare: cannot create $KEYDIR" >&2; exit 1; }
 chmod 0755 "$KEYDIR"
@@ -28,4 +39,42 @@ if [ ! -s "$KEYDIR/ssh_host_ed25519_key" ]; then
 fi
 chmod 0600 "$KEYDIR/ssh_host_ed25519_key"
 chmod 0644 "$KEYDIR/ssh_host_ed25519_key.pub" 2>/dev/null || true
+
+# --- certificate plane: the anchor principal (ADR-0019 amendment C) ---------
+# Nothing below runs on a shared-plane image: no CA, no principals, no change.
+[ -s "$CA_PUB" ] || exit 0
+
+mkdir -p "$PRINCIPALS" 2>/dev/null || true
+# StrictModes checks EVERY directory on the path to the principals file. A
+# group- or world-writable directory anywhere above it makes sshd refuse the
+# file and reject every certificate, and the client only ever sees
+# "Permission denied (publickey)". The bind mount means these modes come from
+# a directory created elsewhere, so they are enforced here.
+_p="$PRINCIPALS"
+while [ "$_p" != "/" ] && [ "$_p" != "." ]; do
+    if [ -d "$_p" ] && [ -n "$(find "$_p" -maxdepth 0 -perm -0022 2>/dev/null)" ]; then
+        chmod go-w "$_p" 2>/dev/null || true
+        [ -n "$(find "$_p" -maxdepth 0 -perm -0022 2>/dev/null)" ] && \
+            echo "ga-sshd-prepare: $_p is group/world-writable and could not be fixed — sshd will refuse EVERY certificate on this device" >&2
+    fi
+    _p=$(dirname "$_p")
+done
+
+# The anchor is the HARDWARE serial, written with no network so a fresh
+# device accepts a certificate before identity backfill. Hardware sources
+# only: /etc/machine-id changes on reflash and would move under the device.
+hw_serial=""
+[ -r "$DT_SERIAL" ] && hw_serial=$(tr -d '\0' < "$DT_SERIAL" | tr -d '\r\n')
+[ -n "$hw_serial" ] || hw_serial=$(awk '/^Serial/{print $3; exit}' "$CPUINFO" 2>/dev/null || true)
+if [ -n "$hw_serial" ]; then
+    "$PRINCIPALS_BIN" anchor "$hw_serial" \
+        || echo "ga-sshd-prepare: could not write the anchor principal" >&2
+else
+    echo "ga-sshd-prepare: no HARDWARE serial (devicetree and /proc/cpuinfo both silent) — refusing to anchor on /etc/machine-id. No anchor principal written." >&2
+fi
+
+# A fallback must be loud: without a principal no certificate is accepted and
+# break-glass is the only way in, which looks like a working device until
+# somebody tries to log in. Never fatal — sshd must still start for break-glass.
+[ -s "$PRINCIPALS/${GA_SSH_PRINCIPALS_USER:-root}" ] || echo "ga-sshd-prepare: $PRINCIPALS/${GA_SSH_PRINCIPALS_USER:-root} is absent or empty — NO certificate will be accepted on this device; access is break-glass only." >&2
 exit 0

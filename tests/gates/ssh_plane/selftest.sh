@@ -148,6 +148,26 @@ expect FAIL "$d" SSH-08 "dropbear binary left in an sshd image"
 d="$(mk sshd-gesftp-left BOSv1.3.0-rc47 "$LEGACY" "$SSHD_SHARED" - - "$SSHD_OK" "$SSHD_BINS,usr/libexec/gesftpserver")"
 expect FAIL "$d" SSH-08 "gesftpserver left in an sshd image"
 
+# ADR-0019 step 2: the certificate plane arrives as an sshd_config.d drop-in.
+SSHD_INCLUDE=$'Include /etc/ssh/sshd_config.d/*.conf\nPort 22222\nAuthorizedKeysFile /root/.ssh/authorized_keys\n'
+SSHD_NO_INCLUDE=$'Port 22222\nAuthorizedKeysFile /root/.ssh/authorized_keys\n'
+CERT_DROPIN=$'TrustedUserCAKeys /etc/ssh/ga_user_ca.pub\nAuthorizedPrincipalsFile /etc/ssh/principals/%u\n'
+CERT_FILES="usr/lib/systemd/system/etc-ssh-principals.mount,usr/libexec/ga-ssh-principals,usr/libexec/ga-ssh-principal-label"
+dropin() { mkdir -p "$1/target/etc/ssh/sshd_config.d"; printf '%s' "$2" > "$1/target/etc/ssh/sshd_config.d/50-ga-cert-plane.conf"; }
+prep_writes_anchor() { mkdir -p "$1/target/usr/libexec"; printf '#!/bin/sh\n/usr/libexec/ga-ssh-principals anchor x\n' > "$1/target/usr/libexec/ga-sshd-prepare"; chmod +x "$1/target/usr/libexec/ga-sshd-prepare"; }
+
+d="$(mk dropin-not-included BOSv1.4.0-rc1 "$BREAKGLASS" "$SSHD_NO_INCLUDE" "$REAL_CA" - "$SSHD_OK" "$CERT_FILES")"; dropin "$d" "$CERT_DROPIN"; prep_writes_anchor "$d"
+expect FAIL "$d" SSH-06 "cert drop-in present but sshd_config never includes it — dead text, not a CA"
+
+d="$(mk two-static-keys BOSv1.4.0-rc1 "$BREAKGLASS"$'\n'"$REAL_CA" "$SSHD_INCLUDE" "$REAL_CA" - "$SSHD_OK" "$CERT_FILES")"; dropin "$d" "$CERT_DROPIN"; prep_writes_anchor "$d"
+expect FAIL "$d" SSH-09 "cert plane with a second static key next to break-glass"
+
+d="$(mk no-principals-mount BOSv1.4.0-rc1 "$BREAKGLASS" "$SSHD_INCLUDE" "$REAL_CA" - "$SSHD_OK" "usr/libexec/ga-ssh-principals,usr/libexec/ga-ssh-principal-label")"; dropin "$d" "$CERT_DROPIN"; prep_writes_anchor "$d"
+expect FAIL "$d" SSH-09 "cert plane without the principals bind mount"
+
+d="$(mk no-anchor-writer BOSv1.4.0-rc1 "$BREAKGLASS" "$SSHD_INCLUDE" "$REAL_CA" - "$SSHD_OK" "$CERT_FILES")"; dropin "$d" "$CERT_DROPIN"
+expect FAIL "$d" SSH-09 "cert plane whose ga-sshd-prepare never writes the anchor"
+
 echo "── must PASS (a gate that only fails is a blocked pipeline, not a check) ──"
 
 # The shape the repository is in TODAY. If this goes red the gate blocks every
@@ -171,6 +191,13 @@ d="$(mk cut-image BOSv1.4.0-rc1 "$BREAKGLASS" "$SSHD_FULL" "$REAL_CA" -)"
 expect PASS "$d" SSH-05 "cut image — certificates are scoped per device"
 expect PASS "$d" SSH-06 "cut image — marker and content both say ca"
 expect PASS "$d" SSH-07 "cut image — a real CA public key is baked"
+
+# The drop-in shape BOSv1.4.0-rc1 actually has (post-build.d/87).
+d="$(mk cut-image-dropin BOSv1.4.0-rc1 "$BREAKGLASS" "$SSHD_INCLUDE" "$REAL_CA" - "$SSHD_OK" "$CERT_FILES")"; dropin "$d" "$CERT_DROPIN"; prep_writes_anchor "$d"
+expect PASS "$d" SSH-05 "cut image (drop-in) — certificates scoped per device"
+expect PASS "$d" SSH-06 "cut image (drop-in) — marker and content both say ca"
+expect PASS "$d" SSH-07 "cut image (drop-in) — real CA baked"
+expect PASS "$d" SSH-09 "cut image (drop-in) — one break-glass key, principals plumbing present"
 
 # SSH-07 is scoped to the cert plane: it must stay silent on a pre-cut image
 # rather than failing it for a file that plane never has.

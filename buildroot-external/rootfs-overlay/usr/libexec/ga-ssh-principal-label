@@ -1,0 +1,30 @@
+#!/bin/sh
+# ga-ssh-principal-label — apply the fleet label principal handed over by
+# ga_manager (ADR-0019 step 2, amendment C).
+#
+# ga_manager's REST-only `ssh-principals-write` worker cannot see /etc/ssh (an
+# addon container never can), so it writes the label to the /share bridge and
+# this host-side unit carries it across. ga-ssh-principals re-validates it
+# (charset first, then ^KIB-SON-[0-9]{8}$) and rebuilds the principals file
+# atomically, keeping the hardware anchor. A value it refuses changes nothing.
+#
+# Removing the bridge file does NOT remove the label: revocation is done by
+# certificate expiry, not by a file an addon can delete.
+#
+# No-op on a shared-plane image (no user CA baked, i.e. below BOSv1.4.0).
+set -u
+CA_PUB="${GA_SSH_CA_PUB:-/etc/ssh/ga_user_ca.pub}"
+BRIDGE="${GA_SSH_LABEL_BRIDGE:-/mnt/data/supervisor/share/ga-ssh-principal-label}"
+PRINCIPALS_BIN="${GA_SSH_PRINCIPALS_BIN:-/usr/libexec/ga-ssh-principals}"
+
+[ -s "$CA_PUB" ] || exit 0
+[ -r "$BRIDGE" ] || exit 0
+# Exactly one line is a label; anything longer is refused whole, never trimmed
+# to its first line — a second line is what an injection would look like.
+n=$(grep -c '' "$BRIDGE" 2>/dev/null || echo 0)
+if [ "$n" != "1" ]; then
+    echo "ga-ssh-principal-label: $BRIDGE has $n lines, want exactly 1 — ignored" >&2
+    exit 1
+fi
+label=$(tr -d '\r\n' < "$BRIDGE")
+exec "$PRINCIPALS_BIN" label "$label"

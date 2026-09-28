@@ -1,0 +1,11 @@
+[Unit]
+Description=Watch the ga_manager SSH principal label bridge (ADR-0019)
+ConditionPathExists=/etc/ssh/ga_user_ca.pub
+After=hassos-overlay.service mnt-data.mount
+
+[Path]
+PathChanged=/mnt/data/supervisor/share/ga-ssh-principal-label
+Unit=ga-ssh-principal-label.service
+
+[Install]
+WantedBy=multi-user.target

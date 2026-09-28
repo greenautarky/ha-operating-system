@@ -1,0 +1,78 @@
+#!/bin/sh
+# ga-ssh-principals <anchor|label> <identity>  —  ADR-0019 amendment C.
+#
+# The device carries TWO valid certificate principals:
+#
+#   anchor  the hardware serial. Written by the device itself at first boot,
+#           no network needed. Immutable, survives a reflash. It exists so a
+#           fresh device is never certificate-less — otherwise break-glass
+#           becomes the routine provisioning path, and a rescue key needed
+#           daily stops being a rescue key.
+#   label   KIB-SON-…, written by the fleet-manager when it assigns identity.
+#           This is what operators type.
+#
+# sshd reads ONE file per user, so two writers would race on it. Each writer
+# therefore owns its own input file and this script regenerates the combined
+# `root` atomically from both. A writer can never clobber the other's line.
+set -u
+
+PRINCIPALS_DIR="${GA_SSH_PRINCIPALS_DIR:-/etc/ssh/principals}"
+ANCHOR_FILE="$PRINCIPALS_DIR/.anchor"
+LABEL_FILE="$PRINCIPALS_DIR/.label"
+# sshd reads /etc/ssh/principals/%u; operators log in as root. The override is
+# for the local sshd dry run (tests/gates/ssh_cert_plane) ONLY.
+COMBINED="$PRINCIPALS_DIR/${GA_SSH_PRINCIPALS_USER:-root}"
+
+role="${1:-}"
+identity="${2:-}"
+
+die() { echo "ga-ssh-principals: $*" >&2; exit 2; }
+
+case "$role" in
+    anchor)
+        # Hardware serials vary by board; accept a conservative charset.
+        case "$identity" in
+            ''|*[!A-Za-z0-9._-]*) die "refusing anchor '$identity' — empty or outside [A-Za-z0-9._-]" ;;
+        esac
+        target="$ANCHOR_FILE" ;;
+    label)
+        # CHARSET FIRST, shape second. grep is line-oriented: it happily matches
+        # "KIB-SON-00000901\nkibu", so a shape check alone lets a second
+        # principal ride in on a newline — and that second one could be the
+        # name every device ships with. A charset test has no concept of lines
+        # and rejects the newline outright.
+        case "$identity" in
+            ''|*[!A-Za-z0-9-]*) die "refusing label '$identity' — empty or outside [A-Za-z0-9-]" ;;
+        esac
+        printf '%s' "$identity" | grep -qE '^KIB-SON-[0-9]{8}$' \
+            || die "refusing label '$identity' — must match ^KIB-SON-[0-9]{8}$" ;;
+    *)  die "usage: ga-ssh-principals <anchor|label> <identity>" ;;
+esac
+[ "$role" = "label" ] && target="$LABEL_FILE"
+
+mkdir -p "$PRINCIPALS_DIR" || exit 1
+chmod 0755 "$PRINCIPALS_DIR"
+
+tmp="$target.tmp.$$"
+printf '%s\n' "$identity" > "$tmp" || exit 1
+[ -s "$tmp" ] || { rm -f "$tmp"; die "refusing to write an empty $role file"; }
+mv -f "$tmp" "$target" || { rm -f "$tmp"; exit 1; }
+
+# Rebuild the file sshd actually reads. Deduplicated, never empty: an empty
+# principals file silently rejects every certificate, which looks exactly like
+# a working device until someone tries to log in.
+ctmp="$COMBINED.tmp.$$"
+: > "$ctmp"
+for f in "$ANCHOR_FILE" "$LABEL_FILE"; do
+    [ -s "$f" ] || continue
+    line=$(head -1 "$f")
+    [ -n "$line" ] || continue
+    grep -qxF "$line" "$ctmp" 2>/dev/null || printf '%s\n' "$line" >> "$ctmp"
+done
+if [ ! -s "$ctmp" ]; then
+    rm -f "$ctmp"
+    die "refusing to write an empty principals file — no certificate would be accepted"
+fi
+chmod 0644 "$ctmp"
+mv -f "$ctmp" "$COMBINED" || { rm -f "$ctmp"; exit 1; }
+echo "ga-ssh-principals: $role set to '$identity'; principals now: $(tr '\n' ' ' < "$COMBINED")" >&2

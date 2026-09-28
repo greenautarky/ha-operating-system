@@ -432,6 +432,19 @@ echo ""
 
 export GA_BUILD_TIMESTAMP GA_RELEASE
 
+# ADR-0019 step 2: a BOSv1.4.0+ image needs the user CA and the break-glass
+# PUBLIC keys from the secrets mount. The post-build hook refuses without them
+# too, but only after the rootfs is built — ask here, in seconds. Below the cut
+# this is a no-op. Same script, --check mode, so the two cannot disagree.
+GA_SSH_CERT_HOOK="${BR2EXT_IHOST}/board/sonoff/ihost/post-build.d/87-ssh-cert-plane.sh"
+if [[ -x "$GA_SSH_CERT_HOOK" ]]; then
+  GA_SECRETS_DIR="$GA_SECRETS_DIR" "$GA_SSH_CERT_HOOK" --check "$GA_RELEASE" || {
+    echo "FAIL: $GA_RELEASE is on the SSH certificate plane (ADR-0019) but its keys are not in ${GA_SECRETS_DIR}/ssh/." >&2
+    echo "      Put ga_user_ca.pub + ga_breakglass.pub there (key ceremony runbook) and re-run." >&2
+    exit 1
+  }
+fi
+
 assert_ga_release_stamped() {
   # Post-bake guard: confirm /etc/ga-release in the produced rootfs matches
   # the resolved GA_RELEASE. Catches:
