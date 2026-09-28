@@ -281,7 +281,7 @@ commit_repo() {
     fi
     git commit -m "$subject
 
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
     if $NO_PUSH; then
         echo "  ($repo): commit made, push skipped (--no-push)"
         return 0
