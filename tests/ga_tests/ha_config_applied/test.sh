@@ -188,9 +188,16 @@ if [ -z "$want_int" ]; then
   # HCA-15 already reports the missing url. Repeating it here would turn one
   # fault into two and hide how many things are actually wrong.
   skip_test "HCA-16" "no internal_url to compare — see HCA-15"
+elif [ -n "$HOSTNAME_NOW" ] && require_ha_port "HCA-16a"; then
+  # And the port Core actually serves on (ADR-0038): `http://<host>.local` on
+  # :80 — no suffix, the form a resident types — and `:<port>` otherwise. Until
+  # 2026-09-28 this pinned `:8123`, so a device on Core 2026.8 with a correct
+  # url failed and one with a stale `:8123` url (a closed port there) passed.
+  _want_suffix=$(ga_ha_url_port "$HA_PORT")
+  run_test_show "HCA-16" "internal_url is http://$HOSTNAME_NOW.local$_want_suffix (live hostname, Core port $HA_PORT)" \
+    "echo 'internal_url=$want_int'; echo '$want_int' | grep -qix 'http://$HOSTNAME_NOW\.local$_want_suffix/\{0,1\}'"
 elif [ -n "$HOSTNAME_NOW" ]; then
-  run_test "HCA-16" "internal_url matches the live hostname ($HOSTNAME_NOW), not a stale one" \
-    "echo '$want_int' | grep -qi '://$HOSTNAME_NOW\.local:8123$'"
+  : # require_ha_port recorded HCA-16a as failed, with the reason
 else
   skip_test "HCA-16" "Supervisor reported no hostname"
 fi

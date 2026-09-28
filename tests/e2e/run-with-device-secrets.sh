@@ -91,11 +91,23 @@ TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"
 
 # The device address is NOT defaulted: the fixture would silently fall back
 # to homeassistant.local and the run would measure the wrong device.
+# Nor is the port (ADR-0038: 80 on Core 2026.8+, 8123 before): it is asked of
+# the device's Supervisor over SSH (ga_tests/lib/ha_port.sh); GA_HA_PORT or an
+# explicit DEVICE_URL wins; unresolvable stops the run.
+_ha_url_for() {  # <ip> -> http://<ip>[:port]
+  # shellcheck source=../ga_tests/lib/ha_port.sh
+  . "$SCRIPT_DIR/../ga_tests/lib/ha_port.sh"
+  GA_HA_INFO_CMD="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 ${SSH_KEY:+-i '$SSH_KEY'} -p '${SSH_PORT:-22222}' 'root@$1' 'ha core info --raw-json --no-progress'"
+  _ga_ha_port_resolve || die "cannot resolve the Home Assistant port on $1 (no SSH answer from 'ha core info') — export GA_HA_PORT or DEVICE_URL"
+  printf 'http://%s%s' "$1" "$(ga_ha_url_port "$GA_HA_PORT")"
+}
 if [[ -n "$DEVICE_IP_ARG" ]]; then
   export DEVICE_IP="$DEVICE_IP_ARG"
-  export DEVICE_URL="http://${DEVICE_IP_ARG}:8123"
+  DEVICE_URL="$(_ha_url_for "$DEVICE_IP_ARG")" || exit 1
+  export DEVICE_URL
 elif [[ -n "${DEVICE_IP:-}" ]]; then
-  export DEVICE_URL="${DEVICE_URL:-http://${DEVICE_IP}:8123}"
+  if [[ -z "${DEVICE_URL:-}" ]]; then DEVICE_URL="$(_ha_url_for "$DEVICE_IP")" || exit 1; fi
+  export DEVICE_URL
 elif [[ -z "${DEVICE_URL:-}" ]]; then
   die "no device address: pass --device-ip <ip> or export DEVICE_IP / DEVICE_URL"
 fi

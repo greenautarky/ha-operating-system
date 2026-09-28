@@ -112,7 +112,18 @@ fi
 
 # Export env vars consumed by Playwright fixtures and tests
 export DEVICE_IP="$DEVICE_IP"
-export DEVICE_URL="http://${DEVICE_IP}:8123"
+# Core's port (80 on 2026.8+, 8123 before), asked of the device's Supervisor
+# over the SSH access this runner has anyway — ga_tests/lib/ha_port.sh,
+# ADR-0038. An explicit DEVICE_URL (or GA_HA_PORT) still wins; unresolvable
+# stops the run instead of aiming every spec at a guessed port.
+if [[ -z "${DEVICE_URL:-}" ]]; then
+  # shellcheck source=ga_tests/lib/ha_port.sh
+  . "$SCRIPT_DIR/ga_tests/lib/ha_port.sh"
+  GA_HA_INFO_CMD="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -i '${SSH_KEY/#\~/$HOME}' -p '$SSH_PORT' 'root@${DEVICE_IP}' 'ha core info --raw-json --no-progress'"
+  _ga_ha_port_resolve || { echo "ERROR: cannot resolve the Home Assistant port on ${DEVICE_IP} — set DEVICE_URL or GA_HA_PORT" >&2; exit 1; }
+  DEVICE_URL="http://${DEVICE_IP}$(ga_ha_url_port "$GA_HA_PORT")"
+fi
+export DEVICE_URL
 
 # Two whole suites skipped on every run because the runner never set the URL
 # they gate on, although it already knew both — measured 2026-09-07 against a
@@ -167,7 +178,7 @@ _tree_note="tree ${_tree}"
 echo "=============================================="
 echo "  GA OS E2E Tests"
 echo "  Tree:    ${_tree_note}"
-echo "  Device:  http://${DEVICE_IP}:8123"
+echo "  Device:  ${DEVICE_URL}${GA_HA_PORT_SOURCE:+ (port from ${GA_HA_PORT_SOURCE})}"
 echo "  Panel:   ${GA_PANEL_URL} (token: $([[ -n "${GA_PANEL_TOKEN:-}" ]] && echo present || echo MISSING — panel suite skips))"
 echo "  Public:  ${CADDY_URL:-(no external_url on device — reverse-proxy public tests skip)}"
 echo "  Auth:    ${AUTH_DESC}"

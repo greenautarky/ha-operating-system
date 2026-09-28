@@ -13,9 +13,10 @@ import { execSync } from 'child_process';
  *     Start HA:  tests/app/android/start-ha-local.sh
  *
  *   DEVICE MODE (default, DEVICE_IP=<ip>)
- *     HA Core runs on a real iHost device.
- *     From emulator: http://<DEVICE_IP>:8123
- *     From host:     http://<DEVICE_IP>:8123
+ *     HA Core runs on a real iHost device, on Core's own port (ADR-0038):
+ *     :80 on Core 2026.8+, :8123 before. run_app_tests.sh asks the device and
+ *     exports DEVICE_URL; without it GA_HA_PORT, else 80.
+ *     From emulator / host: http://<DEVICE_IP>[:<port>]
  *     Onboarding reset: SSH to root@<DEVICE_IP>
  */
 
@@ -36,9 +37,12 @@ export const DEVICE_IP = LOCAL_MODE
 /**
  * Full HA URL as seen by the emulator.
  */
+const HA_PORT = LOCAL_MODE
+  ? process.env.HA_PORT || '8123' // Docker container mode keeps Core's container default
+  : process.env.GA_HA_PORT || '80'; // a device: ADR-0038 default, 8123 only when told
 export const DEVICE_URL =
   process.env.DEVICE_URL ||
-  `http://${DEVICE_IP}:${process.env.HA_PORT || '8123'}`;
+  (HA_PORT === '80' ? `http://${DEVICE_IP}` : `http://${DEVICE_IP}:${HA_PORT}`);
 
 /**
  * Full HA URL as seen by the HOST (used for API calls in helpers).

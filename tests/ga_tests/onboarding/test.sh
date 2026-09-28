@@ -36,9 +36,14 @@ run_test "OB-04a" "/etc/ga-release present + non-empty" \
 run_test_show "OB-04b" "GA release identifier" \
   "cat /etc/ga-release 2>/dev/null"
 
+# Core's own port for every HTTP check below (80 on 2026.8+, 8123 before) —
+# lib/ha_port.sh, ADR-0038. These checks said localhost:8123 until 2026-09-28
+# and went red on a device serving the wizard with 200 on :80.
+require_ha_port "OB-00"
+
 # --- Wizard redirect (Finding 20 follow-up: BOSv1.2.0 bench regression) ---
 # Customer's first browser hit on a fresh GA-provisioned device is
-# `http://<device>:8123/`. With GA wizard NOT YET completed, this MUST
+# `http://<device>/` (`:8123` on Core < 2026.8). With GA wizard NOT YET completed, this MUST
 # redirect server-side to `/greenautarky-setup.html` — otherwise the
 # customer lands on the stock HA login (because ga_manager already
 # created the admin user) and never finds the GA wizard. The
@@ -66,7 +71,7 @@ _wizard_probe_device="ob-wr-probe"
 
 _wizard_completed=$(jq -r '.data.completed // false' /mnt/data/supervisor/homeassistant/.storage/greenautarky_site 2>/dev/null || echo "false")
 _root_redirect=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --connect-timeout 5 \
-  "http://localhost:8123/?pin=${_wizard_probe_pin}&device=${_wizard_probe_device}" 2>/dev/null)
+  "$HA_BASE/?pin=${_wizard_probe_pin}&device=${_wizard_probe_device}" 2>/dev/null)
 
 if [ "$_wizard_completed" = "false" ]; then
   run_test "OB-WR-01" "/ redirects to /greenautarky-setup.html (wizard incomplete)" \
@@ -153,7 +158,7 @@ fi
 # A missing view answers 404, and curl answers 000 when nothing listens.
 run_test_show "OB-13" "Ethernet consent API view is registered (200 accept or 403 wizard-complete)" \
   "_ob13=\$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 -X POST \
-     http://localhost:8123/api/greenautarky_site/ethernet \
+     $HA_BASE/api/greenautarky_site/ethernet \
      -H 'Content-Type: application/json' -d '{\"enable_ethernet\": false}' 2>/dev/null); \
    echo \"HTTP \$_ob13\"; [ \"\$_ob13\" = 200 ] || [ \"\$_ob13\" = 403 ]"
 
@@ -167,7 +172,7 @@ fi
 
 # --- Password reset ---
 run_test "PW-01" "Password reset page accessible" \
-  "curl -sf --connect-timeout 5 http://localhost:8123/greenautarky-password-reset 2>/dev/null | grep -qi 'passwort'"
+  "curl -sf --connect-timeout 5 $HA_BASE/greenautarky-password-reset 2>/dev/null | grep -qi 'passwort'"
 
 # The PIN endpoints are RATE LIMITED, and the check one line above deliberately
 # trips the limiter — so 429 is a correct answer here and its absence made the
@@ -177,13 +182,13 @@ run_test "PW-01" "Password reset page accessible" \
 # what these two assert.
 run_test "PW-02" "Password reset API rejects wrong PIN" \
   "HTTP_CODE=\$(curl -sf --connect-timeout 5 -o /dev/null -w '%{http_code}' \
-   -X POST http://localhost:8123/api/greenautarky_site/password_reset/users \
+   -X POST $HA_BASE/api/greenautarky_site/password_reset/users \
    -H 'Content-Type: application/json' -d '{\"pin\": \"000000\"}' 2>/dev/null); \
    [ \"\$HTTP_CODE\" = '401' ] || [ \"\$HTTP_CODE\" = '404' ] || [ \"\$HTTP_CODE\" = '429' ]"
 
 run_test "PW-03" "Password reset API rejects missing fields" \
   "HTTP_CODE=\$(curl -sf --connect-timeout 5 -o /dev/null -w '%{http_code}' \
-   -X POST http://localhost:8123/api/greenautarky_site/password_reset \
+   -X POST $HA_BASE/api/greenautarky_site/password_reset \
    -H 'Content-Type: application/json' -d '{\"pin\": \"000000\", \"username\": \"\", \"new_password\": \"\"}' 2>/dev/null); \
    [ \"\$HTTP_CODE\" = '400' ] || [ \"\$HTTP_CODE\" = '401' ] || [ \"\$HTTP_CODE\" = '404' ] || [ \"\$HTTP_CODE\" = '429' ]"
 

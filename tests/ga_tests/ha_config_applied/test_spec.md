@@ -33,7 +33,7 @@ integrations. Nothing about the package file was wrong.
 | HCA-12 | `ga_logger.yaml` present | HA log levels unmanaged |
 | HCA-13 | log levels raised **and** HA-log shipping enabled | The disclosure needs both switches, in two different systems, with no privacy filter on that path. Raised-but-not-shipped is a WARN, not a failure — it is a legitimate operator choice |
 | HCA-15 | Core runs the `internal_url` from configuration.yaml | file written, Core not restarted — the url a resident is handed is the old one |
-| HCA-16 | `internal_url` names the **live** hostname | a url left over from before a rename points at whatever answers that mDNS name on the LAN, which with two GA devices is the neighbour |
+| HCA-16 | `internal_url` is `http://<live hostname>.local` plus Core's port (`:<port>`, none on :80 — ADR-0038; port from `lib/ha_port.sh`, failure recorded as HCA-16a) | a url left over from before a rename points at whatever answers that mDNS name on the LAN, which with two GA devices is the neighbour; a url with `:8123` on Core 2026.8 points at a closed port |
 | HCA-17 | `external_url` names **this** device's prefix | a url from a previous identity hands out a link to another tenant. SKIP, not FAIL, on a device with no `url_prefix` yet — it has not been released, so the url is not due |
 | HCA-14 | `provision-verify` passes | The device's own verdict, so one command after provisioning answers both questions. A disagreement between this suite and that check is itself information |
 

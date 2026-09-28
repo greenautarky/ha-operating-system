@@ -1,8 +1,9 @@
 import { test as base, expect } from '@playwright/test';
 import { execSync } from 'child_process';
+import { haBaseUrl } from '../helpers/ha-url';
 
 export interface DeviceFixtures {
-  /** Base URL of the HA instance, e.g. http://192.168.1.100:8123 */
+  /** Base URL of the HA instance, e.g. http://<device-ip> (Core 2026.8+) or http://<device-ip>:8123 (older) */
   deviceUrl: string;
 
   /**
@@ -46,11 +47,8 @@ export function sshCmd(cmd: string): string {
 
 export const test = base.extend<DeviceFixtures>({
   deviceUrl: async ({}, use) => {
-    const ip = process.env.DEVICE_IP;
-    const url =
-      process.env.DEVICE_URL ||
-      (ip ? `http://${ip}:8123` : 'http://homeassistant.local:8123');
-    await use(url);
+    // Core's own port (80 on 2026.8+, 8123 before) — helpers/ha-url.ts.
+    await use(haBaseUrl());
   },
 
   resetOnboarding: async ({ deviceUrl }, use) => {

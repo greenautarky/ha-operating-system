@@ -35,7 +35,18 @@ fi
 
 suite_start "User flows (onboarding + login + dashboard + wizard + password-reset + console-login)"
 
-HA="http://localhost:8123"
+# Core's own port (80 on 2026.8+, 8123 before) — lib/ha_port.sh, ADR-0038.
+# Unresolvable = stop here: every step below talks HTTP to Core.
+if [ -f "$SCRIPT_DIR/../lib/ha_port.sh" ]; then . "$SCRIPT_DIR/../lib/ha_port.sh"; fi
+if ! command -v ga_ha_port >/dev/null 2>&1; then
+  echo "  FAIL  E2E-PORT: lib/ha_port.sh not found next to this suite"
+  exit 1
+fi
+if ! HA_PORT=$(ga_ha_port 2>&1); then
+  echo "  FAIL  E2E-PORT: $HA_PORT"
+  exit 1
+fi
+HA="http://localhost:${HA_PORT}"
 CFG_DIR="/mnt/data/supervisor/homeassistant"
 STORAGE_DIR="${CFG_DIR}/.storage"
 STATE_FILE="${STORAGE_DIR}/greenautarky_site"
