@@ -167,6 +167,15 @@ jobs:
       - name: ga-share-publish (/share symlink hardening)
         run: sh tests/ga_tests/share_publish/test.sh
 
+      - name: weekly digest refuses a cut-off or refused model answer
+        # synthesise() used to return whatever text came back, so a max_tokens
+        # cut or a refusal was posted to Odoo chatter as a complete digest. The
+        # test fakes only the HTTP transport and drives the live function.
+        # Red-proven against the pre-fix code (3 of 4 fail) in #634.
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 -m pytest -q -p no:cacheprovider -c /dev/null scripts/ops/test_weekly_digest.py
+
       - name: gen_expected.sh works from any cwd (the release-train's call shape)
         # The generator computed its output path relative to the CALLER's cwd and
         # then cd'd to the repo root. So it worked from the repo root — how every
