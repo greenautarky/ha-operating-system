@@ -564,6 +564,22 @@ heat09() {
       | jq -r '.attributes.temperature // empty'
   }
 
+  # ga-heating >= 0.11: a write straight to a valve is what a resident's hand on the
+  # device looks like, so the room goes manual for its cap (3 h). Remember the room's
+  # mode and give it back afterwards, exactly like the setpoint — otherwise every suite
+  # run leaves a room in manual (seen on a canary 2026-09-28: 09:50 → 12:50).
+  room=$(jq -r --arg v "$v" '[ .[] | select(.entity_id | startswith("climate."))
+               | select((.attributes.valves // []) | index($v)) | .entity_id ] | first // empty' "$STATES")
+  room_mode=""
+  [ -n "$room" ] && room_mode=$(jq -r --arg r "$room" '[ .[] | select(.entity_id == $r) | .state ] | first // empty' "$STATES")
+  set_room_mode() {
+    docker exec "$GM" sh -c \
+      "curl -fsS -m 20 -X POST -H \"Authorization: Bearer \$SUPERVISOR_TOKEN\" \
+            -H 'Content-Type: application/json' \
+            -d '{\"entity_id\":\"$room\",\"hvac_mode\":\"$1\"}' \
+            http://supervisor/core/api/services/climate/set_hvac_mode" >/dev/null 2>&1
+  }
+
   call "$want" || { echo "the service call itself failed for $v"; exit 1; }
 
   # A battery valve answers in seconds when the path is healthy; it answered in
@@ -582,6 +598,7 @@ heat09() {
 
   # Put it back whatever the outcome, and do not let the restore mask a failure.
   call "$before" >/dev/null 2>&1 || :
+  case "$room_mode" in auto|heat|off) set_room_mode "$room_mode" || : ;; esac
 
   if [ "$got" != "$want" ]; then
     echo "$v did not accept the setpoint: asked for $want, still reads ${got:-<unreadable>} after $((tries*step))s."
@@ -591,7 +608,7 @@ heat09() {
     echo "dropped as a replay): zigbee-roster-preserve.sh restore --bump-counter."
     exit 1
   fi
-  echo "$v accepted $want within $((i*step))s and was restored to $before"
+  echo "$v accepted $want within $((i*step))s and was restored to $before${room:+ (room $room back to $room_mode)}"
 }
 
 # A valve with no setpoint at all is a device nothing has been asked of yet —
