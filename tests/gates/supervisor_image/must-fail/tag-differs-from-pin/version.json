@@ -1,0 +1,6 @@
+{
+  "supervisor": "2025.11.4.6",
+  "images": {
+    "supervisor": "ghcr.io/greenautarky/{arch}-hassio-supervisor"
+  }
+}

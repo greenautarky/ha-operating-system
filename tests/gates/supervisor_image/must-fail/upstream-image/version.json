@@ -1,0 +1,6 @@
+{
+  "supervisor": "2025.11.5.4",
+  "images": {
+    "supervisor": "ghcr.io/home-assistant/{arch}-hassio-supervisor"
+  }
+}

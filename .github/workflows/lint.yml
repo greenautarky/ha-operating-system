@@ -380,6 +380,12 @@ jobs:
       - name: Core image (upstream, pre-2026 or non-drop-in must go red)
         run: ./tests/gates/core_image/selftest.sh
 
+      # The Supervisor image the bake ships must be the GA image at exactly the
+      # version.yaml pin, and its io.hass labels must agree (version, type, arch).
+      # must-pass is the real 2025.11.5.4 config read from the registry.
+      - name: Supervisor image (upstream, off-pin or mislabelled must go red)
+        run: ./tests/gates/supervisor_image/selftest.sh
+
       # The setup wizard is vendored, not built here: the component is pulled
       # from GHCR at OS build time, so BLD-FE-03 only ever runs on the builder
       # and never on a pull request. A release shipped a bundle built from a

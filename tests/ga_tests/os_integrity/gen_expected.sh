@@ -49,6 +49,8 @@ REL=$(awk '/^gaos_release:/{print $2; exit}' version.yaml)
 [ -n "$REL" ] || fail "no gaos_release in version.yaml"
 CORE=$(awk -F'"' '/^  homeassistant_core:/{print $2; exit}' version.yaml)
 [ -n "$CORE" ] || fail "no homeassistant_core pin in version.yaml"
+SUPERVISOR=$(awk -F'"' '/^  homeassistant_supervisor:/{print $2; exit}' version.yaml)
+[ -n "$SUPERVISOR" ] || fail "no homeassistant_supervisor pin in version.yaml"
 
 # --- kernel, from the live defconfig --------------------------------------
 KERNEL=$(sed -nE 's/^BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="([0-9.]+)"/\1/p' buildroot-ihost/configs/ga_ihost_full_defconfig | head -1)
@@ -134,6 +136,7 @@ EXPECTED_GA_RELEASE="$REL"
 EXPECTED_KERNEL="$KERNEL"
 EXPECTED_OPENSSL="$OPENSSL"
 EXPECTED_CORE="$CORE"
+EXPECTED_SUPERVISOR="$SUPERVISOR"
 EXPECTED_ADDON_IMAGES="$ADDONS"
 EXPECTED_CHANNEL="$CHANNEL"
 EXPECTED_PLUGINS="$PLUGINS"

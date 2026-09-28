@@ -37,8 +37,8 @@ fi
 # (Cost me a confused minute on 2026-08-24: master had moved mosquitto
 # 7.2.2 -> 7.2.3 hours after the device was flashed.)
 grep -m1 "^# source commit:" "$EXP" | sed "s/^# /  expectations from /"
-run_test "OSI-00" "expected.env carries all seven expectation groups" \
-  '[ -n "$EXPECTED_GA_RELEASE" ] && [ -n "$EXPECTED_KERNEL" ] && [ -n "$EXPECTED_OPENSSL" ] && [ -n "$EXPECTED_CORE" ] && [ -n "$EXPECTED_ADDON_IMAGES" ] && [ -n "$EXPECTED_PLUGINS" ] && [ -n "$EXPECTED_CHANNEL" ]'
+run_test "OSI-00" "expected.env carries all eight expectation groups" \
+  '[ -n "$EXPECTED_GA_RELEASE" ] && [ -n "$EXPECTED_KERNEL" ] && [ -n "$EXPECTED_OPENSSL" ] && [ -n "$EXPECTED_CORE" ] && [ -n "$EXPECTED_SUPERVISOR" ] && [ -n "$EXPECTED_ADDON_IMAGES" ] && [ -n "$EXPECTED_PLUGINS" ] && [ -n "$EXPECTED_CHANNEL" ]'
 
 # --- the OS layer ----------------------------------------------------------
 run_test_show "OSI-01" "/etc/ga-release == declared ${EXPECTED_GA_RELEASE}" \
@@ -59,6 +59,16 @@ run_test_show "OSI-03" "openssl == declared ${EXPECTED_OPENSSL} (the rc3 lesson)
 run_test_ready "OSI-04" "HA Core container runs the pinned ${EXPECTED_CORE}" \
   'docker ps --format "{{.Names}}" | grep -q "^homeassistant$"' 600 \
   'docker inspect homeassistant --format "{{.Config.Image}}" 2>/dev/null | grep -q ":${EXPECTED_CORE}$"'
+
+# --- the Supervisor ---------------------------------------------------------
+# The Core has OSI-04; the Supervisor had no on-device check at all. Both the
+# version AND the origin are asserted: a Supervisor that self-updated from an
+# upstream channel, or was replaced by the upstream image, reports a plausible
+# version and is still the wrong program. Read from the running container, not
+# from `ha supervisor info` — that JSON also lists add-on versions, and a
+# greedy parse can land on one of them. Unreadable = empty = FAIL.
+run_test_show "OSI-05" "Supervisor runs the pinned ${EXPECTED_SUPERVISOR} from ghcr.io/greenautarky" \
+  '[ "$(docker inspect hassio_supervisor --format "{{index .Config.Labels \"io.hass.version\"}}" 2>/dev/null)" = "$EXPECTED_SUPERVISOR" ] && docker inspect hassio_supervisor --format "{{.Config.Image}}" 2>/dev/null | grep -q "^ghcr.io/greenautarky/"'
 
 # --- the baked add-on set --------------------------------------------------
 # Every image addon-images.json pins must be PRESENT at exactly that tag.
