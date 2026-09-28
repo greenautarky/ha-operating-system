@@ -14,24 +14,24 @@ fork (iHost hardware + GA version-URL); Core and the frontend are stock.
 
 ## Tests
 
-### OB-01: Core image is stock upstream (Core fork retired)
-- **Command**: `docker inspect homeassistant --format '{{.Config.Image}}' | grep -q 'ghcr.io/home-assistant/'`
-- **Expected**: Container image is `ghcr.io/home-assistant/tinker-homeassistant:*`
-- **Catches**: Device still on a `ghcr.io/greenautarky/*` Core fork image (un-fork incomplete)
+### OB-01: Core image is the GA armv7 build
+- **Command**: `docker inspect homeassistant --format '{{.Config.Image}}' | grep -q '^ghcr.io/greenautarky/home-assistant-armv7:'`
+- **Expected**: Container image is `ghcr.io/greenautarky/home-assistant-armv7:*`
+- **Catches**: Device still on the frozen upstream armv7 image (`ghcr.io/home-assistant/tinker-homeassistant`)
 
 ### OB-02: Core image tag is a pinned HA version
-- **Command**: `docker inspect homeassistant --format '{{.Config.Image}}' | grep -qE ':2025\.[0-9]+\.[0-9]+'`
-- **Expected**: Image tag is a pinned HA version (e.g., `2025.11.3.2`)
+- **Command**: `docker inspect homeassistant --format '{{.Config.Image}}' | grep -qE ':20(2[6-9]|[3-9][0-9])\.[0-9]+\.[0-9]+$'`
+- **Expected**: Image tag is a pinned HA version from 2026 on (e.g., `2026.8.2`)
 - **Catches**: `latest` tag or a missing/upstream version tag
 
 ### OB-03: HA version is displayed
 - **Command**: `cat /mnt/data/supervisor/homeassistant/.HA_VERSION`
 - **Expected**: Version string is present (informational)
 
-### OB-04: Supervisor version.json references a STOCK core image
+### OB-04: Supervisor version.json references the GA armv7 Core image
 - **Command**: Check version.json on the data partition for the core image
-- **Expected**: `images.core` field contains `home-assistant` (stock), NOT `greenautarky`
-- **Catches**: Release manifest still pinning a Core fork image (T2b incomplete)
+- **Expected**: `images.core` is `ghcr.io/greenautarky/home-assistant-armv7`
+- **Catches**: Release manifest still pinning the frozen upstream armv7 image
 
 ### OB-05: Version repo URL points to greenautarky
 - **Command**: Verify supervisor fetches from `greenautarky/haos-version`

@@ -1,0 +1,1 @@
+{"architecture":"arm","config":{"Labels":{"io.hass.arch":"armv7","io.hass.type":"core","io.hass.machine":"tinker","io.hass.version":"2026.8.2"},"Entrypoint":["/init"]}}

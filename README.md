@@ -242,9 +242,10 @@ upstream open-source projects. Original license terms are preserved.
 
 #### Core Components
 
-GreenAutarky OS ships **stock, unmodified** Home Assistant Core and frontend
-(`ghcr.io/home-assistant/tinker-homeassistant`) — there is no longer a Core or
-frontend fork. All GreenAutarky customization is delivered as vendored
+GreenAutarky OS ships **unmodified upstream** Home Assistant Core and frontend,
+built for armv7 by [`greenautarky/ga-core-armv7`](https://github.com/greenautarky/ga-core-armv7)
+(`ghcr.io/greenautarky/home-assistant-armv7`) because upstream stopped building
+armv7 Core in late 2025 — there is no Core or frontend fork. All GreenAutarky customization is delivered as vendored
 `custom_components` and Lovelace bundles, published as standalone OCI artifacts
 and pinned in [`version.yaml`](version.yaml) under `components:` (ADR-0007):
 

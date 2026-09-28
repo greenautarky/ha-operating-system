@@ -12,6 +12,30 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased — Core 2026.8.2 from the GA armv7 build (planned BOSv1.3.0-rc53)
+
+### Changed — Core moves from the frozen upstream armv7 image to the GA armv7 build
+
+Upstream stopped building Home Assistant Core for armv7 in late 2025; the
+fleet's stock image stayed at 2025.11.3. Core now comes from
+`ghcr.io/greenautarky/home-assistant-armv7` (greenautarky/ga-core-armv7),
+unmodified upstream source built for armv7, pinned at `2026.8.2`.
+
+- `version.yaml` `homeassistant_core` 2025.11.3 → 2026.8.2; `expected.env` regenerated.
+- `hassio.mk` refuses, at configure time: the upstream Core image, a Core tag
+  older than 2026, an image without `io.hass.version`/`io.hass.machine` or the
+  s6 `/init` entrypoint (`check-core-image.sh`, fixtures in
+  `tests/gates/core_image/`), and a channel Core that differs from the
+  `version.yaml` pin.
+- The bake seeds the Core image into `updater.json`, so a fresh device's
+  Supervisor names the right image before it has read the channel.
+- Build tests: REG-02/VER-05/XVER-03 expect the GA image, BLD-CORE-FLOOR
+  refuses pre-2026 tags, VER-07/VER-11 find the Core tar by name + tag (the
+  old glob never matched the GA name and skipped). On-device OB-01/OB-02 follow.
+
+Requires, before the bake: haos-version `beta.json` naming this image and a
+Supervisor whose default Core image follows the channel.
+
 ## Unreleased — rides in the next rc after rc29
 
 ### Fixed — a cut-off weekly digest no longer reaches the team as if complete
