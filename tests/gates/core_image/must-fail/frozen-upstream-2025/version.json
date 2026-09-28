@@ -1,0 +1,9 @@
+{
+  "core": "2025.11.3",
+  "homeassistant": {
+    "tinker": "2025.11.3"
+  },
+  "images": {
+    "core": "ghcr.io/home-assistant/{machine}-homeassistant"
+  }
+}

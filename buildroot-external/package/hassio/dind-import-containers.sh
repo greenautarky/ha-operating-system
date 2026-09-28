@@ -344,7 +344,18 @@ fi
 if [ -z "$core_version" ]; then
   die "Cannot determine core version: /build/version.json missing or has no .core field"
 fi
-log "Writing updater.json: channel=$channel core=$core_version"
-printf '{ "channel": "%s", "homeassistant": "%s" }\n' "$channel" "$core_version" > /data/supervisor/updater.json
+# The Core IMAGE comes from the same version.json. The Supervisor's default
+# Core image follows the channel's images.core (ha-supervisor#36), but on a
+# fresh device it has not fetched the channel yet — an updater.json without
+# the image leaves it on the upstream name, which has no 2026 armv7 tag, and
+# first boot falls to the landing page. Seed what the bake actually ships.
+core_image="$(jq -r '.images.core // empty' /build/version.json 2>/dev/null || true)"
+if [ -z "$core_image" ]; then
+  die "Cannot determine core image: /build/version.json has no .images.core field"
+fi
+log "Writing updater.json: channel=$channel core=$core_version image=$core_image"
+jq -n --arg channel "$channel" --arg core "$core_version" --arg image "$core_image" \
+  '{channel: $channel, homeassistant: $core, image: {homeassistant: $image}}' \
+  > /data/supervisor/updater.json
 
 log "Done. channel=$channel"

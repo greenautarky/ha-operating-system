@@ -1,0 +1,9 @@
+{
+  "core": "2026.8.2",
+  "homeassistant": {
+    "tinker": "2026.8.2"
+  },
+  "images": {
+    "core": "ghcr.io/greenautarky/home-assistant-armv7"
+  }
+}

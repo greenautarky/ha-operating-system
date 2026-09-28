@@ -1,8 +1,8 @@
 #!/bin/sh
 # Core image & onboarding verification - runs ON the device.
-# V1.2-clean model: STOCK HA Core image + the greenautarky_site
-# custom_component (German onboarding, GDPR consent, telemetry preferences).
-# The Supervisor stays a greenautarky fork; Core + frontend are stock upstream.
+# Core is the GA armv7 build of upstream Core (unmodified source, built for
+# armv7 because upstream stopped) + the greenautarky_site custom_component
+# (German onboarding, GDPR consent, telemetry preferences).
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
 
@@ -11,12 +11,14 @@ suite_start "Onboarding"
 # --- Core image checks ---
 CORE_IMAGE=$(docker inspect homeassistant --format '{{.Config.Image}}' 2>/dev/null)
 
-# V1.2-clean: Core fork retired — the device must run STOCK upstream Core.
-run_test "OB-01" "Core image is stock upstream (Core fork retired)" \
-  "echo '$CORE_IMAGE' | grep -q 'ghcr.io/home-assistant/'"
+# 2026-09-28: Core is the GA armv7 build — upstream stopped building armv7
+# Core in late 2025, so the stock image is frozen at 2025.11.3.
+run_test "OB-01" "Core image is the GA armv7 build" \
+  "echo '$CORE_IMAGE' | grep -q '^ghcr.io/greenautarky/home-assistant-armv7:'"
 
-run_test "OB-02" "Core image tag is a pinned HA version" \
-  "echo '$CORE_IMAGE' | grep -qE ':2025\.[0-9]+\.[0-9]+'"
+# A floor, not a pin: any calver from 2026 on. The exact pin is OSI-04.
+run_test "OB-02" "Core image tag is a pinned HA version from 2026 on" \
+  "echo '$CORE_IMAGE' | grep -qE ':20(2[6-9]|[3-9][0-9])\.[0-9]+\.[0-9]+$'"
 
 run_test_show "OB-02b" "Core image" \
   "echo '$CORE_IMAGE'"

@@ -1,0 +1,9 @@
+{
+  "core": "latest",
+  "homeassistant": {
+    "tinker": "latest"
+  },
+  "images": {
+    "core": "ghcr.io/greenautarky/home-assistant-armv7"
+  }
+}

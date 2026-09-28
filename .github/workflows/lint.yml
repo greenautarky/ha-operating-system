@@ -373,6 +373,13 @@ jobs:
       - name: Baked add-on images (a pin that is not in the image must go red)
         run: ./tests/gates/baked_addon_images/selftest.sh
 
+      # The Core image the bake ships must be the GA armv7 build at a 2026+ tag
+      # and carry what the Supervisor reads (io.hass.version/machine, s6 /init).
+      # The 2026.8.2 tag first published 2026-09-22 booted standalone and had
+      # none of the three; its measured config is a must-fail fixture.
+      - name: Core image (upstream, pre-2026 or non-drop-in must go red)
+        run: ./tests/gates/core_image/selftest.sh
+
       # The setup wizard is vendored, not built here: the component is pulled
       # from GHCR at OS build time, so BLD-FE-03 only ever runs on the builder
       # and never on a pull request. A release shipped a bundle built from a
