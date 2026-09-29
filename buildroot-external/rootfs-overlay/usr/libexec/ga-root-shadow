@@ -1,0 +1,196 @@
+#!/bin/sh
+# ga-root-shadow — apply this device's own root password hash to /etc/shadow
+# (ADR-0039 D4, D4b, D6).
+#
+# /etc/shadow lives on the read-only rootfs and is replaced by every OTA. The
+# device's own hash lives on the overlay partition, in ONE file:
+#
+#   /mnt/overlay/etc/ga-root-pw-hash    one SHA-512 crypt hash ($6$…), mode 0600
+#
+# On every boot (and on `systemctl restart ga-root-shadow`) this script copies
+# the rootfs /etc/shadow to /run/ga-shadow with ONLY root's password field
+# replaced, and bind-mounts that copy onto /etc/shadow. Every other account
+# stays exactly as the running image ships it.
+#
+#   hash file absent      → rootfs shadow unchanged          state "start"
+#   hash file valid       → merged copy bind-mounted         state "rotated"
+#   hash file malformed   → rootfs shadow unchanged, exit 1  state "malformed"
+#
+# The state is published to /share/ga-root-shadow-status.json (through
+# ga-share-publish) so ga_manager can report a device that is not "rotated".
+#
+# --early  (emergency.service / rescue.service ExecStartPre, ADR-0039 D4b)
+#   Runs before the normal boot may have mounted the overlay:
+#   1. /etc/shadow already bind-mounted          → nothing to do
+#   2. /mnt/overlay mounted                      → apply from there
+#   3. otherwise mount the overlay partition READ-ONLY (no journal replay)
+#      on a private directory, apply, unmount it again
+#   4. partition unreadable                      → the image's password stays,
+#      and a banner on the console says so
+#   No status is published in this mode (the data partition may be absent).
+#
+# Test hooks (never set on a device): GA_RS_ROOTFS, GA_RS_OVERLAY,
+# GA_RS_RUN_DIR, GA_RS_STATUS, GA_RS_OVERLAY_DEV, GA_RS_MOUNTINFO,
+# GA_RS_CONSOLE, GA_RS_PUBLISH, GA_RS_BOOT_ID.
+set -u
+
+ROOTFS="${GA_RS_ROOTFS:-}"          # the filesystem that holds the image's /etc/shadow
+SHADOW="$ROOTFS/etc/shadow"
+OVERLAY="${GA_RS_OVERLAY:-/mnt/overlay}"
+RUN_DIR="${GA_RS_RUN_DIR:-/run/ga-root-shadow}"
+MERGED="$RUN_DIR/shadow"
+STATUS="${GA_RS_STATUS:-/mnt/data/supervisor/share/ga-root-shadow-status.json}"
+OVERLAY_DEV="${GA_RS_OVERLAY_DEV:-}"
+MOUNTINFO="${GA_RS_MOUNTINFO:-/proc/self/mountinfo}"
+CONSOLE="${GA_RS_CONSOLE:-/dev/console}"
+PUBLISH="${GA_RS_PUBLISH:-/usr/libexec/ga-share-publish}"
+BOOT_ID="${GA_RS_BOOT_ID:-$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)}"
+
+EARLY=0
+[ "${1:-}" = "--early" ] && EARLY=1
+
+log() { echo "ga-root-shadow: $*" >&2; }
+
+# is_mountpoint <path> — the path is a mount point (bind mounts of files too).
+is_mountpoint() {
+	awk -v p="$1" '$5 == p { found = 1 } END { exit !found }' "$MOUNTINFO"
+}
+
+# valid_hash <file> — exactly one line, one SHA-512 crypt hash, nothing else.
+valid_hash() {
+	[ -f "$1" ] || return 1
+	[ "$(wc -l < "$1")" -le 1 ] || return 1
+	grep -Eqx '\$6\$(rounds=[0-9]+\$)?[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{86}' "$1" || return 1
+	[ "$(grep -c '' "$1")" -eq 1 ]
+}
+
+publish() { # publish <state>
+	[ "$EARLY" -eq 1 ] && return 0
+	printf '{"state": "%s", "boot_id": "%s", "ts": %s}\n' \
+		"$1" "$BOOT_ID" "$(date +%s)" | "$PUBLISH" "$STATUS" 0644 \
+		|| log "WARNING: could not publish $STATUS (state $1)"
+}
+
+# build_merged <hash-file> <rootfs-shadow> <out> — root's field replaced, all
+# other lines byte-identical. Fails if there is no root line.
+build_merged() {
+	h="$(cat "$1")"
+	( umask 077
+	  awk -F: -v OFS=: -v H="$h" '
+		$1 == "root" && !done { $2 = H; done = 1 }
+		{ print }
+		END { exit !done }' "$2" > "$3" ) || return 1
+	chmod 0600 "$3"
+}
+
+# rootfs_shadow <out> — the IMAGE's shadow, even while a copy is bind-mounted
+# over it: a non-recursive bind of / does not carry the /etc/shadow submount.
+rootfs_shadow() {
+	if is_mountpoint "$SHADOW"; then
+		view="$RUN_DIR/rootfs-view"
+		mkdir -p "$view" || return 1
+		mount --bind "${ROOTFS:-/}" "$view" || return 1
+		cp "$view/etc/shadow" "$1"; rc=$?
+		umount "$view"; rmdir "$view" 2>/dev/null
+		return $rc
+	fi
+	cp "$SHADOW" "$1"
+}
+
+# apply <hash-file> — the D4 core. Returns 0 rotated, 1 failure.
+apply() {
+	mkdir -p "$RUN_DIR" && chmod 0700 "$RUN_DIR" || return 1
+	base="$RUN_DIR/rootfs.$$"
+	new="$RUN_DIR/shadow.$$"
+	( umask 077; rootfs_shadow "$base" ) || { rm -f "$base"; log "cannot read the image's shadow"; return 1; }
+	if ! build_merged "$1" "$base" "$new"; then
+		rm -f "$base" "$new"
+		log "no root entry in the image's shadow"
+		return 1
+	fi
+	rm -f "$base"
+	if is_mountpoint "$SHADOW" && [ -f "$MERGED" ] \
+		&& [ "$(stat -c '%d:%i' "$SHADOW")" = "$(stat -c '%d:%i' "$MERGED")" ]; then
+		# Already ours: rewrite the bound file in place, so there is no moment
+		# in which the image's password applies. A reader racing the rewrite
+		# sees a short file and fails the login; it never sees the old hash
+		# alongside the image's password.
+		cat "$new" > "$MERGED" || { rm -f "$new"; return 1; }
+		rm -f "$new"
+	else
+		mv -f "$new" "$MERGED" || return 1
+		mount --bind "$MERGED" "$SHADOW" || { log "bind mount onto $SHADOW failed"; return 1; }
+	fi
+	return 0
+}
+
+# drop — back to the image's shadow (hash file removed at runtime).
+drop() {
+	while is_mountpoint "$SHADOW"; do
+		umount "$SHADOW" || return 1
+	done
+	rm -f "$MERGED"
+}
+
+run_from() { # run_from <overlay-dir> → exit status of the whole script
+	hf="$1/etc/ga-root-pw-hash"
+	if [ ! -e "$hf" ]; then
+		if [ "$EARLY" -eq 0 ] && is_mountpoint "$SHADOW"; then
+			drop || { log "cannot remove the bind mount on $SHADOW"; publish malformed; return 1; }
+		fi
+		log "no device password on this device — the image's password applies"
+		publish start
+		return 0
+	fi
+	if ! valid_hash "$hf"; then
+		# Loud, never silent (ADR-0039 D4): the image's password still applies
+		# on this boot, and the status says why.
+		log "ERROR: $hf is not exactly one SHA-512 crypt hash — NOT applied"
+		publish malformed
+		return 1
+	fi
+	if ! apply "$hf"; then
+		log "ERROR: could not apply $hf"
+		publish malformed
+		return 1
+	fi
+	log "device root password applied"
+	publish rotated
+	return 0
+}
+
+if [ "$EARLY" -eq 0 ]; then
+	run_from "$OVERLAY"
+	exit $?
+fi
+
+# ── --early (D4b) ───────────────────────────────────────────────────────────
+banner() {
+	printf '\n*** ga-root-shadow: %s ***\n\n' "$1" > "$CONSOLE" 2>/dev/null || true
+	log "$1"
+}
+
+is_mountpoint "$SHADOW" && exit 0                                   # step 1
+if is_mountpoint "$OVERLAY"; then                                   # step 2
+	run_from "$OVERLAY" || banner "device password not applied — the image's password applies"
+	exit 0
+fi
+
+if [ -z "$OVERLAY_DEV" ]; then                                      # step 3
+	if [ -e /dev/disk/by-label/hassos-overlay ]; then
+		OVERLAY_DEV=/dev/disk/by-label/hassos-overlay
+	else
+		OVERLAY_DEV="$(blkid -L hassos-overlay 2>/dev/null || true)"
+	fi
+fi
+priv="$RUN_DIR/early-overlay"
+mkdir -p "$priv" && chmod 0700 "$RUN_DIR"
+if [ -n "$OVERLAY_DEV" ] && mount -o ro,noload "$OVERLAY_DEV" "$priv" 2>/dev/null; then
+	run_from "$priv" || banner "device password not applied — the image's password applies"
+	umount "$priv"
+	rmdir "$priv" 2>/dev/null
+	exit 0
+fi
+rmdir "$priv" 2>/dev/null
+banner "overlay partition unreadable — the image's password applies on this console" # step 4
+exit 0
