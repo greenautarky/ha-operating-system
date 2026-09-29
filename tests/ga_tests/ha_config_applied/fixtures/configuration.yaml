@@ -1,0 +1,17 @@
+# Shape ga_manager writes (converge baseline + location seed). The location is
+# the published fleet default, not any device's site; the url is RFC 2606.
+default_config:
+
+homeassistant:
+  unit_system: metric
+  time_zone: Europe/Berlin
+  country: DE
+  latitude: 52.520008
+  longitude: 13.404954
+  elevation: 34
+  internal_url: "http://kibu.local"
+  external_url: "https://example.invalid"
+  packages: !include_dir_named ga_packages
+
+logger:
+  default: warning

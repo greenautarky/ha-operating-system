@@ -1,0 +1,14 @@
+# A device converged before the elevation seed existed, with a quoted country
+# and a trailing comment — and a two-space `latitude:` under ANOTHER top-level
+# key, which must not be read as ours.
+zone_seed:
+  latitude: 1.5
+homeassistant:
+  country: 'DE'   # fleet constant
+  latitude: 52.520008
+  longitude: 13.404954
+  unit_system: metric
+  time_zone: "Europe/Berlin"
+  internal_url: "http://kibu.local:8123"
+http:
+  use_x_forwarded_for: true

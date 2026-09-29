@@ -28,8 +28,8 @@ integrations. Nothing about the package file was wrong.
 | HCA-05 | a `ga_packages/` directory implies the include key | **The 2026-08-19 regression, verbatim.** Fires while the state is still harmless — before the Core restart that turns it into lost integrations |
 | HCA-06/07 | every OS-staged component is declared | A component delivered by an OTA that nothing ever enabled |
 | HCA-08 | every declared domain is **LOADED IN CORE** | Declared ≠ loaded. A broken include, a bad manifest, or a setup error all look identical from disk |
-| HCA-09/10 | Core runs the configured latitude/longitude/elevation/time_zone/country | File and Core disagree for as long as it takes Core to restart; a device in that state computes every sunrise for the previous location |
-| HCA-11 | Core reports `config_source: yaml` | If it says `storage`, our file is being ignored and every comparison above compared two copies of the same stale value |
+| HCA-09/10 | Core **runs** the file's value for every key ga_manager owns in `homeassistant:` — latitude/longitude/elevation (09), time_zone/country/unit_system (10) | File and Core disagree for as long as it takes Core to restart; a device in that state computes every sunrise for the previous location. Compared by VALUE in `site_config_verdict.sh`: a number as a number (the old `grep '"latitude": *52.52'` was a prefix match and passed Core running 52.5291), `unit_system` as the length/temperature/mass units Core reports for it (Core never returns the name). Core unreadable is FAIL; key absent from the file is SKIP |
+| HCA-11 | **Information, never fails** (since 2026-09-29): records Core's `config_source` | It used to assert `config_source == yaml` as "our file is authoritative". It is not that. Home Assistant 2026.8.2 `homeassistant/core_config.py`, `async_process_ha_core_config` (~l.374–411): Core loads `.storage/core.config`, then every key present in the YAML `homeassistant:` block overrides the stored value and sets `config_source=yaml` — at every start and on `reload_core_config`; `config/core/update` (how ga_manager ≥ 0.216.0 applies config live) sets `storage` until the next start. The field names the **last writer**: it went storage/yaml between two identical flashes on a canary and would read red after every correct live update. Authority is what HCA-09/10 check directly |
 | HCA-12 | `ga_logger.yaml` present | HA log levels unmanaged |
 | HCA-13 | log levels raised **and** HA-log shipping enabled | The disclosure needs both switches, in two different systems, with no privacy filter on that path. Raised-but-not-shipped is a WARN, not a failure — it is a legitimate operator choice |
 | HCA-15 | Core runs the `internal_url` from configuration.yaml | file written, Core not restarted — the url a resident is handed is the old one |
@@ -107,3 +107,48 @@ to ignore the colour just as fast as one that cannot fail.
 `HCA-16` skips when there is no `internal_url` at all, pointing at `HCA-15`;
 `HCA-17b` does the same for `HCA-17`. Without that, a single missing url
 produced four red lines and hid how many things were actually wrong.
+
+
+## Changed 2026-09-29 — HCA-11 stops asserting the last writer
+
+HCA-11 asserted `config_source == yaml`. That field says which writer touched
+Core's config last, not whether our file wins (see the HCA-11 row for the Core
+source). The check that answers "is our file authoritative" is the value
+comparison, so it moved there: HCA-09/10 now compare every key ga_manager owns
+(converge `HA_CORE_CONFIG_BASELINE` + `HA_LOCATION_SEED`) by value, including
+`unit_system`, which nothing checked before. HCA-11 prints `config_source` and
+passes.
+
+The verdict lives in `site_config_verdict.sh` (sh + jq), so CI drives it over
+fixtures without a device: `selftest.sh`, wired into `lint.yml` host-suites.
+`cfg_value` delegates to the same file, so key extraction still has one
+definition — now restricted to the `homeassistant:` block.
+
+### Red and green, fixtures (host, 2026-09-29)
+
+The old predicates, verbatim, over the fixtures:
+
+```
+old HCA-11 on yaml-matching: PASS
+old HCA-11 on storage-matching: FAIL
+old HCA-09:latitude on latitude-lookalike (Core 52.5200081, file 52.520008): PASS  <- wrong
+```
+
+The new section, driven with the same fixtures:
+
+```
+--- Core fixture: storage-matching        -> passed=7 failed=0
+--- Core fixture: moved-latitude
+  FAIL  HCA-09:latitude: Core runs the configured latitude (52.520008)
+        -> file latitude=52.520008; Core runs latitude=48.137154 (config_source=storage)
+  PASS  HCA-11: config_source recorded (info: names Core's last writer, not authority)
+```
+
+Mutations of the live verdict, each caught by the selftest (exit 1):
+HCA-11 back to `config_source == yaml` (5 wrong); numeric compare back to the
+prefix grep (1 wrong, latitude-lookalike); unit_system not compared (2 wrong);
+extraction over the whole file instead of the block (2 wrong). Restored:
+`49 cases, 0 wrong`, also under BusyBox applets.
+
+**Not yet shown on a device** — the fixtures are Core 2026.8.2's `/api/config`
+shape; the first device run after this lands is the on-device proof.

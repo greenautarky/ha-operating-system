@@ -247,6 +247,16 @@ jobs:
         # stable slot regardless of what runs fails three cases.
         run: sh tests/ga_tests/config_verify/selftest.sh
 
+      - name: HCA-09..11 judge the site config Core RUNS, by value
+        # HCA-11 asserted config_source == yaml, which names Core's last writer
+        # (YAML at start, config/core/update at runtime — Core 2026.8.2
+        # core_config.py), so it went red after every correct live update. The
+        # verdict (site_config_verdict.sh) compares every key ga_manager owns by
+        # value; HCA-11 only records the field. Red-proven by mutation: the old
+        # HCA-11 fails 5 cases, the old prefix grep passes a look-alike
+        # latitude, an uncompared unit_system passes imperial units.
+        run: sh tests/ga_tests/ha_config_applied/selftest.sh
+
       - name: every suite directory is registered or explicitly excluded
         run: sh tests/ga_tests/run_all.sh --selftest
 

@@ -47,15 +47,11 @@ fi
 # Helper: is a value present in Core's /api/config JSON?
 core_has() { grep -q "$1" "$CORE_CFG" 2>/dev/null; }
 
-# Read one key out of the `homeassistant:` block.
-#
-# `[^:]*:` and not `.*:` — the greedy form eats everything up to the LAST colon,
-# so `internal_url: "http://kibu.local:8123"` yields `8123` and the comparison
-# can never match. A check that cannot go green is as useless as one that cannot
-# go red, and this one was caught only by deliberately making it pass.
-cfg_value() {
-  grep -E "^  $1:" "$CFG" 2>/dev/null | head -1 | sed "s/^[^:]*: *//" | tr -d '"' | tr -d '\r'
-}
+# Read one key out of the `homeassistant:` block. ONE definition, in the verdict
+# script, so the extraction bugs found on 2026-08-26 (the greedy `.*:` that
+# turned `http://kibu.local:8123` into `8123`) cannot come back per call site.
+VERDICT="$SCRIPT_DIR/site_config_verdict.sh"
+cfg_value() { sh "$VERDICT" value "$1" "$CFG"; }
 
 # =========================================================================
 # Reachability — everything below is meaningless without it (HCA-01..02)
@@ -115,36 +111,47 @@ for d in $DECLARED; do
 done
 
 # =========================================================================
-# Site config: file vs what Core is RUNNING ON (HCA-09..12)
+# Site config: file vs what Core is RUNNING ON (HCA-09..11)
 # =========================================================================
 # They disagree for exactly as long as it takes Core to restart — and a device
 # left in that state computes every sunrise for the previous location.
+#
+# The keys are the ones ga_manager owns in the `homeassistant:` block
+# (converge.py HA_CORE_CONFIG_BASELINE + HA_LOCATION_SEED). They are pinned
+# here, not read from the file under test. The verdict compares VALUES (a
+# number as a number; unit_system as the units Core reports for it), never a
+# text prefix — site_config_verdict.sh, fixtures in selftest.sh.
 
 for key in latitude longitude elevation; do
   want=$(cfg_value "$key")
   if [ -n "$want" ]; then
-    run_test "HCA-09:$key" "Core runs the configured $key ($want)" \
-      "grep -q '\"$key\": *$want' $CORE_CFG"
+    run_test_show "HCA-09:$key" "Core runs the configured $key ($want)" \
+      "sh '$VERDICT' '$key' '$CFG' '$CORE_CFG'"
   else
     skip_test "HCA-09:$key" "$key not set in configuration.yaml"
   fi
 done
 
-for key in time_zone country; do
+for key in time_zone country unit_system; do
   want=$(cfg_value "$key")
   if [ -n "$want" ]; then
-    run_test "HCA-10:$key" "Core runs the configured $key ($want)" \
-      "grep -q '\"$key\": *\"$want\"' $CORE_CFG"
+    run_test_show "HCA-10:$key" "Core runs the configured $key ($want)" \
+      "sh '$VERDICT' '$key' '$CFG' '$CORE_CFG'"
   else
     skip_test "HCA-10:$key" "$key not set in configuration.yaml"
   fi
 done
 
-# `config_source: yaml` is how Core says the YAML won. If it says `storage`,
-# our file is being ignored and every check above compared two copies of the
-# same stale value.
-run_test "HCA-11" "Core reports config_source=yaml (our file is authoritative)" \
-  "grep -q '\"config_source\": *\"yaml\"' $CORE_CFG"
+# Information, never a verdict. Until 2026-09-29 this asserted
+# `config_source == yaml` as "our file is authoritative". It is not that: Core
+# 2026.8.2 (core_config.py async_process_ha_core_config, ~l.374-411) sets
+# `yaml` at every start when the block has any of these keys, and
+# `config/core/update` — how ga_manager >= 0.216.0 applies config live — sets
+# `storage` until the next start. It names the last writer; it went
+# storage/yaml between two identical flashes on a canary. Authority is what
+# HCA-09/10 check: every owned key's RUNNING value equals the file's.
+run_test_show "HCA-11" "config_source recorded (info: names Core's last writer, not authority)" \
+  "sh '$VERDICT' source '$CORE_CFG'"
 
 # =========================================================================
 # The urls: file vs Core, and the identity split (HCA-15..17)
