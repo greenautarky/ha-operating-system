@@ -159,10 +159,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install jq, bubblewrap, busybox
+      - name: Install jq, busybox
         uses: ./.github/actions/apt-install
         with:
-          packages: jq bubblewrap busybox
+          packages: jq busybox
+
+      # Not through apt-install: that action proves each package by a command
+      # of the same name, and the bubblewrap package installs `bwrap`.
+      - name: Install bubblewrap
+        run: |
+          command -v bwrap >/dev/null 2>&1 || {
+            timeout 180 sudo apt-get update -qq || true
+            timeout 180 sudo apt-get install -y -qq bubblewrap
+          }
+          command -v bwrap || { echo "::error::bwrap not on PATH after install"; exit 1; }
 
       - name: ga-share-publish (/share symlink hardening)
         # GSP-14 runs the rename with BusyBox mv, the device's mv.
