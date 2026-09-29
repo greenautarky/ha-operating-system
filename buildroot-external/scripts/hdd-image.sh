@@ -35,7 +35,10 @@ function create_disk_image() {
     # variables used in raucb manifest template
     ota_compatible="$(hassos_rauc_compatible)"
     ota_version="$(hassos_version)"
-    export ota_compatible ota_version
+    # The GA release floor (manifest [meta.ga] release=): see ga_bundle_release.
+    ota_ga_release="$(ga_bundle_release)"
+    echo "RAUC bundle GA release: ${ota_ga_release:-<none>}"
+    export ota_compatible ota_version ota_ga_release
     # variables used in genimage configs
     export BOOTSTATE_SIZE SYSTEM_SIZE KERNEL_SIZE OVERLAY_SIZE DATA_SIZE
     RAUC_MANIFEST=$(tempio -template "${BR2_EXTERNAL_HASSOS_PATH}/ota/manifest.raucm.gtpl")

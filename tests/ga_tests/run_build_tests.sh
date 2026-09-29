@@ -1038,6 +1038,74 @@ RAUCB="$(ls -t "${OUT}/images/"*.raucb 2>/dev/null | head -1)"
   && _pass "BLD: RAUC bundle exists" \
   || _fail "BLD: No .raucb found"
 
+# RFLOOR-01/02: the GA release floor for OS updates.
+# Every bundle must carry its GA release in the manifest ([meta.ga] release=),
+# equal to the /etc/ga-release inside it, and the image must declare the RAUC
+# pre-install handler that enforces it. A bundle without the release is
+# refused by every device that runs the handler, so shipping one strands the
+# fleet on its current release. Proven both ways by
+# tests/gates/rauc_release_floor/selftest.sh.
+_rf_rootfs="${OUT}/images/rootfs.erofs"
+_rf_rel="$(head -n 1 "${TARGET}/etc/ga-release" 2>/dev/null | tr -d '\r\n')"
+_rf_bundle="$(ls -t "${OUT}"/images/*.raucb 2>/dev/null | head -1)"
+_rf_unsq="$(find "${OUT}/host" -name unsquashfs -type f -perm -u+x 2>/dev/null | head -1)"
+[[ -n "$_rf_unsq" ]] || _rf_unsq="$(command -v unsquashfs 2>/dev/null || true)"
+if [[ ! -f "$_rf_rootfs" ]]; then
+  _skip "RFLOOR-01: bundle manifest carries the GA release" "no rootfs in this run (source tree only)"
+elif [[ -z "$_rf_bundle" ]]; then
+  _fail "RFLOOR-01: no bundle in ${OUT}/images although a rootfs was built — nothing to inspect is a failure, not a pass"
+elif [[ ! "$_rf_bundle" -nt "$_rf_rootfs" ]]; then
+  _fail "RFLOOR-01: the newest bundle ($(basename "$_rf_bundle")) is older than rootfs.erofs — left over from an earlier build"
+elif [[ -z "$_rf_unsq" ]]; then
+  _fail "RFLOOR-01: no unsquashfs (host or PATH) — the bundle manifest cannot be read"
+else
+  _rf_tmp="$(mktemp -d)"
+  if "$_rf_unsq" -q -n -d "${_rf_tmp}/x" "$_rf_bundle" manifest.raucm >/dev/null 2>&1 \
+     && [[ -f "${_rf_tmp}/x/manifest.raucm" ]]; then
+    _rf_mf="${_rf_tmp}/x/manifest.raucm"
+    # awk reads every [meta.ga] release= line; count them, never assume one.
+    _rf_vals="$(awk '/^[[:space:]]*\[/{g=$0; gsub(/[[:space:]]/,"",g); next}
+                    g=="[meta.ga]" && /^[[:space:]]*release[[:space:]]*=/{sub(/^[^=]*=[[:space:]]*/,""); sub(/[[:space:]]+$/,""); print}' "$_rf_mf")"
+    _rf_n="$(printf '%s' "$_rf_vals" | grep -c . || true)"
+    if ! grep -q '^\[update\]' "$_rf_mf"; then
+      _fail "RFLOOR-01: DETECTOR BROKEN — extracted manifest.raucm has no [update] group; refusing to judge it"
+    elif (( _rf_n == 0 )); then
+      _fail "RFLOOR-01: bundle manifest has no [meta.ga] release= — every device running the release floor would refuse this bundle"
+    elif (( _rf_n > 1 )); then
+      _fail "RFLOOR-01: bundle manifest has ${_rf_n} [meta.ga] release= values — devices refuse an ambiguous release"
+    elif [[ "$_rf_vals" != "$_rf_rel" ]]; then
+      _fail "RFLOOR-01: bundle manifest release '${_rf_vals}' differs from the image's /etc/ga-release '${_rf_rel}'"
+    else
+      _pass "RFLOOR-01: bundle manifest carries [meta.ga] release=${_rf_vals} (= /etc/ga-release)"
+    fi
+  else
+    _fail "RFLOOR-01: could not extract manifest.raucm from $(basename "$_rf_bundle")"
+  fi
+  rm -rf "$_rf_tmp"
+fi
+
+_rf_conf="${TARGET}/etc/rauc/system.conf"
+_rf_handler="/usr/lib/rauc/ga-release-floor"
+if [[ ! -f "$_rf_conf" ]]; then
+  if [[ -f "$_rf_rootfs" ]]; then
+    _fail "RFLOOR-02: ${_rf_conf} missing from a built image"
+  else
+    _skip "RFLOOR-02: system.conf declares the release-floor handler" "no target tree in this run"
+  fi
+else
+  _rf_decl="$(awk '/^[[:space:]]*\[/{g=$0; gsub(/[[:space:]]/,"",g); next}
+                  g=="[handlers]" && /^[[:space:]]*pre-install[[:space:]]*=/{sub(/^[^=]*=[[:space:]]*/,""); sub(/[[:space:]]+$/,""); print}' "$_rf_conf")"
+  if [[ "$_rf_decl" != "$_rf_handler" ]]; then
+    _fail "RFLOOR-02: system.conf [handlers] pre-install is '${_rf_decl:-<unset>}', want ${_rf_handler} — the image would enforce no release floor"
+  elif [[ ! -f "${TARGET}${_rf_handler}" ]]; then
+    _fail "RFLOOR-02: ${_rf_handler} is declared but missing from the image — every install would fail"
+  elif [[ ! -x "${TARGET}${_rf_handler}" ]]; then
+    _fail "RFLOOR-02: ${_rf_handler} is not executable in the image — every install would fail"
+  else
+    _pass "RFLOOR-02: system.conf declares pre-install=${_rf_handler}, shipped executable"
+  fi
+fi
+
 # version.json
 VER_JSON="${OUT}/build/hassio-1.0.0/version.json"
 if [[ -f "$VER_JSON" ]]; then

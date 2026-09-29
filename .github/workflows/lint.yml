@@ -410,6 +410,25 @@ jobs:
       - name: RAUC keyring audit (one pinned root — red on anything else)
         run: ./tests/gates/rauc_keyring/selftest.sh
 
+      # The GA release floor for OS updates: the RAUC pre-install handler
+      # against fixture manifests (running BOSv1.4.0-rc1: older and pre-floor
+      # bundles refused, rc/final at or above allowed), the operator override
+      # honoured only as ga-rauc-install-older writes it, the build gate
+      # RFLOOR-01/02 over fixture outputs from the LIVE templates, and the
+      # ga-rauc-install label. busybox runs the handler under the device shell.
+      - name: Install busybox, squashfs-tools, rauc and dbus for the release-floor tests
+        uses: ./.github/actions/apt-install
+        with:
+          packages: busybox squashfs-tools rauc dbus
+      - name: OS update release floor (handler, override, build gate, label — both ways)
+        run: ./tests/gates/rauc_release_floor/selftest.sh
+      # The same handler behind a REAL `rauc service` (sandbox slots, throwaway
+      # keys): RAUC aborts a refused install before writing a slot, installs an
+      # allowed one, and a handler-less (pre-floor) system still installs a
+      # bundle that carries the release — the transition.
+      - name: OS update release floor through a real RAUC
+        run: ./tests/gates/rauc_release_floor/rauc_e2e.sh
+
       # ADR-0027 D9: one build mode. `dev` must be refused however it is asked
       # for; every real mode and a leftover `prod` (accepted, loud) must work.
       - name: Build mode (dev refused, real modes and deprecated prod still build)

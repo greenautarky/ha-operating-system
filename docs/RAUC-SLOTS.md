@@ -97,6 +97,52 @@ version is compared and none is invented. An older image whose slot B is zeros
 reports `false` with a reason that says the content differs. The booted slot is
 always bootable by demonstration.
 
+## The release floor: which bundles a device will install
+
+Every install goes through the RAUC system `pre-install` handler
+`/usr/lib/rauc/ga-release-floor`, declared in `/etc/rauc/system.conf` and so
+taken from the **running** rootfs, never from the bundle. It compares the
+bundle's `[meta.ga] release=` with `/etc/ga-release`:
+
+| bundle | verdict |
+|---|---|
+| same release (reinstall) or newer | installed |
+| older release | refused, nothing written, no reboot |
+| no `[meta.ga] release=` (built before the floor) | refused |
+| malformed release, or the device's own release unreadable | refused |
+
+Order: `BOSvX.Y.Z-devN < BOSvX.Y.Z-rcN < BOSvX.Y.Z`, numeric per field, so
+`BOSv1.3.0-rc56 < BOSv1.4.0-rc1 < BOSv1.4.0-rc2 < BOSv1.4.0 < BOSv1.4.1-rc1`.
+A refusal shows up as `Pre-install handler error` from `rauc install`, as exit
+5 from `ga-rauc-install`, and in the journal as `[ga-release-floor] REFUSED: …`.
+
+### Going back to an older release
+
+The fleet path (fleet-manager → ga_manager → `ga-rauc-install`) cannot install
+an older bundle on a device that runs the floor, by design. What still works:
+
+1. **Roll forward.** Rebuild the known-good source under a new, higher release
+   label and dispatch that. This is the only fleet-scale way back.
+2. **Switch slots** when the other slot still holds the previous release (see
+   `rollback.possible` above): `rauc status mark-active other && reboot`. No
+   bundle is installed, so the floor is not involved.
+3. **Per device, by an operator**, as root at a terminal:
+
+   ```sh
+   ssh -t root@<device> ga-rauc-install-older /mnt/data/tmp/<bundle>.raucb
+   ```
+
+   It shows the running and the bundle release, asks for the bundle release
+   (or `none`) to be typed back, writes a one-shot token to
+   `/run/ga-rauc-floor/allow-older` (root, 0700) and runs `rauc install`. The
+   handler accepts the token for that release only, for 15 minutes, and
+   deletes it. It does not reboot. Without a terminal it refuses — it is not a
+   path for automation. An environment variable on `rauc install` cannot act
+   as an override: the handler runs in the rauc service's environment.
+
+Consequence for release labels: they must only grow. A bake that reuses an
+older label produces a bundle that every device above that label refuses.
+
 ## Where it is proven
 
 * `IMG-01` (build suite, `scripts/check-slot-pairs.sh`): the produced `.img.xz`
@@ -104,6 +150,9 @@ always bootable by demonstration.
   self-tested on every PR by `tests/gates/slot_pairs/selftest.sh`.
 * `SRC-23` (build suite): the layouts declare an image for both pairs.
 * `PROV-11` (provisioning suite, device): the inactive kernel slot is not blank.
+* `tests/gates/rauc_release_floor/selftest.sh` and `rauc_e2e.sh` (CI): the
+  release floor both ways — handler verdicts, the override, build gate
+  RFLOOR-01/02, and the handler behind a real `rauc service`.
 * `tests/ga_tests/rauc_slots/test.sh`: SLOT-25..28 keep proving an empty slot is
   refused; SLOT-70..83 prove the mirror evidence red and green on fixtures;
   SLOT-46 (device) asserts the live rollback target is bootable; SLOT-61/62

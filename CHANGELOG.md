@@ -12,6 +12,58 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased — OS updates refuse a bundle older than the running GA release
+
+### Added — a release floor for every OS install, enforced on the device
+
+Every bundle now carries the GA release of the rootfs inside it in its
+manifest (`[meta.ga] release=BOSv1.4.0-rc2`, taken from the same
+`/etc/ga-release` that ships in the bundle). The image declares a RAUC system
+`pre-install` handler, `/usr/lib/rauc/ga-release-floor`, which runs from the
+*running* rootfs for every install path (Supervisor, `ga-rauc-install`, a
+manual `rauc install`) after the signature check and before any slot is
+written. It refuses a bundle whose release is older than `/etc/ga-release`,
+and a bundle that carries no release at all (everything built before this
+change). Equal and newer install as before.
+
+Order: `BOSvX.Y.Z-devN < BOSvX.Y.Z-rcN < BOSvX.Y.Z`, numeric per field — a
+final release sorts after its candidates, which `sort -V` gets wrong. The HAOS
+version cannot serve here: it has been `16.3.1.9` for every bundle since
+BOSv1.2.15.
+
+An operator can install one older bundle on purpose, as root at a terminal on
+the device: `ga-rauc-install-older <bundle.raucb>`. It asks for the bundle's
+release to be typed back and leaves a one-shot token in a root-only directory
+under `/run`, bound to that release and valid for 15 minutes. There is no
+other override; the fleet dispatch path cannot carry one.
+
+`ga-rauc-install` now accepts only `BOSvX.Y.Z` or `BOSvX.Y.Z-rcN` as a
+release label (or none, for the version-only slot) and refuses anything else
+instead of silently falling back to the version-only slot.
+
+### Transition and rollback
+
+- The first bundle with the release installs on every current device: their
+  images have no handler, and RAUC (1.13 in every image since 2025-07)
+  ignores `meta.*` groups it has no use for.
+- From then on a device accepts the same or a newer release only. **Going
+  back to an older release through the fleet (`rollback.yml`) is refused on
+  such a device** — roll forward with a new, higher release, switch back to
+  the other slot (`rauc status mark-active other`), or install per device with
+  `ga-rauc-install-older`. See `docs/RAUC-SLOTS.md`.
+- Release labels must only grow: a bake that reuses an older label produces a
+  bundle every device above it refuses.
+
+### Tests
+
+`tests/gates/rauc_release_floor/selftest.sh` (78 checks, CI): handler verdicts
+against manifests rendered from the live template, under the host shell and
+busybox; the override in every shape it must refuse and the one it must honour;
+build gate RFLOOR-01/02 over fixture outputs; the `ga-rauc-install` label.
+`rauc_e2e.sh` (CI): the live handler behind a real `rauc service` — refused
+installs abort before a slot is written, a handler-less system installs a
+release-carrying bundle, and a real RAUC loads the live `system.conf`.
+
 ## Unreleased — ADR-0019 step 2: the SSH certificate plane (BOSv1.4.0+ only)
 
 ### Added — a BOSv1.4.0+ image trusts an offline user CA instead of a shared key

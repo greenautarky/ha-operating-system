@@ -1,0 +1,63 @@
+#!/bin/sh
+# ga-rauc-install-older — install ONE bundle that the release floor would
+# refuse (older than the running GA release, or built before bundles carried
+# a GA release). For an operator at a terminal on the device, as root:
+#
+#     ssh -t root@<device> ga-rauc-install-older /mnt/data/tmp/<bundle>.raucb
+#
+# It prints the running and the bundle release, asks the operator to type the
+# bundle's release back (`none` when the bundle has none), writes that string
+# as a one-shot token to /run/ga-rauc-floor/allow-older and runs
+# `rauc install`. The RAUC pre-install handler /usr/lib/rauc/ga-release-floor
+# accepts the token for that release only, for 15 minutes, and deletes it.
+# It does NOT reboot: activate the slot with `reboot` when you mean to.
+#
+# Refuses without a terminal on stdin and stdout. That is a statement of
+# intent — this is not a path for automation, the fleet dispatch
+# (ga-rauc-install) must never reach it — not the security boundary. The
+# boundary is that the token lives in a root-only directory on the host's
+# /run, which no add-on container mounts.
+#
+# GA_RAUC_FLOOR_ROOT: directory prefix for /etc and /run, for the self-test.
+
+set -eu
+
+ROOT="${GA_RAUC_FLOOR_ROOT:-}"
+TOKEN_DIR="${ROOT}/run/ga-rauc-floor"
+TOKEN="${TOKEN_DIR}/allow-older"
+
+die() { echo "[ga-rauc-install-older] $*" >&2; exit 2; }
+
+[ $# -eq 1 ] || die "usage: ga-rauc-install-older <bundle.raucb>"
+BUNDLE="$1"
+[ "$(id -u)" = "0" ] || die "must run as root"
+{ [ -t 0 ] && [ -t 1 ]; } || die "refusing: needs an operator at a terminal (use ssh -t); this is not an automation path"
+
+INFO="$(rauc info --output-format=shell "$BUNDLE")" || die "rauc info refuses $BUNDLE"
+WANT="$(printf '%s\n' "$INFO" | sed -n "s/^RAUC_META_GA_RELEASE=//p" | head -n 1 | sed -e "s/^'//" -e "s/'\$//")"
+[ -n "$WANT" ] || WANT="none"
+RUNNING="$(head -n 1 "${ROOT}/etc/ga-release" 2>/dev/null || echo unknown)"
+
+echo "running release : $RUNNING"
+if [ "$WANT" = "none" ]; then
+    echo "bundle release  : none (built before bundles carried a GA release)"
+else
+    echo "bundle release  : $WANT"
+fi
+printf 'Type the bundle release (%s) to install it past the release floor: ' "$WANT"
+read -r ANSWER || ANSWER=""
+[ "$ANSWER" = "$WANT" ] || die "not confirmed — nothing installed"
+
+umask 077
+mkdir -p "$TOKEN_DIR"
+if [ ! -d "$TOKEN_DIR" ] || [ -L "$TOKEN_DIR" ]; then die "$TOKEN_DIR is not a directory"; fi
+chown 0:0 "$TOKEN_DIR"
+chmod 700 "$TOKEN_DIR"
+rm -f "$TOKEN"
+trap 'rm -f "$TOKEN" "$TOKEN.tmp.$$"' EXIT
+printf '%s\n' "$WANT" > "$TOKEN.tmp.$$"
+mv -f "$TOKEN.tmp.$$" "$TOKEN"
+
+echo "[ga-rauc-install-older] installing $BUNDLE ($WANT) on an operator override"
+rauc install "$BUNDLE"
+echo "[ga-rauc-install-older] installed. Not rebooting — run 'reboot' to switch to it."
