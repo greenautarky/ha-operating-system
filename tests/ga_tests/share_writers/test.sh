@@ -18,8 +18,8 @@
 # file must be byte-identical AND the status file must exist at its literal
 # path with the writer's content (so "wrote nothing" cannot pass).
 #
-# With --unshare-pid the script under test is PID 2, which makes the
-# `$$`-suffixed temporary names of the pre-change writers predictable, so the
+# The sandbox has its own PID namespace, so the script under test is PID 2 — the
+# `$$`-suffixed temporary names of the pre-change writers are predictable and the
 # suite is deterministic in both directions.
 #
 # Runs every case twice when BusyBox is available: once with the host's
@@ -29,6 +29,7 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 IHOST="$ROOT/buildroot-ihost/rootfs-overlay"
+OVL=/mnt/.ihost   # where the sandbox sees $IHOST
 LIBEXEC="$ROOT/buildroot-external/rootfs-overlay/usr/libexec"
 
 pass=0; fail=0
@@ -38,9 +39,9 @@ FAIL() { echo "  FAIL  $1${2:+ ($2)}"; fail=$((fail+1)); }
 # ── the sandbox runner ──────────────────────────────────────────────────────
 BWRAP=""
 if command -v bwrap >/dev/null 2>&1; then
-  if bwrap --ro-bind / / --unshare-pid --proc /proc --dev /dev true 2>/dev/null; then
+  if timeout 20 bwrap --unshare-net --unshare-pid --ro-bind / / --proc /proc --dev /dev true 2>/dev/null; then
     BWRAP="bwrap"
-  elif sudo -n bwrap --ro-bind / / --unshare-pid --proc /proc --dev /dev true 2>/dev/null; then
+  elif timeout 20 sudo -n bwrap --unshare-net --unshare-pid --ro-bind / / --proc /proc --dev /dev true 2>/dev/null; then
     BWRAP="sudo -n bwrap"
   fi
 fi
@@ -55,7 +56,7 @@ WORK="$(mktemp -d -t share-writers-XXXXXX)"
 trap 'rm -rf "$WORK" 2>/dev/null || sudo -n rm -rf "$WORK" 2>/dev/null' EXIT
 
 STUBS="$WORK/stubs"; mkdir -p "$STUBS"
-for c in nft systemctl dmesg journalctl iw logger; do
+for c in nft systemctl dmesg journalctl iw logger reboot rmmod modprobe lsmod uhubctl; do
   printf '#!/bin/sh\nexit 0\n' > "$STUBS/$c"
 done
 # nmcli: everything connected and healthy; nothing else to report.
@@ -93,16 +94,23 @@ fresh() {
   SHARE="$C/data/supervisor/share"
 }
 
-# sbx <path-prefix> <cmd...>: run inside the sandbox with $C mounted. The stubs
-# and the BusyBox links are mounted under /mnt because $WORK itself may live
-# under the /tmp the sandbox replaces.
+# sbx <path-prefix> <cmd...>: run inside the sandbox with $C mounted. The stubs,
+# the BusyBox links and the ihost overlay (the scripts under test, as $OVL) are
+# mounted under /mnt because $WORK or the checkout may live under the /tmp the
+# sandbox replaces.
 sbx() {
   _pfx="$1"; shift
   # Bounded: a writer that blocks must fail its checks, never wedge the job.
-  timeout -k 5 60 $BWRAP --ro-bind / / --unshare-pid --proc /proc --dev /dev \
+  # Own network, IPC, UTS and PID namespaces. The writers
+  # include a firewall loader and an interface manager; even with their tools
+  # stubbed, nothing they run may ever reach the host's network stack (in CI
+  # the sandbox can run as root).
+  timeout -k 5 60 $BWRAP --unshare-net --unshare-ipc --unshare-uts --unshare-pid --die-with-parent \
+    --ro-bind / / --proc /proc --dev /dev \
     --tmpfs /mnt --bind "$C/data" /mnt/data --bind "$C/boot" /mnt/boot \
     --bind "$C/run" /run --bind "$C/tmp" /tmp \
     --ro-bind "$LIBEXEC" /usr/libexec --ro-bind "$STUBS" /mnt/.stubs \
+    --ro-bind "$IHOST" /mnt/.ihost \
     ${BBDIR:+--ro-bind "$BBDIR" /mnt/.busybox} \
     --tmpfs /sys --dir /sys/bus/sdio/devices/mmc1:0001:1 --dir /sys/class/net/wlan0 \
     --setenv PATH "$_pfx/mnt/.stubs:/usr/sbin:/usr/bin:/sbin:/bin" \
@@ -133,37 +141,37 @@ run_cases() {  # <label> <PATH prefix>
 
   echo "── [$L] ga-uplink-ladder ──"
   fresh ladder; ln -s /mnt/data/other-file "$SHARE/ga-uplink.json"
-  sbx "$P" sh "$IHOST/usr/sbin/ga-uplink-ladder" >/dev/null 2>&1
+  sbx "$P" sh "$OVL/usr/sbin/ga-uplink-ladder" >/dev/null 2>&1
   check "SW-01[$L]" "ladder status (symlink at the file)" ga-uplink.json '"rung":"none"'
 
   echo "── [$L] ga-wifi-watchdog ──"
   fresh wd-tmp; ln -s /mnt/data/other-file "$SHARE/ga-wifi-health.json.tmp"
-  sbx "$P" sh "$IHOST/usr/sbin/ga-wifi-watchdog" >/dev/null 2>&1
+  sbx "$P" sh "$OVL/usr/sbin/ga-wifi-watchdog" >/dev/null 2>&1
   check "SW-02[$L]" "watchdog health (symlink at the .tmp name)" ga-wifi-health.json '"iface": "wlan0"'
   fresh wd-dir; ln -s /mnt/data/other-dir "$SHARE/ga-wifi-health.json"
-  sbx "$P" sh "$IHOST/usr/sbin/ga-wifi-watchdog" >/dev/null 2>&1
+  sbx "$P" sh "$OVL/usr/sbin/ga-wifi-watchdog" >/dev/null 2>&1
   check "SW-03[$L]" "watchdog health (symlink to a directory at the file)" ga-wifi-health.json '"iface": "wlan0"' dir
 
   echo "── [$L] ga-firewall-gate ──"
   fresh fw-tmp; ln -s /mnt/data/other-file "$SHARE/ga-firewall-status.json.tmp.2"
-  sbx "$P" sh "$IHOST/usr/libexec/ga-firewall-gate" >/dev/null 2>&1
+  sbx "$P" sh "$OVL/usr/libexec/ga-firewall-gate" >/dev/null 2>&1
   check "SW-04[$L]" "firewall status (symlink at the .tmp.<pid> name)" ga-firewall-status.json '"ruleset_loaded": true'
   fresh fw-dir; ln -s /mnt/data/other-dir "$SHARE/ga-firewall-status.json"
-  sbx "$P" sh "$IHOST/usr/libexec/ga-firewall-gate" >/dev/null 2>&1
+  sbx "$P" sh "$OVL/usr/libexec/ga-firewall-gate" >/dev/null 2>&1
   check "SW-05[$L]" "firewall status (symlink to a directory at the file)" ga-firewall-status.json '"ruleset_loaded": true' dir
 
   echo "── [$L] ga-bluetooth-status ──"
   fresh bt-tmp; ln -s /mnt/data/other-file "$SHARE/ga-bluetooth-status.json.tmp.2"
-  sbx "$P" sh "$IHOST/usr/libexec/ga-bluetooth-status" >/dev/null 2>&1
+  sbx "$P" sh "$OVL/usr/libexec/ga-bluetooth-status" >/dev/null 2>&1
   check "SW-06[$L]" "bluetooth status (symlink at the .tmp.<pid> name)" ga-bluetooth-status.json '"schema_version": 2'
 
   echo "── [$L] ga-manage-ethernet ──"
   fresh eth-tmp; ln -s /mnt/data/other-file "$SHARE/ga-ethernet-status.json.tmp.2"
-  sbx "$P" sh "$IHOST/usr/sbin/ga-manage-ethernet" apply >/dev/null 2>&1
+  sbx "$P" sh "$OVL/usr/sbin/ga-manage-ethernet" apply >/dev/null 2>&1
   check "SW-07[$L]" "ethernet status (symlink at the .tmp.<pid> name)" ga-ethernet-status.json '"source": "default"'
 
   echo "── [$L] ga-wlan0-deauth ──"
-  DEAUTH="$IHOST/usr/sbin/ga-wlan0-deauth"
+  DEAUTH="$OVL/usr/sbin/ga-wlan0-deauth"
   PUBLISH_ONE='GA_DEAUTH_TEST=1 . "$0"; publish_counter 4 bid "" "\"3\":4" 3'
   fresh deauth-lock; ln -s /mnt/data/other-file "$SHARE/ga-wlan0-deauth.json.lock"
   sbx "$P" sh -c "$PUBLISH_ONE" "$DEAUTH" >/dev/null 2>&1
@@ -228,7 +236,14 @@ run_cases() {  # <label> <PATH prefix>
   fi
 }
 
-echo "share_writers — status files in the shared directory ($BWRAP)"
+echo "share_writers — status files in the shared directory ($BWRAP, $(id -un))"
+# The sandbox must see the scripts, the helper, and the STUBS in front of the
+# real tools — otherwise every "unchanged" check would pass over nothing.
+fresh probe
+if ! sbx "" sh -c '[ -r /mnt/.ihost/usr/sbin/ga-uplink-ladder ] && [ -x /usr/libexec/ga-share-publish ] \
+      && [ "$(command -v nft)" = /mnt/.stubs/nft ] && [ "$(command -v ip)" = /mnt/.stubs/ip ]'; then
+  echo "FATAL: the sandbox does not see the scripts under test or the stubs" >&2; exit 1
+fi
 run_cases host ""
 if [ -n "$BBDIR" ]; then
   run_cases busybox "/mnt/.busybox:"
