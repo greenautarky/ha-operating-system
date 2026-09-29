@@ -27,12 +27,16 @@ role="${1:-}"
 identity="${2:-}"
 
 die() { echo "ga-ssh-principals: $*" >&2; exit 2; }
+# A refused value is never echoed: it may be anything a writer handed over,
+# and the journal is readable far more widely than the file it came from.
+# Its length is enough to tell "empty" from "garbage" when debugging.
+refused() { echo "(${#identity} bytes, not shown)"; }
 
 case "$role" in
     anchor)
         # Hardware serials vary by board; accept a conservative charset.
         case "$identity" in
-            ''|*[!A-Za-z0-9._-]*) die "refusing anchor '$identity' — empty or outside [A-Za-z0-9._-]" ;;
+            ''|*[!A-Za-z0-9._-]*) die "refusing anchor $(refused) — empty or outside [A-Za-z0-9._-]" ;;
         esac
         target="$ANCHOR_FILE" ;;
     label)
@@ -42,10 +46,10 @@ case "$role" in
         # name every device ships with. A charset test has no concept of lines
         # and rejects the newline outright.
         case "$identity" in
-            ''|*[!A-Za-z0-9-]*) die "refusing label '$identity' — empty or outside [A-Za-z0-9-]" ;;
+            ''|*[!A-Za-z0-9-]*) die "refusing label $(refused) — empty or outside [A-Za-z0-9-]" ;;
         esac
         printf '%s' "$identity" | grep -qE '^KIB-SON-[0-9]{8}$' \
-            || die "refusing label '$identity' — must match ^KIB-SON-[0-9]{8}$" ;;
+            || die "refusing label $(refused) — must match ^KIB-SON-[0-9]{8}$" ;;
     *)  die "usage: ga-ssh-principals <anchor|label> <identity>" ;;
 esac
 [ "$role" = "label" ] && target="$LABEL_FILE"

@@ -31,13 +31,23 @@ unparseable key fails the build — in the preflight (`ga_build.sh`, seconds) an
 again in the hook.
 
 Principals: `ga-sshd-prepare` writes the hardware serial as the anchor (never
-`/etc/machine-id`); `ga-ssh-principal-label` (path unit on the `/share` bridge)
+`/etc/machine-id`); `ga-ssh-principal-label` (path unit on ga_manager's own
+data directory, pinned slug:
+`/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-ssh-principal-label`)
 applies the fleet label `KIB-SON-XXXXXXXX` written by ga_manager's REST-only
-`ssh-principals-write` worker; `ga-ssh-principals` validates both and rebuilds
-the file atomically. The principals bind mount is *wanted*, not required: if it
+`ssh-principals-write` worker (ga_manager ≥ 0.217.0); `ga-ssh-principals`
+validates both and rebuilds the file atomically. The principals bind mount is *wanted*, not required: if it
 fails, sshd still starts for break-glass. `ga-enroll` publishes the host public
 key in the enrol-state bridge (certificate plane only) for the fleet-manager
 host-key register.
+
+Label hardening (before the first BOSv1.4.0 rc): the principals label is read
+from ga_manager's own data directory and must match this device. The host
+requires a regular file (no symlink), reads at most 32 bytes, validates the
+shape, and — when `/mnt/data/ga-device-label` exists — requires the label to
+equal it (without that file it accepts a shape-valid label and logs why).
+Refused values are logged by length only, never echoed. The oneshot has a
+`TimeoutStartSec`. The `/share/ga-ssh-principal-label` path is no longer read.
 
 Ops: `scripts/ops/ga-sign-ssh-cert.sh` (YubiKey PIV via PKCS#11; file CAs only
 for tests; label + anchor principals; ≤24 h; ledger + fleet-manager mirror) and

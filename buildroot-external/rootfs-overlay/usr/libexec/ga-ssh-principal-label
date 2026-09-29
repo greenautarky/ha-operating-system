@@ -3,28 +3,80 @@
 # ga_manager (ADR-0019 step 2, amendment C).
 #
 # ga_manager's REST-only `ssh-principals-write` worker cannot see /etc/ssh (an
-# addon container never can), so it writes the label to the /share bridge and
-# this host-side unit carries it across. ga-ssh-principals re-validates it
-# (charset first, then ^KIB-SON-[0-9]{8}$) and rebuilds the principals file
-# atomically, keeping the hardware anchor. A value it refuses changes nothing.
+# addon container never can). It writes the label into its OWN data directory,
+# which the host sees under the pinned slug listed in /etc/ga-addon-prime.conf:
 #
-# Removing the bridge file does NOT remove the label: revocation is done by
-# certificate expiry, not by a file an addon can delete.
+#   /mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-ssh-principal-label
+#
+# The path is static on purpose — no glob over *_ga_manager, which would match
+# any add-on whose slug merely ends that way. Only ga_manager writes there.
+#
+# Before anything reaches ga-ssh-principals, this script requires:
+#   1. a regular file, not a symlink, not a device or FIFO;
+#   2. a bounded read (at most 32 bytes — a label is 16 plus a newline);
+#   3. exactly one label: charset [A-Za-z0-9-], shape ^KIB-SON-[0-9]{8}$;
+#   4. equality with this device's own label when /mnt/data/ga-device-label
+#      exists. Without that file the label is accepted on shape alone (the
+#      worker has already compared it with its own device_id) and the journal
+#      says so.
+# A refused value is never printed — only its length. ga-ssh-principals then
+# re-validates and rebuilds the principals file atomically, keeping the anchor.
+#
+# Removing the file does NOT remove the label: revocation is done by
+# certificate expiry, not by deleting a file.
 #
 # No-op on a shared-plane image (no user CA baked, i.e. below BOSv1.4.0).
+#
+# GA_ROOT relocates every default path under a fixture root (tests only).
 set -u
-CA_PUB="${GA_SSH_CA_PUB:-/etc/ssh/ga_user_ca.pub}"
-BRIDGE="${GA_SSH_LABEL_BRIDGE:-/mnt/data/supervisor/share/ga-ssh-principal-label}"
+R="${GA_ROOT:-}"
+CA_PUB="${GA_SSH_CA_PUB:-$R/etc/ssh/ga_user_ca.pub}"
+SRC="${GA_SSH_LABEL_BRIDGE:-$R/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-ssh-principal-label}"
+OWN_FILE="${GA_DEVICE_LABEL_FILE:-$R/mnt/data/ga-device-label}"
 PRINCIPALS_BIN="${GA_SSH_PRINCIPALS_BIN:-/usr/libexec/ga-ssh-principals}"
+MAX=32
+
+log() { echo "ga-ssh-principal-label: $*" >&2; }
+
+# Bounded read that keeps trailing newlines (a command substitution strips
+# them; the sentinel preserves them so a second line cannot hide).
+read_bounded() { _v=$(head -c "$MAX" "$1" 2>/dev/null; echo x); printf '%s' "${_v%x}"; }
+
+valid_label() {
+    case "$1" in ''|*[!A-Za-z0-9-]*) return 1 ;; esac
+    printf '%s' "$1" | grep -qE '^KIB-SON-[0-9]{8}$'
+}
 
 [ -s "$CA_PUB" ] || exit 0
-[ -r "$BRIDGE" ] || exit 0
-# Exactly one line is a label; anything longer is refused whole, never trimmed
-# to its first line — a second line is what an injection would look like.
-n=$(grep -c '' "$BRIDGE" 2>/dev/null || echo 0)
-if [ "$n" != "1" ]; then
-    echo "ga-ssh-principal-label: $BRIDGE has $n lines, want exactly 1 — ignored" >&2
+# Absent (and not a dangling link) → nothing delivered yet.
+[ -e "$SRC" ] || [ -L "$SRC" ] || exit 0
+if [ -L "$SRC" ] || [ ! -f "$SRC" ]; then
+    log "$SRC is not a regular file — ignored, principals unchanged"
     exit 1
 fi
-label=$(tr -d '\r\n' < "$BRIDGE")
+
+raw=$(read_bounded "$SRC")
+nl='
+'
+label=${raw%"$nl"}           # exactly one trailing newline allowed
+if ! valid_label "$label"; then
+    log "refusing the delivered label (${#raw} bytes) — not exactly one KIB-SON-<8 digits> line; principals unchanged"
+    exit 2
+fi
+
+if [ -e "$OWN_FILE" ]; then
+    own=""
+    [ -f "$OWN_FILE" ] && [ ! -L "$OWN_FILE" ] && own=$(read_bounded "$OWN_FILE" | tr -d ' \t\r\n')
+    if ! valid_label "$own"; then
+        log "$OWN_FILE exists but holds no usable label — refusing the delivered label (fail closed)"
+        exit 2
+    fi
+    if [ "$label" != "$own" ]; then
+        log "refusing the delivered label — it is not this device's label ($own); principals unchanged"
+        exit 2
+    fi
+else
+    log "no $OWN_FILE — cannot compare with this device's own label; accepting a shape-valid label (ga_manager compared it with its device_id)"
+fi
+
 exec "$PRINCIPALS_BIN" label "$label"

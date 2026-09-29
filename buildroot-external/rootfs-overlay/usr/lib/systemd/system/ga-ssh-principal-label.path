@@ -1,10 +1,12 @@
 [Unit]
-Description=Watch the ga_manager SSH principal label bridge (ADR-0019)
+Description=Watch ga_manager's SSH principal label in its own data directory (ADR-0019)
 ConditionPathExists=/etc/ssh/ga_user_ca.pub
 After=hassos-overlay.service mnt-data.mount
 
 [Path]
-PathChanged=/mnt/data/supervisor/share/ga-ssh-principal-label
+# ga_manager's private data dir under its PINNED slug (/etc/ga-addon-prime.conf).
+# Static on purpose: no glob over *_ga_manager.
+PathChanged=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-ssh-principal-label
 Unit=ga-ssh-principal-label.service
 
 [Install]
