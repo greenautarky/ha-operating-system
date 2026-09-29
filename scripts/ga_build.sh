@@ -2519,9 +2519,16 @@ if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]];
       echo "ERROR: the container image scan is BROKEN (exit ${_img_rc}) — an unscanned image must not ship as scanned"
       exit 1
     fi
-  else
-    echo "WARNING: no baked container images under ${OUT}/build/hassio-*/images — the container image scan did NOT run" \
+  elif [[ "${MODE:-full}" == "kernel" ]]; then
+    # A kernel-only rebuild does not produce the data partition; say so loudly.
+    echo "WARNING: no baked container images under ${OUT}/build/hassio-*/images (MODE=kernel) — the container image scan did NOT run" \
       | tee "$_cve_scan_file"
+  else
+    # Every other mode bakes the data partition, so its images must be there to
+    # be scanned — no image ships as "scanned" without having been.
+    echo "ERROR: no baked container images under ${OUT}/build/hassio-*/images (MODE=${MODE:-full}) — refusing to build an unscanned image" \
+      | tee "$_cve_scan_file"
+    exit 1
   fi
 else
   # Fail closed: no image ships without a scanned SBOM.

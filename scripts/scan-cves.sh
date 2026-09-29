@@ -83,18 +83,27 @@ while [[ $# -gt 0 ]]; do
     --strict)   STRICT=true;      shift ;;
     --no-strict) STRICT=false;    shift ;;
     --policy)
-      case "$2" in d1|report) POLICY="$2" ;; *) echo "Unknown policy: $2 (d1|report)"; exit 1 ;; esac
+      case "$2" in d1|report) POLICY="$2" ;; *) echo "Unknown policy: $2 (d1|report)"; exit 2 ;; esac
       shift 2 ;;
     --channel)
-      case "$2" in stable|beta|dev) CHANNEL="$2" ;; *) echo "Unknown channel: $2 (stable|beta|dev)"; exit 1 ;; esac
+      case "$2" in stable|beta|dev) CHANNEL="$2" ;; *) echo "Unknown channel: $2 (stable|beta|dev)"; exit 2 ;; esac
       shift 2 ;;
     --help|-h)
       sed -n '2,28p' "$0"
       exit 0
       ;;
-    *) echo "Unknown arg: $1"; exit 1 ;;
+    # A usage error exits 2 ("the scan did not run"), never 1: callers read 1
+    # as "the policy blocks", and a typo must not be reported as a finding.
+    *) echo "Unknown arg: $1"; exit 2 ;;
   esac
 done
+
+# #8 of the 2026-09-29 review: under the decided policy CRITICAL must be in the
+# severity set, or the policy would silently see nothing to block.
+if [[ "$POLICY" == "d1" && "$SCAN_IMAGES" == "true" && ",${SEVERITY}," != *",CRITICAL,"* ]]; then
+  echo "ERROR: --severity '${SEVERITY}' leaves out CRITICAL — the image policy could not see what it has to block"
+  exit 2
+fi
 
 # trivy is required for the container images and for the OS fallback path, but
 # NOT for an SBOM already enriched by cve-check — that path reads CycloneDX
@@ -138,7 +147,8 @@ load_allowlist() {
   local today; today="$(date +%Y-%m-%d)"
   local latest; latest="$(date -d "+${ALLOW_MAX_DAYS} days" +%Y-%m-%d)"
   local cve owner expiry reason
-  while read -r cve owner expiry reason; do
+  # `|| [[ -n ... ]]`: a last line without a trailing newline is still an entry.
+  while read -r cve owner expiry reason || [[ -n "${cve:-}" ]]; do
     [[ -z "${cve:-}" || "${cve:0:1}" == "#" ]] && continue
     if [[ ! "${expiry:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
       echo "  WARN: allowlist entry '${cve}' has no valid expiry date — ignoring it"
@@ -218,13 +228,27 @@ scan_one_image() {
   # --list-all-pkgs is what turns "no findings" into a CHECKABLE claim: trivy
   # reports every package it CONSIDERED, so a verdict of "clean" can be held
   # against the number of packages it actually looked at.
-  if ! trivy image --severity "$SEVERITY" --list-all-pkgs --format json --output "$report" "$@" 2>/dev/null; then
+  if ! trivy image --severity "$SEVERITY" --list-all-pkgs --format json --output "$report" "$@" 2>"${report%.json}.err"; then
     echo "  ERROR: could not scan ${label} (not pullable / not readable) — NOT scanned, not clean"
+    echo "         cause: $(grep -E 'FATAL|ERROR|error' "${report%.json}.err" 2>/dev/null | tail -n1 | cut -c1-240)"
     img_unscannable=$((img_unscannable + 1)); UNSCANNABLE_NAMES+=("$label")
     jq -cn --arg i "$label" '{image:$i, state:"unscannable"}' >> "$IMG_LIST_FILE"
     return 0
   fi
   pkgs=$(jq '[.Results[]? | select(.Class == "os-pkgs" or .Class == "lang-pkgs") | .Packages // []] | flatten | length' "$report" 2>/dev/null || echo 0)
+  # Language packages cover a distroless image, but they must not paper over an
+  # OS layer trivy detected and then evaluated nothing in: if an OS family was
+  # detected, OS packages have to be there too.
+  local os_family os_pkgs
+  os_family=$(jq -r '.Metadata.OS.Family // empty' "$report" 2>/dev/null || true)
+  os_pkgs=$(jq '[.Results[]? | select(.Class == "os-pkgs") | .Packages // []] | flatten | length' "$report" 2>/dev/null || echo 0)
+  if [[ -n "$os_family" && "${os_pkgs:-0}" -eq 0 ]]; then
+    echo "  ERROR: BLIND SCAN — OS '${os_family}' detected but ZERO OS packages evaluated in this image."
+    echo "         Its language packages do not make up for an unscanned OS layer."
+    IMG_BLIND=$((IMG_BLIND + 1))
+    jq -cn --arg i "$label" --arg f "$os_family" '{image:$i, state:"blind", os_family:$f, packages:0}' >> "$IMG_LIST_FILE"
+    return 0
+  fi
   if [[ "${pkgs:-0}" -eq 0 ]]; then
     # NOT a clean image. Trivy returns success having evaluated nothing when
     # it has no matcher for the image's package family — the empty report is
