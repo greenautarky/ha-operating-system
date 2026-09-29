@@ -418,6 +418,12 @@ jobs:
       - name: ga-publish-services (services address -> /share bridge)
         run: sh tests/ga_tests/publish_services/test.sh
 
+      - name: ga-root-shadow (per-device root password hash, ADR-0039)
+        # Drives the real helper with real bind mounts in a private mount
+        # namespace; the emergency-mode case loop-mounts an ext4 image, hence
+        # sudo. GA_RS_REQUIRE_ALL=1: a skipped case fails the step.
+        run: sudo env GA_RS_REQUIRE_ALL=1 sh tests/ga_tests/root_shadow/selftest.sh
+
   # Prove the GATES can go red AND green — the thing review cannot see.
   #
   # A guard that cannot fail is indistinguishable from a guard that works, and
