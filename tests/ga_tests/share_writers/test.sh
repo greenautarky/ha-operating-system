@@ -133,7 +133,7 @@ check() {  # <id> <what> <name> <needle> [dir]
     else FAIL "$_id $_what: linked file was written" "now: $(head -c 80 "$C/data/other-file" | tr '\n' ' ')"; fi
   fi
   if published "$_name" "$_needle"; then PASS "$_id $_what: status published at the literal path"
-  else FAIL "$_id $_what: status NOT published at the literal path" "$(ls -l "$SHARE" | tr '\n' ';')"; fi
+  else FAIL "$_id $_what: status NOT published at the literal path" "$(ls -l "$SHARE" | tr '\n' ';') writer said: $(tail -n 4 "$C/out" 2>/dev/null | tr '\n' ';')"; fi
 }
 
 run_cases() {  # <label> <PATH prefix>
@@ -141,43 +141,43 @@ run_cases() {  # <label> <PATH prefix>
 
   echo "── [$L] ga-uplink-ladder ──"
   fresh ladder; ln -s /mnt/data/other-file "$SHARE/ga-uplink.json"
-  sbx "$P" sh "$OVL/usr/sbin/ga-uplink-ladder" >/dev/null 2>&1
+  sbx "$P" sh "$OVL/usr/sbin/ga-uplink-ladder" >"$C/out" 2>&1
   check "SW-01[$L]" "ladder status (symlink at the file)" ga-uplink.json '"rung":"none"'
 
   echo "── [$L] ga-wifi-watchdog ──"
   fresh wd-tmp; ln -s /mnt/data/other-file "$SHARE/ga-wifi-health.json.tmp"
-  sbx "$P" sh "$OVL/usr/sbin/ga-wifi-watchdog" >/dev/null 2>&1
+  sbx "$P" sh "$OVL/usr/sbin/ga-wifi-watchdog" >"$C/out" 2>&1
   check "SW-02[$L]" "watchdog health (symlink at the .tmp name)" ga-wifi-health.json '"iface": "wlan0"'
   fresh wd-dir; ln -s /mnt/data/other-dir "$SHARE/ga-wifi-health.json"
-  sbx "$P" sh "$OVL/usr/sbin/ga-wifi-watchdog" >/dev/null 2>&1
+  sbx "$P" sh "$OVL/usr/sbin/ga-wifi-watchdog" >"$C/out" 2>&1
   check "SW-03[$L]" "watchdog health (symlink to a directory at the file)" ga-wifi-health.json '"iface": "wlan0"' dir
 
   echo "── [$L] ga-firewall-gate ──"
   fresh fw-tmp; ln -s /mnt/data/other-file "$SHARE/ga-firewall-status.json.tmp.2"
-  sbx "$P" sh "$OVL/usr/libexec/ga-firewall-gate" >/dev/null 2>&1
+  sbx "$P" sh "$OVL/usr/libexec/ga-firewall-gate" >"$C/out" 2>&1
   check "SW-04[$L]" "firewall status (symlink at the .tmp.<pid> name)" ga-firewall-status.json '"ruleset_loaded": true'
   fresh fw-dir; ln -s /mnt/data/other-dir "$SHARE/ga-firewall-status.json"
-  sbx "$P" sh "$OVL/usr/libexec/ga-firewall-gate" >/dev/null 2>&1
+  sbx "$P" sh "$OVL/usr/libexec/ga-firewall-gate" >"$C/out" 2>&1
   check "SW-05[$L]" "firewall status (symlink to a directory at the file)" ga-firewall-status.json '"ruleset_loaded": true' dir
 
   echo "── [$L] ga-bluetooth-status ──"
   fresh bt-tmp; ln -s /mnt/data/other-file "$SHARE/ga-bluetooth-status.json.tmp.2"
-  sbx "$P" sh "$OVL/usr/libexec/ga-bluetooth-status" >/dev/null 2>&1
+  sbx "$P" sh "$OVL/usr/libexec/ga-bluetooth-status" >"$C/out" 2>&1
   check "SW-06[$L]" "bluetooth status (symlink at the .tmp.<pid> name)" ga-bluetooth-status.json '"schema_version": 2'
 
   echo "── [$L] ga-manage-ethernet ──"
   fresh eth-tmp; ln -s /mnt/data/other-file "$SHARE/ga-ethernet-status.json.tmp.2"
-  sbx "$P" sh "$OVL/usr/sbin/ga-manage-ethernet" apply >/dev/null 2>&1
+  sbx "$P" sh "$OVL/usr/sbin/ga-manage-ethernet" apply >"$C/out" 2>&1
   check "SW-07[$L]" "ethernet status (symlink at the .tmp.<pid> name)" ga-ethernet-status.json '"source": "default"'
 
   echo "── [$L] ga-wlan0-deauth ──"
   DEAUTH="$OVL/usr/sbin/ga-wlan0-deauth"
   PUBLISH_ONE='GA_DEAUTH_TEST=1 . "$0"; publish_counter 4 bid "" "\"3\":4" 3'
   fresh deauth-lock; ln -s /mnt/data/other-file "$SHARE/ga-wlan0-deauth.json.lock"
-  sbx "$P" sh -c "$PUBLISH_ONE" "$DEAUTH" >/dev/null 2>&1
+  sbx "$P" sh -c "$PUBLISH_ONE" "$DEAUTH" >"$C/out" 2>&1
   check "SW-08[$L]" "deauth counter (symlink at the old lock name)" ga-wlan0-deauth.json '"reason3_total":4'
   fresh deauth-nolock
-  sbx "$P" sh -c "$PUBLISH_ONE" "$DEAUTH" >/dev/null 2>&1
+  sbx "$P" sh -c "$PUBLISH_ONE" "$DEAUTH" >"$C/out" 2>&1
   if [ -z "$(ls -A "$SHARE" | grep -v '^ga-wlan0-deauth.json$')" ]; then
     PASS "SW-09[$L] deauth leaves nothing but its status file in the shared dir"
   else
@@ -188,7 +188,7 @@ run_cases() {  # <label> <PATH prefix>
   fresh deauth-read
   printf '{"healer_marks":["FROM-OTHER-FILE"]}\n' > "$C/data/other-file"
   ln -s /mnt/data/other-file "$SHARE/ga-wlan0-deauth.json"
-  sbx "$P" sh -c "$PUBLISH_ONE" "$DEAUTH" >/dev/null 2>&1
+  sbx "$P" sh -c "$PUBLISH_ONE" "$DEAUTH" >"$C/out" 2>&1
   if published ga-wlan0-deauth.json '"reason3_total":4' && ! grep -q FROM-OTHER-FILE "$SHARE/ga-wlan0-deauth.json"; then
     PASS "SW-10[$L] deauth marks are read only from a regular file at the literal path"
   else
@@ -197,7 +197,7 @@ run_cases() {  # <label> <PATH prefix>
   # ...while marks in a genuine status file are preserved (the two-writer seam).
   fresh deauth-keep
   printf '{"reason3_total":1,"healer_marks":["2026-09-29T10:00:00Z"]}\n' > "$SHARE/ga-wlan0-deauth.json"
-  sbx "$P" sh -c "$PUBLISH_ONE" "$DEAUTH" >/dev/null 2>&1
+  sbx "$P" sh -c "$PUBLISH_ONE" "$DEAUTH" >"$C/out" 2>&1
   if grep -q '"healer_marks":\["2026-09-29T10:00:00Z"\]' "$SHARE/ga-wlan0-deauth.json" \
      && grep -q '"reason3_total":4' "$SHARE/ga-wlan0-deauth.json"; then
     PASS "SW-11[$L] deauth preserves healer_marks from a regular status file"
