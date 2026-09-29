@@ -2762,10 +2762,31 @@ _ssh_legacy_key_present() {
   return 1
 }
 
-_ssh_ca_configured() {
+# The files sshd actually reads: the main config, plus the drop-ins it
+# INCLUDES. A drop-in that sshd_config does not include is dead text — counting
+# it would make the gate green on a directive the daemon never sees (the
+# certificate plane arrives as a drop-in since ADR-0019 step 2).
+GA_SSHD_DROPIN_DIR_T="${TARGET}/etc/ssh/sshd_config.d"
+_ssh_includes_dropins() {
   [[ -r "$GA_SSHD_CONFIG_T" ]] || return 1
-  grep -qE '^[[:space:]]*TrustedUserCAKeys[[:space:]]+' "$GA_SSHD_CONFIG_T"
+  grep -qE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf[[:space:]]*$' "$GA_SSHD_CONFIG_T"
 }
+_ssh_effective_cfgs() {
+  [[ -r "$GA_SSHD_CONFIG_T" ]] && printf '%s\n' "$GA_SSHD_CONFIG_T"
+  if _ssh_includes_dropins; then
+    local f
+    for f in "$GA_SSHD_DROPIN_DIR_T"/*.conf; do [[ -r "$f" ]] && printf '%s\n' "$f"; done
+  fi
+  return 0
+}
+_ssh_directive() {  # <keyword> — succeeds if any effective config sets it
+  local f
+  while IFS= read -r f; do
+    grep -qE "^[[:space:]]*$1[[:space:]]+" "$f" && return 0
+  done < <(_ssh_effective_cfgs)
+  return 1
+}
+_ssh_ca_configured() { _ssh_directive TrustedUserCAKeys; }
 
 # ---- which plane does the image DECLARE? ---------------------------------
 GA_REL_FOR_SSH="$(head -1 "${TARGET}/etc/ga-release" 2>/dev/null | tr -d '\r\n')"
@@ -2798,7 +2819,7 @@ if [[ "$SSH_CONTENT_PLANE" == "shared" ]]; then
     _fail "SSH-05: image is on the shared plane but neither the dropbear nor the sshd unit drop-in exists"
   fi
 else
-  if [[ -r "$GA_SSHD_CONFIG_T" ]] && grep -qE '^[[:space:]]*AuthorizedPrincipalsFile[[:space:]]+' "$GA_SSHD_CONFIG_T"; then
+  if _ssh_directive AuthorizedPrincipalsFile; then
     _pass "SSH-05: sshd scopes certificates per device (AuthorizedPrincipalsFile set)"
   else
     _fail "SSH-05: certificate plane without AuthorizedPrincipalsFile — one cert would open EVERY device"
@@ -2856,6 +2877,31 @@ if [[ "$SSH_CONTENT_PLANE" == "ca" ]]; then
     _pass "SSH-07: user-CA public key is baked and parses as a real key"
   else
     _fail "SSH-07: $GA_CA_PUB_T is not a valid OpenSSH public key"
+  fi
+fi
+
+# SSH-09: the rest of the certificate plane (ADR-0019 step 2). Each item has a
+# concrete failure behind it that no other check sees:
+#   * authorized_keys must hold EXACTLY ONE key — the break-glass key. A second
+#     line is a static key nobody inventoried; zero lines means sshd never
+#     starts (ConditionFileNotEmpty) and the device has no SSH at all.
+#   * the principals bind mount and its writers must be in the image, or no
+#     certificate is ever accepted and break-glass becomes the routine door.
+if [[ "$SSH_CONTENT_PLANE" == "ca" ]]; then
+  _ssh09_bad=()
+  _ssh09_keys=0
+  if [[ -r "$GA_SSH_AK" ]]; then
+    _ssh09_keys=$(grep -cE '^(ssh-ed25519|sk-ssh-ed25519@openssh\.com|ecdsa-sha2-|sk-ecdsa-sha2-|ssh-rsa) ' "$GA_SSH_AK" || true)
+  fi
+  [[ "$_ssh09_keys" == "1" ]] || _ssh09_bad+=("baked authorized_keys holds ${_ssh09_keys} keys, want exactly 1 (break-glass)")
+  [[ -f "${TARGET}/usr/lib/systemd/system/etc-ssh-principals.mount" ]] || _ssh09_bad+=("etc-ssh-principals.mount missing")
+  [[ -x "${TARGET}/usr/libexec/ga-ssh-principals" ]]        || _ssh09_bad+=("/usr/libexec/ga-ssh-principals missing")
+  [[ -x "${TARGET}/usr/libexec/ga-ssh-principal-label" ]]   || _ssh09_bad+=("/usr/libexec/ga-ssh-principal-label missing")
+  grep -qs 'ga-ssh-principals' "${TARGET}/usr/libexec/ga-sshd-prepare" || _ssh09_bad+=("ga-sshd-prepare does not write the anchor principal")
+  if (( ${#_ssh09_bad[@]} == 0 )); then
+    _pass "SSH-09: certificate plane complete — one break-glass key, principals mount and writers present"
+  else
+    _fail "SSH-09: certificate plane incomplete — $(IFS='; '; echo "${_ssh09_bad[*]}")"
   fi
 fi
 

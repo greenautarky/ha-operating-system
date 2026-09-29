@@ -1,0 +1,12 @@
+[Unit]
+Description=Apply the fleet label SSH principal from ga_manager (ADR-0019)
+ConditionPathExists=/etc/ssh/ga_user_ca.pub
+RequiresMountsFor=/mnt/data
+After=etc-ssh-principals.mount mnt-data.mount
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/ga-ssh-principal-label
+
+[Install]
+WantedBy=multi-user.target

@@ -16,6 +16,7 @@
 #
 #   /root/.ssh                 ← /mnt/overlay/root/.ssh        (root-.ssh.mount)
 #   /etc/ssh/keys              ← /mnt/overlay/etc/ssh/keys     (etc-ssh-keys.mount)
+#   /etc/ssh/principals        ← /mnt/overlay/etc/ssh/principals (etc-ssh-principals.mount)
 #   /etc/hostname              ← /mnt/overlay/etc/hostname     (etc-hostname.mount)
 #   /etc/hosts                 ← /mnt/overlay/etc/hosts        (etc-hosts.mount)
 #   /etc/systemd/timesyncd.conf ← /mnt/overlay/etc/systemd/... (etc-systemd-timesyncd.conf.mount)
@@ -105,6 +106,10 @@ fi
 # detail the whole SSH path would hang on — so it is made explicit here, next
 # to the other overlay seeds.
 mkdir -p /mnt/overlay/etc/ssh/keys
+# etc-ssh-principals.mount (ADR-0019 step 2): this device's certificate
+# principals. Empty and unused below BOSv1.4.0; sshd's StrictModes refuses a
+# group/world-writable directory on the path, hence the explicit mode.
+mkdir -p /mnt/overlay/etc/ssh/principals && chmod 0755 /mnt/overlay/etc/ssh/principals
 
 # --- SSH operator keys (GA-specific) ----------------------------------------
 # Seeds /mnt/overlay/root/.ssh/authorized_keys so sshd (port 22222) can

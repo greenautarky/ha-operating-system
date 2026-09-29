@@ -63,6 +63,7 @@ NB_ENV="${GA_ENROLL_NB_ENV:-/mnt/data/netbird/netbird.env}"
 HA_UUID_STORE="${GA_ENROLL_HA_UUID_STORE:-/mnt/data/supervisor/homeassistant/.storage/core.uuid}"
 SHARE_PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
 SSH_POSTURE="${GA_ENROLL_SSH_POSTURE:-/usr/libexec/ga-ssh-posture}"
+SSH_HOST_PUB="${GA_ENROLL_SSH_HOST_PUB:-/etc/ssh/keys/ssh_host_ed25519_key.pub}"
 
 log()  { echo "${LOG_TAG}: $*"; }
 warn() { echo "${LOG_TAG}: WARNING: $*" >&2; }
@@ -219,9 +220,18 @@ ga_env=""
 # belongs in the journal next to the enrolment it rode in on (rule 44).
 ssh_auth=""
 [ -x "$SSH_POSTURE" ] && ssh_auth=$("$SSH_POSTURE")
+# ssh_host_key (ADR-0019 §5): the device's SSH host PUBLIC key, "<type>
+# <base64>" without the comment, so ga_manager can register it with the
+# fleet-manager (first-write-wins) and operators can verify the host instead
+# of trusting on first use. Public data — never the private half. Only on the
+# certificate plane: the pre-cut population is left exactly as it is.
+ssh_host_key=""
+if [ "$ssh_auth" = "ca" ] && [ -r "$SSH_HOST_PUB" ]; then
+    ssh_host_key=$(awk 'NF>=2 {print $1" "$2; exit}' "$SSH_HOST_PUB")
+fi
 jq -cn --arg hw "$hw_serial" --arg url "$FLEET_URL" --arg ipurl "$FLEET_URL_IP" \
        --arg pid "$prov_id" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-       --arg rel "$ga_release" --arg env "$ga_env" --arg fenv "$fleet_env" --arg ssh "$ssh_auth" \
-       '{hw_serial:$hw, fleet_url:$url, fleet_url_ip:$ipurl, provisional_id:$pid, enrolled_at:$at, ga_release:$rel, ga_env:$env, fleet_env:$fenv, ssh_auth:$ssh}' \
+       --arg rel "$ga_release" --arg env "$ga_env" --arg fenv "$fleet_env" --arg ssh "$ssh_auth" --arg hk "$ssh_host_key" \
+       '{hw_serial:$hw, fleet_url:$url, fleet_url_ip:$ipurl, provisional_id:$pid, enrolled_at:$at, ga_release:$rel, ga_env:$env, fleet_env:$fenv, ssh_auth:$ssh, ssh_host_key:$hk}' \
     | "$SHARE_PUBLISH" "$STATE_FILE" 0644
 log "state written to ${STATE_FILE}"

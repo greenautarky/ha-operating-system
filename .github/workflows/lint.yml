@@ -379,6 +379,27 @@ jobs:
       - name: ssh-plane build-gate self-test (ADR-0019 — both directions)
         run: ./tests/gates/ssh_plane/selftest.sh
 
+      # ADR-0019 step 2. The principals writers (anchor from hardware, label
+      # from the ga_manager /share bridge) against fixture dirs, both ways.
+      - name: ssh-principals self-test (ADR-0019 step 2 — anchor + label)
+        run: ./tests/gates/ssh_principals/selftest.sh
+
+      # The bake hook that puts a BOSv1.4.0+ image on the certificate plane:
+      # refuses without real keys, never touches a pre-cut image, and what it
+      # produces passes the live build gate.
+      - name: ssh cert-plane bake hook self-test (ADR-0019 step 2)
+        run: ./tests/gates/ssh_cert_plane/selftest.sh
+
+      # The same plane against a REAL sshd: the image's sshd_config + the hook's
+      # drop-in + the live prepare/principals scripts + the live sign script,
+      # with throwaway CAs. Accept/refuse is asserted by the reason sshd logs.
+      - name: Install OpenSSH server + client for the sshd dry run
+        uses: ./.github/actions/apt-install
+        with:
+          packages: openssh-server openssh-client
+      - name: ssh cert-plane dry run against a real sshd (ADR-0019 step 2)
+        run: SSHD=/usr/sbin/sshd ./tests/gates/ssh_cert_plane/sshd_dryrun.sh -v
+
       # ADR-0027 D9: one OTA key. The keyring audit normally runs only over a
       # real build on the builder, so no pull request ever saw it fire. This
       # drives the LIVE audit over minted keyrings: a second anchor, a duplicate

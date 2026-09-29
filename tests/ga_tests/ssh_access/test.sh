@@ -119,6 +119,39 @@ run_test "SSH-D-18" "dropbear is gone (no unit, no binary)" \
   "! systemctl cat dropbear >/dev/null 2>&1 && ! command -v dropbear >/dev/null 2>&1"
 
 # =========================================================================
+# Certificate plane (ADR-0019 step 2, BOSv1.4.0+) — the device-side half.
+# =========================================================================
+# Which plane applies comes from the IMAGE (a baked user CA), never from a
+# guess. On a pre-cut image these are skipped, and SSH-D-19 says so.
+# The login matrix itself (cert accepted, other-device cert refused, shared
+# key refused, break-glass accepted) runs from the operator's machine:
+# scripts/ops/ga-ssh-cert-plane-verify.sh — this box has no client to test with.
+GA_LEGACY_FLEET_KEY_FP="SHA256:T+Pt2vUEG+lYv0t5qTMdFyd2Kchx6mjkOR3YZaVqcjE"
+if [ -s /etc/ssh/ga_user_ca.pub ]; then
+  run_test "SSH-D-19" "sshd EFFECTIVELY trusts the baked user CA (sshd -T, not the file)" \
+    "sshd -T -C user=root,host=localhost,addr=127.0.0.1 2>/dev/null | grep -qx 'trustedusercakeys /etc/ssh/ga_user_ca.pub'"
+  run_test "SSH-D-20" "sshd EFFECTIVELY scopes certificates per device (AuthorizedPrincipalsFile)" \
+    "sshd -T -C user=root,host=localhost,addr=127.0.0.1 2>/dev/null | grep -qx 'authorizedprincipalsfile /etc/ssh/principals/%u'"
+  run_test "SSH-D-21" "/etc/ssh/principals is a bind mount from the overlay" \
+    "mountpoint -q /etc/ssh/principals"
+  run_test "SSH-D-22" "principals for root: hardware anchor present, no 'kibu', no wildcard" \
+    "test -s /etc/ssh/principals/root && ! grep -qxE 'kibu|\\*' /etc/ssh/principals/root \
+     && grep -qvE '^KIB-SON-' /etc/ssh/principals/root"
+  run_test "SSH-D-23" "principals for root: fleet label KIB-SON-XXXXXXXX present (from ga_manager)" \
+    "grep -qxE 'KIB-SON-[0-9]{8}' /etc/ssh/principals/root"
+  run_test "SSH-D-24" "live authorized_keys: exactly ONE key (break-glass), not the shared fleet key" \
+    "[ \"\$(grep -cE '^(ssh-|ecdsa-|sk-)' $LIVE_AK)\" = 1 ] \
+     && ! ssh-keygen -lf $LIVE_AK 2>/dev/null | grep -qF '$GA_LEGACY_FLEET_KEY_FP'"
+  run_test "SSH-D-25" "ga-ssh-posture reports the certificate plane" \
+    "[ \"\$(/usr/libexec/ga-ssh-posture 2>/dev/null)\" = ca ]"
+  run_test "SSH-D-26" "host key published to the /share bridge for the fleet-manager register" \
+    "jq -er '.ssh_host_key' /mnt/data/supervisor/share/ga-enroll-state.json 2>/dev/null \
+     | grep -qx \"\$(awk '{print \$1\" \"\$2}' /etc/ssh/keys/ssh_host_ed25519_key.pub)\""
+else
+  skip_test "SSH-D-19" "certificate plane checks — no user CA baked (pre-BOSv1.4.0 image, shared plane)"
+fi
+
+# =========================================================================
 # Loopback SSH banner — implicit
 # =========================================================================
 # We previously had a banner-exchange probe via nc.

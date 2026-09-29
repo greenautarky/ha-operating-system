@@ -63,6 +63,7 @@ run_enroll() {   # run_enroll <override-file-or-empty> <logname>
   GA_ENROLL_CREDS_FILE="$W/ghcr-creds.json" GA_ENROLL_STATE_FILE="$W/share/ga-enroll-state.json" \
   GA_ENROLL_NB_ENV="$W/no-nb-env" GA_ENROLL_HA_UUID_STORE="$W/no-uuid" \
   GA_SHARE_PUBLISH="$PUB" GA_SHARE_STAGE_DIR="$W/stage" \
+  GA_ENROLL_SSH_POSTURE="${SSH_POSTURE_STUB:-$W/no-posture}" GA_ENROLL_SSH_HOST_PUB="${SSH_HOST_PUB:-$W/no-host-pub}" \
   sh "$ENROLL" > "$W/$2.out" 2>&1
   echo $? > "$W/$2.rc"
 }
@@ -134,6 +135,18 @@ CURL_LOG="$W/loud.log" PATH="$W/bin:$PATH" \
   sh "$ENROLL" > "$W/loud.out" 2>&1
 run_test "ENV-FE-11" "no GA_FLEET_HOST anywhere → WARNING naming the consequence, not an info line" \
   "grep -qi 'WARNING' '$W/loud.out' && grep -q 'NEVER enrol' '$W/loud.out'"
+
+# --- ENV-FE-12/13: the SSH host public key rides in the bridge (ADR-0019 s2) ---
+# Only on the certificate plane; the pre-cut population is left as it is.
+printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHostKeyFixtureHostKeyFixtureHostKeyFix root@kibu\n' > "$W/host.pub"
+printf '#!/bin/sh\necho ca\n' > "$W/posture-ca"; printf '#!/bin/sh\necho shared\n' > "$W/posture-shared"
+chmod +x "$W/posture-ca" "$W/posture-shared"
+SSH_POSTURE_STUB="$W/posture-ca" SSH_HOST_PUB="$W/host.pub" run_enroll "" hk-ca
+run_test "ENV-FE-12" "certificate plane → bridge carries ssh_host_key as '<type> <base64>' (no comment)" \
+  "[ \"\$(cat '$W/hk-ca.rc')\" = 0 ] && [ \"\$(jq -r .ssh_host_key '$W/share/ga-enroll-state.json')\" = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHostKeyFixtureHostKeyFixtureHostKeyFix' ]"
+SSH_POSTURE_STUB="$W/posture-shared" SSH_HOST_PUB="$W/host.pub" run_enroll "" hk-shared
+run_test "ENV-FE-13" "shared plane → ssh_host_key empty (nothing new pushed at the pre-cut fleet)" \
+  "[ \"\$(cat '$W/hk-shared.rc')\" = 0 ] && [ \"\$(jq -r .ssh_host_key '$W/share/ga-enroll-state.json')\" = '' ]"
 
 rm -rf "$W" 2>/dev/null
 suite_end
