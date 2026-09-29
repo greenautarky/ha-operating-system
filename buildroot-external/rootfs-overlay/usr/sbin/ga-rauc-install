@@ -77,16 +77,27 @@ case "$VERSION" in
 esac
 
 # Validate the optional ga_release label (defence in depth — anything able to
-# write /share/ can write the sidecar). Allow only [A-Za-z0-9.-]; on anything
-# else, DROP it and fall back to the version-only slot rather than fail the
-# whole install.
-case "$GA_RELEASE" in
-    "" ) : ;;                      # no label → version-only PROD slot
-    *[!A-Za-z0-9.-]* )
-        echo "[ga-rauc-install] WARN: ignoring malformed ga_release '$GA_RELEASE' — using version-only slot" >&2
-        GA_RELEASE=""
-        ;;
-esac
+# write /share/ can write the sidecar). Empty means the version-only PROD
+# slot. Otherwise it must be a GA release label, BOSvX.Y.Z or BOSvX.Y.Z-rcN —
+# the only names a release slot on the OTA server has. Anything else is
+# REFUSED: silently substituting the prod slot for a label we could not read
+# would install something nobody asked for. (Which releases may be installed
+# at all is decided by the RAUC pre-install handler /usr/lib/rauc/ga-release-floor,
+# not here.)
+if [ -n "$GA_RELEASE" ]; then
+    case "$GA_RELEASE" in
+        *[!A-Za-z0-9.-]* ) GA_RELEASE_OK=no ;;
+        * ) if printf '%s\n' "$GA_RELEASE" | grep -Eq '^BOSv[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$'; then
+                GA_RELEASE_OK=yes
+            else
+                GA_RELEASE_OK=no
+            fi ;;
+    esac
+    if [ "$GA_RELEASE_OK" != yes ]; then
+        echo "[ga-rauc-install] FATAL: refusing ga_release '$GA_RELEASE' — not BOSvX.Y.Z[-rcN]" >&2
+        exit 2
+    fi
+fi
 
 # Per-rc slot when a ga_release is given, else the version-only prod slot.
 # With a ga_release we FALL BACK to the prod slot on a 404 so a device is never

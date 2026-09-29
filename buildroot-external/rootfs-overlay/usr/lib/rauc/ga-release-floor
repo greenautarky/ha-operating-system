@@ -1,0 +1,189 @@
+#!/bin/sh
+# ga-release-floor — RAUC system pre-install handler: refuse a bundle whose GA
+# release is older than the release this device is running.
+#
+# Declared in /etc/rauc/system.conf as `[handlers] pre-install=`, so it comes
+# from the RUNNING rootfs, never from the bundle being installed. RAUC 1.13
+# (the version every image since 2025-07 builds) calls it for every install —
+# Supervisor's D-Bus InstallBundle, ga-rauc-install, and a manual
+# `rauc install` alike — after the bundle signature has been verified and the
+# bundle is mounted, and before any slot is touched. A non-zero exit aborts
+# the install with "Pre-install handler error" and nothing is written.
+#
+# WHY A GA RELEASE AND NOT THE RAUC VERSION
+#   Every bundle since BOSv1.2.15 carries RAUC manifest version 16.3.1.9 (the
+#   HAOS base), so that number cannot order BOSv1.3.x against BOSv1.4.x, and
+#   RAUC's own `min-bundle-version` accepts semver only. The GA release label
+#   is written into the manifest by the build as
+#       [meta.ga]
+#       release=BOSv1.4.0-rc2
+#   taken from the same /etc/ga-release that ships inside the bundle's rootfs.
+#
+# ORDER (defined here, tested in tests/gates/rauc_release_floor):
+#   BOSvX.Y.Z-devN  <  BOSvX.Y.Z-rcN  <  BOSvX.Y.Z  <  BOSvX.Y.(Z+1)-devN ...
+#   Numeric per field (1.10.0 > 1.9.0). A final release sorts AFTER its own
+#   release candidates — `sort -V` gets exactly that case wrong (it puts
+#   BOSv1.4.0 before BOSv1.4.0-rc1), so no version sort is used here.
+#
+# VERDICT
+#   bundle release >= running release  -> allow (equal = reinstall, allowed)
+#   bundle release <  running release  -> refuse
+#   bundle has no [meta.ga] release    -> refuse (every bundle built before
+#                                          the floor existed: fail closed)
+#   running or bundle release malformed -> refuse
+#   Any refusal can be lifted for ONE install by an operator — see below.
+#
+# OPERATOR OVERRIDE (the only one)
+#   As root, from a terminal on the device:
+#       ga-rauc-install-older <bundle.raucb>
+#   It shows both releases, asks the operator to type the bundle's release
+#   (or `none` for a bundle without one), writes that string to
+#   /run/ga-rauc-floor/allow-older and runs `rauc install`. This handler
+#   accepts the token only if the directory is 0700 and both it and the token
+#   are owned by the uid this handler runs as (root under rauc.service), the
+#   token is a regular single-link file no older than 15 minutes, and its
+#   content equals the bundle's release. The token is deleted when used.
+#   /run is a host tmpfs that no add-on container mounts, and nothing here
+#   reads /share. An environment variable cannot serve as the override:
+#   `rauc install` hands the job to the rauc service over D-Bus, and the
+#   handler runs in the service's environment, not the caller's.
+#
+# Argument: a directory prefix for /etc and /run, used ONLY by the self-test.
+# RAUC invokes system handlers without arguments.
+
+set -u
+
+ROOT="${1:-}"
+RELEASE_FILE="${ROOT}/etc/ga-release"
+OVERRIDE_DIR="${ROOT}/run/ga-rauc-floor"
+OVERRIDE_FILE="${OVERRIDE_DIR}/allow-older"
+OVERRIDE_MAX_AGE=900
+
+log() { echo "[ga-release-floor] $*" >&2; }
+
+# Echo "X Y Z STAGE N" for a well-formed release label, or fail.
+# STAGE: dev=0, rc=1, final=2 — a final release outranks its candidates.
+release_key() {
+    printf '%s\n' "$1" | grep -Eq '^BOSv[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(-(rc|dev)[0-9]{1,6})?$' || return 1
+    _r="${1#BOSv}"
+    _suffix=""
+    case "$_r" in *-*) _suffix="${_r#*-}"; _r="${_r%%-*}" ;; esac
+    _x="${_r%%.*}"; _r="${_r#*.}"
+    _y="${_r%%.*}"; _z="${_r#*.}"
+    case "$_suffix" in
+        "")    _st=2; _n=0 ;;
+        rc*)   _st=1; _n="${_suffix#rc}" ;;
+        dev*)  _st=0; _n="${_suffix#dev}" ;;
+        *)     return 1 ;;
+    esac
+    # Strip leading zeros so "08" is never read as octal.
+    for _v in "$_x" "$_y" "$_z" "$_st" "$_n"; do
+        _v="${_v#"${_v%%[!0]*}"}"
+        printf '%s ' "${_v:-0}"
+    done
+    echo
+}
+
+# Exit status 0 when release $1 >= release $2 (both well-formed).
+release_ge() {
+    _a="$(release_key "$1")" || return 2
+    _b="$(release_key "$2")" || return 2
+    _i=0
+    # shellcheck disable=SC2086  # word splitting into fields is the point
+    for _l in $_a; do
+        _i=$((_i + 1))
+        _rr="$(printf '%s\n' $_b | sed -n "${_i}p")"
+        if [ "$_l" -gt "$_rr" ]; then return 0; fi
+        if [ "$_l" -lt "$_rr" ]; then return 1; fi
+    done
+    return 0
+}
+
+# The `release=` values of every [meta.ga] group in the manifest, one per line.
+manifest_releases() {
+    _sec=""
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        _line="$(printf '%s' "$_line" | tr -d '\r')"
+        case "$_line" in
+            \[*\]*) _sec="$(printf '%s' "$_line" | tr -d ' \t')"; continue ;;
+            \#*|"") continue ;;
+        esac
+        [ "$_sec" = "[meta.ga]" ] || continue
+        _key="$(printf '%s' "${_line%%=*}" | tr -d ' \t')"
+        [ "$_key" = "release" ] || continue
+        _val="${_line#*=}"
+        printf '%s\n' "$_val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+    done < "$1"
+}
+
+# 0 when a valid operator token for bundle release $1 exists; consumes it.
+override_granted() {
+    _want="$1"
+    [ -e "$OVERRIDE_FILE" ] || [ -L "$OVERRIDE_FILE" ] || return 1
+    _me="$(id -u)"
+    if [ -L "$OVERRIDE_DIR" ] || [ ! -d "$OVERRIDE_DIR" ]; then
+        log "override ignored: $OVERRIDE_DIR is not a real directory"; return 1
+    fi
+    if [ "$(stat -c %u "$OVERRIDE_DIR")" != "$_me" ] || [ "$(stat -c %a "$OVERRIDE_DIR")" != "700" ]; then
+        log "override ignored: $OVERRIDE_DIR must be mode 700 and owned by uid $_me"; return 1
+    fi
+    if [ -L "$OVERRIDE_FILE" ] || [ ! -f "$OVERRIDE_FILE" ]; then
+        log "override ignored: $OVERRIDE_FILE is not a regular file"; return 1
+    fi
+    if [ "$(stat -c %u "$OVERRIDE_FILE")" != "$_me" ] || [ "$(stat -c %h "$OVERRIDE_FILE")" != "1" ]; then
+        log "override ignored: $OVERRIDE_FILE must be owned by uid $_me and have one link"; return 1
+    fi
+    _age=$(( $(date +%s) - $(stat -c %Y "$OVERRIDE_FILE") ))
+    if [ "$_age" -gt "$OVERRIDE_MAX_AGE" ] || [ "$_age" -lt -60 ]; then
+        log "override ignored: token is ${_age}s old (limit ${OVERRIDE_MAX_AGE}s)"; return 1
+    fi
+    _tok="$(head -c 128 "$OVERRIDE_FILE" | head -n 1 | tr -d '\r')"
+    if [ "$_tok" != "$_want" ]; then
+        log "override ignored: token names '$_tok', this bundle is '$_want'"; return 1
+    fi
+    rm -f "$OVERRIDE_FILE"
+    return 0
+}
+
+refuse() {
+    _why="$1"; _tok="$2"
+    if override_granted "$_tok"; then
+        log "WARNING: $_why — installing anyway on an operator override (token consumed)"
+        exit 0
+    fi
+    log "REFUSED: $_why"
+    log "An operator can install it anyway, as root on this device: ga-rauc-install-older <bundle>"
+    exit 1
+}
+
+MOUNT="${RAUC_BUNDLE_MOUNT_POINT:-}"
+MANIFEST="${MOUNT}/manifest.raucm"
+if [ -z "$MOUNT" ] || [ ! -f "$MANIFEST" ]; then
+    log "REFUSED: no bundle manifest at '${MANIFEST}' (RAUC_BUNDLE_MOUNT_POINT unset?)"
+    exit 1
+fi
+
+RUNNING="$(head -n 1 "$RELEASE_FILE" 2>/dev/null | tr -d '\r')"
+RELS="$(manifest_releases "$MANIFEST")"
+COUNT="$(printf '%s' "$RELS" | grep -c . || true)"
+
+if [ "$COUNT" -eq 0 ]; then
+    refuse "bundle carries no GA release ([meta.ga] release=); it was built before the release floor, running ${RUNNING:-unknown}" "none"
+fi
+if [ "$COUNT" -ne 1 ]; then
+    refuse "bundle carries $COUNT GA release values — ambiguous" "none"
+fi
+BUNDLE="$RELS"
+
+if ! release_key "$BUNDLE" >/dev/null; then
+    refuse "bundle GA release '$BUNDLE' is malformed" "$BUNDLE"
+fi
+if ! release_key "$RUNNING" >/dev/null; then
+    refuse "running GA release '${RUNNING}' (from $RELEASE_FILE) is missing or malformed — cannot order the bundle against it" "$BUNDLE"
+fi
+
+if release_ge "$BUNDLE" "$RUNNING"; then
+    log "allowed: bundle $BUNDLE >= running $RUNNING"
+    exit 0
+fi
+refuse "bundle $BUNDLE is older than running $RUNNING" "$BUNDLE"

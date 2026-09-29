@@ -21,6 +21,27 @@ function ga_signing_key()  { echo "${GA_SECRETS_DIR}/key.pem"; }
 function ga_signing_cert() { echo "${GA_SECRETS_DIR}/cert.pem"; }
 function ga_base_ca()      { echo "${BR2_EXTERNAL_HASSOS_PATH}/ota/rel-ca.pem"; }
 
+# The GA release the bundle being built will carry in its manifest
+# ([meta.ga] release=), read from the rootfs that goes into the same bundle —
+# so the two cannot disagree. Empty (with a loud warning) when the target has
+# no /etc/ga-release yet: ga_build.sh stamps it after the first buildroot pass
+# and rebuilds, and the build gate RFLOOR-01 fails a final bundle without it.
+# A malformed value is fatal: devices would refuse the bundle.
+function ga_bundle_release() {
+    local f="${TARGET_DIR}/etc/ga-release" rel
+    if [ ! -s "${f}" ]; then
+        echo "WARNING: ${f} is missing — this bundle carries NO GA release;" >&2
+        echo "         devices with the release floor will refuse it." >&2
+        return 0
+    fi
+    rel="$(head -n 1 "${f}" | tr -d '\r\n')"
+    if ! [[ "${rel}" =~ ^BOSv[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(-(rc|dev)[0-9]{1,6})?$ ]]; then
+        echo "FATAL: ${f} holds '${rel}', not a GA release (BOSvX.Y.Z[-rcN|-devN])" >&2
+        return 1
+    fi
+    echo "${rel}"
+}
+
 function prepare_rauc_signing() {
     local key cert
     key="$(ga_signing_key)"

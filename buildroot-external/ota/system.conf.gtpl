@@ -11,11 +11,14 @@ bootloader={{ env "BOOTLOADER" }}
 grubenv=/mnt/boot/EFI/BOOT/grubenv
 {{- end }}
 
-{{- if eq (env "BOOTLOADER") "tryboot" }}
 [handlers]
+# The GA release floor: runs from THIS rootfs for every install, after the
+# signature check, before any slot is written. See the script's header.
+pre-install=/usr/lib/rauc/ga-release-floor
+{{- if eq (env "BOOTLOADER") "tryboot" }}
 bootloader-custom-backend=/usr/lib/rauc/rpi-tryboot.sh
-
 {{- end }}
+
 [keyring]
 path=/etc/rauc/keyring.pem
 
