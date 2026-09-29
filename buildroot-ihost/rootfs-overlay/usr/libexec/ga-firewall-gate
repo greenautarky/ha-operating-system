@@ -23,7 +23,8 @@
 #
 #   * HARD INVARIANT: loopback, the NetBird mesh (wt0) and Tailscale
 #     (tailscale0) are accepted FIRST in every chain, hardcoded, never derived
-#     from policy. The fleet-manager and GACI reach :8099/:8123 over the mesh.
+#     from policy. The fleet-manager and GACI reach :8099 and HA Core (:80 on
+#     Core 2026.8+, :8123 before) over the mesh.
 #   * The drops are scoped to the PHYSICAL interfaces by name. The chain policy
 #     stays `accept`, so a truncated or half-loaded ruleset fails OPEN rather
 #     than locking the device out — and container traffic (hassio, docker0,
@@ -45,7 +46,8 @@
 # container port is terminated by a docker-proxy process ON THE HOST. That
 # traffic hits the `input` hook and is never DNAT'd forward traffic. The
 # allowlist therefore lives in `input` and covers both the host port (sshd
-# :22222) and the container port (HA Core :8123).
+# :22222) and the HA Core UI port (:80 on Core 2026.8+, :8123 before — both
+# stay allowed while the fleet is mixed, see CONTAINER_ALLOW_TCP).
 # The `forward` chain is kept as defence in depth for the case where
 # userland-proxy is turned off — then the same connections really do arrive as
 # DNAT'd forward traffic and would otherwise be unfiltered.

@@ -109,3 +109,24 @@ package updates, or RAUC OTA issues where new rootfs doesn't contain latest chan
 - **Command**: `grep 'storage.total_limit_size' /etc/fluent-bit/fluent-bit.conf | grep -v '^#' | grep -qE '[3-9][0-9]{2}M|[0-9]{4,}M'`
 - **Expected**: Active (non-commented) storage buffer is at least 300M
 - **Catches**: Insufficient buffer for Loki outage store-and-forward
+
+### CFG-32a / 32 / 33 / 34 / 32b: HA reverse-proxy trust Core RUNS (ADR-0038)
+- **Core >= 2026.8 (or version unreadable — the default):** asked of Core itself via the
+  Supervisor websocket, `http/config` (`http_config_query.py`, run inside the ga_manager
+  container), judged by `http_config_verdict.sh` on the slot the server runs:
+  - CFG-32a: `http/config` answered — FAILS otherwise, never skips
+  - CFG-32: `use_x_forwarded_for` is true
+  - CFG-33: `trusted_proxies` holds `127.0.0.1` (Core stores `127.0.0.1/32`)
+  - CFG-34: `trusted_proxies` holds the services address from `/share/ga-services.json`
+    (`ga_services_ip`, published by ga-publish-services — never a constant)
+  - CFG-32b: settled — `pending` is null and `active_config_type` is `stable`
+- **Core < 2026.8 (positively known old):** the YAML checks (configuration.yaml +
+  ga_packages/), because that Core still reads them. Bridge; removal = Odoo #1099.
+- **Why:** 2026.8 imports a YAML `http:` block once, at the first start, then ignores it.
+  The YAML checks were green-or-red on a file Core never read.
+- **Fixtures:** `selftest.sh` (CI host-suites) — must-pass and must-fail.
+
+### CFG-32c: Core refused no proxied request
+- `docker logs --since 30m homeassistant` has no `not set-up for reverse proxies` and no
+  `X-Forwarded-For header from an untrusted proxy` (http/forwarded.py). Zero log lines in
+  the window = WARN, not pass.

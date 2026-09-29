@@ -15,7 +15,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 suite_start "Frontend bundle (ga_frontend_bundle)"
 
-HA="http://localhost:8123"
+# Core's own port (80 on 2026.8+, 8123 before) — lib/ha_port.sh, ADR-0038.
+require_ha_port "FB-00"
+HA="$HA_BASE"
 COMP="/mnt/data/supervisor/homeassistant/custom_components/ga_frontend_bundle"
 CARDS="$COMP/community/cards.json"
 CFG="/mnt/data/supervisor/homeassistant/configuration.yaml"

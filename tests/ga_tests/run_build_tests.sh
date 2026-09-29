@@ -1041,22 +1041,40 @@ RAUCB="$(ls -t "${OUT}/images/"*.raucb 2>/dev/null | head -1)"
 # version.json
 VER_JSON="${OUT}/build/hassio-1.0.0/version.json"
 if [[ -f "$VER_JSON" ]]; then
-  # V1.2-clean: version.json mixes registries by design — Supervisor is a GA
-  # image (greenautarky), Core is stock upstream (ghcr.io/home-assistant/*).
+  # Supervisor and Core are both GA images; the other plugins mix registries.
   # A blanket "references greenautarky" grep is meaningless now; assert the
   # two image refs against their correct registries instead (see REG-01/02).
   SUP_IMG="$(jq -r '.images.supervisor // "unknown"' "$VER_JSON" 2>/dev/null)"
   CORE_IMG="$(jq -r '.images.core // "unknown"' "$VER_JSON" 2>/dev/null)"
-  if [[ "$SUP_IMG" == *greenautarky* ]] && [[ "$CORE_IMG" == ghcr.io/home-assistant/* ]]; then
-    _pass "BLD: version.json registries correct (supervisor=greenautarky, core=stock)"
+  # Both images are GA-built now. Upstream stopped building Core for armv7 in
+  # late 2025, so "stock upstream" no longer means "current" — it means frozen
+  # at the last armv7 tag it ever produced and no longer maintained. The
+  # armv7 bridge (greenautarky/ga-core-armv7) exists to keep this hardware on a
+  # maintained Core, and this assertion is what makes the fleet actually use it.
+  if [[ "$SUP_IMG" == *greenautarky* ]] && [[ "$CORE_IMG" == *greenautarky* ]]; then
+    _pass "BLD: version.json registries correct (supervisor + core are GA-built)"
   else
     _fail "BLD: version.json registries wrong (supervisor='$SUP_IMG' core='$CORE_IMG')"
   fi
 
   CORE_TAG="$(jq -r '.core // "unknown"' "$VER_JSON" 2>/dev/null)"
-  [[ "$CORE_TAG" =~ ^2025\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] \
-    && _pass "BLD: Core image tag is '$CORE_TAG'" \
-    || _fail "BLD: Core tag is '$CORE_TAG' (expected HA calver like 2025.11.3 or 2025.11.3.1)"
+  # A FLOOR, not an exact pin: any calver from 2026 on is acceptable, 2025 and
+  # earlier is not. Checked numerically rather than by refusing ^2025\. so it
+  # keeps working in 2027 without an edit — a guard that needs yearly
+  # maintenance is a guard that will one day be edited to make a build pass.
+  #
+  # Why a floor at all: on 2026-09-09 the fleet was measured running 2025.11.3
+  # while upstream stood at 2026.9.1, and nobody had noticed for ten months,
+  # because nothing refused it. The bridge that could carry a current Core had
+  # been proven on hardware three weeks earlier and never shipped.
+  CORE_YEAR="${CORE_TAG%%.*}"
+  if [[ ! "$CORE_TAG" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+    _fail "BLD: Core tag is '$CORE_TAG' (expected HA calver like 2026.8.2 or 2026.8.2.1)"
+  elif (( CORE_YEAR < 2026 )); then
+    _fail "BLD-CORE-FLOOR: Core tag '$CORE_TAG' is from $CORE_YEAR — this fleet must not ship a Core older than 2026. A 2025 tag is the frozen stock armv7 image upstream stopped maintaining. Build one with greenautarky/ga-core-armv7 and pin that."
+  else
+    _pass "BLD: Core image tag is '$CORE_TAG' (>= 2026, GA-built)"
+  fi
 
   # REG: Verify image refs use the correct registry — V1.2-clean retires the
   # Core fork: Supervisor stays a GA image, Core goes stock upstream.
@@ -1064,10 +1082,13 @@ if [[ -f "$VER_JSON" ]]; then
   [[ "$SUP_IMG" == *greenautarky* ]] \
     && _pass "REG-01: Supervisor image is greenautarky: $SUP_IMG" \
     || _fail "REG-01: Supervisor image is NOT greenautarky: $SUP_IMG"
-  # REG-02 (V1.2-clean): Core fork retired — Core image must be stock upstream
-  [[ "$CORE_IMG" == ghcr.io/home-assistant/* ]] \
-    && _pass "REG-02: Core image is stock upstream: $CORE_IMG" \
-    || _fail "REG-02: Core image is NOT stock ghcr.io/home-assistant/*: $CORE_IMG"
+  # REG-02: reversed 2026-09-09. V1.2-clean retired the Core fork and moved to
+  # stock upstream, which was right while upstream still built armv7. It stopped
+  # doing so in late 2025, so "stock" became "frozen". Core is a GA image again —
+  # not the old fork, but the armv7 bridge, which tracks upstream releases.
+  [[ "$CORE_IMG" == *greenautarky* ]] \
+    && _pass "REG-02: Core image is the GA armv7 build: $CORE_IMG" \
+    || _fail "REG-02: Core image is NOT a GA armv7 build: $CORE_IMG (upstream no longer builds armv7 — a stock image here is frozen)"
 
   # REG: No upstream or oliverc7 refs in version.json
   if grep -qE 'oliverc7|iHost-Open-Source' "$VER_JSON" 2>/dev/null; then
@@ -1123,23 +1144,24 @@ if [[ -f "$VER_JSON" ]]; then
     [[ "$VER_IMGS_SUP" != *greenautarky* ]] && _fail "VER-04: images.supervisor is NOT greenautarky: $VER_IMGS_SUP"
   fi
 
-  # VER-05 (V1.2-clean): core image is STOCK upstream (Core fork retired —
-  # see V1.2-CLEAN-REBUILD T2). Both .image.core and .images.core must point
-  # at ghcr.io/home-assistant/*. A `.image.core` key may be absent in a
-  # stock stable.json — only assert on refs that are present.
+  # VER-05: core image is the GA armv7 build (reversed 2026-09-28 together
+  # with REG-02 — upstream stopped building armv7 Core in late 2025, so the
+  # stock image is frozen). Both .image.core and .images.core must name
+  # ghcr.io/greenautarky/home-assistant-armv7. A `.image.core` key may be
+  # absent — only assert on refs that are present.
   VER_IMG_CORE="$(jq -r '.image.core // empty' "$VER_JSON" 2>/dev/null)"
   VER_IMGS_CORE="$(jq -r '.images.core // empty' "$VER_JSON" 2>/dev/null)"
   VER05_OK=true
   if [[ -n "$VER_IMGS_CORE" ]]; then
-    [[ "$VER_IMGS_CORE" == ghcr.io/home-assistant/* ]] \
-      || { _fail "VER-05: images.core is NOT stock ghcr.io/home-assistant/*: $VER_IMGS_CORE"; VER05_OK=false; }
+    [[ "$VER_IMGS_CORE" == ghcr.io/greenautarky/home-assistant-armv7 ]] \
+      || { _fail "VER-05: images.core is NOT the GA armv7 build: $VER_IMGS_CORE"; VER05_OK=false; }
   else
     _fail "VER-05: images.core missing from version.json"; VER05_OK=false
   fi
-  if [[ -n "$VER_IMG_CORE" ]] && [[ "$VER_IMG_CORE" != ghcr.io/home-assistant/* ]]; then
-    _fail "VER-05: image.core is NOT stock ghcr.io/home-assistant/*: $VER_IMG_CORE"; VER05_OK=false
+  if [[ -n "$VER_IMG_CORE" ]] && [[ "$VER_IMG_CORE" != ghcr.io/greenautarky/home-assistant-armv7 ]]; then
+    _fail "VER-05: image.core is NOT the GA armv7 build: $VER_IMG_CORE"; VER05_OK=false
   fi
-  $VER05_OK && _pass "VER-05: core image refs are stock upstream (ghcr.io/home-assistant/*)"
+  $VER05_OK && _pass "VER-05: core image refs are the GA armv7 build"
 
   # VER-06: OTA URL points to greenautarky
   VER_OTA="$(jq -r '.ota // "unknown"' "$VER_JSON" 2>/dev/null)"
@@ -1150,13 +1172,16 @@ if [[ -f "$VER_JSON" ]]; then
   # VER-07: Core image digest matches GHCR (not stale cache)
   IMAGES_DIR="$(ls -d ${OUT}/build/hassio-*/images 2>/dev/null | head -n 1 || true)"
   if [[ -d "$IMAGES_DIR" ]] && command -v skopeo >/dev/null 2>&1; then
-    CORE_TAR="$(ls "$IMAGES_DIR"/*homeassistant*.tar 2>/dev/null | head -n 1 || true)"
+    # Resolve the ref first and find the tar BY NAME + TAG: the old
+    # *homeassistant*.tar glob misses ghcr.io_greenautarky_home-assistant-armv7_*
+    # and, with the landingpage tar of the same image beside it, could pick
+    # the wrong one.
+    CORE_REF="$(jq -r '.images.core // .image.core' "$VER_JSON" 2>/dev/null | sed "s/{machine}/${MACHINE:-tinker}/;s/{arch}/${ARCH:-armv7}/")"
+    CORE_TAG="$(jq -r '.homeassistant."'${MACHINE:-tinker}'" // .core' "$VER_JSON" 2>/dev/null)"
+    CORE_TAR="$(ls "$IMAGES_DIR"/"${CORE_REF//[:\/]/_}_${CORE_TAG}"@*.tar 2>/dev/null | head -n 1 || true)"
     if [[ -n "$CORE_TAR" ]]; then
       # Extract digest from tar filename (format: ...@sha256_XXXX.tar)
       BUILD_DIGEST="$(basename "$CORE_TAR" .tar | grep -oP 'sha256_\K[a-f0-9]+' || true)"
-      # Query current digest from GHCR
-      CORE_REF="$(jq -r '.images.core // .image.core' "$VER_JSON" 2>/dev/null | sed "s/{machine}/${MACHINE:-tinker}/;s/{arch}/${ARCH:-armv7}/")"
-      CORE_TAG="$(jq -r '.homeassistant."'${MACHINE:-tinker}'" // .core' "$VER_JSON" 2>/dev/null)"
       if [[ -n "$CORE_REF" ]] && [[ -n "$CORE_TAG" ]] && [[ "$CORE_TAG" != "null" ]]; then
         GHCR_DIGEST="$(skopeo inspect --override-arch arm --override-variant v7 "docker://${CORE_REF}:${CORE_TAG}" 2>/dev/null | jq -r '.Digest' | sed 's/sha256://' || true)"
         if [[ -n "$BUILD_DIGEST" ]] && [[ -n "$GHCR_DIGEST" ]]; then
@@ -1270,7 +1295,11 @@ if [[ -f "$VER_JSON" ]]; then
   # gate is dropped (the GA frontend fork is retired — T3); the check now
   # depends only on the built Core image tar.
   if [[ -d "$IMAGES_DIR" ]]; then
-    CORE_TAR_V11="$(ls "$IMAGES_DIR"/*homeassistant*.tar 2>/dev/null | head -n 1 || true)"
+    # By image name + tag (see VER-07): *homeassistant*.tar never matched the
+    # GA armv7 image, so this check skipped instead of running.
+    CORE_REF_V11="$(jq -r '.images.core // .image.core' "$VER_JSON" 2>/dev/null | sed "s/{machine}/${MACHINE:-tinker}/;s/{arch}/${ARCH:-armv7}/")"
+    CORE_TAG_V11="$(jq -r '.homeassistant."'${MACHINE:-tinker}'" // .core' "$VER_JSON" 2>/dev/null)"
+    CORE_TAR_V11="$(ls "$IMAGES_DIR"/"${CORE_REF_V11//[:\/]/_}_${CORE_TAG_V11}"@*.tar 2>/dev/null | head -n 1 || true)"
     if [[ -n "$CORE_TAR_V11" ]]; then
       CONFIG_PATH_V11=$(tar -xOf "$CORE_TAR_V11" manifest.json 2>/dev/null | jq -r '.[0].Config // empty' || true)
       if [[ -n "$CONFIG_PATH_V11" ]]; then
@@ -1287,7 +1316,9 @@ if [[ -f "$VER_JSON" ]]; then
         _skip "VER-11" "could not parse core image manifest"
       fi
     else
-      _skip "VER-11" "no core tar found"
+      # The images dir exists, so this is a full build: a missing Core tar is
+      # a finding, not a reason to skip.
+      _fail "VER-11: no Core tar for ${CORE_REF_V11}:${CORE_TAG_V11} in $IMAGES_DIR"
     fi
   else
     _skip "VER-11" "core images dir not available (full build needed)"
@@ -2515,13 +2546,12 @@ if [[ -n "$SRC" ]]; then
     STABLE_SUP_IMG="$(echo "$STABLE_JSON" | jq -r '.images.supervisor // "unknown"')"
     STABLE_CORE_TINKER="$(echo "$STABLE_JSON" | jq -r '.homeassistant.tinker // "unknown"')"
 
-    # XVER-01 (V1.2-clean): stable.json core is a STOCK 3-part HA calver
-    # (YYYY.MM.PATCH). The retired fork used a 4-part `.N` GA suffix; clean
-    # V1.2 ships stock Core, so the version must be exactly 3 parts.
+    # XVER-01: stable.json core is a 3-part HA calver (YYYY.MM.PATCH). The
+    # GA armv7 build carries upstream's tag unchanged — no `.N` GA suffix.
     if [[ "$STABLE_CORE" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
       _pass "XVER-01: stable.json core is a stock 3-part calver: $STABLE_CORE"
     else
-      _fail "XVER-01: stable.json core is NOT a stock 3-part calver: $STABLE_CORE (V1.2-clean Core must be plain YYYY.MM.PATCH — no .N / -ga.N suffix)"
+      _fail "XVER-01: stable.json core is NOT a stock 3-part calver: $STABLE_CORE (Core must be plain YYYY.MM.PATCH — no .N / -ga.N suffix)"
     fi
 
     # XVER-02 (V1.2-clean): stable.json supervisor is a GA-fork calver. The
@@ -2533,11 +2563,15 @@ if [[ -n "$SRC" ]]; then
       _fail "XVER-02: stable.json supervisor is NOT a 4-part GA-fork calver: $STABLE_SUP (expected YYYY.MM.PATCH.N)"
     fi
 
-    # XVER-03 (V1.2-clean): Core fork retired — stable.json core image must
-    # be STOCK upstream (ghcr.io/home-assistant/*), NOT greenautarky.
-    [[ "$STABLE_CORE_IMG" == ghcr.io/home-assistant/* ]] \
-      && _pass "XVER-03: stable.json core image is stock upstream: $STABLE_CORE_IMG" \
-      || _fail "XVER-03: stable.json core image is NOT stock ghcr.io/home-assistant/*: $STABLE_CORE_IMG"
+    # XVER-03 (2026-09-28): the channel this build bakes from must name the GA
+    # armv7 Core build — upstream stopped building armv7 Core in late 2025.
+    # It used to assert stock upstream on stable.json, which says nothing about
+    # a beta or dev bake and would refuse the promotion. Only the baked channel is
+    # asserted; stable may lag until it is promoted.
+    CH_CORE_IMG="$(echo "${BUILD_CHANNEL_JSON:-}" | jq -r '.images.core // "unknown"' 2>/dev/null || echo unknown)"
+    [[ "$CH_CORE_IMG" == ghcr.io/greenautarky/home-assistant-armv7 ]] \
+      && _pass "XVER-03: ${BUILD_CHANNEL:-build}.json core image is the GA armv7 build: $CH_CORE_IMG" \
+      || _fail "XVER-03: ${BUILD_CHANNEL:-build}.json core image is NOT the GA armv7 build: $CH_CORE_IMG"
 
     # XVER-04: stable.json supervisor image is greenautarky (GA fork stays)
     [[ "$STABLE_SUP_IMG" == *greenautarky* ]] \

@@ -184,12 +184,14 @@ BR2_PACKAGE_HASSIO_MACHINE="tinker"
 BR2_PACKAGE_HASSIO_FULL_CORE=y
 # CANARY BUILD: the bake resolves Supervisor, Core and all five plugins from
 # greenautarky/haos-version {channel}.json AT BUILD TIME and pre-loads them
-# into the image. beta carries what the fleet gets NEXT (GA-built dns/cli,
-# the Supervisor release under test); stable carries what the fleet runs now.
-# A device flashed from this image also RUNS on the beta channel.
-# Flip back to stable for a fleet build. os_integrity OSI-19 compares the
-# device's channel against this declaration, so a mismatch fails loudly.
-BR2_PACKAGE_HASSIO_CHANNEL_BETA=y
+# into the image. stable carries what the fleet runs now; beta what it gets
+# NEXT; dev (2026-09-28) is canary-only: beta plus Core 2026.x from the GA
+# armv7 build and the Supervisor that follows the channel's Core image.
+# A device flashed from this image also RUNS on the dev channel, and no
+# fleet device polls dev. Switch back to beta in a separate change when
+# 2026.x is promoted. os_integrity OSI-19 compares the device's channel
+# against this declaration, so a mismatch fails loudly.
+BR2_PACKAGE_HASSIO_CHANNEL_DEV=y
 BR2_PACKAGE_HASSIO_DATA_IMAGE_SIZE="8192M"
 BR2_PACKAGE_OS_AGENT=y
 BR2_PACKAGE_OS_AGENT_BOARD="iHost"

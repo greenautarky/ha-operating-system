@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { haBaseUrl } from './helpers/ha-url';
 
 /**
  * GA OS E2E Test Configuration
@@ -17,9 +18,8 @@ import { defineConfig, devices } from '@playwright/test';
  *   DEVICE_IP=192.168.1.100 npx playwright test --project=mobile-ios --project=mobile-android
  */
 
-const baseURL =
-  process.env.DEVICE_URL ||
-  (process.env.DEVICE_IP ? `http://${process.env.DEVICE_IP}:8123` : 'http://homeassistant.local:8123');
+// Core's own port (80 on 2026.8+, 8123 before) — helpers/ha-url.ts, ADR-0038.
+const baseURL = haBaseUrl();
 
 export default defineConfig({
   testDir: './tests',

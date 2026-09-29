@@ -33,9 +33,15 @@ fi
 
 # HA returns 401 (Unauthorized) for /api/ without a token — that still means it's responding.
 # Accept any HTTP response (non-000) as success.
-HA_HTTP=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 10 http://127.0.0.1:8123/api/ 2>/dev/null || echo "000")
-run_test_show "HLTH-05" "HA Core API responds (HTTP ${HA_HTTP})" \
-  "[ \"$HA_HTTP\" != \"000\" ]"
+# The port is Core's own (80 on 2026.8+, 8123 before) — lib/ha_port.sh.
+require_ha_port "HLTH-05a"
+# curl prints 000 AND exits non-zero when nothing listens; the old
+# `|| echo "000"` appended a second 000, and "000000" != "000" passed — HLTH-05
+# was green against a closed port (found 2026-09-28 by pointing it at one).
+# Assert a real status line instead.
+HA_HTTP=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 10 "$HA_BASE/api/" 2>/dev/null)
+run_test_show "HLTH-05" "HA Core API responds on :$HA_PORT (HTTP ${HA_HTTP:-none})" \
+  "case '$HA_HTTP' in [1-5][0-9][0-9]) true ;; *) false ;; esac"
 
 run_test "HLTH-06" "Supervisor API responds" \
   "docker exec hassio_supervisor curl -sf --connect-timeout 5 http://127.0.0.1/supervisor/info >/dev/null 2>&1 || ha supervisor info >/dev/null 2>&1"

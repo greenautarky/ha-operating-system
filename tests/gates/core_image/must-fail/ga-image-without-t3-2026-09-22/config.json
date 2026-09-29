@@ -1,0 +1,1 @@
+{"architecture":"arm","config":{"Labels":{"io.hass.arch":"armv7","io.hass.type":"core","org.opencontainers.image.version":"2026.8.2"},"Entrypoint":null,"Cmd":["python3","-m","homeassistant","--config","/config"]}}

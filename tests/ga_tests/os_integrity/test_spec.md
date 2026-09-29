@@ -11,6 +11,7 @@ submodule on the builder, ga-ops#38), found only by a human on the device.
 | OSI-02 | `uname -r` | defconfig `BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE` |
 | OSI-03 | `openssl version` | buildroot submodule pointer → libopenssl.mk |
 | OSI-04 | HA Core container image tag | version.yaml `homeassistant_core` |
+| OSI-05 | running Supervisor: `io.hass.version` label + image from ghcr.io/greenautarky | version.yaml `homeassistant_supervisor` |
 | OSI-10+ | every baked add-on image present at its exact tag | addon-images.json |
 | OSI-99 | coverage: ≥6 add-ons checked | — |
 

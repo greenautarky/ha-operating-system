@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 
 import { test, expect, sshCmd } from '../fixtures/device';
 import { getGAOnboardingStatus } from '../helpers/ha-api';
+import { haPort } from '../helpers/ha-url';
 
 /**
  * The account step has to survive being pressed twice.
@@ -136,7 +137,7 @@ function purgeProbeAccounts(): void {
     // on "Core restarts" in the 2026-09-07 runs. Block here until the GA
     // status endpoint answers (Core + greenautarky_site up), or give up loudly.
     'ok=0; for i in $(seq 1 60); do',
-    '  if curl -sf -o /dev/null http://172.30.32.1:8123/api/greenautarky_site/status; then ok=1; break; fi',
+    `  if curl -sf -o /dev/null http://localhost:${haPort()}/api/greenautarky_site/status; then ok=1; break; fi`,
     '  sleep 3',
     'done',
     '[ "$ok" = 1 ] || { echo "Core did not become ready within 180s after restart" >&2; exit 1; }',

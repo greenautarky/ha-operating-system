@@ -47,8 +47,12 @@ define HASSIO_CONFIGURE_CMDS
 	# HomeAssistantOS Deploy only landing page for "core" by setting version to "landingpage", but we are using the full core image whether BR2_PACKAGE_HASSIO_FULL_CORE is set or not
 	curl -s $(HASSIO_VERSION_URL)$(HASSIO_VERSION_CHANNEL)".json" | jq '.core = $(HASSIO_CORE_VERSION)' > $(@D)/version.json;
 	# Validate version.json: reject "latest" and wrong registries (catches stale stable.json)
-	# V1.2-clean: Core is STOCK upstream (ghcr.io/home-assistant/*) — GA value
-	# moved to a custom_component. Only the Supervisor stays a GA image.
+	# Core is the GA armv7 build again (2026-09-28): upstream stopped building
+	# armv7 in late 2025, so the stock image is frozen at 2025.11.3.
+	# check-core-image.sh refuses the upstream image, a pre-2026 tag, and an
+	# image without the labels + s6 entrypoint the Supervisor needs.
+	# check-supervisor-image.sh refuses a non-GA Supervisor image, a tag other
+	# than the version.yaml pin, and an image whose io.hass labels disagree.
 	@VJ=$(@D)/version.json; \
 	SUP=$$(jq -r '.supervisor' $$VJ); \
 	CORE=$$(jq -r '.core' $$VJ); \
@@ -60,8 +64,9 @@ define HASSIO_CONFIGURE_CMDS
 	if [ "$$CORE" = "latest" ] || [ -z "$$CORE" ]; then echo "ERROR: version.json core='$$CORE' (must be pinned version)"; FAIL=1; fi; \
 	if [ "$$TINKER" = "latest" ] || [ -z "$$TINKER" ]; then echo "ERROR: version.json tinker='$$TINKER' (must be pinned version)"; FAIL=1; fi; \
 	if ! echo "$$SUP_IMG" | grep -q greenautarky; then echo "ERROR: version.json supervisor image='$$SUP_IMG' (must use greenautarky)"; FAIL=1; fi; \
-	if ! echo "$$CORE_IMG" | grep -qE '^ghcr\.io/home-assistant/'; then echo "ERROR: version.json core image='$$CORE_IMG' (V1.2-clean: Core must be stock ghcr.io/home-assistant/*)"; FAIL=1; fi; \
+	if ! $(BR2_EXTERNAL_HASSOS_PATH)/package/hassio/check-core-image.sh $$VJ $(BR2_PACKAGE_HASSIO_MACHINE); then FAIL=1; fi; \
 	PIN=$$(sed -nE 's/^[[:space:]]*homeassistant_supervisor:[[:space:]]*"?([^"[:space:]#]+)"?.*/\1/p' $(BR2_EXTERNAL_HASSOS_PATH)/../version.yaml | head -1); \
+	if ! $(BR2_EXTERNAL_HASSOS_PATH)/package/hassio/check-supervisor-image.sh $$VJ $(BR2_PACKAGE_HASSIO_ARCH) "$$PIN"; then FAIL=1; fi; \
 	if [ -n "$$PIN" ] && [ "$$SUP" != "$$PIN" ]; then \
 	  echo "ERROR: version.json supervisor='$$SUP' but version.yaml pins '$$PIN'"; \
 	  echo "       The BAKED supervisor would differ from the pin. A device whose"; \
@@ -70,8 +75,15 @@ define HASSIO_CONFIGURE_CMDS
 	  echo "       Check HASSIO_VERSION_URL points at the branch the fleet polls."; \
 	  FAIL=1; \
 	fi; \
+	CORE_PIN=$$(sed -nE 's/^[[:space:]]*homeassistant_core:[[:space:]]*"?([^"[:space:]#]+)"?.*/\1/p' $(BR2_EXTERNAL_HASSOS_PATH)/../version.yaml | head -1); \
+	if [ -n "$$CORE_PIN" ] && [ "$$CORE" != "$$CORE_PIN" ]; then \
+	  echo "ERROR: version.json core='$$CORE' but version.yaml pins '$$CORE_PIN'"; \
+	  echo "       The baked Core would differ from the pin the on-device suite"; \
+	  echo "       (OSI-04, expected.env) asserts."; \
+	  FAIL=1; \
+	fi; \
 	if [ $$FAIL -ne 0 ]; then echo "FATAL: version.json validation failed — check haos-version stable.json"; exit 1; fi; \
-	echo "version.json validated: supervisor=$$SUP core=$$CORE tinker=$$TINKER (pin=$$PIN)"
+	echo "version.json validated: supervisor=$$SUP core=$$CORE tinker=$$TINKER (pin=$$PIN core_pin=$$CORE_PIN)"
 endef
 
 define HASSIO_BUILD_CMDS

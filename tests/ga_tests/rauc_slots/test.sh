@@ -46,6 +46,56 @@ export GA_RAUC_SLOTS_MIRROR
 DEVICE_MIRROR_FILE=/mnt/data/ga-slot-mirror.json
 _dev_mirror_before="$(cat "$DEVICE_MIRROR_FILE" 2>/dev/null || echo ABSENT)"
 
+# SLOT-61/62 compare those two device files before and after this suite. The
+# device's OWN collector (ga-rauc-slots.timer, every 10 min) legitimately
+# rewrites them while the suite runs — measured on a canary on 2026-09-28:
+# before {"A":{"at":1790598757,"uptime_s":2498}}, after {"A":{"at":1790599358,
+# "uptime_s":3100}}, 601 s apart, booted slot A, a real clock — the timer, not
+# this suite. SLOT-61 failed on that run and passed on the next: a red that
+# depends on when the timer fires is a flake, and a flake teaches people to
+# ignore the colour. So a change is accepted ONLY when every changed entry is
+# the live collector's signature, and anything else still fails:
+#   - written during this run (at >= suite start). That also excludes the
+#     fixture epoch GA_RAUC_SLOTS_TS=1753790000 every fixture call here uses —
+#     it lies in 2025, before any run of this suite can start
+#   - about THIS boot: boots entry keyed by the booted slot; mirror entry
+#     measured against it (.of == booted)
+#   - nothing removed
+# Proven red and green on fixtures by SLOT-63..66 (host half, every PR).
+SUITE_T0=$(date +%s)
+# device_record_change_explained <boots|mirror> <before> <after> <booted> <t0>
+device_record_change_explained() {
+  _b="$2"; _a="$3"
+  [ "$_b" = ABSENT ] && _b='{}'
+  [ "$_a" = ABSENT ] && _a='{}'
+  jq -en --argjson b "$_b" --argjson a "$_a" --arg kind "$1" --arg slot "$4" \
+      --argjson t0 "$5" '
+    ([$b | keys[] | select($a[.] == null)] | length == 0)
+    and ([$a | keys[] | select($b[.] != $a[.])] as $changed
+         | ($changed | length) > 0
+         and ($changed | all(. as $k | $a[$k] as $e
+               | ($e.at | type) == "number" and $e.at >= $t0
+               and (if $kind == "boots" then $k == $slot else $e.of == $slot end))))
+  ' >/dev/null 2>&1
+}
+
+# SLOT-63..66: the predicate itself, red and green, on the measured shapes.
+_t0=1790599000
+run_test "SLOT-63" "record-change guard: the device timer rewriting the booted slot mid-run is explained (measured 2026-09-28)" \
+  "device_record_change_explained boots '{\"A\":{\"at\":1790598757,\"uptime_s\":2498}}' '{\"A\":{\"at\":1790599358,\"uptime_s\":3100}}' A $_t0"
+run_test "SLOT-64" "record-change guard: an entry for the OTHER slot is NOT explained — fixture epoch (the 2026-09-08 poisoning) or a real clock" \
+  "! device_record_change_explained boots '{\"A\":{\"at\":1790598757,\"uptime_s\":2498}}' '{\"A\":{\"at\":1790598757,\"uptime_s\":2498},\"B\":{\"at\":1753790000,\"uptime_s\":900}}' A $_t0 \
+   && ! device_record_change_explained boots '{\"A\":{\"at\":1790598757,\"uptime_s\":2498}}' '{\"A\":{\"at\":1790598757,\"uptime_s\":2498},\"B\":{\"at\":1790599358,\"uptime_s\":3100}}' A $_t0"
+run_test "SLOT-65" "record-change guard: NOT explained — booted slot rewritten with the fixture epoch or before the run, or another slot deleted alongside a legit rewrite" \
+  "! device_record_change_explained boots '{\"A\":{\"at\":1790598757,\"uptime_s\":2498}}' '{\"A\":{\"at\":1753790000,\"uptime_s\":900}}' A $_t0 \
+   && ! device_record_change_explained boots '{\"A\":{\"at\":1790598757,\"uptime_s\":2498}}' '{\"A\":{\"at\":1790598800,\"uptime_s\":2540}}' A $_t0 \
+   && ! device_record_change_explained boots '{\"A\":{\"at\":1790598757,\"uptime_s\":2498},\"B\":{\"at\":1790500000,\"uptime_s\":700}}' '{\"A\":{\"at\":1790599358,\"uptime_s\":3100}}' A $_t0"
+run_test "SLOT-66" "record-change guard: mirror — live re-measure against the booted slot explained; fixture epoch, deletion or another reference slot not" \
+  "device_record_change_explained mirror '{}' '{\"B\":{\"of\":\"A\",\"identical\":true,\"at\":1790599400}}' A $_t0 \
+   && ! device_record_change_explained mirror '{}' '{\"B\":{\"of\":\"A\",\"identical\":true,\"at\":1753790000}}' A $_t0 \
+   && ! device_record_change_explained mirror '{\"B\":{\"of\":\"A\",\"identical\":true,\"at\":1790598000}}' '{}' A $_t0 \
+   && ! device_record_change_explained mirror '{}' '{\"A\":{\"of\":\"B\",\"identical\":true,\"at\":1790599400}}' A $_t0"
+
 # Run the collector against a fixture, leaving the JSON in $WORK/<name>.json.
 parse_fixture() {
   # GA_RAUC_SLOTS_BOOTS is NOT optional here, and leaving it out was a real
@@ -490,8 +540,12 @@ fi
 # Compares the device file before and after: a test that changes the system it
 # measures has no verdict to give.
 _dev_boots_after="$(cat "$DEVICE_BOOTS_FILE" 2>/dev/null || echo ABSENT)"
+_booted_live="$(rauc status --output-format=shell 2>/dev/null | sed -n "s/^RAUC_SYSTEM_BOOTED_BOOTNAME='\(.*\)'\$/\1/p")"
 if [ "$_dev_boots_before" = "$_dev_boots_after" ]; then
   run_test "SLOT-61" "the suite did not write the device healthy-boot record" "true"
+elif device_record_change_explained boots "$_dev_boots_before" "$_dev_boots_after" "$_booted_live" "$SUITE_T0"; then
+  run_test_show "SLOT-61" "the suite did not write the device healthy-boot record (changed only by the device's own collector during the run)" \
+    "echo 'before: $_dev_boots_before'; echo 'after : $_dev_boots_after (booted $_booted_live, suite start $SUITE_T0)'"
 else
   run_test "SLOT-61" "the suite did not write the device healthy-boot record" "false"
   printf '        %s changed while this suite ran.\n' "$DEVICE_BOOTS_FILE"
@@ -506,6 +560,9 @@ fi
 _dev_mirror_after="$(cat "$DEVICE_MIRROR_FILE" 2>/dev/null || echo ABSENT)"
 if [ "$_dev_mirror_before" = "$_dev_mirror_after" ]; then
   run_test "SLOT-62" "the suite did not write the device mirror record" "true"
+elif device_record_change_explained mirror "$_dev_mirror_before" "$_dev_mirror_after" "$_booted_live" "$SUITE_T0"; then
+  run_test_show "SLOT-62" "the suite did not write the device mirror record (changed only by the device's own collector during the run)" \
+    "echo 'before: $_dev_mirror_before'; echo 'after : $_dev_mirror_after (booted $_booted_live, suite start $SUITE_T0)'"
 else
   run_test "SLOT-62" "the suite did not write the device mirror record" "false"
   printf '        %s changed while this suite ran.\n' "$DEVICE_MIRROR_FILE"

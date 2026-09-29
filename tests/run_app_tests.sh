@@ -169,6 +169,17 @@ if $LOCAL_MODE; then
   # HOST_URL is derived from LOCAL_MODE in fixtures/device.ts
 else
   export DEVICE_IP="$DEVICE_IP"
+  # A real device: Core's own port (80 on 2026.8+, 8123 before), asked of its
+  # Supervisor over SSH — ga_tests/lib/ha_port.sh, ADR-0038. DEVICE_URL or
+  # GA_HA_PORT still win. (Local Docker above is container mode: 8123 stays.)
+  if [[ -z "${DEVICE_URL:-}" ]]; then
+    # shellcheck source=ga_tests/lib/ha_port.sh
+    . "$SCRIPT_DIR/ga_tests/lib/ha_port.sh"
+    GA_HA_INFO_CMD="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 ${SSH_KEY:+-i '$SSH_KEY'} -p '$SSH_PORT' 'root@${DEVICE_IP}' 'ha core info --raw-json --no-progress'"
+    _ga_ha_port_resolve || { echo "ERROR: cannot resolve the Home Assistant port on ${DEVICE_IP} — set DEVICE_URL or GA_HA_PORT" >&2; exit 1; }
+    DEVICE_URL="http://${DEVICE_IP}$(ga_ha_url_port "$GA_HA_PORT")"
+  fi
+  export DEVICE_URL
 fi
 
 [[ -n "$HA_ADMIN_PASS" ]] && export HA_ADMIN_PASS
@@ -178,7 +189,7 @@ fi
 if $LOCAL_MODE; then
   TARGET_DESC="local Docker HA (http://10.0.2.2:${HA_PORT:-8123})"
 else
-  TARGET_DESC="iHost device  http://${DEVICE_IP}:8123"
+  TARGET_DESC="iHost device  ${DEVICE_URL}"
 fi
 
 AUTH_DESC="none (login tests will skip)"
@@ -231,7 +242,7 @@ else
     echo "    - Check local HA: docker logs ha-local"
     echo "    - Verify reachable: curl http://localhost:${HA_PORT:-8123}/api/"
   else
-    echo "    - Check device: curl http://${DEVICE_IP}:8123/api/"
+    echo "    - Check device: curl ${DEVICE_URL}/api/"
   fi
 fi
 echo "=============================================="

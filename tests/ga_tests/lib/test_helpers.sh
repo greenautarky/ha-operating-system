@@ -110,6 +110,34 @@ skip_test() {
   _SKIP=$((_SKIP+1))
 }
 
+# --- Home Assistant port (ADR-0038) -----------------------------------------
+# Core 2026.8+ serves on :80, older Core on :8123. Never hard-code either; see
+# ha_port.sh for the resolution order. The file sits next to this one; the
+# lookup does not rely on the caller's SCRIPT_DIR because some callers define
+# none.
+_th_lib="${GA_TESTS_LIB:-${SCRIPT_DIR:-.}/../lib}"
+[ -f "$_th_lib/ha_port.sh" ] || _th_lib="$(dirname "$0")/../lib"
+# shellcheck source=ha_port.sh
+[ -f "$_th_lib/ha_port.sh" ] && . "$_th_lib/ha_port.sh"
+
+# require_ha_port <id> — set HA_PORT and HA_BASE (http://127.0.0.1:<port>) for
+# this suite. When the port cannot be resolved it records ONE failing test with
+# the reason and points HA_BASE at an unusable URL, so every HTTP check after it
+# fails too instead of quietly probing a port the helper guessed.
+require_ha_port() {
+  if command -v _ga_ha_port_resolve >/dev/null 2>&1 && _ga_ha_port_resolve 2>"${TMPDIR:-/tmp}/ga-ha-port.err"; then
+    HA_PORT="$GA_HA_PORT"
+    HA_BASE="http://127.0.0.1:${HA_PORT}"
+    return 0
+  fi
+  _rhp_why=$(tr -d "'" < "${TMPDIR:-/tmp}/ga-ha-port.err" 2>/dev/null)
+  run_test_show "$1" "Home Assistant port resolvable (ha core info: port, else Core version)" \
+    "echo '${_rhp_why:-ha_port.sh not found next to test_helpers.sh}'; false"
+  HA_PORT="UNRESOLVED"
+  HA_BASE="http://127.0.0.1:UNRESOLVED-PORT"
+  return 1
+}
+
 # Print suite header
 suite_start() {
   _SUITE="$1"
