@@ -416,10 +416,18 @@ jobs:
       # honoured only as ga-rauc-install-older writes it, the build gate
       # RFLOOR-01/02 over fixture outputs from the LIVE templates, and the
       # ga-rauc-install label. busybox runs the handler under the device shell.
-      - name: Install busybox, squashfs-tools, rauc and dbus for the release-floor tests
+      - name: Install busybox and rauc for the release-floor tests
         uses: ./.github/actions/apt-install
         with:
-          packages: busybox squashfs-tools rauc dbus
+          packages: busybox rauc
+      # apt-install verifies each package by a command of the same name; these
+      # two packages ship differently named commands, so they are checked here.
+      - name: Install squashfs-tools and dbus (mksquashfs, dbus-run-session)
+        run: |
+          set -euo pipefail
+          command -v mksquashfs >/dev/null && command -v dbus-run-session >/dev/null \
+            || timeout 300 sudo apt-get install -y -qq squashfs-tools dbus
+          command -v mksquashfs && command -v dbus-run-session
       - name: OS update release floor (handler, override, build gate, label — both ways)
         run: ./tests/gates/rauc_release_floor/selftest.sh
       # The same handler behind a REAL `rauc service` (sandbox slots, throwaway
