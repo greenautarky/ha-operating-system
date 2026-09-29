@@ -78,10 +78,21 @@ chmod +x "$STUBS"/*
 BBDIR=""
 if command -v busybox >/dev/null 2>&1; then
   BBDIR="$WORK/busybox"; mkdir -p "$BBDIR"
-  for a in sh cat mv rm ln mkdir chmod dirname basename head tr sed awk grep date \
+  for a in cat mv rm ln mkdir chmod dirname basename head tr sed awk grep date \
            printf stat ls cut sleep touch mktemp; do
     ln -s "$(command -v busybox)" "$BBDIR/$a"
   done
+  # The device's ash looks commands up on PATH (FEATURE_PREFER_APPLETS and
+  # SH_STANDALONE are off in buildroot-external/busybox.config). Some distro
+  # builds prefer their own applets, which would bypass the stubs (`ip` would
+  # be BusyBox's, not the stub). Use BusyBox as the shell only if it behaves
+  # like the device's; otherwise the host shell runs the BusyBox applets.
+  mkdir -p "$WORK/probe"; printf '#!/bin/sh\necho from-path\n' > "$WORK/probe/ip"; chmod +x "$WORK/probe/ip"
+  if [ "$(PATH="$WORK/probe:$PATH" busybox sh -c 'ip' 2>/dev/null)" = from-path ]; then
+    ln -s "$(command -v busybox)" "$BBDIR/sh"; BBSHELL="busybox ash"
+  else
+    BBSHELL="host sh (this busybox prefers its own applets)"
+  fi
 elif [ "${GA_REQUIRE_BUSYBOX:-0}" = 1 ]; then
   echo "FATAL: GA_REQUIRE_BUSYBOX=1 but busybox is not installed" >&2; exit 1
 fi
@@ -246,6 +257,7 @@ if ! sbx "" sh -c '[ -r /mnt/.ihost/usr/sbin/ga-uplink-ladder ] && [ -x /usr/lib
 fi
 run_cases host ""
 if [ -n "$BBDIR" ]; then
+  echo "  NOTE  BusyBox pass shell: $BBSHELL"
   run_cases busybox "/mnt/.busybox:"
 else
   echo "  NOTE  busybox not installed — BusyBox pass not run (CI sets GA_REQUIRE_BUSYBOX=1)"
