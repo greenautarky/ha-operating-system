@@ -142,9 +142,12 @@ if [[ -s "$W/handler-env.txt" ]] && ! grep -q '^GA_ALLOW_OLDER=' "$W/handler-env
    && grep -q '^RAUC_BUNDLE_MOUNT_POINT=' "$W/handler-env.txt"; then
   ok "handler runs in the rauc service's environment: RAUC_BUNDLE_MOUNT_POINT set, the caller's GA_ALLOW_OLDER absent"
 else bad "handler environment not as claimed: $(grep -E '^(GA_ALLOW_OLDER|RAUC_BUNDLE_MOUNT_POINT)=' "$W/handler-env.txt" 2>/dev/null | tr '\n' ' ')"; fi
+# Informational only: RAUC exports manifest meta to handlers as RAUC_META_* in
+# 1.13 (the image's version) but not in 1.11.3 (the CI runner's). The handler
+# does not depend on it — it reads manifest.raucm from the mounted bundle.
 if grep -q '^RAUC_META_GA_RELEASE=BOSv1.3.0-rc55$' "$W/handler-env.txt"; then
-  ok "RAUC exposes the manifest meta as RAUC_META_GA_RELEASE (the handler reads the manifest file itself)"
-else bad "RAUC_META_GA_RELEASE not in the handler environment"; fi
+  echo "  info  this RAUC exports RAUC_META_GA_RELEASE to handlers"
+else echo "  info  this RAUC does not export RAUC_META_* to handlers (the handler reads the manifest file)"; fi
 
 rc="$(install nometa)"
 if [[ "$rc" != 0 ]] && grep -q 'Pre-install handler error' "$W/install.out" "$W/service.log" && ! slot_has nometa; then
@@ -187,5 +190,5 @@ else bad "live templates through real RAUC: $(tail -3 "$W/live.out" | tr '\n' ' 
 
 echo
 echo "=== ${ran} checks: $((ran - fails)) ok, ${fails} failed ==="
-(( ran == 9 )) || { echo "FAIL: expected 9 checks, ran ${ran}"; exit 1; }
+(( ran == 8 )) || { echo "FAIL: expected 8 checks, ran ${ran}"; exit 1; }
 (( fails == 0 ))
