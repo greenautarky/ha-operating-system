@@ -342,8 +342,13 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
     fi
 
     IMG_TOTAL=${#IMAGES[@]}
+    # The images are armv7-only indexes (plus attestation entries). Without an
+    # explicit platform trivy looks for the runner's own (linux/amd64), finds
+    # none and fails — that alone made every armv7-only index "unscannable"
+    # while single-manifest images of the same arch scanned fine.
+    PLATFORM="linux/arm/v7"
     for img in ${IMAGES[@]+"${IMAGES[@]}"}; do
-      scan_one_image "$img" "$img"
+      scan_one_image "$img" --platform "$PLATFORM" "$img"
     done
   fi
 
