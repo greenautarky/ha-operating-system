@@ -15,7 +15,7 @@
 # same algorithms the YubiKeys produce (ECDSA P-256 PIV, and ed25519).
 #
 # What it cannot prove — and the run on a real canary must: the real CA from the
-# YubiKeys, the real hardware serial, systemd ordering, the /share bridge from
+# YubiKeys, the real hardware serial, systemd ordering, the label hand-over from
 # ga_manager, and the device's OpenSSH build.
 #
 # Usage: sshd_dryrun.sh [-v]    (needs /usr/sbin/sshd, ssh, ssh-keygen)
@@ -95,8 +95,9 @@ GA_SSHD_KEYDIR="$R/etc/ssh/keys" GA_SSH_CA_PUB="$R/etc/ssh/ga_user_ca.pub" \
 GA_SSH_PRINCIPALS_DIR="$R/etc/ssh/principals" GA_SSH_PRINCIPALS_USER="$ME" \
 GA_SSH_PRINCIPALS_BIN="$OVL/usr/libexec/ga-ssh-principals" GA_DT_SERIAL="$W/dt-serial" \
 GA_CPUINFO=/dev/null GA_SSHD_PREPARE_VAR_EMPTY=0 sh "$OVL/usr/libexec/ga-sshd-prepare" 2>&1 | sed 's/^/  /'
-printf '%s\n' "$LABEL" > "$W/share-label"      # what ga_manager's ssh-principals-write leaves in /share
-GA_SSH_CA_PUB="$R/etc/ssh/ga_user_ca.pub" GA_SSH_LABEL_BRIDGE="$W/share-label" \
+printf '%s\n' "$LABEL" > "$W/gm-label"         # what ga_manager's ssh-principals-write leaves in its /data
+printf '%s\n' "$LABEL" > "$W/ga-device-label"  # this device's own label, which it must equal
+GA_SSH_CA_PUB="$R/etc/ssh/ga_user_ca.pub" GA_SSH_LABEL_BRIDGE="$W/gm-label" GA_DEVICE_LABEL_FILE="$W/ga-device-label" \
 GA_SSH_PRINCIPALS_DIR="$R/etc/ssh/principals" GA_SSH_PRINCIPALS_USER="$ME" \
 GA_SSH_PRINCIPALS_BIN="$OVL/usr/libexec/ga-ssh-principals" sh "$OVL/usr/libexec/ga-ssh-principal-label" 2>&1 | sed 's/^/  /'
 echo "  principals file: $(tr '\n' ' ' < "$R/etc/ssh/principals/$ME")"

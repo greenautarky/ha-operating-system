@@ -380,7 +380,9 @@ jobs:
         run: ./tests/gates/ssh_plane/selftest.sh
 
       # ADR-0019 step 2. The principals writers (anchor from hardware, label
-      # from the ga_manager /share bridge) against fixture dirs, both ways.
+      # from ga_manager's own data dir under its pinned slug) against fixture
+      # dirs, both ways: the label must be a regular file, read bounded, equal
+      # this device's label when known, and a refused value is never echoed.
       - name: ssh-principals self-test (ADR-0019 step 2 — anchor + label)
         run: ./tests/gates/ssh_principals/selftest.sh
 

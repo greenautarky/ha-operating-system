@@ -7,6 +7,9 @@ After=etc-ssh-principals.mount mnt-data.mount
 [Service]
 Type=oneshot
 ExecStart=/usr/libexec/ga-ssh-principal-label
+# The script reads at most 32 bytes from a regular file, so it finishes in
+# milliseconds. The bound is for whatever that assumption misses.
+TimeoutStartSec=15s
 
 [Install]
 WantedBy=multi-user.target
