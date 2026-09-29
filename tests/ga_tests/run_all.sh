@@ -54,6 +54,7 @@ SUITES_EXCLUDED="
   device_run_lock host suite: CI lint.yml host-suites — the runner's one-run-per-device lock
   uplink_ladder   host suite: CI lint.yml host-suites
   uplink_units    host suite: CI lint.yml host-suites
+  share_writers   host suite: CI lint.yml host-suites — needs bubblewrap, drives the writers in a sandbox
   apparmor_profile host suite: CI lint.yml host-suites
   device_features on demand: feature surface, not a per-run gate
   ha_init         superseded by ha_config_applied on the device lane

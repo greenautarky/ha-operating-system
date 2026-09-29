@@ -55,6 +55,8 @@ run_retire() {
     GA_FORCE_BOOT="$WORK/boot/ga-ethernet-force" \
     GA_ENV_FILE="$1" \
     GA_SHARE_DIR="$WORK/share" \
+    GA_SHARE_PUBLISH="$ROOT/buildroot-external/rootfs-overlay/usr/libexec/ga-share-publish" \
+    GA_SHARE_STAGE_DIR="$WORK/stage" \
     GA_ADDON_DATA_GLOB="$WORK/addons/*_ga_manager" \
     GA_LABEL_FILE="$WORK/data/ga-device-label" \
     sh "$SBIN/ga-manage-ethernet" retire 2>&1

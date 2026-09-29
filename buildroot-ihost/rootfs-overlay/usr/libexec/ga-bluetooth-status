@@ -50,8 +50,9 @@ mode=managed
 [ -e "$RAW_FLAG" ] && mode=raw
 
 [ -d "$SHARE_DIR" ] || exit 0
-tmp="$OUT.tmp.$$"
-cat > "$tmp" <<JSON
+# Published through ga-share-publish (staged outside the shared directory,
+# renamed into place), never written in place.
+/usr/libexec/ga-share-publish "$OUT" 0644 <<JSON || true
 {
   "schema_version": 2,
   "enabled": $enabled,
@@ -64,5 +65,4 @@ cat > "$tmp" <<JSON
   "bluetoothd_active": $bluetoothd_active
 }
 JSON
-mv -f "$tmp" "$OUT" 2>/dev/null || { rm -f "$tmp"; exit 0; }
 exit 0
