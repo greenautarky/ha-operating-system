@@ -6,12 +6,22 @@
 #   ./scripts/scan-cves.sh --images           # container images only
 #   ./scripts/scan-cves.sh --sbom             # SBOM only (after a build)
 #   ./scripts/scan-cves.sh --severity HIGH    # filter by min severity
-#   ./scripts/scan-cves.sh --strict           # findings over budget are fatal too
+#   ./scripts/scan-cves.sh --strict           # OS (SBOM) findings over budget are fatal too
+#   ./scripts/scan-cves.sh --image-tars DIR   # scan saved image tarballs (the bake)
+#   ./scripts/scan-cves.sh --images --channel stable   # images of another channel
 #
 # Exit codes (distinct on purpose — see COVERAGE below):
-#   0  clean, or findings within the allowlist budget
-#   1  findings above the budget          (fatal only with --strict)
+#   0  clean, or findings within the policy
+#   1  OS: findings above the budget (fatal only with --strict)
+#      images: the policy blocks (see POLICY below)
 #   2  the scan itself is broken          (ALWAYS fatal, never suppressed)
+#
+# POLICY (container images; decided 2026-09-29, "D1"):
+#   A CRITICAL finding that has a fix available BLOCKS (exit 1).
+#   HIGH findings, and CRITICAL ones without a fix, are reported, never blocking.
+#   The only exception is an allowlist entry with a reason and an expiry at most
+#   30 days out. `--policy report` turns the image half into report-only for
+#   ad-hoc runs; the default is the decided policy.
 #
 # COVERAGE — why exit 2 exists:
 #   Until 2026-07-28 this script reported "CLEAN: no CRITICAL/HIGH vulnerabilities
@@ -47,6 +57,18 @@ COVERAGE_MIN_PCT="${COVERAGE_MIN_PCT:-50}"
 # explicit --strict at its call site (ga_build.sh, CVE-SCAN-06) — not through an
 # ambient variable, which is how a build-mode switch could silently disarm it.
 STRICT=false
+# Image policy — see POLICY in the header. Deliberately NOT read from the
+# environment: an ambient variable is how a gate gets disarmed without a diff.
+POLICY="d1"
+# An allowlist entry may suppress a finding for at most this many days (D1).
+# A constant, not a knob, for the same reason.
+readonly ALLOW_MAX_DAYS=30
+# Saved image tarballs to scan instead of pulling from a registry (the bake).
+IMAGE_TARS=""
+# Which haos-version channel the pulled system images come from. Empty = the
+# channel the bake uses (read from the defconfig below), so the scheduled scan
+# looks at what the next image ships, not at a hard-coded channel.
+CHANNEL=""
 
 EXIT_CODE=0
 SCAN_BROKEN=false
@@ -55,12 +77,19 @@ SCAN_BROKEN=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --images)   SCAN_SBOM=false;  shift ;;
+    --image-tars) SCAN_SBOM=false; IMAGE_TARS="$2"; shift 2 ;;
     --sbom)     SCAN_IMAGES=false; shift ;;
     --severity) SEVERITY="$2";    shift 2 ;;
     --strict)   STRICT=true;      shift ;;
     --no-strict) STRICT=false;    shift ;;
+    --policy)
+      case "$2" in d1|report) POLICY="$2" ;; *) echo "Unknown policy: $2 (d1|report)"; exit 1 ;; esac
+      shift 2 ;;
+    --channel)
+      case "$2" in stable|beta|dev) CHANNEL="$2" ;; *) echo "Unknown channel: $2 (stable|beta|dev)"; exit 1 ;; esac
+      shift 2 ;;
     --help|-h)
-      sed -n '2,12p' "$0"
+      sed -n '2,28p' "$0"
       exit 0
       ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
@@ -83,10 +112,11 @@ echo "=== GA OS CVE Scan ==="
 echo "  Date:     $(date -Iseconds)"
 echo "  Severity: ${SEVERITY}"
 echo "  Strict:   ${STRICT}"
+echo "  Policy:   ${POLICY} (images)"
 echo ""
 
 # -----------------------------------------------------------------------------
-# Allowlist — accepted findings, each with an owner and an expiry date.
+# Allowlist — accepted findings, each with an owner, an expiry date and a reason.
 #
 # Format (one per line, '#' comments and blank lines ignored):
 #   CVE-2025-1234  owner-handle  2026-12-31  reason text
@@ -94,17 +124,35 @@ echo ""
 # An entry stops suppressing on its expiry date. That is deliberate: a gate
 # without an allowlist gets switched off within two weeks, and an allowlist
 # without expiry dates becomes permanent amnesia.
+#
+# D1 (2026-09-29): the reason is mandatory and the expiry may be at most
+# ALLOW_MAX_DAYS out. An entry breaking either rule suppresses NOTHING and is
+# reported loudly — a silently honoured long-lived exception is exactly the
+# amnesia the expiry exists to prevent.
 # -----------------------------------------------------------------------------
 ALLOWED_CVES=()
 allow_expired=0
+allow_invalid=0
 load_allowlist() {
   [[ -f "$ALLOW_FILE" ]] || return 0
   local today; today="$(date +%Y-%m-%d)"
-  local cve owner expiry
-  while read -r cve owner expiry _; do
+  local latest; latest="$(date -d "+${ALLOW_MAX_DAYS} days" +%Y-%m-%d)"
+  local cve owner expiry reason
+  while read -r cve owner expiry reason; do
     [[ -z "${cve:-}" || "${cve:0:1}" == "#" ]] && continue
-    if [[ ! "$expiry" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    if [[ ! "${expiry:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
       echo "  WARN: allowlist entry '${cve}' has no valid expiry date — ignoring it"
+      allow_invalid=$((allow_invalid + 1))
+      continue
+    fi
+    if [[ -z "${reason// /}" ]]; then
+      echo "  WARN: allowlist entry ${cve} has NO REASON — an exception needs one; ignoring it"
+      allow_invalid=$((allow_invalid + 1))
+      continue
+    fi
+    if [[ "$expiry" > "$latest" ]]; then
+      echo "  WARN: allowlist entry ${cve} expires ${expiry}, more than ${ALLOW_MAX_DAYS} days out (latest allowed ${latest}) — ignoring it"
+      allow_invalid=$((allow_invalid + 1))
       continue
     fi
     if [[ "$expiry" < "$today" ]]; then
@@ -143,103 +191,171 @@ load_allowlist
 echo ""
 
 # --- Container image scanning ---
+#
+# Coverage: a verdict about an image is only believed if trivy demonstrably
+# evaluated packages in it. OS packages AND language packages count — a
+# distroless image (one Go binary, no package DB) is fully covered by its
+# gobinary result, and calling it "blind" was a false alarm that kept the
+# scheduled scan red on an image the bake scanned fine.
+#
+# Unscannable is not skippable: an image that cannot be pulled or read was NOT
+# scanned, so any such image makes the whole result BROKEN (exit 2). Reporting
+# "7 scanned, 7 skipped" as a pass is how a scan stays red for weeks while
+# everyone reads the colour as noise.
 IMG_TOTAL=0; IMG_PASS=0; IMG_FAIL=0; IMG_FINDINGS=0; IMG_SUPPRESSED=0; IMG_BLIND=0
+IMG_BLOCKING=0; IMG_BLOCKED=0; img_unscannable=0
+IMG_SOURCE="none"
+IMG_LIST_FILE=/dev/null   # set to a real file only when images are scanned
+UNSCANNABLE_NAMES=()
+
+# scan_one_image <label> <trivy target args...>
+scan_one_image() {
+  local label="$1"; shift
+  local report pkgs n s b state
+  report="${OUTPUT_DIR}/image-$(printf '%s' "$label" | tr '/:@' '___').json"
+  echo ""
+  echo "--- Scanning: ${label} ---"
+  # --list-all-pkgs is what turns "no findings" into a CHECKABLE claim: trivy
+  # reports every package it CONSIDERED, so a verdict of "clean" can be held
+  # against the number of packages it actually looked at.
+  if ! trivy image --severity "$SEVERITY" --list-all-pkgs --format json --output "$report" "$@" 2>/dev/null; then
+    echo "  ERROR: could not scan ${label} (not pullable / not readable) — NOT scanned, not clean"
+    img_unscannable=$((img_unscannable + 1)); UNSCANNABLE_NAMES+=("$label")
+    jq -cn --arg i "$label" '{image:$i, state:"unscannable"}' >> "$IMG_LIST_FILE"
+    return 0
+  fi
+  pkgs=$(jq '[.Results[]? | select(.Class == "os-pkgs" or .Class == "lang-pkgs") | .Packages // []] | flatten | length' "$report" 2>/dev/null || echo 0)
+  if [[ "${pkgs:-0}" -eq 0 ]]; then
+    # NOT a clean image. Trivy returns success having evaluated nothing when
+    # it has no matcher for the image's package family — the empty report is
+    # indistinguishable from a clean one unless you count.
+    echo "  ERROR: BLIND SCAN — trivy evaluated ZERO packages (OS or language) in this image."
+    echo "         An empty report is not a clean report. Not counted as clean."
+    IMG_BLIND=$((IMG_BLIND + 1))
+    jq -cn --arg i "$label" '{image:$i, state:"blind", packages:0}' >> "$IMG_LIST_FILE"
+    return 0
+  fi
+  read -r n s < <(count_unsuppressed "$report") || true
+  # D1: CRITICAL with a fix available, and not covered by a valid allowlist entry.
+  b=0
+  local id
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    is_allowed "$id" || { b=$((b + 1)); }
+  done < <(jq -r '[.Results[]?.Vulnerabilities // []] | flatten | .[]
+                  | select(.Severity == "CRITICAL")
+                  | select(((.FixedVersion // "") != "") or (.Status == "fixed"))
+                  | .VulnerabilityID' "$report" 2>/dev/null | sort -u || true)
+  IMG_FINDINGS=$((IMG_FINDINGS + n)); IMG_SUPPRESSED=$((IMG_SUPPRESSED + s))
+  if [[ "$n" -gt 0 ]]; then
+    state="findings"; IMG_FAIL=$((IMG_FAIL + 1))
+    echo "  FOUND: ${n} ${SEVERITY} finding(s) across ${pkgs} evaluated package(s)$([[ "$s" -gt 0 ]] && echo ", ${s} allowlisted"); fixable CRITICAL not allowlisted: ${b}"
+    # One line per finding from the report already in hand — no second scan.
+    jq -r '[.Results[]? | .Target as $t | (.Vulnerabilities // [])[]
+            | [.Severity, .VulnerabilityID, .PkgName, (.InstalledVersion // "?"),
+               (if ((.FixedVersion // "") != "") then .FixedVersion else "no fix" end)] | @tsv]
+           | unique | .[]' "$report" 2>/dev/null \
+      | awk -F'\t' '{printf "    %-8s %-20s %s %s -> %s\n", $1, $2, $3, $4, $5}' || true
+  else
+    state="clean"; IMG_PASS=$((IMG_PASS + 1))
+    echo "  CLEAN: no unsuppressed ${SEVERITY} findings across ${pkgs} evaluated package(s)$([[ "$s" -gt 0 ]] && echo " (${s} allowlisted)")"
+  fi
+  if [[ "$b" -gt 0 ]]; then
+    IMG_BLOCKING=$((IMG_BLOCKING + b)); IMG_BLOCKED=$((IMG_BLOCKED + 1))
+  fi
+  jq -cn --arg i "$label" --arg st "$state" --argjson p "$pkgs" --argjson n "$n" --argjson s "$s" --argjson b "$b" \
+     '{image:$i, state:$st, packages:$p, findings:$n, suppressed:$s, blocking:$b}' >> "$IMG_LIST_FILE"
+  return 0
+}
+
+# Channel the bake uses, from the defconfig — so the scheduled scan follows it.
+build_channel() {
+  local dc="${REPO_ROOT}/buildroot-ihost/configs/ga_ihost_full_defconfig" c
+  c=$(sed -n 's/^BR2_PACKAGE_HASSIO_CHANNEL_\(STABLE\|BETA\|DEV\)=y$/\1/p' "$dc" 2>/dev/null | head -n1)
+  [[ -n "$c" ]] && echo "${c,,}"
+}
+
 if [[ "$SCAN_IMAGES" == "true" ]]; then
-  echo "=== Scanning Container Images ==="
-
-  # Fetch stable.json from haos-version repo and read addon-images.json
-  STABLE_URL="https://raw.githubusercontent.com/greenautarky/haos-version/main/stable.json"
-  ADDON_JSON="${REPO_ROOT}/buildroot-external/package/hassio/addon-images.json"
-  ARCH="armv7"
-  MACHINE="tinker"
-
-  echo "  Fetching stable.json..."
-  STABLE=$(curl -sf "$STABLE_URL" 2>/dev/null || true)
-
-  IMAGES=()
-
-  if [[ -n "$STABLE" ]]; then
-    # Core image: replace {machine} placeholder
-    CORE_TMPL=$(echo "$STABLE" | jq -r '.images.core // empty')
-    CORE_VER=$(echo "$STABLE" | jq -r ".homeassistant.${MACHINE} // .homeassistant.default // empty")
-    CORE_IMG="${CORE_TMPL//\{machine\}/$MACHINE}"
-    [[ -n "$CORE_IMG" && -n "$CORE_VER" ]] && IMAGES+=("${CORE_IMG}:${CORE_VER}")
-
-    # Supervisor: replace {arch} placeholder
-    SUP_TMPL=$(echo "$STABLE" | jq -r '.images.supervisor // empty')
-    SUP_VER=$(echo "$STABLE" | jq -r '.supervisor // empty')
-    SUP_IMG="${SUP_TMPL//\{arch\}/$ARCH}"
-    [[ -n "$SUP_IMG" && -n "$SUP_VER" ]] && IMAGES+=("${SUP_IMG}:${SUP_VER}")
-
-    # System images (cli, dns, audio, observer, multicast)
-    for comp in cli dns audio observer multicast; do
-      IMG_TMPL=$(echo "$STABLE" | jq -r ".images.${comp} // empty")
-      COMP_VER=$(echo "$STABLE" | jq -r ".${comp} // empty")
-      IMG="${IMG_TMPL//\{arch\}/$ARCH}"
-      [[ -n "$IMG" && -n "$COMP_VER" ]] && IMAGES+=("${IMG}:${COMP_VER}")
+  IMG_LIST_FILE="${OUTPUT_DIR}/images.jsonl"
+  : > "$IMG_LIST_FILE"
+  if [[ -n "$IMAGE_TARS" ]]; then
+    echo "=== Scanning Container Image Tarballs: ${IMAGE_TARS} ==="
+    IMG_SOURCE="tarballs"
+    _tars=()
+    for _t in "$IMAGE_TARS"/*.tar; do [[ -f "$_t" ]] && _tars+=("$_t"); done
+    IMG_TOTAL=${#_tars[@]}
+    if [[ "$IMG_TOTAL" -eq 0 ]]; then
+      echo "  ERROR: no *.tar in ${IMAGE_TARS} — nothing was scanned, which is not clean"
+      SCAN_BROKEN=true
+    fi
+    for _t in ${_tars[@]+"${_tars[@]}"}; do
+      scan_one_image "$(basename "$_t" .tar)" --input "$_t"
     done
   else
-    echo "  WARN: Could not fetch stable.json — skipping system images"
-  fi
-
-  # Addon images
-  if [[ -f "$ADDON_JSON" ]]; then
-    while IFS= read -r img; do
-      # Replace {arch} placeholder
-      img="${img//\{arch\}/$ARCH}"
-      IMAGES+=("$img")
-    done < <(jq -r '.addons | to_entries[] | "\(.value.image):\(.value.version)"' "$ADDON_JSON" 2>/dev/null || true)
-  fi
-
-  IMG_TOTAL=${#IMAGES[@]}
-  img_unscannable=0
-
-  for img in ${IMAGES[@]+"${IMAGES[@]}"}; do
-    echo ""
-    echo "--- Scanning: ${img} ---"
-    REPORT="${OUTPUT_DIR}/image-$(echo "$img" | tr '/:' '__').json"
-
-    # --list-all-pkgs is what turns "no findings" into a CHECKABLE claim: trivy
-    # reports every package it CONSIDERED, so a verdict of "clean" can be held
-    # against the number of packages it actually looked at. Without it this loop
-    # counted a scan of ZERO packages as a clean image — the same blindness the
-    # SBOM half of this very file was fixed for on 2026-07-28, left in place here
-    # because nothing had ever compared the two halves against each other.
-    if trivy image --severity "$SEVERITY" --list-all-pkgs --format json --output "$REPORT" "$img" 2>/dev/null; then
-      _pkgs=$(jq '[.Results[]? | select(.Class == "os-pkgs") | .Packages // []] | flatten | length' "$REPORT" 2>/dev/null || echo 0)
-      if [[ "${_pkgs:-0}" -eq 0 ]]; then
-        # NOT a clean image. Trivy returns success having evaluated nothing when
-        # it has no matcher for the image's package family — the empty report is
-        # indistinguishable from a clean one unless you count.
-        echo "  ERROR: BLIND SCAN — trivy evaluated ZERO OS packages in this image."
-        echo "         An empty report is not a clean report. Not counted as clean."
-        IMG_BLIND=$((IMG_BLIND + 1))
-        continue
-      fi
-      read -r _n _s < <(count_unsuppressed "$REPORT") || true
-      IMG_FINDINGS=$((IMG_FINDINGS + _n))
-      IMG_SUPPRESSED=$((IMG_SUPPRESSED + _s))
-      if [[ "$_n" -gt 0 ]]; then
-        echo "  FOUND: ${_n} vulnerabilities (${SEVERITY}) across ${_pkgs} evaluated package(s)$([[ "$_s" -gt 0 ]] && echo ", ${_s} allowlisted")"
-        trivy image --severity "$SEVERITY" --format table "$img" 2>/dev/null || true
-        IMG_FAIL=$((IMG_FAIL + 1))
-      else
-        echo "  CLEAN: no unsuppressed ${SEVERITY} vulnerabilities across ${_pkgs} evaluated package(s)$([[ "$_s" -gt 0 ]] && echo " (${_s} allowlisted)")"
-        IMG_PASS=$((IMG_PASS + 1))
-      fi
-    else
-      echo "  SKIP: could not scan (image not pullable?)"
-      img_unscannable=$((img_unscannable + 1))
+    echo "=== Scanning Container Images ==="
+    ADDON_JSON="${REPO_ROOT}/buildroot-external/package/hassio/addon-images.json"
+    ARCH="armv7"
+    MACHINE="tinker"
+    [[ -n "$CHANNEL" ]] || CHANNEL="$(build_channel)"
+    if [[ -z "$CHANNEL" ]]; then
+      echo "  ERROR: no channel given and none found in the defconfig — cannot tell which images ship"
+      SCAN_BROKEN=true
+      CHANNEL="unknown"
     fi
-  done
+    IMG_SOURCE="channel:${CHANNEL}"
+    VERSION_URL="${HASSIO_VERSION_URL:-https://raw.githubusercontent.com/greenautarky/haos-version/main/}${CHANNEL}.json"
+    echo "  Channel:  ${CHANNEL} (${VERSION_URL})"
+    STABLE=""
+    [[ "$CHANNEL" != "unknown" ]] && STABLE=$(curl -sf "$VERSION_URL" 2>/dev/null || true)
+
+    IMAGES=()
+    if [[ -n "$STABLE" ]]; then
+      # Core: the template may use {machine} or {arch}
+      CORE_TMPL=$(echo "$STABLE" | jq -r '.images.core // empty')
+      CORE_VER=$(echo "$STABLE" | jq -r ".homeassistant.${MACHINE} // .homeassistant.default // empty")
+      CORE_IMG="${CORE_TMPL//\{machine\}/$MACHINE}"; CORE_IMG="${CORE_IMG//\{arch\}/$ARCH}"
+      [[ -n "$CORE_IMG" && -n "$CORE_VER" ]] && IMAGES+=("${CORE_IMG}:${CORE_VER}")
+
+      SUP_TMPL=$(echo "$STABLE" | jq -r '.images.supervisor // empty')
+      SUP_VER=$(echo "$STABLE" | jq -r '.supervisor // empty')
+      SUP_IMG="${SUP_TMPL//\{arch\}/$ARCH}"
+      [[ -n "$SUP_IMG" && -n "$SUP_VER" ]] && IMAGES+=("${SUP_IMG}:${SUP_VER}")
+
+      for comp in cli dns audio observer multicast; do
+        IMG_TMPL=$(echo "$STABLE" | jq -r ".images.${comp} // empty")
+        COMP_VER=$(echo "$STABLE" | jq -r ".${comp} // empty")
+        IMG="${IMG_TMPL//\{arch\}/$ARCH}"
+        [[ -n "$IMG" && -n "$COMP_VER" ]] && IMAGES+=("${IMG}:${COMP_VER}")
+      done
+    else
+      # Not a warning any more: the system images (Core, Supervisor, plugins)
+      # are the bulk of what ships. Without the channel file they were silently
+      # left out and the rest was reported as if it were the whole picture.
+      echo "  ERROR: could not fetch ${VERSION_URL} — the system images cannot be scanned"
+      SCAN_BROKEN=true
+    fi
+
+    if [[ -f "$ADDON_JSON" ]]; then
+      while IFS= read -r img; do
+        IMAGES+=("${img//\{arch\}/$ARCH}")
+      done < <(jq -r '.addons | to_entries[] | "\(.value.image):\(.value.version)"' "$ADDON_JSON" 2>/dev/null || true)
+    fi
+
+    IMG_TOTAL=${#IMAGES[@]}
+    for img in ${IMAGES[@]+"${IMAGES[@]}"}; do
+      scan_one_image "$img" "$img"
+    done
+  fi
 
   echo ""
-  echo "=== Image Scan Summary: ${IMG_PASS} clean, ${IMG_FAIL} with findings, ${IMG_BLIND} blind (${IMG_TOTAL} total, ${img_unscannable} unscannable) ==="
-  [[ "$IMG_FINDINGS" -gt 0 ]] && EXIT_CODE=1
+  echo "=== Image Scan Summary: ${IMG_PASS} clean, ${IMG_FAIL} with findings, ${IMG_BLIND} blind, ${img_unscannable} unscannable (${IMG_TOTAL} total) ==="
+  echo "    Policy ${POLICY}: ${IMG_BLOCKING} fixable CRITICAL finding(s) not allowlisted, in ${IMG_BLOCKED} image(s)"
 
-  # Every image failing to pull is a broken scan, not a clean one.
-  if [[ "$IMG_TOTAL" -gt 0 && "$img_unscannable" -eq "$IMG_TOTAL" ]]; then
-    echo "  ERROR: not a single image could be scanned — the image scan is BROKEN, not clean"
+  if [[ "$img_unscannable" -gt 0 ]]; then
+    echo "  ERROR: ${img_unscannable} of ${IMG_TOTAL} image(s) could not be scanned — the image scan is BROKEN, not clean:"
+    printf '           %s\n' "${UNSCANNABLE_NAMES[@]}"
+    echo "         For private registry images the scanning job needs read access to"
+    echo "         those packages (package settings -> Manage Actions access)."
     SCAN_BROKEN=true
   fi
 
@@ -452,15 +568,28 @@ jq -n \
   --argjson sbom_tracked "${SBOM_TRACKED:-0}" \
   --argjson sbom_hostonly "${SBOM_HOSTONLY:-0}" \
   --argjson img_total "${IMG_TOTAL:-0}" \
+  --argjson img_clean "${IMG_PASS:-0}" \
+  --argjson img_with "${IMG_FAIL:-0}" \
+  --argjson img_blind "${IMG_BLIND:-0}" \
+  --argjson img_unscannable "${img_unscannable:-0}" \
   --argjson img_findings "${IMG_FINDINGS:-0}" \
   --argjson img_suppressed "${IMG_SUPPRESSED:-0}" \
+  --argjson img_blocking "${IMG_BLOCKING:-0}" \
+  --argjson img_blocked "${IMG_BLOCKED:-0}" \
+  --arg img_source "${IMG_SOURCE:-none}" \
+  --arg policy "$POLICY" \
   --argjson allow_expired "${allow_expired:-0}" \
-  '{date:$date, severity:$severity, strict:$strict, scan_broken:$broken,
-    allowlist_expired:$allow_expired,
+  --argjson allow_invalid "${allow_invalid:-0}" \
+  --slurpfile img_list "$IMG_LIST_FILE" \
+  '{date:$date, severity:$severity, strict:$strict, policy:$policy, scan_broken:$broken,
+    allowlist_expired:$allow_expired, allowlist_invalid:$allow_invalid,
     os:{status:$sbom_status, components:$sbom_components, scanned:$sbom_scanned,
         coverage_pct:$sbom_coverage, findings:$sbom_findings, suppressed:$sbom_suppressed,
         tracked:$sbom_tracked, host_only:$sbom_hostonly},
-    images:{total:$img_total, findings:$img_findings, suppressed:$img_suppressed}}' \
+    images:{source:$img_source, total:$img_total, clean:$img_clean, with_findings:$img_with,
+            blind:$img_blind, unscannable:$img_unscannable, findings:$img_findings,
+            suppressed:$img_suppressed, blocking:$img_blocking, blocked_images:$img_blocked,
+            list:$img_list}}' \
   > "$SUMMARY" 2>/dev/null || echo "WARN: could not write ${SUMMARY}"
 
 echo ""
@@ -472,6 +601,14 @@ echo "  Summary:          ${SUMMARY}"
 if [[ "$SCAN_BROKEN" == "true" ]]; then
   echo "  Result: BROKEN SCAN (exit 2)"
   exit 2
+fi
+
+# Image policy (D1): a fixable CRITICAL that no valid allowlist entry covers
+# blocks, whatever --strict says — --strict governs the OS half only.
+if [[ "$POLICY" == "d1" && "${IMG_BLOCKING:-0}" -gt 0 ]]; then
+  echo "  Result: POLICY BLOCK — ${IMG_BLOCKING} fixable CRITICAL finding(s) in ${IMG_BLOCKED} image(s) (exit 1)"
+  echo "          Update the image, or add a time-boxed entry (reason, <= ${ALLOW_MAX_DAYS} days) to ${ALLOW_FILE}."
+  exit 1
 fi
 
 if [[ "$EXIT_CODE" -ne 0 ]]; then
