@@ -3123,9 +3123,11 @@ else
   _fail "NB-REG-04: ga-netbird-register.service NOT enabled (no multi-user.target.wants symlink)"
 fi
 
-# NB-REG-05: setup key file is present iff secret was provided at build.
-# Build tolerates missing key (warn-only); on a build WITH the key, the
-# file must exist + be 0600 + non-empty.
+# NB-REG-05: the setup key is baked — fail-closed. One build mode (ADR-0027
+# D9), so there is no image this may be missing from: without it a freshly-
+# flashed device never joins the mesh. The post-build hook and the preflight
+# refuse too; this checks the image. Size and mode only, never the value.
+# Self-test: tests/gates/netbird_setup_key/selftest.sh
 if [[ -f "$NB_REG_KEY" ]]; then
   PERMS=$(stat -c '%a' "$NB_REG_KEY" 2>/dev/null)
   SIZE=$(stat -c '%s' "$NB_REG_KEY" 2>/dev/null)
@@ -3135,7 +3137,7 @@ if [[ -f "$NB_REG_KEY" ]]; then
     _fail "NB-REG-05: setup-key baked but wrong perms ($PERMS) or empty ($SIZE bytes)"
   fi
 else
-  _skip "NB-REG-05" "no setup-key baked (secret missing at build time — fresh-flash devices won't auto-register)"
+  _fail "NB-REG-05: no setup-key baked at /usr/share/ga-netbird/setup-key — fresh-flash devices can never join the mesh"
 fi
 
 # =========================================================================

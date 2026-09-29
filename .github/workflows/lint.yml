@@ -474,6 +474,12 @@ jobs:
       - name: Build mode (dev refused, real modes and deprecated prod still build)
         run: ./tests/gates/build_mode/selftest.sh
 
+      # No image without a NetBird setup key: the post-build hook and the
+      # preflight refuse a missing/empty key, and NB-REG-05 is red on an image
+      # tree without one, green on the tree the hook produces.
+      - name: NetBird setup key fail-closed (hook, preflight, NB-REG-05)
+        run: ./tests/gates/netbird_setup_key/selftest.sh
+
       # A pinned add-on that never made it into the image used to count as
       # "skipped" while the build suite still printed a pass line — and
       # sonoff_dongle_flasher had never once been checked, because the pin key

@@ -293,12 +293,15 @@ fi
   echo "WARN: secrets/openstick-wifi.key not found — OpenStick WiFi will not work" >&2;
 }
 # NetBird auto-register on first boot needs a reusable setup key from the
-# NetBird admin panel. If absent, the OS builds fine but freshly-flashed
-# devices stay in `Daemon status: NeedsLogin` and don't auto-tunnel —
-# operator must register them via `netbird up` or ga-flasher-py stage 40.
-[[ -f "/build/secrets/netbird-setup-key.txt" ]] || [[ -f "secrets/netbird-setup-key.txt" ]] || {
-  echo "WARN: secrets/netbird-setup-key.txt not found — fresh-flash devices will NOT auto-register with NetBird" >&2;
-}
+# NetBird admin panel. Without it every freshly-flashed device stays in
+# `NeedsLogin` and never joins the mesh, so the post-build hook refuses — ask
+# here, in seconds, with the same script in --check mode so the two cannot
+# disagree.
+GA_NB_KEY_HOOK="${BR2EXT_IHOST}/board/sonoff/ihost/post-build.d/88-netbird-setup-key.sh"
+if ! bash "$GA_NB_KEY_HOOK" --check; then
+  echo "FAIL: NetBird setup key missing or empty — see the line above." >&2
+  PREFLIGHT_FAIL=1
+fi
 
 # Version suffix set (not empty for release builds)
 VERSION_SUFFIX_CHECK=$(grep 'VERSION_SUFFIX=' "$BR2EXT_NETBIRD/meta" 2>/dev/null | cut -d'"' -f2)
