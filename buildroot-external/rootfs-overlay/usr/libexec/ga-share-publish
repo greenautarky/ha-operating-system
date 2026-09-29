@@ -69,7 +69,14 @@ mkdir -p "$(dirname "$target")" 2>/dev/null || true
 [ -L "$target" ] && rm -f "$target"
 # Same-filesystem rename(): atomic, and replaces a destination symlink without
 # following it.
-if ! mv -f "$tmp" "$target"; then
+#
+# -T is load-bearing. Without it, mv stat()s the destination FOLLOWING links
+# and, if that resolves to a directory, moves the file INTO it — so a symlink
+# to a directory that appears at the target name after the `rm` above would
+# still steer the file out of the share dir. With -T the destination is only
+# ever the literal path: GNU mv renames over it, BusyBox mv (the device's)
+# refuses when it resolves to a directory. Either way nothing lands elsewhere.
+if ! mv -f -T "$tmp" "$target"; then
 	echo "ga-share-publish: failed publishing $target" >&2
 	rm -f "$tmp"
 	exit 1

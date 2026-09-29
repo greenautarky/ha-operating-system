@@ -40,7 +40,7 @@ SHARE="$TMPD/ga-wlan0-deauth.json"
 BID="$TMPD/boot_id"; echo "aaaaaaaa-1111-2222-3333-444444444444" > "$BID"
 
 # source the counter functions
-( export GA_DEAUTH_TEST=1 GA_DEAUTH_SHARE="$SHARE" GA_DEAUTH_LOCK="$SHARE.lock" \
+( export GA_DEAUTH_TEST=1 GA_DEAUTH_SHARE="$SHARE" \
          GA_SHARE_PUBLISH="$PUB" GA_SHARE_STAGE_DIR="$TMPD/stage" \
          GA_DEAUTH_BOOT_ID_PATH="$BID" GA_DEAUTH_IFACE=wlan0
   . "$DEAUTH"
@@ -64,7 +64,7 @@ python3 - "$SHARE" <<'PY' 2>/dev/null || printf '{"reason3_total":5,"boot_id":"x
 import json,sys
 p=sys.argv[1]; d=json.load(open(p)); d["healer_marks"]=["2026-09-13T10:05:00Z"]; json.dump(d,open(p,"w"))
 PY
-( export GA_DEAUTH_TEST=1 GA_DEAUTH_SHARE="$SHARE" GA_DEAUTH_LOCK="$SHARE.lock" \
+( export GA_DEAUTH_TEST=1 GA_DEAUTH_SHARE="$SHARE" \
          GA_SHARE_PUBLISH="$PUB" GA_SHARE_STAGE_DIR="$TMPD/stage" GA_DEAUTH_BOOT_ID_PATH="$BID"
   . "$DEAUTH"
   publish_counter 6 "$(cat "$BID")" "2026-09-13T10:06:00Z" '"3":6' 3 )
@@ -75,7 +75,7 @@ run_test "LSB-16" "republish updated the counter alongside the preserved marks" 
 
 # reboot: a new boot_id rewrites the field (acceptance: reboot rewrites boot_id)
 echo "bbbbbbbb-5555-6666-7777-888888888888" > "$BID"
-( export GA_DEAUTH_TEST=1 GA_DEAUTH_SHARE="$SHARE" GA_DEAUTH_LOCK="$SHARE.lock" \
+( export GA_DEAUTH_TEST=1 GA_DEAUTH_SHARE="$SHARE" \
          GA_SHARE_PUBLISH="$PUB" GA_SHARE_STAGE_DIR="$TMPD/stage" GA_DEAUTH_BOOT_ID_PATH="$BID"
   . "$DEAUTH"
   publish_counter 0 "$(cat "$BID")" "" '"3":0' "" )

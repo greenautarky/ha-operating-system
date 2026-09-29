@@ -20,10 +20,23 @@
 # TWO WRITERS, ONE FILE: ga_manager's H1 healer writes its OWN funcNo-1018
 # timestamps into `healer_marks` (each 1018 restarts the dongle's hostapd and
 # produces exactly one Reason-3 deauth, which the flapping rate must exclude).
-# So every write here is a read-modify-write under an flock on <file>.lock —
-# the SAME lock ga_manager takes — and PRESERVES healer_marks verbatim. The
-# write itself goes through ga-share-publish (symlink-safe: /share is writable
-# by every share:rw add-on, so a plain `>` there follows a planted symlink).
+# So every write here is a read-modify-write under an flock — the SAME lock
+# ga_manager takes — and PRESERVES healer_marks verbatim.
+#
+# The lock object is the shared DIRECTORY itself (/mnt/data/supervisor/share,
+# which ga_manager sees as /share), opened read-only. Nothing is created for
+# it, and the directory is the bind-mount root, so it is the same inode on both
+# sides and cannot be replaced from inside a container. ga_manager >= 0.218.0
+# takes this directory lock (and, for the transition, the old <file>.lock after
+# it); earlier ga_manager versions only take <file>.lock. The wait is bounded
+# (GA_DEAUTH_LOCK_WAIT_S, default 5 s): a holder that never lets go delays a
+# publish, it does not stop the counter.
+#
+# Reads and writes of the status file never open it in place: the write goes
+# through ga-share-publish (staged, renamed into place), and the read takes a
+# hard link into the same host-only staging directory and reads that only if
+# it is a regular file (link() does not follow a symlink, and the staged name
+# is not reachable from a container).
 #
 # POSIX /bin/sh (BusyBox ash) — no python on the image, and BusyBox `date` has
 # no %N. Test hook: `GA_DEAUTH_TEST=1 . ga-wlan0-deauth` sources the functions
@@ -31,8 +44,13 @@
 set -u
 
 SHARE="${GA_DEAUTH_SHARE:-/mnt/data/supervisor/share/ga-wlan0-deauth.json}"
-LOCK="${GA_DEAUTH_LOCK:-${SHARE}.lock}"
+LOCK_DIR="${GA_DEAUTH_LOCK_DIR:-$(dirname "$SHARE")}"
+LOCK_WAIT_S="${GA_DEAUTH_LOCK_WAIT_S:-5}"
 PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
+# Same staging dir as ga-share-publish: host-only, same filesystem as $SHARE.
+STAGE_DIR="${GA_SHARE_STAGE_DIR:-/mnt/data/.ga-share-stage}"
+# Upper bound on what the marks read takes in (the real file is < 1 KiB).
+MARKS_READ_MAX=65536
 IFACE="${GA_DEAUTH_IFACE:-wlan0}"
 # The kernel line reason we count. Reason 3 = DEAUTH_LEAVING (AP-initiated).
 BOOT_ID_PATH="${GA_DEAUTH_BOOT_ID_PATH:-/proc/sys/kernel/random/boot_id}"
@@ -58,11 +76,28 @@ deauth_reason() {
 # Read the current healer_marks array (verbatim JSON inner, no brackets) from
 # the shared file so a write PRESERVES what ga_manager put there. Best-effort:
 # a missing/garbled file yields empty, never an error.
+#
+# The file is never opened at its shared path: a hard link to whatever is there
+# is taken into the host-only staging dir first, and only a regular file is
+# read from it (bounded). A hard link to a symlink is a symlink, so a link at
+# the shared path yields nothing instead of the file it points to.
 _read_healer_marks() {
-    [ -f "$SHARE" ] || { echo ""; return; }
-    # extract the "healer_marks":[ ... ] inner content, tolerant of whitespace.
-    tr -d '\n' < "$SHARE" 2>/dev/null \
-      | sed -n 's/.*"healer_marks"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p'
+    [ -e "$SHARE" ] || [ -L "$SHARE" ] || { echo ""; return; }
+    mkdir -p "$STAGE_DIR" 2>/dev/null && chmod 0700 "$STAGE_DIR" 2>/dev/null
+    _snap="$STAGE_DIR/.read.$$.$(basename "$SHARE")"
+    rm -f "$_snap"
+    if ! ln "$SHARE" "$_snap" 2>/dev/null; then
+        echo "ga-wlan0-deauth: cannot snapshot $SHARE for reading — healer_marks not carried over" >&2
+        echo ""; return
+    fi
+    if [ -f "$_snap" ] && [ ! -L "$_snap" ]; then
+        # extract the "healer_marks":[ ... ] inner content, tolerant of whitespace.
+        head -c "$MARKS_READ_MAX" "$_snap" 2>/dev/null | tr -d '\n' \
+          | sed -n 's/.*"healer_marks"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p'
+    else
+        echo "ga-wlan0-deauth: $SHARE is not a regular file — ignoring its healer_marks" >&2
+    fi
+    rm -f "$_snap"
 }
 
 # Render the seam JSON. Args: total boot_id last_event_at reason_json last_reason marks_inner
@@ -80,14 +115,15 @@ render_json() {
 # Publish the seam file under the shared flock, preserving healer_marks.
 # Args: total boot_id last_event_at reason_json last_reason
 publish_counter() {
-    mkdir -p "$(dirname "$LOCK")" 2>/dev/null || true
+    mkdir -p "$LOCK_DIR" 2>/dev/null || true
     (
         if command -v flock >/dev/null 2>&1; then
-            flock 9 2>/dev/null || true
+            flock -x -w "$LOCK_WAIT_S" 9 \
+              || echo "ga-wlan0-deauth: lock on $LOCK_DIR not acquired within ${LOCK_WAIT_S}s — publishing without it" >&2
         fi
         _marks="$(_read_healer_marks)"
         render_json "$1" "$2" "$3" "$4" "$5" "$_marks" | "$PUBLISH" "$SHARE" 0644
-    ) 9>"$LOCK"
+    ) 9<"$LOCK_DIR"
 }
 
 # Count Reason-3 deauths already in THIS boot's kernel journal, to seed

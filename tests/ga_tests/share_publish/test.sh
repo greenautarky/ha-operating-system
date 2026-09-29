@@ -58,6 +58,39 @@ run_test "GSP-11" "target replaced by a real file (planted symlink gone)" \
 run_test "GSP-12" "published bytes landed at the real target path" \
   "[ \"\$(cat '$SHARE/attacked.json')\" = NEW-CONTENT ]"
 
+# --- a symlink to a DIRECTORY appearing between the cleanup and the rename ---
+# ga-share-publish removes a symlink at the target and then renames. Something
+# else can create a new symlink in that window. A stub `rm` makes that window
+# deterministic: it removes the target and immediately puts a symlink to a
+# directory there. The rename must still only ever produce the literal target
+# path — nothing may land inside the linked directory.
+RACE_DIR="$WORK/other_dir"; mkdir -p "$RACE_DIR"
+STUB="$WORK/stub"; mkdir -p "$STUB"
+REAL_RM="$(command -v rm)"
+cat > "$STUB/rm" <<EOF
+#!/bin/sh
+"$REAL_RM" "\$@"
+for a in "\$@"; do [ "\$a" = "$SHARE/raced.json" ] && ln -s "$RACE_DIR" "\$a"; done
+exit 0
+EOF
+chmod +x "$STUB/rm"
+race_publish() {  # <PATH prefix>
+  "$REAL_RM" -rf "$SHARE/raced.json" "$RACE_DIR"/* "$RACE_DIR"/.[!.]* 2>/dev/null
+  ln -s "$VICTIM" "$SHARE/raced.json"
+  printf 'RACED\n' | PATH="$1$STUB:$PATH" GA_SHARE_STAGE_DIR="$STAGE" "$PUB" "$SHARE/raced.json" 2>/dev/null
+}
+race_publish ""
+run_test "GSP-13" "a symlink to a directory re-created before the rename is not followed (host mv)" \
+  "[ -z \"\$(ls -A '$RACE_DIR')\" ] && [ \"\$(cat '$VICTIM')\" = ORIGINAL-ROOT-CONTENT ]"
+if command -v busybox >/dev/null 2>&1; then
+  BBMV="$WORK/bbmv"; mkdir -p "$BBMV"; ln -s "$(command -v busybox)" "$BBMV/mv"
+  race_publish "$BBMV:"
+  run_test "GSP-14" "a symlink to a directory re-created before the rename is not followed (BusyBox mv)" \
+    "[ -z \"\$(ls -A '$RACE_DIR')\" ] && [ \"\$(cat '$VICTIM')\" = ORIGINAL-ROOT-CONTENT ]"
+else
+  skip_test "GSP-14" "same, BusyBox mv" "busybox not installed"
+fi
+
 rm -rf "$WORK" 2>/dev/null
 
 suite_end

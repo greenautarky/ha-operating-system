@@ -159,13 +159,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install jq
+      - name: Install jq, bubblewrap, busybox
         uses: ./.github/actions/apt-install
         with:
-          packages: jq
+          packages: jq bubblewrap busybox
 
       - name: ga-share-publish (/share symlink hardening)
+        # GSP-14 runs the rename with BusyBox mv, the device's mv.
         run: sh tests/ga_tests/share_publish/test.sh
+
+      - name: shared-directory writes go through ga-share-publish (gate + fixtures)
+        # Static gate over every shell script in the rootfs overlays and
+        # packages: no redirect, lock open, tee/touch, or cp/mv destination may
+        # target the shared directory except through ga-share-publish. The
+        # self-test runs the live check.py over must-flag fixtures (each with a
+        # pinned finding count), must-pass fixtures, an empty tree (must fail,
+        # never pass over nothing) and the live overlays. Red-proven: on the
+        # tree before this change it flags six scripts (10 findings).
+        run: sh tests/gates/share_writes/selftest.sh
+
+      - name: status writers publish into the shared directory without following links
+        # Drives the six real writers inside a bubblewrap sandbox, with a link
+        # placed at each path they use, under both host coreutils and BusyBox.
+        # Red-proven: on the tree before this change 38 of 42 checks fail.
+        env:
+          GA_REQUIRE_BUSYBOX: "1"
+        run: sh tests/ga_tests/share_writers/test.sh
 
       - name: gen_expected.sh works from any cwd (the release-train's call shape)
         # The generator computed its output path relative to the CALLER's cwd and

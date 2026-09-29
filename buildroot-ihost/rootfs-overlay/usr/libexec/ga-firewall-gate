@@ -88,10 +88,11 @@ flush_table() {
 }
 
 # $1 = enabled(true/false) $2 = source $3 = ruleset_loaded(true/false)
+# Published through ga-share-publish (staged outside the shared directory,
+# renamed into place), never written in place.
 write_status() {
 	[ -d "$SHARE_DIR" ] || return 0
-	tmp="$STATUS_FILE.tmp.$$"
-	cat > "$tmp" <<EOF
+	/usr/libexec/ga-share-publish "$STATUS_FILE" 0644 <<EOF || return 0
 {
   "schema_version": 2,
   "enabled": $1,
@@ -101,7 +102,6 @@ write_status() {
   "lan_open_tcp": [$HOST_ALLOW_TCP, $CONTAINER_ALLOW_TCP]
 }
 EOF
-	mv -f "$tmp" "$STATUS_FILE" 2>/dev/null || { rm -f "$tmp"; return 0; }
 }
 
 # --- resolve state ---------------------------------------------------------

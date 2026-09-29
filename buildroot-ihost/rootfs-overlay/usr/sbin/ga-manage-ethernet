@@ -104,6 +104,10 @@ set -e
 GA_ENV_FILE="${GA_ENV_FILE:-/mnt/data/ga-env.conf}"
 SHARE_DIR="${GA_SHARE_DIR:-/mnt/data/supervisor/share}"
 STATUS_FILE="$SHARE_DIR/ga-ethernet-status.json"
+# STATUS_FILE is published through ga-share-publish (staged, then renamed into
+# place) — never opened in place, because the shared directory is also mounted
+# into add-on containers.
+PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
 FORCE_BOOT="${GA_FORCE_BOOT:-/mnt/boot/ga-ethernet-force}"
 CONVERGED_MARKER="$SHARE_DIR/.ga_converged"
 ADDON_DATA_GLOB="${GA_ADDON_DATA_GLOB:-/mnt/data/supervisor/addons/data/*_ga_manager}"
@@ -214,8 +218,7 @@ write_status() { # $1 = enabled(true/false) $2 = source
   # green while the running system is still forced. Two claims, two fields.
   _marker="absent"
   [ -e "$FORCE_BOOT" ] && _marker="present"
-  tmp="$STATUS_FILE.tmp.$$"
-  cat > "$tmp" <<EOF
+  "$PUBLISH" "$STATUS_FILE" 0644 <<EOF || true
 {
   "schema_version": 2,
   "enabled": $1,
@@ -225,7 +228,6 @@ write_status() { # $1 = enabled(true/false) $2 = source
   "interface": "$ETH_IFACE"
 }
 EOF
-  mv -f "$tmp" "$STATUS_FILE" 2>/dev/null || rm -f "$tmp"
 }
 
 # --- actions ---------------------------------------------------------------

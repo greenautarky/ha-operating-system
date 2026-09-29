@@ -56,6 +56,8 @@ run() {   # run <cached> <forced> <profiles-file> [now]
     GA_NMCLI="$WORK/nmcli" GA_IP="$WORK/ip" GA_LADDER_SYS_NET="$WORK/sys" \
     GA_LADDER_STATE="$WORK/state" GA_LADDER_BOOT_MARK="$WORK/booted" \
     GA_LADDER_PARK_DIR="$WORK/parked" GA_LADDER_STATUS="$WORK/status.json" \
+    GA_SHARE_PUBLISH="$ROOT/buildroot-external/rootfs-overlay/usr/libexec/ga-share-publish" \
+    GA_SHARE_STAGE_DIR="$WORK/stage" \
     GA_LADDER_NOW="${4:-1000000}" GA_LADDER_COOLDOWN_S=900 \
       sh "$LADDER" >/dev/null 2>&1
 }

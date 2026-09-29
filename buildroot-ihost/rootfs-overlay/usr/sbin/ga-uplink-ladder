@@ -47,6 +47,9 @@ STATE="${GA_LADDER_STATE:-/run/ga-uplink-ladder.state}"
 BOOT_MARK="${GA_LADDER_BOOT_MARK:-/run/ga-uplink-ladder.booted}"
 PARK_DIR="${GA_LADDER_PARK_DIR:-/run/ga-uplink-parked}"
 STATUS="${GA_LADDER_STATUS:-/mnt/data/supervisor/share/ga-uplink.json}"
+# The status file lives in the shared directory, so it is published through
+# ga-share-publish (staged, then renamed into place) — never opened in place.
+PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
 SYS_NET="${GA_LADDER_SYS_NET:-/sys/class/net}"
 FAIL_THRESHOLD="${GA_LADDER_FAILS:-3}"
 COOLDOWN_S="${GA_LADDER_COOLDOWN_S:-900}"
@@ -150,11 +153,10 @@ release_expired() {
 }
 
 write_status() {
-    mkdir -p "$(dirname "$STATUS")" 2>/dev/null
     printf '{"rung":"%s","verdict":"%s","strikes":%s,"parked":"%s","updated_at":"%s"}\n' \
         "$1" "$2" "$3" "$(ls "$PARK_DIR" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')" \
         "$(date -u -d "@$NOW" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        > "$STATUS"
+        | "$PUBLISH" "$STATUS" 0644 || log warning "could not publish $STATUS"
 }
 
 main() {

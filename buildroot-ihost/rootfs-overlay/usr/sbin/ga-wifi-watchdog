@@ -78,7 +78,8 @@ record_action() { printf '%s %s\n' "$1" "$(date +%s 2>/dev/null || echo 0)" > "$
 
 # Emit the current WiFi-health view for ga_manager /info. Atomic, best-effort:
 # a write failure must never affect recovery. Called on every check + after each
-# action, so the surface always reflects the latest tick.
+# action, so the surface always reflects the latest tick. Published through
+# ga-share-publish: staged outside the shared directory, renamed into place.
 write_health() {
     _d=$(dirname "$SHARE_HEALTH"); [ -d "$_d" ] || return 0
     _la="none"; _lts=0
@@ -86,8 +87,7 @@ write_health() {
         _la=$(awk '{print $1}' "$LAST_ACTION_STATE" 2>/dev/null || echo none)
         _lts=$(awk '{print $2}' "$LAST_ACTION_STATE" 2>/dev/null || echo 0)
     fi
-    _tmp="${SHARE_HEALTH}.tmp"
-    cat > "$_tmp" 2>/dev/null <<JSON || { rm -f "$_tmp" 2>/dev/null; return 0; }
+    /usr/libexec/ga-share-publish "$SHARE_HEALTH" 0644 <<JSON || true
 {
   "ts": $(date +%s 2>/dev/null || echo 0),
   "iface": "$IFACE",
@@ -104,7 +104,6 @@ write_health() {
   "last_action_ts": ${_lts:-0}
 }
 JSON
-    mv "$_tmp" "$SHARE_HEALTH" 2>/dev/null || rm -f "$_tmp" 2>/dev/null || true
 }
 
 # ---- preconditions ----
