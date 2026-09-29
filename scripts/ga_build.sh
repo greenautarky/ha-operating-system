@@ -2479,32 +2479,49 @@ if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]];
     echo "CVE scan found vulnerabilities — see ${OUT}/images/reports/cve-scan-sbom.txt"
   fi
 
-  # 11b) Scan downloaded container image tars (covers private GHCR images)
+  # 11b) Scan the container image tars baked into the data partition — every
+  # image that ships, the private GHCR ones included.
+  #
+  # Delegated to scan-cves.sh --image-tars for the same reason as the SBOM scan
+  # above: coverage, the per-image tally and the image policy live in ONE place
+  # and are covered by tests/gates/cve-gate/scan-cves-image-policy-fixtures.sh.
+  # Until 2026-09-29 this block ran trivy itself and tallied "clean vs with
+  # findings" by grepping the CUMULATIVE report file, so every image after the
+  # first one with findings was counted as having findings too, and an image
+  # trivy evaluated nothing in counted as clean.
+  #
+  # Policy (D1, 2026-09-29): a CRITICAL finding with a fix available that no
+  # time-boxed allowlist entry covers stops the build; HIGH is reported only.
+  # The last line of the report stays the one-line summary read further down.
   _cve_images_dir="$(ls -d "${OUT}/build/hassio-"*/images 2>/dev/null | head -n 1 || true)"
+  _cve_scan_file="${OUT}/images/reports/cve-scan-containers.txt"
   if [[ -d "$_cve_images_dir" ]]; then
     echo ""
-    echo "Scanning container image tars for CRITICAL/HIGH vulnerabilities..."
-    _cve_scan_file="${OUT}/images/reports/cve-scan-containers.txt"
-    : > "$_cve_scan_file"
-    _cve_img_total=0 _cve_img_clean=0 _cve_img_findings=0
-    for tarball in "$_cve_images_dir"/*.tar; do
-      [[ -f "$tarball" ]] || continue
-      _cve_img_name="$(basename "$tarball" .tar)"
-      _cve_img_total=$((_cve_img_total + 1))
-      echo "  Scanning: ${_cve_img_name}..." | tee -a "$_cve_scan_file"
-      if trivy image --severity CRITICAL,HIGH --format table --input "$tarball" 2>&1 | tee -a "$_cve_scan_file"; then
-        _cve_count=$(grep -cE "CRITICAL|HIGH" "$_cve_scan_file" 2>/dev/null || echo 0)
-        if [[ "$_cve_count" -gt 0 ]]; then
-          _cve_img_findings=$((_cve_img_findings + 1))
-        else
-          _cve_img_clean=$((_cve_img_clean + 1))
-        fi
-      else
-        echo "    WARN: could not scan ${_cve_img_name}" | tee -a "$_cve_scan_file"
-      fi
-    done
-    echo "" | tee -a "$_cve_scan_file"
-    echo "Container image scan: ${_cve_img_clean} clean, ${_cve_img_findings} with findings (${_cve_img_total} total)" | tee -a "$_cve_scan_file"
+    echo "Scanning the baked container images (CRITICAL,HIGH; fixable CRITICAL blocks)..."
+    _img_out="${OUT}/images/reports/containers"
+    set +e
+    OUTPUT_DIR="$_img_out" \
+      "${SCRIPT_DIR:-/build/scripts}/scan-cves.sh" --image-tars "$_cve_images_dir" --severity CRITICAL,HIGH \
+        2>&1 | tee "$_cve_scan_file"
+    _img_rc=${PIPESTATUS[0]}
+    set -e
+    _img_sum="${_img_out}/summary.json"
+    printf 'Container image scan: %s clean, %s with findings (%s total), %s fixable CRITICAL blocking\n' \
+      "$(jq -r '.images.clean' "$_img_sum" 2>/dev/null || echo '?')" \
+      "$(jq -r '.images.with_findings' "$_img_sum" 2>/dev/null || echo '?')" \
+      "$(jq -r '.images.total' "$_img_sum" 2>/dev/null || echo '?')" \
+      "$(jq -r '.images.blocking' "$_img_sum" 2>/dev/null || echo '?')" | tee -a "$_cve_scan_file"
+    if [[ "$_img_rc" -eq 1 ]]; then
+      echo "ERROR: a baked container image carries a CRITICAL finding with a fix available — refusing to build the image"
+      echo "       Update the image, or add a time-boxed entry (reason, <= 30 days) to .cve-allowlist. See ${_cve_scan_file}"
+      exit 1
+    elif [[ "$_img_rc" -ne 0 ]]; then
+      echo "ERROR: the container image scan is BROKEN (exit ${_img_rc}) — an unscanned image must not ship as scanned"
+      exit 1
+    fi
+  else
+    echo "WARNING: no baked container images under ${OUT}/build/hassio-*/images — the container image scan did NOT run" \
+      | tee "$_cve_scan_file"
   fi
 else
   # Fail closed: no image ships without a scanned SBOM.
