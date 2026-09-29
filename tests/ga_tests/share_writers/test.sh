@@ -98,7 +98,8 @@ fresh() {
 # under the /tmp the sandbox replaces.
 sbx() {
   _pfx="$1"; shift
-  $BWRAP --ro-bind / / --unshare-pid --proc /proc --dev /dev \
+  # Bounded: a writer that blocks must fail its checks, never wedge the job.
+  timeout -k 5 60 $BWRAP --ro-bind / / --unshare-pid --proc /proc --dev /dev \
     --tmpfs /mnt --bind "$C/data" /mnt/data --bind "$C/boot" /mnt/boot \
     --bind "$C/run" /run --bind "$C/tmp" /tmp \
     --ro-bind "$LIBEXEC" /usr/libexec --ro-bind "$STUBS" /mnt/.stubs \

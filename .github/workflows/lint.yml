@@ -192,6 +192,7 @@ jobs:
         # Drives the six real writers inside a bubblewrap sandbox, with a link
         # placed at each path they use, under both host coreutils and BusyBox.
         # Red-proven: on the tree before this change 38 of 42 checks fail.
+        timeout-minutes: 10
         env:
           GA_REQUIRE_BUSYBOX: "1"
         run: sh tests/ga_tests/share_writers/test.sh
