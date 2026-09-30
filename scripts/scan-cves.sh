@@ -32,8 +32,19 @@
 #   A scanner that covers nothing is now a hard error (exit 2), not a pass —
 #   the same fail-closed rule as the prod root password (#239).
 #
+# GO BINARY COVERAGE (container images, 2026-09-30):
+#   Counting packages per image is not enough: trivy can evaluate most Go
+#   binaries of an image and silently skip others — no result, no warning, so a
+#   skipped binary reads as a clean one. Every image is therefore also
+#   catalogued with syft, and every executable carrying Go build info must
+#   appear as a trivy `gobinary` target. A binary trivy did not evaluate gets a
+#   second opinion from grype (same D1 policy, same allowlist). A binary that
+#   neither scanner evaluated makes the image BLIND (exit 2), never clean.
+#
 # Requires: trivy (https://aquasecurity.github.io/trivy/)
-#   Install: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+#   Images also require syft (the Go binary inventory) and, when trivy missed a
+#   Go binary, grype (the second opinion). Versions: pinned in the Dockerfile.
+#   Install: the versions pinned in the Dockerfile (trivy, syft, grype).
 #   Optional: grype — matches on CPE, which our SBOM does carry (130/208).
 #             Preferred for the OS SBOM when present; see docs/CVE-HANDLING.md.
 #
@@ -89,7 +100,7 @@ while [[ $# -gt 0 ]]; do
       case "$2" in stable|beta|dev) CHANNEL="$2" ;; *) echo "Unknown channel: $2 (stable|beta|dev)"; exit 2 ;; esac
       shift 2 ;;
     --help|-h)
-      sed -n '2,28p' "$0"
+      sed -n '2,47p' "$0"
       exit 0
       ;;
     # A usage error exits 2 ("the scan did not run"), never 1: callers read 1
@@ -111,8 +122,16 @@ fi
 HAVE_TRIVY=true
 command -v trivy &>/dev/null || HAVE_TRIVY=false
 if [[ "$HAVE_TRIVY" == "false" && "$SCAN_IMAGES" == "true" ]]; then
-  echo "ERROR: trivy not found — the container image scan cannot run. Install with:"
-  echo "  curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin"
+  echo "ERROR: trivy not found — the container image scan cannot run. Install the"
+  echo "       version pinned in the Dockerfile."
+  exit 2
+fi
+# syft is what makes the image verdict checkable per Go binary (see GO BINARY
+# COVERAGE). Without it the coverage assertion cannot run — broken, not skipped.
+if [[ "$SCAN_IMAGES" == "true" ]] && ! command -v syft &>/dev/null; then
+  echo "ERROR: syft not found — cannot inventory the Go binaries in the images, so"
+  echo "       trivy's coverage of them cannot be asserted. Install the version pinned"
+  echo "       in the Dockerfile (anchore/syft)."
   exit 2
 fi
 
@@ -214,15 +233,88 @@ echo ""
 # everyone reads the colour as noise.
 IMG_TOTAL=0; IMG_PASS=0; IMG_FAIL=0; IMG_FINDINGS=0; IMG_SUPPRESSED=0; IMG_BLIND=0
 IMG_BLOCKING=0; IMG_BLOCKED=0; img_unscannable=0
+# Go binary coverage (see GO BINARY COVERAGE in the header): inventoried by
+# syft, evaluated by trivy, evaluated by grype as the second opinion, by neither.
+GO_BINARIES=0; GO_BY_TRIVY=0; GO_BY_GRYPE=0; GO_BLIND=0
 IMG_SOURCE="none"
 IMG_LIST_FILE=/dev/null   # set to a real file only when images are scanned
 UNSCANNABLE_NAMES=()
+BLIND_BINARY_NAMES=()
+SYFT_PLATFORM=""          # registry mode asks for linux/arm/v7, like trivy
 
-# scan_one_image <label> <trivy target args...>
+# go_binary_inventory <syft-json>: every executable syft found Go build info
+# in, spelled like trivy's Target (no leading slash), one per line. It reads
+# the image's files; nothing in the image is executed.
+go_binary_inventory() {
+  jq -r '[.artifacts[]? | select(.foundBy == "go-module-binary-cataloger")
+          | .locations[]?.path // empty | ltrimstr("/")] | unique | .[]' "$1"
+}
+
+# trivy_go_targets <trivy-json>: the Go binaries trivy actually evaluated.
+trivy_go_targets() {
+  jq -r '[.Results[]? | select(.Type == "gobinary") | .Target | ltrimstr("/")] | unique | .[]' "$1"
+}
+
+# second_opinion <syft-json> <grype-json> <path>...: grype over exactly the Go
+# modules of the named binaries (a filtered syft inventory; nothing extracted,
+# nothing run). Succeeds only if every named binary contributed packages AND
+# grype produced a report — anything less is not an evaluation.
+second_opinion() {
+  local inv="$1" out="$2"; shift 2
+  local sub="${out%.json}.sbom.json" want have x
+  if ! command -v grype &>/dev/null; then
+    echo "  ERROR: grype not found — no second opinion for the Go binaries trivy did not evaluate"
+    return 1
+  fi
+  want=$(printf '%s\n' "$@" | jq -R . | jq -sc .)
+  jq --argjson want "$want" '
+      .artifacts |= map(select(.foundBy == "go-module-binary-cataloger")
+        | select([.locations[]?.path // empty | ltrimstr("/")] as $l
+                 | [$want[] as $w | $l[] | select(. == $w)] | length > 0))
+      | .artifactRelationships = []' "$inv" > "$sub" 2>/dev/null || { echo "  ERROR: could not cut the inventory down to the missed binaries"; return 1; }
+  have=$(jq -r '[.artifacts[]?.locations[]?.path // empty | ltrimstr("/")] | unique | .[]' "$sub" 2>/dev/null || true)
+  for x in "$@"; do
+    grep -qxF -- "$x" <<<"$have" || { echo "  ERROR: no Go modules of ${x} in the inventory — grype would evaluate nothing for it"; return 1; }
+  done
+  if ! grype "sbom:${sub}" -o json --file "$out" -q 2>"${out%.json}.err"; then
+    echo "  ERROR: grype failed: $(tail -n1 "${out%.json}.err" 2>/dev/null | cut -c1-240)"
+    return 1
+  fi
+  jq -e 'has("matches")' "$out" >/dev/null 2>&1 || { echo "  ERROR: grype produced no parseable report"; return 1; }
+}
+
+# grype_policy <grype-json>: prints "<findings> <suppressed> <blocking>" — the
+# same rules as for trivy: only severities in SEVERITY; an allowlist entry
+# matches the finding's id (GHSA/GO/CVE) or one of its related CVE ids;
+# blocking = distinct CRITICAL ids with a fix available, not allowlisted (D1).
+grype_policy() {
+  local report="$1" n=0 s=0 sev fix id rel allowed r
+  local -A blk=()
+  while IFS=$'\t' read -r sev fix id rel; do
+    [[ -z "${id:-}" ]] && continue
+    [[ ",${SEVERITY}," == *",${sev},"* ]] || continue
+    # `if`, not `&&`: a false `&&` as a loop's last command is a non-zero
+    # status, which under `set -e` ends this (process-substituted) function early.
+    allowed=false
+    if is_allowed "$id"; then allowed=true; fi
+    for r in ${rel//,/ }; do if is_allowed "$r"; then allowed=true; fi; done
+    if [[ "$allowed" == "true" ]]; then s=$((s + 1)); continue; fi
+    n=$((n + 1))
+    if [[ "$sev" == "CRITICAL" && "$fix" == "fixed" ]]; then blk["$id"]=1; fi
+  done < <(jq -r '[.matches[]? | [(.vulnerability.severity // "" | ascii_upcase),
+                   (.vulnerability.fix.state // ""), .vulnerability.id,
+                   ([.relatedVulnerabilities[]?.id] | join(",")),
+                   .artifact.name, (.artifact.locations[0].path // "")]]
+                 | unique | .[] | @tsv' "$report" 2>/dev/null | cut -f1-4 || true)
+  printf '%s %s %s\n' "$n" "$s" "${#blk[@]}"
+}
+
+# scan_one_image <label> <syft-source> <trivy target args...>
 scan_one_image() {
-  local label="$1"; shift
-  local report pkgs n s b state
-  report="${OUTPUT_DIR}/image-$(printf '%s' "$label" | tr '/:@' '___').json"
+  local label="$1" syft_src="$2"; shift 2
+  local report pkgs n s b state base
+  base="${OUTPUT_DIR}/image-$(printf '%s' "$label" | tr '/:@' '___')"
+  report="${base}.json"
   echo ""
   echo "--- Scanning: ${label} ---"
   # --list-all-pkgs is what turns "no findings" into a CHECKABLE claim: trivy
@@ -259,6 +351,63 @@ scan_one_image() {
     jq -cn --arg i "$label" '{image:$i, state:"blind", packages:0}' >> "$IMG_LIST_FILE"
     return 0
   fi
+
+  # --- Go binary coverage: every Go binary in the image must have been
+  # evaluated. trivy can skip a Go binary without a word (no result at all), so
+  # its package count proves nothing about the binaries it never looked at.
+  local inv="${base}.syft.json" x
+  local syft_args=(scan "$syft_src" -o "syft-json=${inv}" -q)
+  if [[ -n "$SYFT_PLATFORM" ]]; then syft_args+=(--platform "$SYFT_PLATFORM"); fi
+  if ! syft "${syft_args[@]}" 2>"${base}.syft.err" || ! jq -e 'has("artifacts")' "$inv" >/dev/null 2>&1; then
+    echo "  ERROR: could not inventory the Go binaries of ${label} (syft) — trivy's coverage of"
+    echo "         them cannot be asserted, so the image is NOT scanned, not clean"
+    echo "         cause: $(tail -n1 "${base}.syft.err" 2>/dev/null | cut -c1-240)"
+    img_unscannable=$((img_unscannable + 1)); UNSCANNABLE_NAMES+=("$label (no Go binary inventory)")
+    jq -cn --arg i "$label" '{image:$i, state:"unscannable", reason:"go-binary-inventory"}' >> "$IMG_LIST_FILE"
+    return 0
+  fi
+  local go_all=() go_trivy missed=() blind=() gap=()
+  mapfile -t go_all < <(go_binary_inventory "$inv")
+  go_trivy=$(trivy_go_targets "$report")
+  for x in ${go_all[@]+"${go_all[@]}"}; do
+    grep -qxF -- "$x" <<<"$go_trivy" || missed+=("$x")
+  done
+  # The inventory must itself be complete: a Go binary trivy evaluated but
+  # syft did not list means the inventory is short, and a short inventory
+  # would make this whole assertion vacuous. Such an image is blind too.
+  while IFS= read -r x; do
+    [[ -z "$x" ]] && continue
+    printf '%s\n' ${go_all[@]+"${go_all[@]}"} | grep -qxF -- "$x" || gap+=("$x")
+  done <<<"$go_trivy"
+  if [[ ${#gap[@]} -gt 0 ]]; then
+    echo "  ERROR: INVENTORY GAP — trivy evaluated Go binar(ies) syft did not list: ${gap[*]}"
+    echo "         The Go binary inventory is incomplete, so coverage cannot be asserted."
+    blind+=("${gap[@]/%/ (inventory gap)}")
+  fi
+  GO_BINARIES=$((GO_BINARIES + ${#go_all[@]}))
+  GO_BY_TRIVY=$((GO_BY_TRIVY + ${#go_all[@]} - ${#missed[@]}))
+
+  local g_n=0 g_s=0 g_b=0 second="none"
+  if [[ ${#missed[@]} -gt 0 ]]; then
+    echo "  WARN: trivy did NOT evaluate ${#missed[@]} of ${#go_all[@]} Go binar(ies) in this image: ${missed[*]}"
+    echo "        Second opinion (grype) for exactly those; the same policy applies."
+    if second_opinion "$inv" "${base}.grype.json" "${missed[@]}"; then
+      second="grype"; GO_BY_GRYPE=$((GO_BY_GRYPE + ${#missed[@]}))
+      read -r g_n g_s g_b < <(grype_policy "${base}.grype.json") || true
+      echo "  grype: ${g_n} ${SEVERITY} finding(s)$([[ "$g_s" -gt 0 ]] && echo ", ${g_s} allowlisted"); fixable CRITICAL not allowlisted: ${g_b}"
+      jq -r --arg sev ",${SEVERITY}," '[.matches[]?
+              | select($sev | contains("," + (.vulnerability.severity // "" | ascii_upcase) + ","))
+              | [(.vulnerability.severity | ascii_upcase), .vulnerability.id, .artifact.name,
+                 (.artifact.version // "?"),
+                 (if (.vulnerability.fix.state // "") == "fixed" then (.vulnerability.fix.versions | join(",")) else "no fix" end),
+                 (.artifact.locations[0].path // "?")] | @tsv]
+             | unique | .[]' "${base}.grype.json" 2>/dev/null \
+        | awk -F'\t' '{printf "    %-8s %-20s %s %s -> %s  (grype: %s)\n", $1, $2, $3, $4, $5, $6}' || true
+    else
+      blind+=("${missed[@]}")
+    fi
+  fi
+
   read -r n s < <(count_unsuppressed "$report") || true
   # D1: CRITICAL with a fix available, and not covered by a valid allowlist entry.
   b=0
@@ -270,25 +419,37 @@ scan_one_image() {
                   | select(.Severity == "CRITICAL")
                   | select(((.FixedVersion // "") != "") or (.Status == "fixed"))
                   | .VulnerabilityID' "$report" 2>/dev/null | sort -u || true)
+  n=$((n + g_n)); s=$((s + g_s)); b=$((b + g_b))
   IMG_FINDINGS=$((IMG_FINDINGS + n)); IMG_SUPPRESSED=$((IMG_SUPPRESSED + s))
-  if [[ "$n" -gt 0 ]]; then
+  if [[ ${#blind[@]} -gt 0 ]]; then
+    # Not clean and not "with findings": part of this image was never evaluated.
+    state="blind"; IMG_BLIND=$((IMG_BLIND + 1)); GO_BLIND=$((GO_BLIND + ${#blind[@]}))
+    echo "  ERROR: BLIND SCAN — ${#blind[@]} Go binar(ies) in this image were evaluated by NO scanner:"
+    for x in "${blind[@]}"; do echo "           ${x}"; BLIND_BINARY_NAMES+=("${label}: ${x}"); done
+  elif [[ "$n" -gt 0 ]]; then
     state="findings"; IMG_FAIL=$((IMG_FAIL + 1))
     echo "  FOUND: ${n} ${SEVERITY} finding(s) across ${pkgs} evaluated package(s)$([[ "$s" -gt 0 ]] && echo ", ${s} allowlisted"); fixable CRITICAL not allowlisted: ${b}"
+  else
+    state="clean"; IMG_PASS=$((IMG_PASS + 1))
+    echo "  CLEAN: no unsuppressed ${SEVERITY} findings across ${pkgs} evaluated package(s) and ${#go_all[@]} Go binar(ies)$([[ "$s" -gt 0 ]] && echo " (${s} allowlisted)")"
+  fi
+  if [[ "$n" -gt 0 ]]; then
     # One line per finding from the report already in hand — no second scan.
     jq -r '[.Results[]? | .Target as $t | (.Vulnerabilities // [])[]
             | [.Severity, .VulnerabilityID, .PkgName, (.InstalledVersion // "?"),
                (if ((.FixedVersion // "") != "") then .FixedVersion else "no fix" end)] | @tsv]
            | unique | .[]' "$report" 2>/dev/null \
       | awk -F'\t' '{printf "    %-8s %-20s %s %s -> %s\n", $1, $2, $3, $4, $5}' || true
-  else
-    state="clean"; IMG_PASS=$((IMG_PASS + 1))
-    echo "  CLEAN: no unsuppressed ${SEVERITY} findings across ${pkgs} evaluated package(s)$([[ "$s" -gt 0 ]] && echo " (${s} allowlisted)")"
   fi
   if [[ "$b" -gt 0 ]]; then
     IMG_BLOCKING=$((IMG_BLOCKING + b)); IMG_BLOCKED=$((IMG_BLOCKED + 1))
   fi
   jq -cn --arg i "$label" --arg st "$state" --argjson p "$pkgs" --argjson n "$n" --argjson s "$s" --argjson b "$b" \
-     '{image:$i, state:$st, packages:$p, findings:$n, suppressed:$s, blocking:$b}' >> "$IMG_LIST_FILE"
+     --argjson go "${#go_all[@]}" --arg second "$second" \
+     --argjson missed "$(printf '%s\n' ${missed[@]+"${missed[@]}"} | jq -R 'select(length > 0)' | jq -sc .)" \
+     --argjson blindb "$(printf '%s\n' ${blind[@]+"${blind[@]}"} | jq -R 'select(length > 0)' | jq -sc .)" \
+     '{image:$i, state:$st, packages:$p, findings:$n, suppressed:$s, blocking:$b,
+       go_binaries:$go, trivy_missed:$missed, second_opinion:$second, blind_binaries:$blindb}' >> "$IMG_LIST_FILE"
   return 0
 }
 
@@ -313,7 +474,7 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
       SCAN_BROKEN=true
     fi
     for _t in ${_tars[@]+"${_tars[@]}"}; do
-      scan_one_image "$(basename "$_t" .tar)" --input "$_t"
+      scan_one_image "$(basename "$_t" .tar)" "docker-archive:${_t}" --input "$_t"
     done
   else
     echo "=== Scanning Container Images ==="
@@ -371,14 +532,16 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
     # none and fails — that alone made every armv7-only index "unscannable"
     # while single-manifest images of the same arch scanned fine.
     PLATFORM="linux/arm/v7"
+    SYFT_PLATFORM="$PLATFORM"
     for img in ${IMAGES[@]+"${IMAGES[@]}"}; do
-      scan_one_image "$img" --platform "$PLATFORM" "$img"
+      scan_one_image "$img" "registry:${img}" --platform "$PLATFORM" "$img"
     done
   fi
 
   echo ""
   echo "=== Image Scan Summary: ${IMG_PASS} clean, ${IMG_FAIL} with findings, ${IMG_BLIND} blind, ${img_unscannable} unscannable (${IMG_TOTAL} total) ==="
   echo "    Policy ${POLICY}: ${IMG_BLOCKING} fixable CRITICAL finding(s) not allowlisted, in ${IMG_BLOCKED} image(s)"
+  echo "    Go binaries: ${GO_BINARIES} inventoried, ${GO_BY_TRIVY} evaluated by trivy, ${GO_BY_GRYPE} by grype (second opinion), ${GO_BLIND} by neither"
 
   if [[ "$img_unscannable" -gt 0 ]]; then
     echo "  ERROR: ${img_unscannable} of ${IMG_TOTAL} image(s) could not be scanned — the image scan is BROKEN, not clean:"
@@ -393,9 +556,11 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
   # it is a broken scan (exit 2), never a finding (exit 1) — you cannot triage a
   # vulnerability list that was never produced.
   if [[ "$IMG_BLIND" -gt 0 ]]; then
-    echo "  ERROR: ${IMG_BLIND} of ${IMG_TOTAL} image(s) were scanned with ZERO package coverage"
-    echo "         — the image scan is BROKEN for those, not clean. Most likely a base"
-    echo "         image changed to a family trivy has no package matcher for."
+    echo "  ERROR: ${IMG_BLIND} of ${IMG_TOTAL} image(s) were not evaluated in full — the image scan"
+    echo "         is BROKEN for those, not clean. Either no package at all was evaluated"
+    echo "         (most likely a base trivy has no package matcher for), or Go binaries"
+    echo "         were evaluated by no scanner:"
+    for _b in ${BLIND_BINARY_NAMES[@]+"${BLIND_BINARY_NAMES[@]}"}; do echo "           ${_b}"; done
     SCAN_BROKEN=true
   fi
 fi
@@ -605,6 +770,10 @@ jq -n \
   --argjson img_suppressed "${IMG_SUPPRESSED:-0}" \
   --argjson img_blocking "${IMG_BLOCKING:-0}" \
   --argjson img_blocked "${IMG_BLOCKED:-0}" \
+  --argjson go_bin "${GO_BINARIES:-0}" \
+  --argjson go_trivy "${GO_BY_TRIVY:-0}" \
+  --argjson go_grype "${GO_BY_GRYPE:-0}" \
+  --argjson go_blind "${GO_BLIND:-0}" \
   --arg img_source "${IMG_SOURCE:-none}" \
   --arg policy "$POLICY" \
   --argjson allow_expired "${allow_expired:-0}" \
@@ -618,6 +787,7 @@ jq -n \
     images:{source:$img_source, total:$img_total, clean:$img_clean, with_findings:$img_with,
             blind:$img_blind, unscannable:$img_unscannable, findings:$img_findings,
             suppressed:$img_suppressed, blocking:$img_blocking, blocked_images:$img_blocked,
+            go_binaries:{inventoried:$go_bin, by_trivy:$go_trivy, by_grype:$go_grype, blind:$go_blind},
             list:$img_list}}' \
   > "$SUMMARY" 2>/dev/null || echo "WARN: could not write ${SUMMARY}"
 
