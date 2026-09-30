@@ -442,7 +442,7 @@ scan_one_image() {
     # One line per finding from the report already in hand — no second scan.
     jq -r '[.Results[]? | .Target as $t | (.Vulnerabilities // [])[]
             | [.Severity, .VulnerabilityID, .PkgName, (.InstalledVersion // "?"),
-               (if ((.FixedVersion // "") != "") then .FixedVersion else "no fix" end)] | @tsv]
+               (if ((.FixedVersion // "") != "") then .FixedVersion else "none published" end)] | @tsv]
            | unique | .[]' "$report" 2>/dev/null \
       | awk -F'\t' '{printf "    %-8s %-20s %s %s -> %s\n", $1, $2, $3, $4, $5}' || true
   fi
