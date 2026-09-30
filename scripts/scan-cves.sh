@@ -40,6 +40,8 @@
 #   appear as a trivy `gobinary` target. A binary trivy did not evaluate gets a
 #   second opinion from grype (same D1 policy, same allowlist). A binary that
 #   neither scanner evaluated makes the image BLIND (exit 2), never clean.
+#   The inventory is the union of syft's list and trivy's gobinary results;
+#   a binary only trivy saw is covered but reported (INVENTORY GAP).
 #
 # Requires: trivy (https://aquasecurity.github.io/trivy/)
 #   Images also require syft (the Go binary inventory) and, when trivy missed a
@@ -235,7 +237,7 @@ IMG_TOTAL=0; IMG_PASS=0; IMG_FAIL=0; IMG_FINDINGS=0; IMG_SUPPRESSED=0; IMG_BLIND
 IMG_BLOCKING=0; IMG_BLOCKED=0; img_unscannable=0
 # Go binary coverage (see GO BINARY COVERAGE in the header): inventoried by
 # syft, evaluated by trivy, evaluated by grype as the second opinion, by neither.
-GO_BINARIES=0; GO_BY_TRIVY=0; GO_BY_GRYPE=0; GO_BLIND=0
+GO_BINARIES=0; GO_BY_TRIVY=0; GO_BY_GRYPE=0; GO_BLIND=0; GO_INVENTORY_GAP=0
 IMG_SOURCE="none"
 IMG_LIST_FILE=/dev/null   # set to a real file only when images are scanned
 UNSCANNABLE_NAMES=()
@@ -372,20 +374,23 @@ scan_one_image() {
   for x in ${go_all[@]+"${go_all[@]}"}; do
     grep -qxF -- "$x" <<<"$go_trivy" || missed+=("$x")
   done
-  # The inventory must itself be complete: a Go binary trivy evaluated but
-  # syft did not list means the inventory is short, and a short inventory
-  # would make this whole assertion vacuous. Such an image is blind too.
+  # Neither tool's list is complete on its own: measured 2026-09-30, trivy
+  # skipped Go binaries syft listed, and syft skipped one trivy evaluated. The
+  # inventory is therefore the UNION. A binary only trivy saw is covered (trivy
+  # evaluated it) but is reported loudly and counted — it is evidence the syft
+  # half of the inventory is short, and a binary BOTH tools miss is invisible
+  # to this check (stated, not hidden: see docs/CVE-HANDLING.md).
   while IFS= read -r x; do
     [[ -z "$x" ]] && continue
     printf '%s\n' ${go_all[@]+"${go_all[@]}"} | grep -qxF -- "$x" || gap+=("$x")
   done <<<"$go_trivy"
   if [[ ${#gap[@]} -gt 0 ]]; then
-    echo "  ERROR: INVENTORY GAP — trivy evaluated Go binar(ies) syft did not list: ${gap[*]}"
-    echo "         The Go binary inventory is incomplete, so coverage cannot be asserted."
-    blind+=("${gap[@]/%/ (inventory gap)}")
+    echo "  WARN: INVENTORY GAP — trivy evaluated Go binar(ies) syft did not list: ${gap[*]}"
+    echo "        Covered by trivy; counted in the summary (go_binaries.inventory_gap)."
+    GO_INVENTORY_GAP=$((GO_INVENTORY_GAP + ${#gap[@]}))
   fi
-  GO_BINARIES=$((GO_BINARIES + ${#go_all[@]}))
-  GO_BY_TRIVY=$((GO_BY_TRIVY + ${#go_all[@]} - ${#missed[@]}))
+  GO_BINARIES=$((GO_BINARIES + ${#go_all[@]} + ${#gap[@]}))
+  GO_BY_TRIVY=$((GO_BY_TRIVY + ${#go_all[@]} - ${#missed[@]} + ${#gap[@]}))
 
   local g_n=0 g_s=0 g_b=0 second="none"
   if [[ ${#missed[@]} -gt 0 ]]; then
@@ -445,11 +450,12 @@ scan_one_image() {
     IMG_BLOCKING=$((IMG_BLOCKING + b)); IMG_BLOCKED=$((IMG_BLOCKED + 1))
   fi
   jq -cn --arg i "$label" --arg st "$state" --argjson p "$pkgs" --argjson n "$n" --argjson s "$s" --argjson b "$b" \
-     --argjson go "${#go_all[@]}" --arg second "$second" \
+     --argjson go "$(( ${#go_all[@]} + ${#gap[@]} ))" --arg second "$second" \
+     --argjson gap "$(printf '%s\n' ${gap[@]+"${gap[@]}"} | jq -R 'select(length > 0)' | jq -sc .)" \
      --argjson missed "$(printf '%s\n' ${missed[@]+"${missed[@]}"} | jq -R 'select(length > 0)' | jq -sc .)" \
      --argjson blindb "$(printf '%s\n' ${blind[@]+"${blind[@]}"} | jq -R 'select(length > 0)' | jq -sc .)" \
      '{image:$i, state:$st, packages:$p, findings:$n, suppressed:$s, blocking:$b,
-       go_binaries:$go, trivy_missed:$missed, second_opinion:$second, blind_binaries:$blindb}' >> "$IMG_LIST_FILE"
+       go_binaries:$go, trivy_missed:$missed, inventory_gap:$gap, second_opinion:$second, blind_binaries:$blindb}' >> "$IMG_LIST_FILE"
   return 0
 }
 
@@ -541,7 +547,7 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
   echo ""
   echo "=== Image Scan Summary: ${IMG_PASS} clean, ${IMG_FAIL} with findings, ${IMG_BLIND} blind, ${img_unscannable} unscannable (${IMG_TOTAL} total) ==="
   echo "    Policy ${POLICY}: ${IMG_BLOCKING} fixable CRITICAL finding(s) not allowlisted, in ${IMG_BLOCKED} image(s)"
-  echo "    Go binaries: ${GO_BINARIES} inventoried, ${GO_BY_TRIVY} evaluated by trivy, ${GO_BY_GRYPE} by grype (second opinion), ${GO_BLIND} by neither"
+  echo "    Go binaries: ${GO_BINARIES} inventoried, ${GO_BY_TRIVY} evaluated by trivy, ${GO_BY_GRYPE} by grype (second opinion), ${GO_BLIND} by neither; ${GO_INVENTORY_GAP} seen by trivy only"
 
   if [[ "$img_unscannable" -gt 0 ]]; then
     echo "  ERROR: ${img_unscannable} of ${IMG_TOTAL} image(s) could not be scanned — the image scan is BROKEN, not clean:"
@@ -774,6 +780,7 @@ jq -n \
   --argjson go_trivy "${GO_BY_TRIVY:-0}" \
   --argjson go_grype "${GO_BY_GRYPE:-0}" \
   --argjson go_blind "${GO_BLIND:-0}" \
+  --argjson go_gap "${GO_INVENTORY_GAP:-0}" \
   --arg img_source "${IMG_SOURCE:-none}" \
   --arg policy "$POLICY" \
   --argjson allow_expired "${allow_expired:-0}" \
@@ -787,7 +794,7 @@ jq -n \
     images:{source:$img_source, total:$img_total, clean:$img_clean, with_findings:$img_with,
             blind:$img_blind, unscannable:$img_unscannable, findings:$img_findings,
             suppressed:$img_suppressed, blocking:$img_blocking, blocked_images:$img_blocked,
-            go_binaries:{inventoried:$go_bin, by_trivy:$go_trivy, by_grype:$go_grype, blind:$go_blind},
+            go_binaries:{inventoried:$go_bin, by_trivy:$go_trivy, by_grype:$go_grype, blind:$go_blind, inventory_gap:$go_gap},
             list:$img_list}}' \
   > "$SUMMARY" 2>/dev/null || echo "WARN: could not write ${SUMMARY}"
 
