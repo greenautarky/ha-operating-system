@@ -124,6 +124,11 @@ mkdir -p /mnt/overlay/etc/ssh/principals && chmod 0755 /mnt/overlay/etc/ssh/prin
 # the `if [ ! -f ]` guard means we never overwrite. To rotate the baked
 # default for the whole fleet, edit the rootfs file in source + reflash —
 # already-deployed devices keep their existing authorized_keys.
+# On the certificate plane (BOSv1.4.0+) sshd does not depend on this copy: it
+# reads the baked break-glass file first and refuses the keys on the baked
+# revocation list wherever they appear (post-build.d/87-ssh-cert-plane.sh).
+# This file is left as it is so that a fallback to an older slot keeps the
+# access that image was built with.
 if [ ! -f /mnt/overlay/root/.ssh/authorized_keys ] && [ -f /usr/share/ga-ssh/authorized_keys ]; then
     mkdir -p /mnt/overlay/root/.ssh
     chmod 700 /mnt/overlay/root/.ssh
