@@ -399,7 +399,7 @@ scan_one_image() {
               | select($sev | contains("," + (.vulnerability.severity // "" | ascii_upcase) + ","))
               | [(.vulnerability.severity | ascii_upcase), .vulnerability.id, .artifact.name,
                  (.artifact.version // "?"),
-                 (if (.vulnerability.fix.state // "") == "fixed" then (.vulnerability.fix.versions | join(",")) else "no fix" end),
+                 (if (.vulnerability.fix.state // "") == "fixed" then (.vulnerability.fix.versions | join(",")) else "no fixed version" end),
                  (.artifact.locations[0].path // "?")] | @tsv]
              | unique | .[]' "${base}.grype.json" 2>/dev/null \
         | awk -F'\t' '{printf "    %-8s %-20s %s %s -> %s  (grype: %s)\n", $1, $2, $3, $4, $5, $6}' || true
