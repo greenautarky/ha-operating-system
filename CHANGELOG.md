@@ -12,6 +12,66 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased — the host takes control requests from ga_manager only out of the add-on's own data directory
+
+### Changed — control requests travel through ga_manager's data directory, not /share
+
+Four host actions are started by a file ga_manager writes: an OS install
+(`ga-rauc-install`), the Bluetooth driver and its mode (`ga-bluetooth-gate`),
+the retirement of the flash-time Ethernet override (`ga-ethernet-retire`), and
+the LTE standby default route (`ga-lte-standby-route`). The host now reads those
+files only from ga_manager's own data directory, under the add-on's pinned slug:
+
+    /mnt/data/supervisor/addons/data/99f1cad4_ga_manager/
+      ga-rauc-install-request, ga-rauc-install-request.rc
+      ga-bluetooth-enabled, ga-bluetooth-mode
+      .ga_converged
+      ga-lte-standby.json
+
+The same names in `/mnt/data/supervisor/share` are no longer read — there is no
+fallback. Only ga_manager mounts its data directory; `/share` is mounted into
+every add-on that declares `share:rw`. The path is static (no `*_ga_manager`
+glob), the same way `ga-ssh-principal-label` already reads it.
+
+Each reader also refuses a file that is not a regular file (a symlink, a
+directory): the OS install request is removed and not acted on, the Bluetooth
+flag counts as absent, the Ethernet override is not retired, and an LTE verdict
+that is not a regular file or carries no `usable` field withdraws the standby
+route with a warning. `ga-ethernet-retire.service` now runs
+`ga-manage-ethernet retire-if-converged`, which re-checks the marker and exits 0
+when it refuses, so the unit still disarms its path watcher. The remote
+Ethernet override and the identity fallback in `ga-manage-ethernet` read the
+pinned directory too.
+
+### Added — `ga-gm-host-release`: the host tells ga_manager which release it runs
+
+ga_manager has to know which location a host reads (this image and later: its
+data directory; older images: `/share`). At every boot, before the Supervisor
+starts, and again when the add-on's data directory first appears,
+`ga-gm-host-release` writes `/etc/ga-release` to `ga-host-release` in that
+directory through `ga-share-publish` (a symlink at the target is replaced, not
+followed). A label that is not a GA release is not written and the unit fails.
+
+### Upgrade and version skew
+
+- This image with a ga_manager older than the release that writes to `/data`:
+  OS updates, the Bluetooth flag, the Ethernet retirement and the LTE standby
+  route requested by that add-on are not acted on until ga_manager is updated.
+- An older image with a newer ga_manager: ga_manager keeps writing to `/share`
+  for it, chosen by the host's release.
+
+### Tests
+
+- `tests/ga_tests/host_control` (CI host-suites): drives each unit's real
+  `ExecStart` in a bubblewrap sandbox — a request in `/share` is ignored, the
+  same request in the data directory is acted on, symlinks and garbage are
+  refused, and no path unit watches `/share`. Against the tree before this
+  change 25 of 31 checks fail.
+- `tests/ga_tests/host_control_device` (device lane, HCD-01..07): the pinned
+  slug is the installed one, `ga-host-release` matches `/etc/ga-release`,
+  nothing waits in `/share`, and Bluetooth, the LTE verdict and the converged
+  marker are where this host reads them.
+- `RAUC-05`, `CFG-49i/j` (build asserts) and `ETHF-06` follow the new path.
 ## Unreleased — the SSH certificate plane and the USB host lock hold on devices updated over the air
 
 A device that reaches a BOSv1.4.0+ image by an OTA update keeps two files its

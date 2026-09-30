@@ -197,6 +197,18 @@ jobs:
           GA_REQUIRE_BUSYBOX: "1"
         run: sh tests/ga_tests/share_writers/test.sh
 
+      - name: the host acts on ga_manager's control requests only from its data directory (ADR-0041)
+        # Drives the REAL units' ExecStart (read from the unit files) inside a
+        # bubblewrap sandbox: OS install request, Bluetooth flag and mode,
+        # converged marker (Ethernet override retirement), LTE standby verdict,
+        # and the host-release file the host writes for ga_manager. A request in
+        # the shared directory must be ignored, the same request in ga_manager's
+        # pinned data directory acted on, a symlink or garbage refused, and no
+        # path unit may watch the shared directory. Red-proven against
+        # origin/master before this change: 25 of 31 checks fail.
+        timeout-minutes: 10
+        run: sh tests/ga_tests/host_control/test.sh
+
       - name: gen_expected.sh works from any cwd (the release-train's call shape)
         # The generator computed its output path relative to the CALLER's cwd and
         # then cd'd to the repo root. So it worked from the repo root — how every

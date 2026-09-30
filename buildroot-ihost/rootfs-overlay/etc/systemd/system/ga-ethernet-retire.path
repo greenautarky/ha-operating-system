@@ -1,8 +1,9 @@
 [Unit]
 # Retire the flash-time Ethernet override once the device has converged.
 #
-# The trigger is ga_manager's converged marker on the /share bridge — the same
-# file the add-on writes as step 10/10 of converge, and the only runtime signal
+# The trigger is ga_manager's converged marker in the add-on's OWN data
+# directory, under its pinned slug (ADR-0041) — written at the end of converge
+# (the add-on's /data/.ga_converged), and the only runtime signal
 # the HOST can see that says "this device is provisioned and the fleet-manager
 # now owns its configuration". A .path unit is used rather than a poll because
 # the marker is written exactly once per device lifetime.
@@ -11,6 +12,11 @@
 # and converge finishes minutes AFTER boot on a fresh device. Waiting for the
 # next boot would leave the marker on the card for the whole bench life of the
 # unit, which is precisely the window in which it ships (Odoo #750).
+#
+# Not the /share copy of the marker: /share is mounted into every add-on that
+# declares `share:rw`, and a file there must not be able to make the host
+# change the device's network configuration. The service re-checks that the
+# marker is a regular file at this exact path before it retires anything.
 Description=Retire the flash-time Ethernet override once ga_manager has converged
 # Do not even arm on a device that has nothing to retire: without this the
 # watcher starts on every boot of every already-retired device and fires once
@@ -20,7 +26,7 @@ Description=Retire the flash-time Ethernet override once ga_manager has converge
 ConditionPathExists=/mnt/boot/ga-ethernet-force
 
 [Path]
-PathExists=/mnt/data/supervisor/share/.ga_converged
+PathExists=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/.ga_converged
 Unit=ga-ethernet-retire.service
 
 [Install]

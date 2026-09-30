@@ -6,17 +6,17 @@
 # there is no POST /host/services/<svc>/start. The original BOSv1.2.17
 # attempt at this mechanism (template @.service started via Supervisor
 # API) was based on a wrong assumption and never fired in practice.
-# BOSv1.2.18 fixes the design with an addon-container → host hop via a
-# shared filesystem path (= /share inside the addon is bind-mounted to
-# /mnt/data/supervisor/share on the host), watched by ga-rauc-install.path
-# below.
+# BOSv1.2.18 fixed the design with an addon-container → host hop via a
+# file, watched by ga-rauc-install.path below. Since BOSv1.4.0-rc3 that
+# file lives in ga_manager's own data directory (ADR-0041), not in /share.
 #
 # Workflow:
 #   1. ga_manager 0.42.0+ worker validates target version (N.N.N regex),
-#      writes it as the single line content of /share/ga-rauc-install-request.
+#      writes it as the single line content of /data/ga-rauc-install-request.
 #   2. ga-rauc-install.path notices the file changed + triggers this unit.
 #   3. This unit invokes /usr/sbin/ga-rauc-install (no arg → it reads
-#      /mnt/data/supervisor/share/ga-rauc-install-request itself, deletes
+#      /mnt/data/supervisor/addons/data/99f1cad4_ga_manager/
+#      ga-rauc-install-request itself, deletes
 #      the file as the first step, then proceeds with download + rauc
 #      install + scheduled reboot).
 #
@@ -28,7 +28,7 @@
 # start ga-rauc-install.service` work for operator debug from the host.
 
 [Unit]
-Description=GA RAUC install (Supervisor /os/update bypass; reads version from /mnt/data/supervisor/share/ga-rauc-install-request)
+Description=GA RAUC install (Supervisor /os/update bypass; reads the request from ga_manager's data directory)
 DefaultDependencies=no
 After=network-online.target
 Wants=network-online.target
@@ -37,7 +37,7 @@ Wants=network-online.target
 Type=oneshot
 TimeoutStartSec=900s
 RemainAfterExit=yes
-# No args: the helper reads /mnt/data/supervisor/share/ga-rauc-install-request.
+# No args: the helper reads the request from ga_manager's data directory.
 ExecStart=/usr/sbin/ga-rauc-install
 
 [Install]

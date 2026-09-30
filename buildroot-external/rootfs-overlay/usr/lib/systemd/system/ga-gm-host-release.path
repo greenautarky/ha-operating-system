@@ -1,0 +1,20 @@
+# ga-gm-host-release.path — write the host release into ga_manager's data
+# directory once that directory exists (first install on a fresh device, where
+# it does not exist yet when ga-gm-host-release.service runs at boot).
+#
+# It triggers a SEPARATE unit, ga-gm-host-release-install.service, with
+# RemainAfterExit=yes: a PathExists= trigger re-activates its unit whenever that
+# unit goes inactive while the path still exists, so the unit must stay active
+# for the rest of the boot. It could not share the boot unit: that one is
+# already active (RemainAfterExit=yes) by the time the directory appears, and a
+# start request for an active unit does nothing.
+[Unit]
+Description=Watch for ga_manager's data directory (ADR-0041 host release)
+After=mnt-data.mount
+
+[Path]
+PathExists=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager
+Unit=ga-gm-host-release-install.service
+
+[Install]
+WantedBy=multi-user.target

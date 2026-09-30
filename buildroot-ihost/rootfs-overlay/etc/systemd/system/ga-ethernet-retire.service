@@ -38,6 +38,10 @@ After=ga-ethernet-guard.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/sbin/ga-manage-ethernet retire
+# `retire-if-converged`, not `retire`: the verb re-checks that the trigger is a
+# regular file at ga_manager's pinned data path (ADR-0041) before it deletes
+# anything, and exits 0 when it refuses, so the disarm below still runs and a
+# refused trigger cannot turn into a re-trigger loop.
+ExecStart=/usr/sbin/ga-manage-ethernet retire-if-converged
 ExecStartPost=-/usr/bin/systemctl --no-block stop ga-ethernet-retire.path
 RemainAfterExit=no

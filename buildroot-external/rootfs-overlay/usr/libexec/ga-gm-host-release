@@ -1,0 +1,57 @@
+#!/bin/sh
+# ga-gm-host-release — tell ga_manager which GA release this host runs, in the
+# add-on's OWN data directory (ADR-0041).
+#
+# ga_manager has to know where this host reads control requests from (an OS
+# update request, the Bluetooth flag, the converged marker, the LTE standby
+# verdict): since BOSv1.4.0-rc3 the host reads them ONLY from ga_manager's data
+# directory, older hosts only from /share. The add-on cannot see /etc/ga-release.
+# The /share enroll bridge also carries the release, but it is refreshed only
+# after a successful fleet-manager enrolment — so right after an OS update, and
+# for as long as the fleet-manager is unreachable, it still names the previous
+# release. This file is written at every boot, before the Supervisor starts
+# the add-on, and again whenever the add-on's data directory appears (first
+# install), so the add-on reads the release of the slot that is running.
+#
+# Only root on the host and ga_manager can write that directory, so another
+# add-on cannot make ga_manager believe a different release. An OS older than
+# BOSv1.4.0-rc3 never writes this file; its absence is how ga_manager knows it
+# may be talking to such a host.
+#
+#   /mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-host-release
+#     one line: the content of /etc/ga-release, e.g. "BOSv1.4.0-rc3" — the
+#     same grammar the release floor (/usr/lib/rauc/ga-release-floor) accepts
+#
+# The path is pinned (no *_ga_manager glob). The write goes through
+# ga-share-publish (staged in a host-only directory, renamed into place), so a
+# symlink at the target is replaced, never followed. The directory itself is
+# never created here: before the add-on is installed there is nobody to tell.
+#
+# GA_GM_DATA_DIR / GA_RELEASE_FILE / GA_SHARE_PUBLISH relocate the paths (host
+# tests only; nothing on a device sets them).
+set -u
+
+GM_DATA_DIR="${GA_GM_DATA_DIR:-/mnt/data/supervisor/addons/data/99f1cad4_ga_manager}"
+RELEASE_FILE="${GA_RELEASE_FILE:-/etc/ga-release}"
+PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
+TARGET="$GM_DATA_DIR/ga-host-release"
+
+log() { echo "ga-gm-host-release: $*" >&2; }
+
+if [ -L "$GM_DATA_DIR" ] || [ ! -d "$GM_DATA_DIR" ]; then
+    log "no ga_manager data directory at $GM_DATA_DIR (add-on not installed yet) — nothing written"
+    exit 0
+fi
+
+rel=""
+[ -f "$RELEASE_FILE" ] && rel=$(head -c 64 "$RELEASE_FILE" | head -n 1 | tr -d ' \t\r\n')
+if ! printf '%s\n' "$rel" | grep -Eq '^BOSv[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(-(rc|dev)[0-9]{1,6})?$'; then
+    # Loud, and nothing written: an absent file makes ga_manager fall back to
+    # the enroll bridge or refuse, which is safer than a label it cannot parse.
+    log "WARNING: $RELEASE_FILE does not hold a GA release label (${#rel} bytes) — $TARGET not written"
+    rm -f "$TARGET" 2>/dev/null || true
+    exit 1
+fi
+
+printf '%s\n' "$rel" | "$PUBLISH" "$TARGET" 0644 || { log "WARNING: could not publish $TARGET"; exit 1; }
+log "published $rel to $TARGET"

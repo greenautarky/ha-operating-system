@@ -507,6 +507,16 @@ grep -qE '^ExecStartPost=.*systemctl.*stop[[:space:]]+ga-ethernet-retire\.path' 
 grep -q '^ConditionPathExists=/mnt/boot/ga-ethernet-force' "${TARGET}/etc/systemd/system/ga-ethernet-retire.path" 2>/dev/null \
   && _pass "CFG-49h: retire.path does not arm on a device with nothing to retire" \
   || _fail "CFG-49h: retire.path has no ConditionPathExists — it arms on every boot of every already-retired device"
+# CFG-49i/j (ADR-0041): the trigger is ga_manager's marker in its OWN data dir
+# under the pinned slug, and the unit re-checks it before retiring. The /share
+# copy is mounted into every share:rw add-on and must not reach /mnt/boot.
+grep -qx 'PathExists=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/.ga_converged' "${TARGET}/etc/systemd/system/ga-ethernet-retire.path" 2>/dev/null \
+  && _pass "CFG-49i: retire.path watches ga_manager's pinned data dir, not /share" \
+  || _fail "CFG-49i: retire.path does not watch addons/data/99f1cad4_ga_manager/.ga_converged"
+grep -qE '^ExecStart=/usr/sbin/ga-manage-ethernet retire-if-converged$' "${TARGET}/etc/systemd/system/ga-ethernet-retire.service" 2>/dev/null \
+  && grep -q '^  retire-if-converged)' "${TARGET}/usr/sbin/ga-manage-ethernet" 2>/dev/null \
+  && _pass "CFG-49j: retire.service runs retire-if-converged, and the script implements it" \
+  || _fail "CFG-49j: retire.service does not run a retire-if-converged the script implements"
 
 # CFG-28/29: removed — ga-dns-inject replaced by Supervisor fork DNS handling
 
@@ -3544,9 +3554,9 @@ fi
 RAUC_PATH="${TARGET}/usr/lib/systemd/system/ga-rauc-install.path"
 [[ -f "$RAUC_PATH" ]] || RAUC_PATH="${OVL}/usr/lib/systemd/system/ga-rauc-install.path"
 if [[ -f "$RAUC_PATH" ]] \
-   && grep -q 'PathChanged=/mnt/data/supervisor/share/ga-rauc-install-request' "$RAUC_PATH" 2>/dev/null \
+   && grep -qx 'PathChanged=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-rauc-install-request' "$RAUC_PATH" 2>/dev/null \
    && grep -q 'WantedBy=multi-user.target' "$RAUC_PATH" 2>/dev/null; then
-  _pass "RAUC-05: ga-rauc-install.path watches the request file (WantedBy multi-user)"
+  _pass "RAUC-05: ga-rauc-install.path watches the request file in ga_manager's pinned data dir, not /share (ADR-0041)"
 else
   _fail "RAUC-05: ga-rauc-install.path unit missing or not wired to the request file"
 fi
