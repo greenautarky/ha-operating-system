@@ -3873,6 +3873,15 @@ fi
 if [[ -f "${_cve_src}/scripts/scan-cves.sh" ]] && command -v jq >/dev/null 2>&1; then
   _img_tmp=$(mktemp -d)
   mkdir -p "${_img_tmp}/bin"
+  # scan-cves.sh also inventories each image's Go binaries with syft (their
+  # trivy coverage is asserted per binary). These stub images carry none.
+  cat > "${_img_tmp}/bin/syft" <<'CVEEOF'
+#!/usr/bin/env bash
+_out=""; while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && _out="${2#syft-json=}"; shift; done
+[[ -n "$_out" ]] && echo '{"artifacts":[]}' > "$_out"
+exit 0
+CVEEOF
+  chmod +x "${_img_tmp}/bin/syft"
 
   # must-fail stub: trivy's real no-op shape — exits 0, writes a result set with
   # no Packages at all. Before this change that produced "CLEAN".
