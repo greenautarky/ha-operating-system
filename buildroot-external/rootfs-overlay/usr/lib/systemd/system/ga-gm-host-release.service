@@ -1,0 +1,19 @@
+# ga-gm-host-release.service — write this host's GA release into ga_manager's
+# own data directory (ADR-0041), so the add-on knows where this host reads
+# control requests from. See /usr/libexec/ga-gm-host-release.
+[Unit]
+Description=Tell ga_manager which GA release this host runs (ADR-0041)
+RequiresMountsFor=/mnt/data
+After=mnt-data.mount
+# Before the Supervisor starts the add-on, so its first read already sees the
+# release of the slot that is running.
+Before=hassos-supervisor.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/ga-gm-host-release
+TimeoutStartSec=15s
+
+[Install]
+WantedBy=multi-user.target

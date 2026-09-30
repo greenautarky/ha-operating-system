@@ -13,11 +13,13 @@ set -u
 
 SHARE_DIR=/mnt/data/supervisor/share
 OUT="$SHARE_DIR/ga-bluetooth-status.json"
-SHARE_FLAG="$SHARE_DIR/ga-bluetooth-enabled"
+# The fleet flag the gate reads (ADR-0041: ga_manager's own data directory).
+GM_DATA_DIR="${GA_GM_DATA_DIR:-/mnt/data/supervisor/addons/data/99f1cad4_ga_manager}"
+FLEET_FLAG="$GM_DATA_DIR/ga-bluetooth-enabled"
 BOOT_MARKER=/mnt/boot/ga-bluetooth
 RAW_FLAG=/run/ga-bluetooth.raw
 
-config_enabled=false; [ -e "$SHARE_FLAG" ] && config_enabled=true
+config_enabled=false; [ -f "$FLEET_FLAG" ] && [ ! -L "$FLEET_FLAG" ] && config_enabled=true
 manual_enabled=false; [ -e "$BOOT_MARKER" ] && manual_enabled=true
 
 module_loaded=false

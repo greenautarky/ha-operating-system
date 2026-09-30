@@ -7,6 +7,10 @@
 #   ga-manage-ethernet status     # print current state
 #   ga-manage-ethernet apply      # reconcile from persisted state (systemd, boot)
 #   ga-manage-ethernet retire     # delete the flash-time override, link untouched
+#   ga-manage-ethernet retire-if-converged
+#                                 # `retire`, only when ga_manager's converged
+#                                 # marker is a regular file in its data dir
+#                                 # (what ga-ethernet-retire.service runs)
 #
 # STATE — absent is OFF
 #
@@ -43,8 +47,9 @@
 #                                      so every unit built since 2026-07-30
 #                                      shipped with the override live. It is now
 #                                      a mechanism: ga-ethernet-retire.path fires
-#                                      `retire` below the moment ga_manager
-#                                      writes its converged marker, and
+#                                      `retire-if-converged` below the moment
+#                                      ga_manager writes its converged marker
+#                                      into its own data directory, and
 #                                      tests/ga_tests/ethernet_force is the exit
 #                                      gate. That gate reads this script's own
 #                                      status file, not just the filesystem,
@@ -76,17 +81,18 @@
 #                                      private /data dir is writable by
 #                                      ga_manager alone and readable from the
 #                                      host — the same channel the per-device
-#                                      Loki credential already travels
-#                                      (ga-fluent-bit-env reads
-#                                      addons/data/*_ga_manager/ga-fleet-loki.yaml).
-#                                      The slug prefix differs per device, hence
-#                                      the glob.
+#                                      Loki credential already travels.
+#                                      Read under the add-on's PINNED slug
+#                                      (addons/data/99f1cad4_ga_manager,
+#                                      ADR-0041), never a *_ga_manager glob,
+#                                      which would match any add-on whose slug
+#                                      merely ends that way.
 #
 #   The device-bound check needs the device's label. It comes from
 #   /mnt/data/ga-device-label (the flasher's legacy stage-72b file) or, when
-#   that is absent, from the device_id in addons/data/*_ga_manager/
+#   that is absent, from the device_id in addons/data/99f1cad4_ga_manager/
 #   ga-identity.json — the ADR-0010 identity that self-enrolment and the
-#   fleet-manager's identity backfill write. Nothing in the current
+#   fleet-manager's identity backfill write (same pinned directory). Nothing in the current
 #   provisioning path writes the legacy file any more (the add-on has no
 #   mount on /mnt/data), so without the fallback every freshly enrolled or
 #   reflashed device refused the remote override and went dark at its first
@@ -109,10 +115,13 @@ STATUS_FILE="$SHARE_DIR/ga-ethernet-status.json"
 # into add-on containers.
 PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
 FORCE_BOOT="${GA_FORCE_BOOT:-/mnt/boot/ga-ethernet-force}"
-CONVERGED_MARKER="$SHARE_DIR/.ga_converged"
-ADDON_DATA_GLOB="${GA_ADDON_DATA_GLOB:-/mnt/data/supervisor/addons/data/*_ga_manager}"
+# ga_manager's own data directory under its pinned slug (ADR-0041). Only
+# ga_manager mounts it; /share is mounted into every `share:rw` add-on.
+GM_DATA_DIR="${GA_GM_DATA_DIR:-/mnt/data/supervisor/addons/data/99f1cad4_ga_manager}"
+CONVERGED_MARKER="$GM_DATA_DIR/.ga_converged"
+REMOTE_FORCE="$GM_DATA_DIR/ga-ethernet-force"
 LABEL_FILE="${GA_LABEL_FILE:-/mnt/data/ga-device-label}"
-IDENTITY_GLOB="/mnt/data/supervisor/addons/data/*_ga_manager/ga-identity.json"
+IDENTITY_FILE="$GM_DATA_DIR/ga-identity.json"
 LEGACY_KEY="GA_ETHERNET_DISABLED"
 ETH_IFACE="eth0"
 
@@ -156,12 +165,8 @@ set_enabled() { # $1 = true|false
 device_label() {
   _l=""
   [ -r "$LABEL_FILE" ] && _l=$(tr -d ' \t\n\r' < "$LABEL_FILE")
-  if [ -z "$_l" ]; then
-    for _idf in $IDENTITY_GLOB; do
-      [ -r "$_idf" ] || continue
-      _l=$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_idf" 2>/dev/null | head -1)
-      [ -n "$_l" ] && break
-    done
+  if [ -z "$_l" ] && [ -f "$IDENTITY_FILE" ] && [ ! -L "$IDENTITY_FILE" ]; then
+    _l=$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$IDENTITY_FILE" 2>/dev/null | head -1)
   fi
   [ -n "$_l" ] && echo "$_l"
   return 0
@@ -176,13 +181,10 @@ override_source() {
     return 0
   fi
 
-  # Remote marker lives in ga_manager's addon-private /data, not in /share.
-  # The slug prefix varies per device, so resolve the glob and take the first
-  # readable hit.
+  # Remote marker lives in ga_manager's addon-private /data, not in /share,
+  # read under the pinned slug. A symlink is not a marker.
   _remote=""
-  for _d in $ADDON_DATA_GLOB; do
-    [ -r "$_d/ga-ethernet-force" ] && { _remote="$_d/ga-ethernet-force"; break; }
-  done
+  [ -f "$REMOTE_FORCE" ] && [ ! -L "$REMOTE_FORCE" ] && [ -r "$REMOTE_FORCE" ] && _remote="$REMOTE_FORCE"
   [ -n "$_remote" ] || return 0
 
   # Must name THIS device, so a fleet-wide copy is inert.
@@ -366,6 +368,25 @@ do_retire() {
   write_status "$_en" "$_src"
 }
 
+# `retire`, gated on the trigger ga-ethernet-retire.path watches: ga_manager's
+# converged marker, a regular file at the pinned data path. A symlink, a
+# directory or a missing marker retires nothing. Exit 0 either way — the unit's
+# disarm step only runs after a successful ExecStart, and a failing one would
+# be re-triggered by the .path unit for as long as the path exists.
+do_retire_if_converged() {
+  if [ -f "$CONVERGED_MARKER" ] && [ ! -L "$CONVERGED_MARKER" ]; then
+    do_retire
+    return
+  fi
+  if [ -e "$CONVERGED_MARKER" ] || [ -L "$CONVERGED_MARKER" ]; then
+    _msg="$CONVERGED_MARKER is not a regular file — refusing to retire $FORCE_BOOT"
+  else
+    _msg="no converged marker at $CONVERGED_MARKER — nothing retired"
+  fi
+  logger -t ga-manage-ethernet -p daemon.warning "$_msg" 2>/dev/null || true
+  echo "WARNING: $_msg" >&2
+}
+
 do_apply() {
   # One-time carry-over. A device upgrading from the old GA_ETHERNET_DISABLED
   # scheme has no GA_ETHERNET_ENABLED key, which under the new rule means OFF —
@@ -405,8 +426,9 @@ case "${1:-}" in
   status)  do_status ;;
   apply)   do_apply ;;
   retire)  do_retire ;;
+  retire-if-converged) do_retire_if_converged ;;
   *)
-    echo "Usage: ga-manage-ethernet {disable|enable|status|apply|retire}"
+    echo "Usage: ga-manage-ethernet {disable|enable|status|apply|retire|retire-if-converged}"
     exit 1
     ;;
 esac

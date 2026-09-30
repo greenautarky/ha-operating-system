@@ -1,0 +1,12 @@
+# ga-gm-host-release-install.service — ga-gm-host-release, triggered by
+# ga-gm-host-release.path when ga_manager's data directory exists. Runs at most
+# once per boot (RemainAfterExit=yes; see the .path unit for why).
+[Unit]
+Description=Tell a newly installed ga_manager which GA release this host runs (ADR-0041)
+RequiresMountsFor=/mnt/data
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/ga-gm-host-release
+TimeoutStartSec=15s

@@ -100,7 +100,13 @@ fi
 # until 2026-09-08 the removal was a sentence in three comments and no code, so
 # ETHF-01 was red on every device and nobody could tell from the suite whether
 # a step had failed or had never existed.
-CONVERGED=/mnt/data/supervisor/share/.ga_converged
+# ga_manager's converged marker in its own data directory (ADR-0041, from
+# BOSv1.4.0-rc3). Older images watched the /share copy; fall back to it only to
+# JUDGE such an image, never to act.
+CONVERGED=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/.ga_converged
+if ! grep -q "PathExists=$CONVERGED" /etc/systemd/system/ga-ethernet-retire.path 2>/dev/null; then
+    CONVERGED=/mnt/data/supervisor/share/.ga_converged
+fi
 
 if systemctl cat ga-ethernet-retire.path >/dev/null 2>&1; then
     run_test "ETHF-05" "retire mechanism is installed in the image" "true"

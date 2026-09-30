@@ -3,10 +3,16 @@
 #
 # Invoked by the ga-rauc-install.service systemd unit (= triggered in
 # turn by ga-rauc-install.path watching the request file), or manually
-# by an operator on the host. The systemd path-watcher fires when
-# /mnt/data/supervisor/share/ga-rauc-install-request is written or
-# updated by ga_manager 0.42.0+ (the addon container sees the same
-# file at /share/ga-rauc-install-request).
+# by an operator on the host. The request file lives in ga_manager's OWN
+# data directory, under its pinned slug (ADR-0041):
+#
+#   /mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-rauc-install-request
+#
+# (the add-on writes /data/ga-rauc-install-request). Only ga_manager mounts
+# that directory; no other add-on is given a path to it. The path is static on
+# purpose — no glob over *_ga_manager, which would match any add-on whose slug
+# merely ends that way. A request file in /share is NOT read: that directory is
+# mounted into every add-on that declares `share:rw`.
 #
 # Argument modes:
 #   ga-rauc-install                    — no arg: read version from the request
@@ -28,14 +34,16 @@
 # (verified in 2025.11.4.6 source) exposes /host/services as GET-only;
 # there is no /start. The 0.41.0 worker that called
 # /host/services/ga-rauc-install@VERSION.service/start always 404'd.
-# Files in /share/ are the existing addon-to-host trampoline (already
-# used for ghcr-creds.json + ga-fleet-bundle.yaml) — re-using it for
-# RAUC trigger means no new Supervisor API dependencies + a clear
-# audit trail in /mnt/data/supervisor/share/.
+# The request travels as a file because the add-on has no other way to ask the
+# host for anything. Until BOSv1.4.0-rc3 it travelled through /share; from then
+# on only through ga_manager's own data directory (ADR-0041).
 
 set -eu
 
-REQUEST_FILE="/mnt/data/supervisor/share/ga-rauc-install-request"
+# GA_GM_DATA_DIR relocates ga_manager's data directory (host tests only;
+# nothing on a device sets it).
+GM_DATA_DIR="${GA_GM_DATA_DIR:-/mnt/data/supervisor/addons/data/99f1cad4_ga_manager}"
+REQUEST_FILE="$GM_DATA_DIR/ga-rauc-install-request"
 # Optional sidecar carrying the GA release label (e.g. BOSv1.2.21-rc19). When
 # present, the bundle is pulled from the per-rc CANARY slot
 # releases/<version>/<ga_release>/… instead of the shared per-HAOS-version
@@ -46,9 +54,24 @@ REQUEST_RC_FILE="${REQUEST_FILE}.rc"
 VERSION="${1:-}"
 GA_RELEASE="${2:-}"
 
+# regular_file <path> — true for a plain file, never for a symlink, directory,
+# device or FIFO. A symlink would let the writer point the read elsewhere.
+regular_file() { [ -f "$1" ] && [ ! -L "$1" ]; }
+
 if [ -z "$VERSION" ]; then
-    if [ ! -f "$REQUEST_FILE" ]; then
+    if [ ! -e "$REQUEST_FILE" ] && [ ! -L "$REQUEST_FILE" ]; then
         echo "[ga-rauc-install] FATAL: no VERSION arg and $REQUEST_FILE absent" >&2
+        exit 2
+    fi
+    if ! regular_file "$REQUEST_FILE"; then
+        # rm removes the link itself, never its target.
+        rm -f "$REQUEST_FILE" "$REQUEST_RC_FILE"
+        echo "[ga-rauc-install] FATAL: $REQUEST_FILE is not a regular file — request refused and removed" >&2
+        exit 2
+    fi
+    if { [ -e "$REQUEST_RC_FILE" ] || [ -L "$REQUEST_RC_FILE" ]; } && ! regular_file "$REQUEST_RC_FILE"; then
+        rm -f "$REQUEST_FILE" "$REQUEST_RC_FILE"
+        echo "[ga-rauc-install] FATAL: $REQUEST_RC_FILE is not a regular file — request refused and removed" >&2
         exit 2
     fi
     # Read THEN delete — the delete is the dedupe gate. If install fails,
@@ -65,10 +88,7 @@ if [ -z "$VERSION" ]; then
 fi
 
 # Validate version format — refuse anything that isn't N.N.N.N digits-
-# and-dots. The systemd template variant was operator-influencable
-# through the Supervisor API; the file-based variant is influencable
-# by anything able to write to /share/, which is every running addon
-# container. Defence in depth: the worker validates too.
+# and-dots. Defence in depth: the ga_manager worker validates too.
 case "$VERSION" in
     *[!0-9.]* | "" | *..* | .* | *. )
         echo "[ga-rauc-install] FATAL: refusing malformed version '$VERSION'" >&2
@@ -76,8 +96,8 @@ case "$VERSION" in
         ;;
 esac
 
-# Validate the optional ga_release label (defence in depth — anything able to
-# write /share/ can write the sidecar). Empty means the version-only PROD
+# Validate the optional ga_release label (defence in depth — the worker
+# validates it too). Empty means the version-only PROD
 # slot. Otherwise it must be a GA release label, BOSvX.Y.Z or BOSvX.Y.Z-rcN —
 # the only names a release slot on the OTA server has. Anything else is
 # REFUSED: silently substituting the prod slot for a label we could not read

@@ -6,8 +6,13 @@
 # so loss of the primary uplink routed traffic into a dongle that may have no
 # cellular service — a silent black hole that LOOKS like a fallback (ADR-0025).
 #
-# ga_manager publishes a single verdict for the standby (seam S2):
-#   /mnt/data/supervisor/share/ga-lte-standby.json  {usable, since, reason, updated_at}
+# ga_manager publishes a single verdict for the standby (seam S2) in its OWN
+# data directory, read here under the add-on's pinned slug (ADR-0041):
+#   /mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-lte-standby.json
+#     {usable, since, reason, updated_at}
+# Only ga_manager mounts that directory. A verdict in /share is NOT read: /share
+# is mounted into every add-on that declares `share:rw`, and a file there must
+# not be able to add or withdraw a default route.
 # derived from the MODEM's own registration (never the WiFi hop / a WAN-IP
 # guess), with hysteresis. This unit adds the wlan0 default route when the
 # verdict is `usable:true` and withdraws it otherwise. A missing verdict, or one
@@ -26,7 +31,7 @@
 # are env-overridable so the decision logic runs host-side.
 set -u
 
-VERDICT="${GA_STANDBY_VERDICT:-/mnt/data/supervisor/share/ga-lte-standby.json}"
+VERDICT="${GA_STANDBY_VERDICT:-/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-lte-standby.json}"
 IFACE="${GA_STANDBY_IFACE:-wlan0}"
 # The dongle's AP gateway on the wlan0 subnet, and the metric the standby route
 # uses. Both match the shipped OpenStick hop (192.168.100.1, high metric so the
@@ -40,11 +45,16 @@ LOG_TAG="ga-lte-standby-route"
 _log()  { logger -t "$LOG_TAG" -p "daemon.$1" "$2" 2>/dev/null || echo "$LOG_TAG: $2" >&2; }
 _now_epoch() { date -u +%s; }
 
-# Parse "usable" (true|false|missing) from the verdict JSON. Echoes true/false.
+# Parse "usable" from the verdict JSON. Echoes true|false|missing|invalid:
+# missing = no file at all; invalid = something is there but it is not a
+# regular file (a symlink, a directory) or carries no usable field.
 verdict_usable() {
+    if [ -L "$VERDICT" ] || { [ -e "$VERDICT" ] && [ ! -f "$VERDICT" ]; }; then
+        echo invalid; return
+    fi
     [ -f "$VERDICT" ] || { echo missing; return; }
     _u="$(tr -d '\n' < "$VERDICT" 2>/dev/null | sed -n 's/.*"usable"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p')"
-    [ -n "$_u" ] && echo "$_u" || echo missing
+    [ -n "$_u" ] && echo "$_u" || echo invalid
 }
 
 # File age in seconds from its mtime, or a huge number when absent.
@@ -99,6 +109,8 @@ reconcile_once() {
         _log info "no standby verdict at $VERDICT — this device manages no standby route on $IFACE"
         echo unmanaged
         return
+    elif [ "$_usable" = "invalid" ]; then
+        _log warning "standby verdict $VERDICT is not a regular file with a usable field — treating it as not usable; withdrawing the $IFACE standby route"
     elif [ "$_age" -gt "$STALE_S" ]; then
         _log warning "standby verdict $VERDICT is STALE (${_age}s old, limit ${STALE_S}s) — ga_manager stopped publishing it; withdrawing the $IFACE default route"
     fi

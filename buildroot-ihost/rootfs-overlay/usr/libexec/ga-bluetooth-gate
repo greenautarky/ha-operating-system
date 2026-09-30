@@ -3,9 +3,13 @@
 # if so load the module so a consumer can attach.
 #
 # Two independent, equally-valid enable sources (either one turns it ON):
-#   1. Fleet-managed  — /mnt/data/supervisor/share/ga-bluetooth-enabled
-#      (= the ga_manager addon's `/share/ga-bluetooth-enabled`, written from
-#      the per-device `bluetooth.enabled` config option).
+#   1. Fleet-managed  — ga-bluetooth-enabled in ga_manager's OWN data
+#      directory (the add-on's `/data/ga-bluetooth-enabled`, written from the
+#      per-device `bluetooth.enabled` config option). The host reads it under
+#      the add-on's pinned slug (ADR-0041):
+#        /mnt/data/supervisor/addons/data/99f1cad4_ga_manager/
+#      Only ga_manager mounts that directory. A flag in /share is NOT read:
+#      /share is mounted into every add-on that declares `share:rw`.
 #   2. Manual/recovery — /mnt/boot/ga-bluetooth
 #      (operator marker on the boot partition; survives a data-partition wipe).
 #
@@ -18,7 +22,7 @@
 #     add-on): bluetoothd holding hci0 makes the user channel fail with EBUSY.
 #
 # Mode source (checked in this order; default managed):
-#   * /mnt/data/supervisor/share/ga-bluetooth-mode  (fleet, from bluetooth.mode)
+#   * <ga_manager data dir>/ga-bluetooth-mode       (fleet, from bluetooth.mode)
 #   * the first word of /mnt/boot/ga-bluetooth       (manual: write "raw")
 # An empty legacy marker means managed, so existing devices are unchanged.
 #
@@ -32,15 +36,26 @@
 #   /run/ga-bluetooth.raw      — raw mode; bluetooth.service must NOT start
 set -eu
 
-SHARE_FLAG=/mnt/data/supervisor/share/ga-bluetooth-enabled
-SHARE_MODE=/mnt/data/supervisor/share/ga-bluetooth-mode
+# GA_GM_DATA_DIR relocates ga_manager's data directory (host tests only).
+GM_DATA_DIR="${GA_GM_DATA_DIR:-/mnt/data/supervisor/addons/data/99f1cad4_ga_manager}"
+FLEET_FLAG="$GM_DATA_DIR/ga-bluetooth-enabled"
+FLEET_MODE="$GM_DATA_DIR/ga-bluetooth-mode"
 BOOT_MARKER=/mnt/boot/ga-bluetooth
 RUN_FLAG=/run/ga-bluetooth.enabled
 RAW_FLAG=/run/ga-bluetooth.raw
 
+# regular_file <path> — a plain file, never a symlink/dir/device/FIFO.
+regular_file() { [ -f "$1" ] && [ ! -L "$1" ]; }
+
+for _f in "$FLEET_FLAG" "$FLEET_MODE"; do
+	if { [ -e "$_f" ] || [ -L "$_f" ]; } && ! regular_file "$_f"; then
+		echo "ga-bluetooth-gate: $_f is not a regular file — ignored" >&2
+	fi
+done
+
 enabled=0
 source=none
-if [ -e "$SHARE_FLAG" ]; then
+if regular_file "$FLEET_FLAG"; then
 	enabled=1
 	source=config
 elif [ -e "$BOOT_MARKER" ]; then
@@ -51,8 +66,8 @@ fi
 # Resolve the mode (default managed). Fleet flag wins; else the marker's first
 # word; anything but "raw" is treated as managed.
 mode=managed
-if [ -s "$SHARE_MODE" ]; then
-	read -r mode _ < "$SHARE_MODE" || mode=managed
+if regular_file "$FLEET_MODE" && [ -s "$FLEET_MODE" ]; then
+	read -r mode _ < "$FLEET_MODE" || mode=managed
 elif [ -s "$BOOT_MARKER" ]; then
 	read -r mode _ < "$BOOT_MARKER" || mode=managed
 fi

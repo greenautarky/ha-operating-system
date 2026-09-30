@@ -22,7 +22,8 @@ function hassos_pre_image() {
     #
     # THE MARKER MUST BE REMOVED BEFORE A DEVICE SHIPS, and since 2026-09-08
     # something actually removes it: ga-ethernet-retire.path runs
-    # `ga-manage-ethernet retire` when ga_manager writes /share/.ga_converged,
+    # `ga-manage-ethernet retire-if-converged` when ga_manager writes its
+    # converged marker into its own data directory (ADR-0041),
     # which is the end of the normal provisioning run. The paragraph below
     # describes the manual fallback for a device that never converges.
     #
