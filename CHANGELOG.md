@@ -12,6 +12,71 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased — the SSH certificate plane and the USB host lock hold on devices updated over the air
+
+A device that reaches a BOSv1.4.0+ image by an OTA update keeps two files its
+first image wrote: the overlay `/root/.ssh/authorized_keys` (seeded only when
+absent) and `/mnt/boot/cmdline.txt` (restored by the RAUC boot-slot hook). Both
+are now enforced by files the update replaces, on every boot, with no
+migration step.
+
+### Changed — sshd reads the baked break-glass key first and refuses the pre-cut key
+
+`post-build.d/87-ssh-cert-plane.sh` (BOSv1.4.0+ only) now also bakes:
+
+- `AuthorizedKeysFile /usr/share/ga-ssh/authorized_keys /root/.ssh/authorized_keys`
+  in `50-ga-cert-plane.conf` — the read-only break-glass file is read first, so
+  break-glass works whatever the overlay holds; overlay entries stay valid.
+- `RevokedKeys /etc/ssh/ga_revoked_keys`, installed from the committed
+  `buildroot-ihost/board/sonoff/ihost/ssh-revoked-keys` (public keys only). It
+  holds the pre-cut fleet-wide key; sshd refuses it in any authorized_keys
+  file. The hook fails the build if the list lacks that key (pinned
+  fingerprint), holds a non-key line, or lists the break-glass key.
+- `sshd.service.d/zz-ga-cert-plane.conf`, which resets the unit's
+  `ConditionFileNotEmpty` to the baked break-glass file.
+
+The overlay file is not modified, so a fallback to an older slot keeps the
+access that image was built with.
+
+`ga-ssh-posture` judges the EFFECTIVE sshd configuration (first value wins,
+`Include`s in place, `Match` blocks excluded): `ca` needs a trusted CA and the
+pre-cut key either absent from every `AuthorizedKeysFile` or listed by
+`RevokedKeys`. An `AuthorizedKeysCommand` or an unreadable revocation list
+reads `shared`. The `GA_SSHD_CONFIG_DIR` and `GA_AUTHORIZED_KEYS` test
+overrides are gone (`GA_SSH_ROOT_HOME` replaces the latter).
+
+### Changed — the USB host lock is appended by boot.scr
+
+`uboot-boot.ush` appends `usbcore.authorized_default=0` after `${cmdline}` for
+both slots (set after `haos-config.txt` is imported). The kernel keeps the last
+value, so a device `cmdline.txt` without the flag, or with `=1`, still boots
+with the host port closed. The allowlist (`/usr/share/ga-usb-allowlist` +
+`80-ga-usb-authorize.rules`) is unchanged. `boot.scr` lives on the shared boot
+partition, so a fallback slot boots with the lock as well.
+
+### Gates
+
+- Build: new `SSH-10` (first `AuthorizedKeysFile` is the baked file, the
+  revocation list holds the pre-cut key and not break-glass, unit condition
+  names the same file).
+- `tests/gates/ssh_cert_plane/sshd_dryrun.sh` now models an OTA-updated
+  overlay (pre-cut seed, no break-glass): break-glass accepted from the baked
+  file, a listed key refused by reason `revoked by file`, `sshd -T` values,
+  posture `ca` with a no-`RevokedKeys` control reading `shared`, and no
+  revocation-list parse errors in the sshd log.
+- `tests/gates/ssh_cert_plane/selftest.sh`: `SSH-10` both ways; the hook
+  refuses a broken revocation list.
+- `tests/gates/ssh_posture/selftest.sh`: effective-config cases both ways.
+- New `tests/gates/ota_usb_lock/selftest.sh`: the live `rauc-hook` on a
+  pre-lock `/mnt/boot`, then the kernel command line evaluated from the live
+  boot script (CI: lint workflow).
+- Device: `SSH-D-24` redefined (sshd reads the baked break-glass file first),
+  new `SSH-D-27/28/29`, new `HW-08a3` (`/proc/cmdline`); `SSH-D-06` is
+  shared-plane only. These are meant for OTA-updated canaries as well as
+  clean flashes.
+
+---
+
 ## Unreleased — OS updates refuse a bundle older than the running GA release
 
 ### Added — a release floor for every OS install, enforced on the device

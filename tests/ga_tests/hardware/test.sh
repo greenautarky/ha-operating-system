@@ -65,10 +65,17 @@ fi
 # That claim is now false by design: the host DATA path is closed unless a
 # device is declared (usbcore.authorized_default=0 + an allowlist). A status
 # claim that misstates what ships is a bug (N19), so the assertion is REPLACED,
-# not kept beside the new one. Clean-flash validated (N47) — the default is the
-# thing under test, so an upgrade could carry a stale authorized_default.
+# not kept beside the new one.
+# Holds on a device updated over the air as well as on a fresh flash: the flag
+# is appended by boot.scr after the device's own cmdline.txt (which the RAUC
+# boot hook restores on every update). Run it on an OTA-updated canary too.
 run_test "HW-08a" "USB host controller NOT authorized by default (host data path closed)" \
   "for f in /sys/bus/usb/devices/usb*/authorized_default; do [ -e \"\$f\" ] && [ \"\$(cat \"\$f\" 2>/dev/null)\" != \"0\" ] && exit 1; done; ls /sys/bus/usb/devices/usb*/authorized_default >/dev/null 2>&1"
+
+# The kernel keeps the LAST usbcore.authorized_default on its command line, so
+# that is the one asserted — a 0 followed by a 1 is an open port.
+run_test "HW-08a3" "kernel command line closes the USB host port (last usbcore.authorized_default is 0)" \
+  "[ \"\$(tr ' ' '\\n' < /proc/cmdline | sed -n 's/^usbcore\.authorized_default=//p' | tail -1)\" = 0 ]"
 
 run_test "HW-08a2" "USB authorize helper + empty-by-default allowlist shipped" \
   "test -x /usr/libexec/ga-usb-authorize && test -f /usr/share/ga-usb-allowlist && ! grep -qviE '^[[:space:]]*(#|\$)' /usr/share/ga-usb-allowlist"

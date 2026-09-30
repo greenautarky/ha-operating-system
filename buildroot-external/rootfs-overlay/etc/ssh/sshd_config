@@ -5,21 +5,23 @@
 #
 # The certificate plane (ADR-0019 step 2, BOSv1.4.0 and later) is NOT a second
 # copy of this file: at bake time post-build.d/87-ssh-cert-plane.sh drops
-# sshd_config.d/50-ga-cert-plane.conf (TrustedUserCAKeys +
-# AuthorizedPrincipalsFile) and the CA public key into the image, and replaces
-# the baked authorized_keys with the single break-glass key. Below 1.4.0 that
-# directory stays empty and this Include matches nothing.
+# sshd_config.d/50-ga-cert-plane.conf (TrustedUserCAKeys,
+# AuthorizedPrincipalsFile, AuthorizedKeysFile, RevokedKeys) and the CA public
+# key and revocation list into the image, and replaces the baked
+# authorized_keys with the single break-glass key. Below 1.4.0 that directory
+# stays empty and this Include matches nothing.
 #
 # The Include MUST stay the first directive: sshd takes the FIRST value it
 # reads for most keywords, so a drop-in included after a directive could not
-# change it. Nothing below sets TrustedUserCAKeys or AuthorizedPrincipalsFile,
-# so the order is belt and braces, not load-bearing today.
+# change it. This is load-bearing for AuthorizedKeysFile: the drop-in's value
+# (baked break-glass file first) has to win over the line below.
 Include /etc/ssh/sshd_config.d/*.conf
 
 Port 22222
 
 # Where the shared key is read from. /root/.ssh is bind-mounted from the
 # overlay (root-.ssh.mount) and seeded on first boot by hassos-overlay.
+# Shared plane only: the certificate-plane drop-in sets its own value first.
 AuthorizedKeysFile /root/.ssh/authorized_keys
 
 PermitRootLogin prohibit-password

@@ -2973,6 +2973,61 @@ if [[ "$SSH_CONTENT_PLANE" == "ca" ]]; then
   fi
 fi
 
+# SSH-10: the certificate plane holds on a device updated over the air, not
+# only on a fresh flash. Such a device keeps the overlay authorized_keys its
+# first image wrote (seeded only when absent), so the baked seed never reaches
+# it. The plane therefore has to be enforced by what sshd reads, in the image:
+#   * the FIRST AuthorizedKeysFile is the baked break-glass file (sshd takes
+#     the first value it reads; the drop-ins are Included before the main
+#     file's own line);
+#   * RevokedKeys names a baked list that holds the pre-cut fleet key (pinned
+#     fingerprint above, never read from the list) and not the break-glass key;
+#   * the sshd unit's start condition names that same baked file, reset from
+#     the overlay path hassos.conf sets (a drop-in sorting after it).
+_ssh_first_value() {  # <keyword> — first value in sshd read order (drop-ins, then main)
+  local f v
+  if _ssh_includes_dropins; then
+    for f in "$GA_SSHD_DROPIN_DIR_T"/*.conf; do
+      [[ -r "$f" ]] || continue
+      v="$(sed -nE "s/^[[:space:]]*$1[[:space:]]+(.+)$/\\1/Ip" "$f" | head -1)"
+      [[ -n "$v" ]] && { printf '%s\n' "$v"; return 0; }
+    done
+  fi
+  [[ -r "$GA_SSHD_CONFIG_T" ]] && sed -nE "s/^[[:space:]]*$1[[:space:]]+(.+)$/\\1/Ip" "$GA_SSHD_CONFIG_T" | head -1
+  return 0
+}
+if [[ "$SSH_CONTENT_PLANE" == "ca" ]]; then
+  _ssh10_bad=()
+  _ssh10_akf="$(_ssh_first_value AuthorizedKeysFile)"
+  _ssh10_akf_first="${_ssh10_akf%% *}"
+  [[ "$_ssh10_akf_first" == "/usr/share/ga-ssh/authorized_keys" ]] \
+    || _ssh10_bad+=("first AuthorizedKeysFile is '${_ssh10_akf_first:-<unset>}', want /usr/share/ga-ssh/authorized_keys (break-glass would not reach an OTA-updated device)")
+  _ssh10_rk="$(_ssh_first_value RevokedKeys)"
+  if [[ -z "$_ssh10_rk" || "$_ssh10_rk" == "none" ]]; then
+    _ssh10_bad+=("no RevokedKeys — the pre-cut key in an OTA-updated overlay would authenticate")
+  elif [[ ! -s "${TARGET}${_ssh10_rk}" ]]; then
+    _ssh10_bad+=("RevokedKeys names ${_ssh10_rk}, which is missing or empty in the image (sshd refuses every key then)")
+  else
+    _ssh_legacy_key_present "${TARGET}${_ssh10_rk}" \
+      || _ssh10_bad+=("revocation list ${_ssh10_rk} does not hold the pre-cut fleet key")
+    if [[ -r "$GA_SSH_AK" ]] && grep -qxF "$(awk '/^(ssh-|ecdsa-|sk-)/{print $1" "$2; exit}' "$GA_SSH_AK")" "${TARGET}${_ssh10_rk}"; then
+      _ssh10_bad+=("the break-glass key is on the revocation list")
+    fi
+  fi
+  _ssh10_unit="${TARGET}/usr/lib/systemd/system/sshd.service.d/zz-ga-cert-plane.conf"
+  if [[ ! -r "$_ssh10_unit" ]]; then
+    _ssh10_bad+=("sshd unit drop-in zz-ga-cert-plane.conf missing (sshd would gate on the overlay file)")
+  elif ! grep -qx 'ConditionFileNotEmpty=' "$_ssh10_unit" \
+       || [[ "$(sed -nE 's/^ConditionFileNotEmpty=(.+)$/\1/p' "$_ssh10_unit")" != "$_ssh10_akf_first" ]]; then
+    _ssh10_bad+=("sshd unit start condition does not reset to the first AuthorizedKeysFile")
+  fi
+  if (( ${#_ssh10_bad[@]} == 0 )); then
+    _pass "SSH-10: certificate plane holds on an OTA-updated overlay — baked break-glass file read first, pre-cut key revoked, sshd gated on the file it reads"
+  else
+    _fail "SSH-10: certificate plane does not hold on an OTA-updated overlay — $(IFS='; '; echo "${_ssh10_bad[*]}")"
+  fi
+fi
+
 # =========================================================================
 # BS-RETRY-01..02: ga-bootstrap exponential-backoff retry for `ha store add`
 # =========================================================================

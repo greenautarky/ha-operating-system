@@ -96,8 +96,10 @@ ran=$((ran+1)); if GA_SECRETS_DIR="$GOOD" bash "$HOOK" --check BOSv1.4.0-rc1 >/d
 echo "── a pre-cut image must stay on the shared plane, keys or no keys ──"
 d="$(target pre BOSv1.3.0-rc51)"
 mkdir -p "$d/target/etc/ssh/sshd_config.d"; echo stale > "$d/target/etc/ssh/ga_user_ca.pub"; echo stale > "$d/target/etc/ssh/sshd_config.d/50-ga-cert-plane.conf"
+echo stale > "$d/target/etc/ssh/ga_revoked_keys"; echo stale > "$d/target/usr/lib/systemd/system/sshd.service.d/zz-ga-cert-plane.conf"
 expect_hook accept "$GOOD" "$d" "BOSv1.3.0-rc51 with CA keys present in the mount"
 ran=$((ran+1)); if [[ -e "$d/target/etc/ssh/ga_user_ca.pub" || -e "$d/target/etc/ssh/sshd_config.d/50-ga-cert-plane.conf" ]]; then bad "pre-cut image carries CA files"; else ok "pre-cut image: no CA pub, no cert drop-in (stale leftovers removed)"; fi
+ran=$((ran+1)); if [[ -e "$d/target/etc/ssh/ga_revoked_keys" || -e "$d/target/usr/lib/systemd/system/sshd.service.d/zz-ga-cert-plane.conf" ]]; then bad "pre-cut image carries the revocation list or the sshd unit drop-in"; else ok "pre-cut image: no revocation list, no sshd unit drop-in (stale leftovers removed)"; fi
 ran=$((ran+1)); if cmp -s "$LEGACY_KEY" "$d/target/usr/share/ga-ssh/authorized_keys"; then ok "pre-cut image: authorized_keys untouched"; else bad "pre-cut authorized_keys changed"; fi
 expect_gate PASS "$d" SSH-06 "pre-cut image after the hook — marker and content say shared"
 
@@ -106,11 +108,51 @@ d="$(target cut BOSv1.4.0-rc1)"
 expect_hook accept "$GOOD" "$d" "BOSv1.4.0-rc1 with two CA keys + break-glass"
 ran=$((ran+1)); [[ "$(grep -c . "$d/target/etc/ssh/ga_user_ca.pub")" == 2 ]] && ok "both CA keys baked" || bad "CA file does not hold both keys"
 ran=$((ran+1)); if [[ "$(awk '{print $1" "$2}' "$d/target/usr/share/ga-ssh/authorized_keys")" == "$(awk '{print $1" "$2}' "$W/bg.pub")" ]]; then ok "authorized_keys = break-glass only"; else bad "authorized_keys is not exactly the break-glass key"; fi
-for c in SSH-05 SSH-06 SSH-07 SSH-09; do expect_gate PASS "$d" "$c" "hook output"; done
+for c in SSH-05 SSH-06 SSH-07 SSH-09 SSH-10; do expect_gate PASS "$d" "$c" "hook output"; done
+ran=$((ran+1)); if ssh-keygen -lf "$d/target/etc/ssh/ga_revoked_keys" 2>/dev/null | grep -qF "$(ssh-keygen -lf "$LEGACY_KEY" | awk '{print $2}')"; then ok "revocation list baked with the pre-cut fleet key"; else bad "baked revocation list lacks the pre-cut fleet key"; fi
+
+echo "── an image that would NOT hold on an OTA-updated overlay must fail SSH-10 ──"
+# mutate <name> <sed-expression> <file under target/>  -> dir (a copy of the good hook output)
+mutate() { local m="$W/mut-$1"; rm -rf "$m"; cp -a "$d" "$m"; sed -i "$2" "$m/target/$3"; printf '%s' "$m"; }
+DI=etc/ssh/sshd_config.d/50-ga-cert-plane.conf
+expect_gate FAIL "$(mutate no-revoked '/^RevokedKeys/d' "$DI")" SSH-10 "drop-in without RevokedKeys"
+expect_gate FAIL "$(mutate overlay-first 's#^AuthorizedKeysFile .*#AuthorizedKeysFile /root/.ssh/authorized_keys /usr/share/ga-ssh/authorized_keys#' "$DI")" SSH-10 "overlay file read first"
+expect_gate FAIL "$(mutate no-akf '/^AuthorizedKeysFile/d' "$DI")" SSH-10 "no AuthorizedKeysFile in the drop-in (main file's overlay path wins)"
+expect_gate FAIL "$(mutate empty-list 's/.*//' etc/ssh/ga_revoked_keys)" SSH-10 "revocation list without any key"
+expect_gate FAIL "$(mutate cond-overlay 's#^ConditionFileNotEmpty=/usr/share.*#ConditionFileNotEmpty=/root/.ssh/authorized_keys#' usr/lib/systemd/system/sshd.service.d/zz-ga-cert-plane.conf)" SSH-10 "sshd unit still gated on the overlay file"
+m="$(mutate no-unit-dropin 's/x/x/' etc/ga-release)"; rm -f "$m/target/usr/lib/systemd/system/sshd.service.d/zz-ga-cert-plane.conf"
+expect_gate FAIL "$m" SSH-10 "sshd unit drop-in missing"
+m="$(mutate bg-revoked 's/x/x/' etc/ga-release)"; awk '{print $1" "$2}' "$W/bg.pub" >> "$m/target/etc/ssh/ga_revoked_keys"
+expect_gate FAIL "$m" SSH-10 "break-glass key on the revocation list"
+
+echo "── the hook refuses a revocation list that has lost the pre-cut key ──"
+# The LIVE hook, copied verbatim into a board-shaped dir so its committed
+# revocation list (../ssh-revoked-keys) can be swapped for a fixture.
+REVOKED_LIVE="$ROOT/buildroot-ihost/board/sonoff/ihost/ssh-revoked-keys"
+[[ -s "$REVOKED_LIVE" ]] || { echo "FATAL: $REVOKED_LIVE missing"; exit 1; }
+hook_with_list() {  # <name> <list-content|-> -> runs the hook copy on a fresh 1.4 target; rc
+  local b="$W/board-$1"; mkdir -p "$b/post-build.d"; cp "$HOOK" "$b/post-build.d/"
+  [[ "$2" != "-" ]] && printf '%s' "$2" > "$b/ssh-revoked-keys"
+  GA_SECRETS_DIR="$GOOD" bash "$b/post-build.d/${HOOK##*/}" "$(target "rl-$1" BOSv1.4.0-rc1)/target" >"$W/hook.out" 2>&1
+}
+expect_list() {  # <want: refuse|accept> <name> <content|-> <why> <desc>
+  ran=$((ran+1)); local rc=0; hook_with_list "$2" "$3" || rc=$?
+  if [[ "$1" == refuse ]]; then
+    if (( rc == 0 )); then bad "hook ACCEPTED — $5"
+    elif ! grep -q -- "$4" "$W/hook.out"; then bad "hook refused for the WRONG reason — $5: $(tail -1 "$W/hook.out")"
+    else ok "hook refused — $5"; fi
+  else (( rc == 0 )) && ok "hook accepted — $5" || bad "hook refused — $5: $(tail -1 "$W/hook.out")"; fi
+}
+expect_list refuse missing - "revocation list not found" "no revocation list next to the hook"
+expect_list refuse other "$(cat "$W/ca_b.pub")"$'\n' "does not hold the pre-cut fleet key" "revocation list without the pre-cut key"
+expect_list refuse garbage "not a key"$'\n' "not an OpenSSH public key line" "revocation list with a non-key line"
+expect_list refuse bg "$(cat "$LEGACY_KEY")"$'\n'"$(cat "$W/bg.pub")"$'\n' "break-glass key is on the revocation list" "break-glass key on the revocation list"
+expect_list accept live "$(cat "$REVOKED_LIVE")"$'\n' "" "the committed revocation list"
+ran=$((ran+1)); if GA_SECRETS_DIR="$GOOD" bash "$W/board-other/post-build.d/${HOOK##*/}" --check BOSv1.4.0-rc1 >/dev/null 2>&1; then bad "preflight passed a revocation list without the pre-cut key"; else ok "preflight refuses a revocation list without the pre-cut key"; fi
 d2="$(target rc2 BOSv1.4.1-dev3)"; run_hook "$GOOD" "$d2" >/dev/null 2>&1
 expect_gate PASS "$d2" SSH-06 "a later -devN build is on the certificate plane too (suffix never matters)"
 
 echo
-if (( ran < 24 )); then echo "${RED}FAIL${NC}  only $ran cases ran — expected at least 24"; exit 1; fi
+if (( ran < 40 )); then echo "${RED}FAIL${NC}  only $ran cases ran — expected at least 40"; exit 1; fi
 if (( fails > 0 )); then echo "${RED}${fails} of ${ran} case(s) failed${NC}"; exit 1; fi
 echo "${GRN}all ${ran} cases passed${NC}"

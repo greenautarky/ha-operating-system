@@ -66,7 +66,8 @@ mk() {
   local name="$1" cfg="$2" ca="$3" ak="$4" dropin="${5:-}"
   local d="$WORK/$name"
   mkdir -p "$d/etc/ssh/sshd_config.d" "$d/root/.ssh"
-  [[ -n "$cfg"    ]] && printf '%s\n' "$cfg"    > "$d/etc/ssh/sshd_config"
+  # Like the image's sshd_config: the drop-in directory is Included FIRST.
+  [[ -n "$cfg"    ]] && printf 'Include %s/etc/ssh/sshd_config.d/*.conf\n%s\n' "$d" "$cfg" > "$d/etc/ssh/sshd_config"
   [[ -n "$dropin" ]] && printf '%s\n' "$dropin" > "$d/etc/ssh/sshd_config.d/10-ga.conf"
   [[ "$ca" != "-" ]] && printf '%s' "$ca"       > "$d/etc/ssh/ga_user_ca.pub"
   [[ "$ak" != "-" ]] && printf '%s\n' "$ak"     > "$d/root/.ssh/authorized_keys"
@@ -76,8 +77,7 @@ mk() {
 verdict() {
   local d="$1"
   GA_SSHD_CONFIG="$d/etc/ssh/sshd_config" \
-  GA_SSHD_CONFIG_DIR="$d/etc/ssh/sshd_config.d" \
-  GA_AUTHORIZED_KEYS="$d/root/.ssh/authorized_keys" \
+  GA_SSH_ROOT_HOME="$d/root" \
   "$SENSOR" 2>/dev/null
 }
 
@@ -132,13 +132,46 @@ _ca_cfg "$d" > "$d/etc/ssh/sshd_config"
 printf '%s' "$LEGACY" > "$d/root/.ssh/authorized_keys"   # deliberately no \n
 expect shared "$d" "legacy key as last line WITHOUT a trailing newline"
 
+# ── the state a device updated over the air carries (overlay written by an
+#    older image), judged by the EFFECTIVE sshd configuration ──
+# Baked break-glass file first, overlay second, nothing revokes the legacy key:
+# the overlay entry still lets it in.
+d="$(mk ota-no-revocation placeholder "ssh-ed25519 AAAAfakeca ga-user-ca" "$LEGACY")"
+mkdir -p "$d/usr/share/ga-ssh"; printf '%s\n' "$BREAKGLASS" > "$d/usr/share/ga-ssh/authorized_keys"
+{ _ca_cfg "$d"; printf 'AuthorizedKeysFile %s/usr/share/ga-ssh/authorized_keys %s/root/.ssh/authorized_keys\n' "$d" "$d"; } > "$d/etc/ssh/sshd_config"
+expect shared "$d" "legacy key in the SECOND AuthorizedKeysFile entry, no RevokedKeys"
+
+d="$(mk ota-revocation-lacks-key placeholder "ssh-ed25519 AAAAfakeca ga-user-ca" "$LEGACY")"
+printf '%s\n' "$BREAKGLASS" > "$d/etc/ssh/revoked"
+{ _ca_cfg "$d"; printf 'RevokedKeys %s/etc/ssh/revoked\n' "$d"; } > "$d/etc/ssh/sshd_config"
+expect shared "$d" "RevokedKeys set, but the list does not hold the legacy key"
+
+d="$(mk ota-revocation-missing placeholder "ssh-ed25519 AAAAfakeca ga-user-ca" "$LEGACY")"
+{ _ca_cfg "$d"; printf 'RevokedKeys %s/etc/ssh/nonexistent\n' "$d"; } > "$d/etc/ssh/sshd_config"
+expect shared "$d" "RevokedKeys points at a missing file"
+
+# sshd takes the FIRST value: a RevokedKeys that comes after another one is dead text.
+d="$(mk ota-revocation-shadowed placeholder "ssh-ed25519 AAAAfakeca ga-user-ca" "$LEGACY")"
+printf '%s\n' "$LEGACY" > "$d/etc/ssh/revoked"
+{ _ca_cfg "$d"; printf 'RevokedKeys none\nInclude %s/etc/ssh/sshd_config.d/*.conf\n' "$d"; } > "$d/etc/ssh/sshd_config"
+printf 'RevokedKeys %s/etc/ssh/revoked\n' "$d" > "$d/etc/ssh/sshd_config.d/10-ga.conf"
+expect shared "$d" "revocation only in a file read AFTER 'RevokedKeys none' (first value wins)"
+
+d="$(mk ota-revocation-in-match placeholder "ssh-ed25519 AAAAfakeca ga-user-ca" "$LEGACY")"
+printf '%s\n' "$LEGACY" > "$d/etc/ssh/revoked"
+{ _ca_cfg "$d"; printf 'Match User nobody\n  RevokedKeys %s/etc/ssh/revoked\n' "$d"; } > "$d/etc/ssh/sshd_config"
+expect shared "$d" "revocation only inside a Match block (not global)"
+
+d="$(mk keys-command placeholder "ssh-ed25519 AAAAfakeca ga-user-ca" "$BREAKGLASS")"
+{ _ca_cfg "$d"; printf 'AuthorizedKeysCommand /usr/bin/true\nAuthorizedKeysCommandUser nobody\n'; } > "$d/etc/ssh/sshd_config"
+expect shared "$d" "AuthorizedKeysCommand set (keys it returns cannot be inspected)"
+
 # ssh-keygen unavailable → must fail CLOSED, never optimistic.
 d="$(mk no-sshkeygen placeholder "ssh-ed25519 AAAAfakeca ga-user-ca" "$BREAKGLASS")"
 _ca_cfg "$d" > "$d/etc/ssh/sshd_config"
 got="$(PATH=/nonexistent \
        GA_SSHD_CONFIG="$d/etc/ssh/sshd_config" \
-       GA_SSHD_CONFIG_DIR="$d/etc/ssh/sshd_config.d" \
-       GA_AUTHORIZED_KEYS="$d/root/.ssh/authorized_keys" \
+       GA_SSH_ROOT_HOME="$d/root" \
        /bin/sh "$SENSOR" 2>/dev/null)"
 ran=$((ran + 1))
 if [[ "$got" == "shared" ]]; then ok "ssh-keygen unavailable → shared (fail closed)"
@@ -164,11 +197,26 @@ d="$(mk comments-only placeholder "ssh-ed25519 AAAAfakeca ga-user-ca" \
 _ca_cfg "$d" > "$d/etc/ssh/sshd_config"
 expect ca "$d" "CA trusted, authorized_keys holds only comments"
 
+# ── the fix for a device updated over the air: the overlay still lists the
+#    legacy key, and sshd cannot use it ──
+d="$(mk ota-revoked placeholder "ssh-ed25519 AAAAfakeca ga-user-ca" "$LEGACY")"
+printf '# comment\n%s\n' "$LEGACY" > "$d/etc/ssh/revoked"
+mkdir -p "$d/usr/share/ga-ssh"; printf '%s\n' "$BREAKGLASS" > "$d/usr/share/ga-ssh/authorized_keys"
+{ _ca_cfg "$d"; printf 'AuthorizedKeysFile %s/usr/share/ga-ssh/authorized_keys .ssh/authorized_keys\nRevokedKeys %s/etc/ssh/revoked\n' "$d" "$d"; } \
+  > "$d/etc/ssh/sshd_config.d/10-ga.conf"
+printf 'Include %s/etc/ssh/sshd_config.d/*.conf\nAuthorizedKeysFile /nonexistent/never-read\n' "$d" > "$d/etc/ssh/sshd_config"
+expect ca "$d" "overlay lists the legacy key, the drop-in's RevokedKeys holds it (first value wins over the main file)"
+
+d="$(mk ota-baked-only placeholder "ssh-ed25519 AAAAfakeca ga-user-ca" "$LEGACY")"
+mkdir -p "$d/usr/share/ga-ssh"; printf '%s\n' "$BREAKGLASS" > "$d/usr/share/ga-ssh/authorized_keys"
+{ _ca_cfg "$d"; printf 'AuthorizedKeysFile %s/usr/share/ga-ssh/authorized_keys\n' "$d"; } > "$d/etc/ssh/sshd_config"
+expect ca "$d" "overlay lists the legacy key, but sshd does not read the overlay file"
+
 echo
 # Assert COVERAGE, not exit code (norm N9): a suite that ran zero cases is a
 # failure, however green it looks.
-if (( ran < 13 )); then
-  echo "${RED}FAIL${NC}  only $ran cases ran — expected at least 13"
+if (( ran < 21 )); then
+  echo "${RED}FAIL${NC}  only $ran cases ran — expected at least 21"
   exit 1
 fi
 if (( fails > 0 )); then

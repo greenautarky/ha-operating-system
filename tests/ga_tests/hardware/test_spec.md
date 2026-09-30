@@ -22,7 +22,8 @@ regressions from kernel updates, device tree changes, and firmware issues.
 | HW-06 | Ethernet link state | Reports `operstate` (up/down) |
 | HW-07 | USB subsystem functional | `/sys/bus/usb/devices/` is populated |
 | HW-08 | USB devices enumerated | Lists USB devices via `lsusb` or sysfs fallback |
-| HW-08a | USB host port disabled | No EHCI/OHCI host controller registered (security) |
+| HW-08a | USB host port disabled | `/sys/bus/usb/devices/usb*/authorized_default` is 0 on every root hub (ADR-0029 D3) |
+| HW-08a3 | USB host lock on the kernel command line | The LAST `usbcore.authorized_default` in `/proc/cmdline` is 0 — also on a device updated over the air |
 | HW-08b | USB gadget functional | Serial console gadget (dwc3 peripheral mode) working |
 | HW-09 | Zigbee serial device | Internal UART `/dev/ttyS3` (EFR32 at ff580000) |
 | HW-10 | eMMC block device | `/dev/mmcblk*` present |

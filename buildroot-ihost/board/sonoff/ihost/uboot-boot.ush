@@ -38,6 +38,15 @@ fi
 # Load extraargs
 fileenv mmc ${devnum}:${boot_partnum} ${ramdisk_addr_r} cmdline.txt cmdline
 
+# GA: the USB host port is closed by default (ADR-0029 D3). The flag is
+# appended AFTER ${cmdline} on every boot: cmdline.txt belongs to the device
+# (the RAUC boot hook restores the device's copy on an update), this script is
+# replaced by every update, and for a kernel parameter the last occurrence
+# wins. Devices on the allowlist (/usr/share/ga-usb-allowlist) are still
+# authorised by 80-ga-usb-authorize.rules. Set after haos-config.txt is
+# imported, so a device-side file cannot override it.
+setenv bootargs_ga "usbcore.authorized_default=0"
+
 # Load device tree
 echo "Detected SoC RV${cpucode#}"
 if test "x${cpucode#}" = "x1126"; then
@@ -73,7 +82,7 @@ for BOOT_SLOT in "${BOOT_ORDER}"; do
       echo "Trying to boot slot A, ${BOOT_A_LEFT} attempts remaining. Loading kernel ..."
       part number mmc ${devnum} hassos-kernel0 kernel_partnum
       if load mmc ${devnum}:${kernel_partnum} ${kernel_addr_r} zImage; then
-          setenv bootargs "${bootargs_hassos} ${bootargs_a} rauc.slot=A ${cmdline}"
+          setenv bootargs "${bootargs_hassos} ${bootargs_a} rauc.slot=A ${cmdline} ${bootargs_ga}"
       fi
     fi
   elif test "x${BOOT_SLOT}" = "xB"; then
@@ -82,7 +91,7 @@ for BOOT_SLOT in "${BOOT_ORDER}"; do
       echo "Trying to boot slot B, ${BOOT_B_LEFT} attempts remaining. Loading kernel ..."
       part number mmc ${devnum} hassos-kernel1 kernel_partnum
       if load mmc ${devnum}:${kernel_partnum} ${kernel_addr_r} zImage; then
-          setenv bootargs "${bootargs_hassos} ${bootargs_b} rauc.slot=B ${cmdline}"
+          setenv bootargs "${bootargs_hassos} ${bootargs_b} rauc.slot=B ${cmdline} ${bootargs_ga}"
       fi
     fi
   fi

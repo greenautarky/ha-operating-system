@@ -1,0 +1,11 @@
+# Public keys sshd refuses on a BOSv1.4.0+ image, whichever authorized_keys
+# file lists them (sshd RevokedKeys). Installed as /etc/ssh/ga_revoked_keys by
+# post-build.d/87-ssh-cert-plane.sh, which fails the build if the pre-cut
+# fleet-wide operator key below is missing from this file.
+#
+# PUBLIC KEYS ONLY. One OpenSSH public key per line; # and blank lines ignored.
+#
+# The pre-cut fleet-wide operator key (RSA-2048, rsa-key-20240404,
+# SHA256:T+Pt2vUEG+lYv0t5qTMdFyd2Kchx6mjkOR3YZaVqcjE), trusted by every image
+# up to and including the BOSv1.3.0 line.
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDQmjeBtmQRluySGQRSrKJQXDyvy0dMGl2ZK65U3lH1b5SJpFYu3ChY1hi8jyf2EdxiKb87ENhM6qXyLQgb7Te4mV2qG4XZOIjiPulyN8AUZoxqWq35J3jJKNHU2tLXNiHlSAMnS68FhRwroIuEzwaN4kQE4MjQ6N3RaBmLOdDQYEBeG0dbw0xxBM9PyhqkrpFhlvf+iz0KkjVytcDAw9BZhGkb5VpBUIci8565lPNt0aJaXzGJXUHnnyyyUesNPPAKVck3f0nLirooiqTpFI5RNfy/6sjEk8Q5rqDlcKb2RR+DKmnPFslAp8xSBJFb3Lps6U83F9ij+aSW++tq2/T1 rsa-key-20240404

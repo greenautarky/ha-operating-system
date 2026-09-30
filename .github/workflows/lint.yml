@@ -432,6 +432,13 @@ jobs:
       - name: ssh cert-plane dry run against a real sshd (ADR-0019 step 2)
         run: SSHD=/usr/sbin/sshd ./tests/gates/ssh_cert_plane/sshd_dryrun.sh -v
 
+      # ADR-0029 D3 on the OTA path: the live rauc-hook restores the device's
+      # own cmdline.txt on an update, so the USB host lock has to come from the
+      # boot script the update replaces. Starts from a pre-lock /mnt/boot, runs
+      # the live hook, evaluates the kernel command line from the live script.
+      - name: USB host lock reaches a device updated over the air (ADR-0029 D3)
+        run: ./tests/gates/ota_usb_lock/selftest.sh
+
       # ADR-0027 D9: one OTA key. The keyring audit normally runs only over a
       # real build on the builder, so no pull request ever saw it fire. This
       # drives the LIVE audit over minted keyrings: a second anchor, a duplicate
