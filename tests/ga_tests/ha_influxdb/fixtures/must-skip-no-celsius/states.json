@@ -1,0 +1,4 @@
+[
+ {"entity_id": "sensor.power", "state": "12", "last_updated": "2026-10-05T11:59:30.000000+00:00", "attributes": {"unit_of_measurement": "W"}},
+ {"entity_id": "sensor.t", "state": "unknown", "last_updated": "2026-10-05T11:59:30.000000+00:00", "attributes": {"unit_of_measurement": "°C"}}
+]

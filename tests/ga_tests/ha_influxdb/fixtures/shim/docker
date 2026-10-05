@@ -1,0 +1,10 @@
+#!/bin/sh
+# docker shim for the ha_influxdb suite selftest — answers from the fixture.
+# GA_HAIX_FIXTURE overrides GA_HAIX_FIXTURE_BASE file by file.
+pick() { if [ -e "$GA_HAIX_FIXTURE/$1" ]; then echo "$GA_HAIX_FIXTURE/$1"; else echo "$GA_HAIX_FIXTURE_BASE/$1"; fi; }
+cmd="$1"; shift
+case "$cmd" in
+  ps)   cut -d' ' -f1 "$(pick containers.txt)" ;;
+  exec) cat "$(pick states.json)" ;;   # the one exec: Core /api/states via ga_manager
+  *)    echo "docker shim: unhandled: $cmd $*" >&2; exit 1 ;;
+esac

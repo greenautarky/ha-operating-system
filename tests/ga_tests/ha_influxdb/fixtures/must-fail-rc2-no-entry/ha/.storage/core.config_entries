@@ -1,0 +1,3 @@
+{"version": 1, "minor_version": 5, "key": "core.config_entries", "data": {"entries": [
+ {"entry_id": "01FIXTUREMQTT", "domain": "mqtt", "data": {"broker": "mqtt-fixture-host"}}
+]}}

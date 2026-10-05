@@ -545,6 +545,16 @@ jobs:
       - name: "Heating suite selftest (fixtures: must-fail / must-pass / must-skip)"
         run: ./tests/ga_tests/heating/selftest.sh
 
+      # HA Core -> ga_homeassistant_db. BOSv1.4.0-rc2 had no Core InfluxDB entry
+      # and Core wrote nothing there. Both halves, both directions: the device
+      # suite (HAIX-01 entry, HAIX-02 Core's newest "°C" point vs Core's newest
+      # °C update) over fixture devices incl. the rc2 shape, and the build gate
+      # (GAMCAP-01) over docker-archive tars built in the bake's layout.
+      - name: "ha_influxdb suite selftest (rc2 shape must go red, fixed device green)"
+        run: ./tests/ga_tests/ha_influxdb/selftest.sh
+      - name: "ga_manager capability gate selftest (a baked ga_manager without ha_influxdb must go red)"
+        run: ./tests/gates/ga_manager_capabilities/selftest.sh
+
       # The fresh-flash gate needs a card, a MUX and a power plug, so it cannot
       # run here — but its verdict logic can, and the exit code is what a bake
       # job would act on. Asserted without a pipe, because a pipe reports the

@@ -1,0 +1,6 @@
+[
+ {"entity_id": "sensor.wohnzimmer_temperature", "state": "21.4", "last_updated": "2026-10-05T11:56:00.123456+00:00", "attributes": {"unit_of_measurement": "°C", "device_class": "temperature"}},
+ {"entity_id": "sensor.bad_temperature", "state": "unavailable", "last_updated": "2026-10-05T11:59:00.000000+00:00", "attributes": {"unit_of_measurement": "°C"}},
+ {"entity_id": "sensor.power", "state": "12", "last_updated": "2026-10-05T11:59:30.000000+00:00", "attributes": {"unit_of_measurement": "W"}},
+ {"entity_id": "climate.wohnzimmer", "state": "heat", "last_updated": "2026-10-05T11:58:00.000000+00:00", "attributes": {"current_temperature": 21.4}}
+]

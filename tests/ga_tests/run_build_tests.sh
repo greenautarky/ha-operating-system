@@ -1367,6 +1367,39 @@ if [[ -f "$VER_JSON" ]]; then
     fi
   fi
 
+  # GAMCAP-01: the BAKED ga_manager carries what this OS relies on it for.
+  # BOSv1.4.0-rc2 shipped a ga_manager that configured nothing for Home
+  # Assistant Core's InfluxDB integration, so Core wrote nothing into the
+  # device-local ga_homeassistant_db (the database the heating add-ons read room
+  # temperatures from). The fix is ga_manager's `ha_influxdb` reconciler
+  # (0.221.0). The checker reads the pin AND the ga_manager image tar the bake
+  # wrote — layers in manifest order, whiteouts honoured — and compares the
+  # image's own version with the pin. Expectations are pinned constants in the
+  # script; tests/gates/ga_manager_capabilities/selftest.sh drives it red and
+  # green on every PR. Prefix GAMCAP-, not VER-: it is an artefact check, and a
+  # source-only run (no images) still prints the pin verdict without counting
+  # it towards the PR gate.
+  GAMCAP_CHECKER="${VER10_SRC:+${VER10_SRC}/scripts/check-ga-manager-capabilities.py}"
+  if [[ -z "$GAMCAP_CHECKER" ]] || [[ ! -f "$GAMCAP_CHECKER" ]]; then
+    _fail "GAMCAP-01: scripts/check-ga-manager-capabilities.py not found (looked under '${VER10_SRC:-<unresolved>}')"
+  elif [[ ! -f "$ADDON_JSON" ]]; then
+    _skip "GAMCAP-01" "no addon-images.json at $ADDON_JSON"
+  else
+    GAMCAP_ARGS=(--pins "$ADDON_JSON" --arch "${ARCH:-armv7}")
+    [[ -d "$IMAGES_DIR" ]] && GAMCAP_ARGS+=(--images-dir "$IMAGES_DIR")
+    # Status from the command itself, never from behind a pipe.
+    GAMCAP_OUT="$(python3 "$GAMCAP_CHECKER" "${GAMCAP_ARGS[@]}" 2>&1)"
+    GAMCAP_RC=$?
+    printf '%s\n' "$GAMCAP_OUT" | sed 's/^/        /'
+    if [[ "$GAMCAP_RC" -eq 0 ]] && [[ -d "$IMAGES_DIR" ]]; then
+      _pass "GAMCAP-01: baked ga_manager carries the Core-InfluxDB convergence (artefact + pin)"
+    elif [[ "$GAMCAP_RC" -eq 0 ]]; then
+      _skip "GAMCAP-01" "pin ok; no images dir — artefact not inspected (source-only run)"
+    else
+      _fail "GAMCAP-01: baked ga_manager lacks a capability this OS relies on (rc=${GAMCAP_RC})"
+    fi
+  fi
+
   # VER-11: Core image io.hass.version label matches version.json tag.
   # V1.2-clean: this stays meaningful for STOCK Core — a wrong/`latest`
   # label still loops the Supervisor. The old ga-frontend-version-file

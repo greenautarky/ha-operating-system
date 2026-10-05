@@ -1,0 +1,6 @@
+{"version": 1, "minor_version": 5, "key": "core.config_entries", "data": {"entries": [
+ {"entry_id": "01FIXTUREMQTT", "domain": "mqtt", "data": {"broker": "mqtt-fixture-host"}},
+ {"entry_id": "01FIXTUREINFLUX", "domain": "influxdb", "title": "ga_homeassistant_db (influx-fixture-host)",
+  "data": {"api_version": "1", "host": "influx-fixture-host", "port": 8086, "database": "ga_homeassistant_db",
+           "username": "ga_ha_influx_user", "password": "CHANGEME-fixture-pw", "ssl": false, "path": "/", "verify_ssl": false}}
+]}}
