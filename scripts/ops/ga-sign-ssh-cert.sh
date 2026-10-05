@@ -29,6 +29,13 @@
 # thing that holds the hw_serial <-> label mapping. With neither, the cert
 # names the label only (it works once the device has its label).
 # --no-label signs for the anchor alone (a fresh device before identity).
+#
+# --also <KIB-SON-XXXXXXXX>=<hw_serial>   (repeatable, at most 4)
+# adds further devices to the SAME certificate, each with its label AND its
+# anchor (both required, both validated like the first device). One signature,
+# so one PIN + one touch for several devices. A lost certificate opens every
+# device it names until it expires — use it for canaries only; the batch
+# wrapper ga-issue-device-certs.sh --one-cert enforces the canary tag.
 # -----------------------------------------------------------------------------
 set -euo pipefail
 
@@ -38,11 +45,12 @@ SERIAL_STATE="${GA_CERT_SERIAL_STATE:-$HOME/.local/state/ga/ssh-cert-serial}"
 
 die() { echo "ga-sign-ssh-cert: $*" >&2; exit 1; }
 
-ANCHOR=""; USE_LABEL=1
+ANCHOR=""; USE_LABEL=1; ALSO=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --anchor)   ANCHOR="${2:-}"; shift 2 ;;
     --no-label) USE_LABEL=0; shift ;;
+    --also)     ALSO+=("${2:-}"); shift 2 ;;
     --) shift; break ;;
     -*) die "unknown option $1" ;;
     *) break ;;
@@ -70,6 +78,16 @@ fi
 principals=()
 (( USE_LABEL )) && principals+=("$LABEL")
 [[ -n "$ANCHOR" ]] && principals+=("$ANCHOR")
+(( ${#ALSO[@]} <= 4 )) || die "refusing more than 4 --also devices in one certificate"
+also_labels=()
+for pair in "${ALSO[@]}"; do
+  [[ "$pair" =~ ^(KIB-SON-[0-9]{8})=([A-Za-z0-9._-]+)$ ]] \
+    || die "refusing --also '$pair' — must be KIB-SON-XXXXXXXX=<hw_serial>"
+  a_label="${BASH_REMATCH[1]}"; a_anchor="${BASH_REMATCH[2]}"
+  [[ "$a_anchor" != "kibu" ]] || die "refusing anchor 'kibu' — the name every device ships with"
+  [[ "$a_label" != "$LABEL" ]] || die "--also repeats the first device $LABEL"
+  principals+=("$a_label" "$a_anchor"); also_labels+=("$a_label")
+done
 (( ${#principals[@]} > 0 )) || die "no principal left to sign for (--no-label without an anchor)"
 PRINCIPALS_CSV="$(IFS=,; echo "${principals[*]}")"
 
@@ -122,14 +140,16 @@ if [[ -n "${GA_FLEET_URL:-}" && -n "${GA_FLEET_TOKEN:-}" ]]; then
   ca_fp=$(ssh-keygen -L -f "$OUT" | awk '/Signing CA/{print $4}')
   from_t=$(ssh-keygen -L -f "$OUT" | awk '/Valid:/{print $3}')
   to_t=$(ssh-keygen -L -f "$OUT" | awk '/Valid:/{print $5}')
-  if curl -fsS --max-time 10 -X POST "${GA_FLEET_URL%/}/api/ssh-certificates" \
-       -H "Authorization: Bearer ${GA_FLEET_TOKEN}" -H 'Content-Type: application/json' \
-       -d "$(printf '{"serial":"%s","key_id":"%s","principal":"%s","valid_from":"%s","valid_to":"%s","ca_fingerprint":"%s"}' \
-             "$serial" "$KEYID" "$LABEL" "$from_t" "$to_t" "$ca_fp")" >/dev/null; then
-    echo "  ledger: mirrored to fleet-manager"
-  else
-    echo "  WARNING: could not mirror this issuance to the fleet-manager. The certificate IS valid and IS in $LEDGER — re-send the central copy." >&2
-  fi
+  for p_label in "$LABEL" "${also_labels[@]}"; do
+    if curl -fsS --max-time 10 -X POST "${GA_FLEET_URL%/}/api/ssh-certificates" \
+         -H "Authorization: Bearer ${GA_FLEET_TOKEN}" -H 'Content-Type: application/json' \
+         -d "$(printf '{"serial":"%s","key_id":"%s","principal":"%s","valid_from":"%s","valid_to":"%s","ca_fingerprint":"%s"}' \
+               "$serial" "$KEYID" "$p_label" "$from_t" "$to_t" "$ca_fp")" >/dev/null; then
+      echo "  ledger: mirrored to fleet-manager ($p_label)"
+    else
+      echo "  WARNING: could not mirror this issuance for $p_label to the fleet-manager. The certificate IS valid and IS in $LEDGER — re-send the central copy." >&2
+    fi
+  done
 fi
 
 echo "issued: $OUT"
