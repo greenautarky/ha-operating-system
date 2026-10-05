@@ -2,7 +2,7 @@
   "addons": {
     "mosquitto": {
       "image": "ghcr.io/greenautarky/ga_mosquitto-{arch}",
-      "version": "7.2.3"
+      "version": "7.2.4"
     },
     "ga_ihosthardwarecontrol": {
       "image": "ghcr.io/greenautarky/ga_ihosthardwarecontrol-{arch}",
