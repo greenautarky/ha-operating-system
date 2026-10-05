@@ -1,0 +1,1 @@
+{"results": [{"statement_id": 0, "series": [{"name": "°C", "columns": ["time", "value", "entity_id"], "values": [[1791194160, 20.9, "wohnzimmer_temperature"]]}]}]}

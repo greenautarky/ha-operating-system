@@ -1,0 +1,5 @@
+{"version": 1, "minor_version": 5, "key": "core.config_entries", "data": {"entries": [
+ {"entry_id": "01FIXTUREINFLUX", "domain": "influxdb", "title": "home_assistant (localhost)",
+  "data": {"api_version": "1", "host": "localhost", "port": 8086, "database": "home_assistant",
+           "username": "ga_ha_influx_user", "password": "CHANGEME-fixture-pw", "ssl": false, "path": "/", "verify_ssl": false}}
+]}}

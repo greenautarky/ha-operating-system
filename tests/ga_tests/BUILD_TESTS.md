@@ -88,6 +88,7 @@ No device or emulator needed — checks the build output tree directly.
 - VER-08: Frontend SHA matches frontend repo HEAD (not stale CI)
 - VER-09: Supervisor image digest matches GHCR (not stale cache)
 - VER-10: All addon image digests match GHCR (not stale cache)
+- GAMCAP-01: the BAKED ga_manager carries what the OS relies on it for (`scripts/check-ga-manager-capabilities.py`): pinned version >= the release that introduced each capability, the ga_manager image tar's layers (manifest order, whiteouts honoured) contain the capability's files and text, and the image's own `source-config.yaml` version equals the pin. First capability: `core_influxdb` (ga_manager >= 0.221.0, HA Core's InfluxDB integration -> `ga_homeassistant_db`; BOSv1.4.0-rc2 shipped without it). Red/green on every PR via `tests/gates/ga_manager_capabilities/selftest.sh`.
 - VER-11: Core io.hass.version label matches version.json tag
 - VER-12: Frontend build date recent (< 7 days old)
 
