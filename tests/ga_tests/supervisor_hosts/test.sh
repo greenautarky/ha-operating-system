@@ -5,10 +5,11 @@
 # fleet) by their MESH addresses, the ones ga-services.conf pins. Until
 # BOSv1.4.0-rc6 it did not: ga-update-hosts tried to append the entries to the
 # container's /etc/hosts through `docker exec`, the upstream AppArmor profile
-# hassio-supervisor denied the write, the error was swallowed, and the
-# container resolved every GA name through public DNS (measured on a canary
-# running rc5, 2026-10-06). That stays invisible until the OTA store is
-# reachable over the mesh only — then the Supervisor cannot update anything.
+# hassio-supervisor denied the write, and the error was swallowed. The
+# container then depended on the DNS plugin (CoreDNS) alone, which carries
+# only influx, loki and ota: measured on a canary running rc5 (2026-10-06),
+# mqtt resolved to another address and fleet did not resolve. SUPH-03 checks
+# the mechanism (the mounted file), SUPH-1x/20 the outcome per name.
 #
 # Expected addresses come from the device's OWN ga-services.conf (baked, then
 # the /mnt/data override on top, the same layering ga-update-hosts uses) and
@@ -55,7 +56,7 @@ run_test_show "SUPH-03" "/etc/hosts in $SUP is the host-managed file, mounted re
 # resolve <name> — the address the Supervisor's Python gets for <name>.
 resolve() {
   docker exec "$SUP" python3 -c \
-    'import socket, sys; print(socket.gethostbyname(sys.argv[1]))' "$1" 2>&1
+    'import socket, sys; print(socket.gethostbyname(sys.argv[1]))' "$1" 2>&1 | tail -n 1
 }
 
 N=0

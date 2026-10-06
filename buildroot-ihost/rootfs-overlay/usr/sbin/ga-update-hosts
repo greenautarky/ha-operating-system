@@ -135,8 +135,11 @@ GA_HOSTS_LINE="${GA_SERVICES_IP}"
 # which denies that write — so every append failed, the error went to
 # /dev/null behind `|| true`, and the script still logged "injected". Measured
 # on a canary running BOSv1.4.0-rc5 (2026-10-06): six apparmor="DENIED" lines
-# on /etc/hosts, zero GA entries in the container, and the Supervisor resolving
-# the GA names through public DNS instead of the mesh. Docker would also
+# on /etc/hosts and zero GA entries in the container. The Supervisor then
+# depended on the DNS plugin (CoreDNS) for these names, which carries only
+# influx, loki and ota: mqtt resolved through public DNS to another address
+# and fleet did not resolve at all — and with the DNS plugin down or late
+# (the boot race the plugin itself guards against), none would. Docker would also
 # rebuild that file on the next container start, so the append could never
 # have survived a Supervisor restart or self-update anyway.
 #

@@ -4,8 +4,10 @@
 #   * the Supervisor container runs under the AppArmor profile hassio-supervisor,
 #     which DENIES writes to /etc/hosts from inside the container
 #     (`docker exec ... sh -c '... > /etc/hosts'` fails);
-#   * without GA entries in its /etc/hosts the container resolves the GA names
-#     through public DNS — modelled as an answer from 198.51.100.0/24;
+#   * without GA entries in its /etc/hosts a GA name resolves to some other
+#     address (measured: mqtt via public DNS) — modelled as an answer from
+#     198.51.100.0/24 for every name, the case where the DNS plugin is not
+#     there to cover influx/loki/ota;
 #   * a bind mount at /etc/hosts makes the container read the HOST file.
 # This is the environment of the subject, not the subject: ga-update-hosts
 # itself runs unmodified.

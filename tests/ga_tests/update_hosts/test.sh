@@ -7,8 +7,8 @@
 # hassio-supervisor denies that write. The error went to /dev/null behind
 # `|| true` and the script still logged "injected entries". Measured on a
 # canary running BOSv1.4.0-rc5 (2026-10-06): six apparmor="DENIED" lines on
-# /etc/hosts, zero GA entries in the container, GA names resolved through
-# public DNS. Now hassos-supervisor mounts a host-managed file read-only at
+# /etc/hosts, zero GA entries in the container; names the DNS plugin does
+# not carry (mqtt, fleet) resolved elsewhere or not at all. Now hassos-supervisor mounts a host-managed file read-only at
 # /etc/hosts and ga-update-hosts writes it and verifies from inside.
 #
 # Host-side: needs sh + awk + stat. Runs the LIVE ga-update-hosts (override
