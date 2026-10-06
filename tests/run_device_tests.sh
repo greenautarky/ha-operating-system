@@ -369,8 +369,14 @@ run_ssh() {
     local suite_args="--category device"
     [[ -n "$SUITES" ]] && suite_args="$SUITES"
 
+    # run_all.sh's exit code IS the verdict (non-zero on any failure, and on a
+    # run that executed zero tests). It used to end in `|| true`, so this runner
+    # exited 0 on a red device run — measured: 3 failures, RC=0. Capture it,
+    # still clean up, then hand it to the caller. 255 is ssh's own failure
+    # (connection lost mid-run): not a verdict either, and not 0.
+    local run_rc=0
     # shellcheck disable=SC2086
-    ssh $SSH_OPTS "$SSH_TARGET" "sh $REMOTE_DIR/run_all.sh $suite_args" || true
+    ssh $SSH_OPTS "$SSH_TARGET" "sh $REMOTE_DIR/run_all.sh $suite_args" || run_rc=$?
 
     # Cleanup
     ssh $SSH_OPTS "$SSH_TARGET" "rm -rf $REMOTE_DIR" 2>/dev/null || true
@@ -378,6 +384,12 @@ run_ssh() {
     # Run host-side destructive tests (opt-in only — must be explicitly requested)
     if echo "$SUITES" | grep -qw "crash_panic"; then
         run_crash_panic_test
+    fi
+
+    if [[ "$run_rc" -ne 0 ]]; then
+        echo ""
+        echo "Device run FAILED: run_all.sh exited $run_rc — runner exits $run_rc"
+        exit "$run_rc"
     fi
 }
 
