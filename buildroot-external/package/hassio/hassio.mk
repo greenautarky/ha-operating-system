@@ -25,8 +25,30 @@ HASSIO_SITE_METHOD = local
 # ga_manager never runs, the device never finishes provisioning — and nothing
 # reports an error. The device boots, answers on serial, and is inert.
 #
-# Keep this pointing where the fleet points.
-HASSIO_VERSION_URL ?= "https://raw.githubusercontent.com/greenautarky/haos-version/main/"
+# Keep this pointing where the fleet points — with ONE sanctioned exception.
+#
+# BUILD-TIME ONLY. Nothing here reaches the device: a flashed unit keeps only
+# its CHANNEL (updater.json, seeded by dind-import-containers.sh) and polls the
+# URL compiled into the GA Supervisor, haos-version/main/{channel}.json. So the
+# value below decides what is BAKED, never what a device follows afterwards.
+#
+# The exception (ADR-0037, decided 2026-10-06, "variant A"): the stable-channel
+# dress rehearsal BOSv1.4.0-rc5 bakes the CANDIDATE stable.json from the
+# candidate/stable-1.4 branch, because the fleet-facing stable.json on main
+# moves only at the 1.4.0 promotion. scripts/check-version-url-scope.sh (lint)
+# allows a candidate/* branch only while gaos_release is an -rc, so a final
+# BOSv1.4.0 cannot bake from here: the promotion PR points this back at main/.
+#
+# Know what the rehearsal devices see at runtime: until promotion, main's
+# stable.json still describes the old fleet (upstream Core image 2025.11.3,
+# Supervisor 2025.11.4.6). See the rc5 PR for the consequence on Core/plugin
+# image reconciliation — it must be resolved before the rc5 image is flashed.
+#
+# Every consumer reads THIS line, so they cannot disagree: the build (below),
+# ga-ops' hassio_channel_guard.py, run_build_tests.sh (XVER-*), gen_expected.sh
+# and scan-cves.sh. A `make HASSIO_VERSION_URL=…` override bypasses all of
+# them but the build — do not use one for an image that ships.
+HASSIO_VERSION_URL ?= "https://raw.githubusercontent.com/greenautarky/haos-version/candidate/stable-1.4/"
 ifeq ($(BR2_PACKAGE_HASSIO_CHANNEL_STABLE),y)
 HASSIO_VERSION_CHANNEL = "stable"
 else ifeq ($(BR2_PACKAGE_HASSIO_CHANNEL_BETA),y)

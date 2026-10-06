@@ -5,6 +5,39 @@
 # ==============================================================================
 set -e
 
+# GA: the version file this device follows is <base><channel>.json, and the
+# CHANNEL is the device's own — the one the bake seeded into updater.json
+# (dind-import-containers.sh) and the Supervisor keeps there. It used to be a
+# literal .../main/stable.json, so a device on dev or beta that lost its
+# Supervisor image re-pulled the STABLE Supervisor and then sat one version
+# away from its own channel. The base stays `main`: it is what the Supervisor
+# itself polls (URL_HASSIO_VERSION in the GA fork), whatever branch the image
+# was BAKED from (hassio.mk HASSIO_VERSION_URL is build-time only).
+GA_VERSION_URL_BASE="https://raw.githubusercontent.com/greenautarky/haos-version/main/"
+
+# Prints the device's channel. An unreadable updater.json or an unknown value
+# falls back to stable — loudly, on stderr (journal), never silently.
+ga_supervisor_channel() {
+    _ga_ch="$(jq -r '.channel // "stable"' "$1" 2>/dev/null)" || _ga_ch=""
+    case "${_ga_ch}" in
+        stable|beta|dev) echo "${_ga_ch}" ;;
+        *)
+            echo "[WARNING] channel in $1 is '${_ga_ch}' (unreadable or unknown) - using stable" >&2
+            echo "stable"
+            ;;
+    esac
+}
+
+ga_channel_version_url() {
+    echo "${GA_VERSION_URL_BASE}$(ga_supervisor_channel "$1").json"
+}
+
+# tests/ga_tests/hassos_supervisor_channel sources this file for the two
+# functions above and must stop here, before anything touches the host.
+if [ "${HASSOS_SUPERVISOR_FUNCTIONS_ONLY:-0}" = "1" ]; then
+    return 0
+fi
+
 # Load configs
 . /etc/os-release
 
@@ -45,10 +78,12 @@ if [ -z "${SUPERVISOR_IMAGE_ID}" ]; then
     # broken, this creates a way back (e.g., bad release).
     SUPERVISOR_VERSION=$(jq -r '.supervisor // "stable"' "${SUPERVISOR_DATA}/updater.json" || echo "stable")
 
-    # Get version from stable channel in case we have no local version
-    # information.
+    # No local version information ("stable" is jq's placeholder above, not a
+    # channel): ask the device's OWN channel file, not always stable.json.
     if [ "${SUPERVISOR_VERSION}" = "stable" ]; then
-        SUPERVISOR_VERSION="$(curl -s --location https://raw.githubusercontent.com/greenautarky/haos-version/main/stable.json | jq -e -r '.supervisor')"
+        GA_CHANNEL_URL="$(ga_channel_version_url "${SUPERVISOR_DATA}/updater.json")"
+        echo "[INFO] No local Supervisor version, asking ${GA_CHANNEL_URL}"
+        SUPERVISOR_VERSION="$(curl -s --location "${GA_CHANNEL_URL}" | jq -e -r '.supervisor')"
     fi
 
     echo "[WARNING] Supervisor image missing, downloading a fresh one: ${SUPERVISOR_VERSION}"

@@ -182,16 +182,19 @@ BR2_PACKAGE_HASSIO=y
 BR2_PACKAGE_HASSIO_ARCH="armv7"
 BR2_PACKAGE_HASSIO_MACHINE="tinker"
 BR2_PACKAGE_HASSIO_FULL_CORE=y
-# CANARY BUILD: the bake resolves Supervisor, Core and all five plugins from
+# The bake resolves Supervisor, Core and all five plugins from
 # greenautarky/haos-version {channel}.json AT BUILD TIME and pre-loads them
-# into the image. stable carries what the fleet runs now; beta what it gets
-# NEXT; dev (2026-09-28) is canary-only: beta plus Core 2026.x from the GA
-# armv7 build and the Supervisor that follows the channel's Core image.
-# A device flashed from this image also RUNS on the dev channel, and no
-# fleet device polls dev. Switch back to beta in a separate change when
-# 2026.x is promoted. os_integrity OSI-19 compares the device's channel
-# against this declaration, so a mismatch fails loudly.
-BR2_PACKAGE_HASSIO_CHANNEL_DEV=y
+# into the image; a device flashed from it RUNS on this channel (updater.json).
+# STABLE since BOSv1.4.0-rc5 (2026-10-06, ADR-0037 dress rehearsal): the line
+# that ships as 1.4.0 must be baked and proven on the channel the fleet runs.
+# Until the 1.4.0 promotion the stable.json it bakes from is the CANDIDATE on
+# haos-version candidate/stable-1.4 (= the dev.json the canaries proved, Core
+# 2026.8.2.1 + Supervisor 2025.11.5.5) — see hassio.mk HASSIO_VERSION_URL.
+# PREVIOUS: dev (rc53..BOSv1.4.0-rc4), canary-only for Core 2026.x.
+# A device OTA-updated from a dev image STAYS on dev: the channel lives on the
+# data partition, which an OS update does not touch. os_integrity OSI-19
+# compares the device's channel against this declaration, so that fails loudly.
+BR2_PACKAGE_HASSIO_CHANNEL_STABLE=y
 BR2_PACKAGE_HASSIO_DATA_IMAGE_SIZE="8192M"
 BR2_PACKAGE_OS_AGENT=y
 BR2_PACKAGE_OS_AGENT_BOARD="iHost"

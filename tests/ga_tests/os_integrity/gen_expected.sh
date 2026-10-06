@@ -108,10 +108,16 @@ if [ -z "${CHANNEL:-}" ]; then
     CHANNEL=stable
   fi
 fi
-PLUGINS=$(CHANNEL="$CHANNEL" python3 - <<'PYEOF'
+# The branch is the one the BUILD reads — hassio.mk's HASSIO_VERSION_URL, the
+# live line, never a copy here. It was a hardcoded .../main/ until the rc5
+# dress rehearsal baked from candidate/stable-1.4: a copy would have described
+# main's stable.json (upstream plugins) while the image carries the candidate's.
+VERSION_URL=$(sed -nE 's/^HASSIO_VERSION_URL[[:space:]]*\??=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' \
+  buildroot-external/package/hassio/hassio.mk | head -1)
+[ -n "$VERSION_URL" ] || fail "no HASSIO_VERSION_URL in buildroot-external/package/hassio/hassio.mk — refusing to guess a branch"
+PLUGINS=$(CHANNEL="$CHANNEL" VERSION_URL="$VERSION_URL" python3 - <<'PYEOF'
 import json, os, sys, urllib.request
-url = ("https://raw.githubusercontent.com/greenautarky/haos-version/main/"
-       + os.environ["CHANNEL"] + ".json")
+url = os.environ["VERSION_URL"] + os.environ["CHANNEL"] + ".json"
 try:
     d = json.loads(urllib.request.urlopen(url, timeout=20).read())
 except Exception as e:
