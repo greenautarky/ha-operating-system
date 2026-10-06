@@ -158,7 +158,7 @@ const RESTORE_HOLD_MS = 20_000;
  * Put a KI room back and PROVE it: mode, setpoint, no manual clock, no override
  * left — and still so RESTORE_HOLD_MS later.
  *
- * The hold is paid for. On K31 rc6 (2026-10-06) a room set back to KI one
+ * The hold is paid for. On a bench canary on BOSv1.4.0-rc6 (2026-10-06) a room set back to KI one
  * second after a setpoint change read as restored on the first poll; one second
  * later ga_heating took the valve's late echo of the old setpoint for a hand on
  * the radiator ("valve") and put the room back in MANUEL for three hours. A
@@ -388,7 +388,7 @@ test.describe('Aktivität — ga-heating-log-card', () => {
   });
 
   test('a setpoint change taken back with KI at once stays taken back — the valve echo is not a hand', async ({ page, deviceUrl }, info) => {
-    // MEASURED on K31 rc6 (ga_heating 0.13.0), 2026-10-06: setpoint 17 → 18 as
+    // MEASURED on a bench canary, BOSv1.4.0-rc6 (ga_heating 0.13.0), 2026-10-06: setpoint 17 → 18 as
     // the logged-in user, KI one second later. The room went to KI — and one
     // second after that ga_heating logged "valve: auto → heat, 17 → 18" and the
     // room sat in MANUEL at 18 °C with a three-hour clock nobody asked for. The
