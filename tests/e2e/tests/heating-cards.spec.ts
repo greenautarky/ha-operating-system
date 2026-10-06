@@ -139,24 +139,59 @@ function snap(r: State): Snapshot {
   };
 }
 
-/** Put a KI room back and PROVE it: mode, setpoint, no manual clock, no override left. */
-async function restoreQuietRoom(base: string, tok: string, before: Snapshot) {
-  await callService(base, tok, 'ga_heating', 'cancel_boost', { entity_id: before.id }).catch(() => {});
-  if ((await stateOf(base, tok, before.id))?.state !== before.state) {
-    await callService(base, tok, 'climate', 'set_hvac_mode', { entity_id: before.id, hvac_mode: before.state });
+/** The room as the restore compares it. */
+async function roomKey(base: string, tok: string, id: string): Promise<string> {
+  const r = await stateOf(base, tok, id);
+  if (!r) return 'gone';
+  return JSON.stringify({
+    state: r.state,
+    temperature: r.attributes?.temperature ?? null,
+    manual: r.attributes?.manual_until ?? null,
+    boost: ov(r, 'boost') ?? null,
+  });
+}
+
+/** How long a restored room must STAY restored before the restore counts. */
+const RESTORE_HOLD_MS = 20_000;
+
+/**
+ * Put a KI room back and PROVE it: mode, setpoint, no manual clock, no override
+ * left — and still so RESTORE_HOLD_MS later.
+ *
+ * The hold is paid for. On K31 rc6 (2026-10-06) a room set back to KI one
+ * second after a setpoint change read as restored on the first poll; one second
+ * later ga_heating took the valve's late echo of the old setpoint for a hand on
+ * the radiator ("valve") and put the room back in MANUEL for three hours. A
+ * restore that checks once checks the race, not the room. Returns how many
+ * attempts it took, so a caller can report a room that had to be put back twice.
+ */
+async function restoreQuietRoom(base: string, tok: string, before: Snapshot): Promise<number> {
+  const want = JSON.stringify({ state: before.state, temperature: before.temperature, manual: before.manualUntil, boost: null });
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await callService(base, tok, 'ga_heating', 'cancel_boost', { entity_id: before.id }).catch(() => {});
+    if ((await stateOf(base, tok, before.id))?.state !== before.state) {
+      await callService(base, tok, 'climate', 'set_hvac_mode', { entity_id: before.id, hvac_mode: before.state });
+    }
+    await expect
+      .poll(() => roomKey(base, tok, before.id),
+        { timeout: 120_000, intervals: [2_000], message: `${before.id} was not restored to ${JSON.stringify(before)}` })
+      .toBe(want);
+    await new Promise(r => setTimeout(r, RESTORE_HOLD_MS));
+    if ((await roomKey(base, tok, before.id)) === want) return attempt;
+    console.log(`[restore] ${before.id} drifted after restore (attempt ${attempt}): ${await roomKey(base, tok, before.id)}`);
   }
+  throw new Error(`${before.id} would not stay restored to ${want}: ${await roomKey(base, tok, before.id)}`);
+}
+
+/** Wait until every valve of the room reports this setpoint — its echo is then spent. */
+async function valvesAt(base: string, tok: string, room: State, temp: number) {
   await expect
     .poll(async () => {
-      const r = await stateOf(base, tok, before.id);
-      if (!r) return 'gone';
-      return JSON.stringify({
-        state: r.state,
-        temperature: r.attributes?.temperature ?? null,
-        manual: r.attributes?.manual_until ?? null,
-        boost: ov(r, 'boost') ?? null,
-      });
-    }, { timeout: 120_000, intervals: [2_000], message: `${before.id} was not restored to ${JSON.stringify(before)}` })
-    .toBe(JSON.stringify({ state: before.state, temperature: before.temperature, manual: before.manualUntil, boost: null }));
+      const all = await states(base, tok);
+      return (room.attributes.valves as string[])
+        .filter(v => all.find(s => s.entity_id === v)?.attributes?.temperature !== temp);
+    }, { timeout: 60_000, intervals: [2_000], message: `${room.entity_id}: valves never reported ${temp} °C` })
+    .toEqual([]);
 }
 
 // ── the browser ─────────────────────────────────────────────────────────────
@@ -317,15 +352,19 @@ test.describe('Aktivität — ga-heating-log-card', () => {
     const to = before.temperature! >= 29 ? before.temperature! - 1 : before.temperature! + 1;
     note(info, 'room', `${before.id}: ${before.state} ${before.temperature} °C → set ${to} °C`);
 
+    const t0 = Date.now() - 5_000;
+    let changed = false;
     try {
       await callService(deviceUrl, tok, 'climate', 'set_temperature', { entity_id: before.id, temperature: to });
+      changed = true;
 
       // The ROOM: ga_heating published the change with its source.
       let entry: ChangeEntry | undefined;
       await expect
         .poll(async () => {
           const r = await stateOf(deviceUrl, tok, before.id);
-          entry = loggableEntries(r?.attributes?.changes).find(e => e.kind === 'target' && Number(e.to) === to);
+          entry = loggableEntries(r?.attributes?.changes)
+            .find(e => e.kind === 'target' && Number(e.to) === to && Date.parse(String(e.at)) >= t0);
           return entry ? String(entry.source) : 'none';
         }, { timeout: 30_000, message: `${before.id}: no change entry to ${to} °C was published` })
         .not.toBe('none');
@@ -340,7 +379,44 @@ test.describe('Aktivität — ga-heating-log-card', () => {
       expect(line, `no line "${want}" among:\n${lines.map(l => `${l.what} | ${l.why}`).join('\n')}`).toBeTruthy();
       expect(reasonText(line!.why)).toBe(SOURCE_REASON.resident);
     } finally {
+      // Let the valves report the new setpoint before handing the room back:
+      // their late echo is otherwise read as a hand on the radiator (see the
+      // next test, and restoreQuietRoom).
+      if (changed) await valvesAt(deviceUrl, tok, target!, to).catch(() => {});
       await restoreQuietRoom(deviceUrl, tok, before);
+    }
+  });
+
+  test('a setpoint change taken back with KI at once stays taken back — the valve echo is not a hand', async ({ page, deviceUrl }, info) => {
+    // MEASURED on K31 rc6 (ga_heating 0.13.0), 2026-10-06: setpoint 17 → 18 as
+    // the logged-in user, KI one second later. The room went to KI — and one
+    // second after that ga_heating logged "valve: auto → heat, 17 → 18" and the
+    // room sat in MANUEL at 18 °C with a three-hour clock nobody asked for. The
+    // log blamed the resident's hand on the radiator.
+    test.skip(info.project.name !== 'desktop', 'changes a real room — desktop only');
+    await openDashboard(page, deviceUrl);
+    const tok = await token(page);
+    const target = rooms(await states(deviceUrl, tok)).find(quiet);
+    test.skip(!target, 'no room in KI with nothing acting on it — refusing to change a room someone is using');
+    const before = snap(target!);
+    const to = before.temperature! >= 29 ? before.temperature! - 1 : before.temperature! + 1;
+    note(info, 'room', `${before.id}: ${before.state} ${before.temperature} °C → ${to} °C → KI at once`);
+    const t0 = Date.now() - 5_000;
+    try {
+      await callService(deviceUrl, tok, 'climate', 'set_temperature', { entity_id: before.id, temperature: to });
+      await expect.poll(async () => (await stateOf(deviceUrl, tok, before.id))?.state, { timeout: 15_000 }).toBe('heat');
+      await callService(deviceUrl, tok, 'climate', 'set_hvac_mode', { entity_id: before.id, hvac_mode: before.state });
+      await new Promise(r => setTimeout(r, RESTORE_HOLD_MS));
+      const r = await stateOf(deviceUrl, tok, before.id);
+      const valveLines = loggableEntries(r?.attributes?.changes)
+        .filter(e => e.source === 'valve' && Date.parse(String(e.at)) >= t0)
+        .map(e => `${e.at} ${e.kind} ${e.from} → ${e.to}`);
+      expect(valveLines, `${before.id}: nobody touched a radiator, yet the log says "valve"`).toEqual([]);
+      expect(r?.state, `${before.id} fell back into MANUEL after KI`).toBe(before.state);
+    } finally {
+      await valvesAt(deviceUrl, tok, target!, before.temperature!).catch(() => {});
+      const attempts = await restoreQuietRoom(deviceUrl, tok, before);
+      if (attempts > 1) note(info, 'restore', `${before.id} needed ${attempts} restores`);
     }
   });
 
@@ -594,6 +670,12 @@ test.describe('Boost — Beenden in the room card', () => {
       await expect
         .poll(async () => (await stateOf(deviceUrl, tok, before.id))?.attributes?.temperature ?? null, { timeout: 90_000 })
         .toBe(before.temperature);
+      // And STILL so a little later: a valve's late echo of the boost setpoint
+      // must not be read as a hand on the radiator and bring MANUEL back.
+      await new Promise(r => setTimeout(r, RESTORE_HOLD_MS));
+      const after = await stateOf(deviceUrl, tok, before.id);
+      expect({ state: after?.state, manual: after?.attributes?.manual_until ?? null },
+        `${before.id} did not stay where Beenden put it`).toEqual({ state: before.state, manual: before.manualUntil });
       // The CARD: the row is gone with the boost.
       await expect(page.locator('ga-thermostat-card .endov')).toHaveCount(0, { timeout: 30_000 });
     } finally {
