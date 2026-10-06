@@ -17,8 +17,13 @@ run_test "OB-01" "Core image is the GA armv7 build" \
   "echo '$CORE_IMAGE' | grep -q '^ghcr.io/greenautarky/home-assistant-armv7:'"
 
 # A floor, not a pin: any calver from 2026 on. The exact pin is OSI-04.
+# An optional fourth component is the GA rebuild counter: 2026.8.2.1 is HA
+# 2026.8.2, rebuilt with updated Python dependencies (version.yaml
+# base_images.homeassistant_core). The three-part-only pattern called that pin
+# "not pinned" on the first rc that carried it, while OSI-04 passed on the same
+# tag — two checks of one fact disagreeing.
 run_test "OB-02" "Core image tag is a pinned HA version from 2026 on" \
-  "echo '$CORE_IMAGE' | grep -qE ':20(2[6-9]|[3-9][0-9])\.[0-9]+\.[0-9]+$'"
+  "echo '$CORE_IMAGE' | grep -qE ':20(2[6-9]|[3-9][0-9])\.[0-9]+\.[0-9]+(\.[0-9]+)?$'"
 
 run_test_show "OB-02b" "Core image" \
   "echo '$CORE_IMAGE'"
@@ -102,12 +107,35 @@ warn_test "OB-05" "Supervisor fetches from greenautarky version repo" \
 run_test "OB-06" "Supervisor is greenautarky fork" \
   "docker inspect hassio_supervisor --format '{{.Config.Image}}' 2>/dev/null | grep -qi 'greenautarky'"
 
-# --- Non-core components should stay upstream ---
-# T4 (Odoo #708): dns and cli are our own armv7 builds; audio, multicast and
-# observer stay upstream until their shutdown analysis lands. The old rule
-# ("no plugin is ours") went red the day T4 shipped and stayed red.
-run_test "OB-07" "Supervisor plugins: dns+cli are GA builds, audio/multicast/observer upstream" \
-  "for c in hassio_dns hassio_cli; do IMG=\$(docker inspect \$c --format '{{.Config.Image}}' 2>/dev/null); [ -z \"\$IMG\" ] && continue; echo \"\$IMG\" | grep -qi 'greenautarky' || exit 1; done; for c in hassio_audio hassio_multicast hassio_observer; do IMG=\$(docker inspect \$c --format '{{.Config.Image}}' 2>/dev/null); [ -z \"\$IMG\" ] && continue; echo \"\$IMG\" | grep -qi 'greenautarky' && exit 1; done; exit 0"
+# --- Supervisor plugins come from the DECLARED origin ---
+# Which plugins GA builds changes from release to release: T4 (Odoo #708) made
+# dns and cli ours; BOSv1.4.0-rc3 added audio, multicast and observer (see its
+# gaos_release text in version.yaml). Every such change turned the hard-coded
+# split here red although the device was right, so the split is no longer
+# written down here at all. It is read from the pinned expectation that
+# os_integrity uses (expected.env, generated from the repo's declarations,
+# never from the device). This check asserts the ORIGIN — the image repository,
+# tag stripped — and OSI-20..24 assert the exact tag. A missing expected.env or
+# a plugin that does not run is a FAIL, never a skip.
+_OB07_EXP="$SCRIPT_DIR/../os_integrity/expected.env"
+# shellcheck source=/dev/null
+EXPECTED_PLUGINS=$( [ -s "$_OB07_EXP" ] && . "$_OB07_EXP" && echo "$EXPECTED_PLUGINS")
+if [ -z "$EXPECTED_PLUGINS" ]; then
+  run_test "OB-07" "Supervisor plugins come from the declared registry (os_integrity/expected.env)" "false"
+  printf '        %s missing or carries no EXPECTED_PLUGINS\n' "$_OB07_EXP"
+else
+  _ob07_n=0
+  for pair in $EXPECTED_PLUGINS; do
+    _slug="${pair%%=*}"; _ref="${pair#*=}"
+    _want="${_ref%:*}"
+    _img=$(docker inspect "hassio_${_slug}" --format '{{.Config.Image}}' 2>/dev/null)
+    run_test_show "OB-07-${_slug}" "plugin ${_slug} comes from the declared ${_want}" \
+      "echo 'running: ${_img:-<not running>}'; [ '${_img%:*}' = '$_want' ]"
+    _ob07_n=$((_ob07_n+1))
+  done
+  run_test "OB-07" "coverage: all five Supervisor plugins checked for origin (${_ob07_n})" \
+    "[ $_ob07_n -eq 5 ]"
+fi
 
 # --- Core image freshness ---
 run_test_show "OB-08" "Core image is latest (not stale)" \
@@ -135,16 +163,26 @@ run_test "OB-12" "No frontend-build bloat in core image" \
   "docker exec homeassistant test ! -d /usr/src/homeassistant/frontend-build"
 
 # --- Onboarding PIN ---
-# PIN lives in /mnt/data/supervisor/homeassistant/ (HA Core sees it as /config/)
-PIN_FILE="/mnt/data/supervisor/homeassistant/ga-onboarding-pin"
-if [ -f "$PIN_FILE" ]; then
-  run_test "OB-10a" "PIN file exists" "true"
+# Same lookup order as ga_manager's auth.get_onboarding_pin(): the canonical
+# Core-private secrets store first (.storage/greenautarky_secrets/, dir 0700,
+# file 0600 — what ga_manager's identity_write worker writes), then the
+# ga-onboarding-pin compat file older provisioning wrote. This check read only
+# the compat file and reported a provisioned device as "not provisioned".
+# The PIN is never printed: the checks are stat and grep -q, and run_test
+# discards output anyway.
+HA_CONFIG="/mnt/data/supervisor/homeassistant"
+PIN_FILE=""
+for _p in "$HA_CONFIG/.storage/greenautarky_secrets/onboarding_pin" "$HA_CONFIG/ga-onboarding-pin"; do
+  [ -f "$_p" ] && { PIN_FILE="$_p"; break; }
+done
+if [ -n "$PIN_FILE" ]; then
+  run_test "OB-10a" "PIN file exists (${PIN_FILE#"$HA_CONFIG"/})" "true"
   PERMS=$(stat -c '%a' "$PIN_FILE" 2>/dev/null || echo "?")
   run_test "OB-10b" "PIN file permissions 600" "[ '$PERMS' = '600' ]"
   run_test "OB-10c" "PIN is 6 digits" \
-    "grep -qE '^[0-9]{6}$' $PIN_FILE"
+    "grep -qE '^[0-9]{6}$' '$PIN_FILE'"
 else
-  skip_test "OB-10" "PIN file (not provisioned via ga-flasher)"
+  skip_test "OB-10a" "PIN file" "neither .storage/greenautarky_secrets/onboarding_pin nor ga-onboarding-pin — not provisioned"
 fi
 
 # --- Ethernet consent ---
@@ -162,12 +200,27 @@ run_test_show "OB-13" "Ethernet consent API view is registered (200 accept or 40
      -H 'Content-Type: application/json' -d '{\"enable_ethernet\": false}' 2>/dev/null); \
    echo \"HTTP \$_ob13\"; [ \"\$_ob13\" = 200 ] || [ \"\$_ob13\" = 403 ]"
 
-# OB-14: Default Ethernet state after provisioning
-if [ -f /mnt/data/ga-env.conf ]; then
-  run_test "OB-14" "Ethernet disabled by default after provisioning" \
-    "grep -q 'GA_ETHERNET_DISABLED=true' /mnt/data/ga-env.conf 2>/dev/null"
+# OB-14: Ethernet is OFF by default — asked of the code that decides it.
+# This check used to look for GA_ETHERNET_DISABLED=true in /mnt/data/ga-env.conf
+# and skip when that file was absent. Both halves are obsolete: the key was
+# inverted to GA_ETHERNET_ENABLED (absent = OFF, so the safe state no longer
+# depends on a provisioning step having written anything — see the header of
+# ga-manage-ethernet), and /mnt/data/ga-env.conf is only the runtime override;
+# it is absent on a device nobody has granted Ethernet to. /etc/ga-env.conf is
+# the baked GA_ENV/log/telemetry defaults and carries no Ethernet key at all.
+# So the default is a property of ga-manage-ethernet, and that is what is
+# asked: with no consent file, no boot marker and no remote marker, `status`
+# must answer OFF from source "default". Read-only — `status` writes nothing.
+# Whether THIS device's running link matches its consent is the ethernet_force
+# suite (ETHF-02..04).
+_ob14_none=/nonexistent/ob14
+if [ -x /usr/sbin/ga-manage-ethernet ]; then
+  run_test_show "OB-14" "Ethernet default without consent or override is OFF (ga-manage-ethernet)" \
+    "_s=\$(GA_ENV_FILE=$_ob14_none GA_FORCE_BOOT=$_ob14_none GA_GM_DATA_DIR=$_ob14_none GA_LABEL_FILE=$_ob14_none \
+        /usr/sbin/ga-manage-ethernet status 2>/dev/null | grep -E '^ethernet_(enabled|source)='); \
+     echo \$_s; echo \"\$_s\" | grep -qx 'ethernet_enabled=false' && echo \"\$_s\" | grep -qx 'ethernet_source=default'"
 else
-  skip_test "OB-14" "ga-env.conf not found (not provisioned)"
+  run_test "OB-14" "Ethernet default without consent or override is OFF (ga-manage-ethernet missing)" "false"
 fi
 
 # --- Password reset ---
