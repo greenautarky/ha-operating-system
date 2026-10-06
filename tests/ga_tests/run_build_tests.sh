@@ -2657,12 +2657,19 @@ if [[ -n "$SRC" ]]; then
     STABLE_SUP_IMG="$(echo "$STABLE_JSON" | jq -r '.images.supervisor // "unknown"')"
     STABLE_CORE_TINKER="$(echo "$STABLE_JSON" | jq -r '.homeassistant.tinker // "unknown"')"
 
-    # XVER-01: stable.json core is a 3-part HA calver (YYYY.MM.PATCH). The
-    # GA armv7 build carries upstream's tag unchanged — no `.N` GA suffix.
+    # XVER-01: stable.json core is an HA calver. An upstream image carries the
+    # plain 3-part tag (YYYY.MM.PATCH). The GA armv7 build adds a 4th `.N` GA
+    # rebuild counter since 2026.8.2.1 (2026-09-30, same Core, rebuilt image),
+    # so `.N` is accepted ONLY together with the GA image — an upstream image
+    # has no such tag. Was 3-part only, which went red the first time stable.json
+    # carried the GA build (BOSv1.4.0-rc5 candidate, 2026-10-06); every
+    # promotion of the GA Core to stable would have hit it.
     if [[ "$STABLE_CORE" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
-      _pass "XVER-01: stable.json core is a stock 3-part calver: $STABLE_CORE"
+      _pass "XVER-01: stable.json core is a 3-part calver: $STABLE_CORE"
+    elif [[ "$STABLE_CORE" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+\.[0-9]+$ && "$STABLE_CORE_IMG" == ghcr.io/greenautarky/home-assistant-armv7 ]]; then
+      _pass "XVER-01: stable.json core is a GA-build calver on the GA image: $STABLE_CORE"
     else
-      _fail "XVER-01: stable.json core is NOT a stock 3-part calver: $STABLE_CORE (Core must be plain YYYY.MM.PATCH — no .N / -ga.N suffix)"
+      _fail "XVER-01: stable.json core $STABLE_CORE on image $STABLE_CORE_IMG is not an HA calver (YYYY.MM.PATCH; a .N suffix only on ghcr.io/greenautarky/home-assistant-armv7)"
     fi
 
     # XVER-02 (V1.2-clean): stable.json supervisor is a GA-fork calver. The
@@ -2738,6 +2745,59 @@ if [[ -n "$SRC" ]]; then
     fi
   else
     _skip "XVER-01..08" "could not fetch stable.json from release/v1.2-rebuild (offline or network error)"
+  fi
+
+  # XVER-09/10: the image tells the Supervisor which haos-version branch to
+  # poll. From GA Supervisor 2025.11.5.6 the Supervisor reads /etc/ga-version-url
+  # inside its container (absent or invalid -> main, with a warning). Before,
+  # the URL was build-time only and a device baked from candidate/stable-1.4
+  # polled main at runtime. Two halves, both asserted here:
+  #   XVER-09  the bake writes the file, from HASSIO_VERSION_URL itself — the
+  #            REAL install recipe is evaluated (scripts/probe-ga-version-url.sh),
+  #            never a copy of it;
+  #   XVER-10  the launcher bind-mounts the host file read-only into the
+  #            Supervisor container at the same path.
+  # Source-level, no network: they run in CI on every PR.
+  _GVU_PROBE_DIR="$(mktemp -d 2>/dev/null || echo "/tmp/gvu_probe_$$")"
+  _GVU_MK="${SRC}/buildroot-external/package/hassio/hassio.mk"
+  _GVU_URL="$(sed -n 's/^HASSIO_VERSION_URL[[:space:]]*?\?=[[:space:]]*"\([^"]*\)".*/\1/p' "$_GVU_MK" 2>/dev/null | head -1)"
+  if ! "${SRC}/scripts/probe-ga-version-url.sh" "$_GVU_MK" "$_GVU_PROBE_DIR" >/dev/null 2>"$_GVU_PROBE_DIR.err"; then
+    _fail "XVER-09: hassio.mk's install recipe could not be evaluated: $(head -c 300 "$_GVU_PROBE_DIR.err")"
+  elif [[ ! -f "$_GVU_PROBE_DIR/etc/ga-version-url" ]]; then
+    _fail "XVER-09: hassio.mk installs no /etc/ga-version-url — a device would poll main whatever the image was baked from"
+  else
+    _gvu_val="$(cat "$_GVU_PROBE_DIR/etc/ga-version-url")"
+    _gvu_lines="$(wc -l < "$_GVU_PROBE_DIR/etc/ga-version-url")"
+    _gvu_mode="$(stat -c %a "$_GVU_PROBE_DIR/etc/ga-version-url" 2>/dev/null)"
+    if [[ -z "$_GVU_URL" ]]; then
+      _fail "XVER-09: no HASSIO_VERSION_URL in hassio.mk to compare /etc/ga-version-url with"
+    elif [[ "$_gvu_val" != "$_GVU_URL" || "$_gvu_lines" != 1 ]]; then
+      _fail "XVER-09: /etc/ga-version-url '$_gvu_val' ($_gvu_lines lines) is not exactly hassio.mk's HASSIO_VERSION_URL '$_GVU_URL'"
+    elif [[ "$_gvu_val" != */ ]]; then
+      _fail "XVER-09: /etc/ga-version-url '$_gvu_val' does not end with '/' — the Supervisor appends {channel}.json"
+    elif [[ "$_gvu_mode" != 444 ]]; then
+      _fail "XVER-09: /etc/ga-version-url is installed mode $_gvu_mode, not 0444 (read-only)"
+    else
+      _pass "XVER-09: the bake installs /etc/ga-version-url = HASSIO_VERSION_URL ($_gvu_val), mode 0444"
+    fi
+  fi
+  rm -rf "$_GVU_PROBE_DIR" "$_GVU_PROBE_DIR.err"
+
+  _GVU_LAUNCH="${SRC}/buildroot-external/rootfs-overlay/usr/sbin/hassos-supervisor"
+  # The create command, from `docker container create` to the image argument.
+  _gvu_create="$(awk '/docker container create/{on=1} on{print} on && /SUPERVISOR_IMAGE\}:latest"/{exit}' "$_GVU_LAUNCH" 2>/dev/null)"
+  if [[ -z "$_gvu_create" ]]; then
+    _fail "XVER-10: no 'docker container create' block found in hassos-supervisor — the check lost its subject"
+  elif ! grep -qF '${GA_VERSION_URL_MOUNT}' <<<"$_gvu_create"; then
+    _fail "XVER-10: the Supervisor container is created without \${GA_VERSION_URL_MOUNT} — /etc/ga-version-url never reaches the Supervisor"
+  elif ! grep -qE '^[[:space:]]*GA_VERSION_URL_MOUNT="\$\(ga_version_url_mount\)"' "$_GVU_LAUNCH"; then
+    _fail "XVER-10: GA_VERSION_URL_MOUNT is not set from ga_version_url_mount with its default path"
+  elif ! grep -qF 'ga_version_url_mount() {' "$_GVU_LAUNCH" \
+       || ! grep -qF ':/etc/ga-version-url:ro' "$_GVU_LAUNCH" \
+       || ! grep -qE '_ga_vu_src="\$\{1:-/etc/ga-version-url\}"' "$_GVU_LAUNCH"; then
+    _fail "XVER-10: ga_version_url_mount does not mount /etc/ga-version-url read-only at /etc/ga-version-url"
+  else
+    _pass "XVER-10: the Supervisor container gets -v /etc/ga-version-url:/etc/ga-version-url:ro"
   fi
 
 else
@@ -3407,6 +3467,37 @@ if [[ -L "${TARGET}/etc/systemd/system/sysinit.target.wants/ga-bootstrap-disk.se
   _pass "EMMC-ERASE-05: ga-bootstrap-disk.service enabled early (sysinit.target.wants symlink)"
 else
   _fail "EMMC-ERASE-05: ga-bootstrap-disk.service NOT enabled in sysinit.target.wants"
+fi
+
+# =========================================================================
+# GVU-01..03: the version URL the Supervisor polls, as BAKED into this rootfs.
+# XVER-09 proves the recipe on the source; these read the artefact of a real
+# bake. GA Supervisor >= 2025.11.5.6 reads /etc/ga-version-url (bind-mounted
+# read-only by hassos-supervisor) and falls back to main when it is absent.
+# =========================================================================
+echo ""
+echo "--- Version URL (/etc/ga-version-url) ---"
+GVU_FILE="${TARGET}/etc/ga-version-url"
+GVU_MK="${OUT}/../buildroot-external/package/hassio/hassio.mk"
+[[ -n "${SRC:-}" ]] && GVU_MK="${SRC}/buildroot-external/package/hassio/hassio.mk"
+GVU_DECLARED="$(sed -n 's/^HASSIO_VERSION_URL[[:space:]]*?\?=[[:space:]]*"\([^"]*\)".*/\1/p' "$GVU_MK" 2>/dev/null | head -1)"
+if [[ -f "$GVU_FILE" ]]; then
+  GVU_BAKED="$(cat "$GVU_FILE")"
+  _pass "GVU-01: /etc/ga-version-url present in the rootfs: '$GVU_BAKED'"
+  if [[ -z "$GVU_DECLARED" ]]; then
+    _fail "GVU-02: cannot read HASSIO_VERSION_URL from $GVU_MK to compare with"
+  elif [[ "$GVU_BAKED" == "$GVU_DECLARED" && "$(wc -l < "$GVU_FILE")" == 1 ]]; then
+    _pass "GVU-02: /etc/ga-version-url equals hassio.mk HASSIO_VERSION_URL"
+  else
+    _fail "GVU-02: /etc/ga-version-url '$GVU_BAKED' != hassio.mk HASSIO_VERSION_URL '$GVU_DECLARED' (or not one line)"
+  fi
+  if [[ "$GVU_BAKED" == https://raw.githubusercontent.com/greenautarky/haos-version/*/ ]]; then
+    _pass "GVU-03: /etc/ga-version-url is a greenautarky/haos-version base URL ending in '/'"
+  else
+    _fail "GVU-03: /etc/ga-version-url '$GVU_BAKED' is not https://raw.githubusercontent.com/greenautarky/haos-version/<branch>/"
+  fi
+else
+  _fail "GVU-01: /etc/ga-version-url missing from the rootfs — the Supervisor would poll main whatever this image was baked from"
 fi
 
 # =========================================================================

@@ -494,7 +494,15 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
       CHANNEL="unknown"
     fi
     IMG_SOURCE="channel:${CHANNEL}"
-    VERSION_URL="${HASSIO_VERSION_URL:-https://raw.githubusercontent.com/greenautarky/haos-version/main/}${CHANNEL}.json"
+    # Default = the branch the BUILD reads (hassio.mk), not a hardcoded main/:
+    # during an rc dress rehearsal the image bakes from a candidate branch.
+    _mk_url="$(sed -nE 's/^HASSIO_VERSION_URL[[:space:]]*\??=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' \
+      "${REPO_ROOT}/buildroot-external/package/hassio/hassio.mk" 2>/dev/null | head -1 || true)"
+    if [[ -z "${HASSIO_VERSION_URL:-}" && -z "$_mk_url" ]]; then
+      echo "  ERROR: no HASSIO_VERSION_URL in hassio.mk and none given — cannot tell which images ship"
+      SCAN_BROKEN=true
+    fi
+    VERSION_URL="${HASSIO_VERSION_URL:-${_mk_url}}${CHANNEL}.json"
     echo "  Channel:  ${CHANNEL} (${VERSION_URL})"
     STABLE=""
     [[ "$CHANNEL" != "unknown" ]] && STABLE=$(curl -sf "$VERSION_URL" 2>/dev/null || true)

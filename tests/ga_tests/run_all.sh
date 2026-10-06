@@ -58,6 +58,7 @@ SUITES_EXCLUDED="
   share_writers   host suite: CI lint.yml host-suites — needs bubblewrap, drives the writers in a sandbox
   host_control    host suite: CI lint.yml host-suites — needs bubblewrap, drives the host control units in a sandbox (ADR-0041)
   apparmor_profile host suite: CI lint.yml host-suites
+  hassos_supervisor_channel host suite: CI lint.yml host-suites — sources the launcher functions-only
   device_features on demand: feature surface, not a per-run gate
   ha_init         superseded by ha_config_applied on the device lane
   netbird_reg     on demand: registration is proven by enrolment itself
