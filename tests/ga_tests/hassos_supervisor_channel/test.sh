@@ -9,7 +9,7 @@
 #
 # Host-side, needs sh + jq. Sources the LIVE script (on a device: the installed
 # one; in the repo: the overlay copy) with HASSOS_SUPERVISOR_FUNCTIONS_ONLY=1,
-# which returns after the two helper functions and before anything touches the
+# which returns after the helper functions and before anything touches the
 # host. Red-proven against the script before this change: HSC-01..08 fail
 # (the functions do not exist) and HSC-09 fails (the stable.json literal).
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -67,5 +67,32 @@ run_test "HSC-08" "missing updater.json -> stable + warning" \
 # Static: the literal that caused the defect must not come back.
 run_test "HSC-09" "no hardcoded .../stable.json URL left in the launch script" \
   '! grep -q "haos-version/[^\"]*/stable\.json" "$LAUNCH"'
+
+# --- /etc/ga-version-url reaches the Supervisor container (read-only) -------
+# GA Supervisor >= 2025.11.5.6 reads /etc/ga-version-url inside its container.
+# The launcher mounts the host file at the same path, read-only, and ONLY when
+# it is a regular file: bind-mounting a missing source makes Docker try to
+# create it (a directory, on a read-only /etc), so the container would not be
+# created at all. Missing -> no mount, a WARNING, and the Supervisor's own
+# fallback (main). Red-proven: HSC-10..14 fail on the launcher before this.
+printf 'https://raw.githubusercontent.com/greenautarky/haos-version/candidate/stable-1.4/\n' > "$W/ga-version-url"
+mkdir -p "$W/a-directory"
+mount_for() {
+  [ "$HOOKED" = 1 ] || { echo "launcher has no functions-only hook - not sourced" > "$W/err"; return 1; }
+  ( HASSOS_SUPERVISOR_FUNCTIONS_ONLY=1; . "$LAUNCH"; ga_version_url_mount "$@" ) 2>"$W/err"
+}
+run_test "HSC-10" "file present -> read-only bind mount at /etc/ga-version-url" \
+  '[ "$(mount_for "$W/ga-version-url")" = "-v $W/ga-version-url:/etc/ga-version-url:ro" ]'
+run_test "HSC-11" "file absent -> no mount and a WARNING (Supervisor falls back to main)" \
+  'out="$(mount_for "$W/absent")"; [ -z "$out" ] && grep -q "WARNING" "$W/err"'
+run_test "HSC-12" "a directory at the path -> no mount and a WARNING" \
+  'out="$(mount_for "$W/a-directory")"; [ -z "$out" ] && grep -q "WARNING" "$W/err"'
+# The default path IS /etc/ga-version-url: on a host with the file the
+# production mount comes out verbatim; without it the warning names that path.
+run_test "HSC-13" "default path is /etc/ga-version-url" \
+  'out="$(mount_for)"; [ "$out" = "-v /etc/ga-version-url:/etc/ga-version-url:ro" ] || { [ -z "$out" ] && grep -q "/etc/ga-version-url" "$W/err"; }'
+# The create command passes what the function returns.
+run_test "HSC-14" "docker container create carries \${GA_VERSION_URL_MOUNT}, set from ga_version_url_mount" \
+  'awk "/docker container create/{on=1} on{print} on && /SUPERVISOR_IMAGE\\}:latest\"/{exit}" "$LAUNCH" | grep -qF "\${GA_VERSION_URL_MOUNT}" && grep -qE "^[[:space:]]*GA_VERSION_URL_MOUNT=\"\\\$\\(ga_version_url_mount\\)\"" "$LAUNCH"'
 
 suite_end

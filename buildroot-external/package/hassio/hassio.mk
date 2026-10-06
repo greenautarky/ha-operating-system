@@ -27,10 +27,12 @@ HASSIO_SITE_METHOD = local
 #
 # Keep this pointing where the fleet points — with ONE sanctioned exception.
 #
-# BUILD-TIME ONLY. Nothing here reaches the device: a flashed unit keeps only
-# its CHANNEL (updater.json, seeded by dind-import-containers.sh) and polls the
-# URL compiled into the GA Supervisor, haos-version/main/{channel}.json. So the
-# value below decides what is BAKED, never what a device follows afterwards.
+# What it decides: (1) the {channel}.json the bake reads, and (2) since
+# BOSv1.4.0-rc5, what the device POLLS — the value is installed as
+# /etc/ga-version-url (HASSIO_INSTALL_TARGET_CMDS below), which GA Supervisor
+# 2025.11.5.6+ reads. An older Supervisor ignores the file and polls the URL
+# compiled into it, haos-version/main/{channel}.json. The channel itself stays
+# in updater.json (seeded by dind-import-containers.sh).
 #
 # The exception (ADR-0037, decided 2026-10-06, "variant A"): the stable-channel
 # dress rehearsal BOSv1.4.0-rc5 bakes the CANDIDATE stable.json from the
@@ -41,13 +43,15 @@ HASSIO_SITE_METHOD = local
 #
 # Know what the rehearsal devices see at runtime: until promotion, main's
 # stable.json still describes the old fleet (upstream Core image 2025.11.3,
-# Supervisor 2025.11.4.6). See the rc5 PR for the consequence on Core/plugin
-# image reconciliation — it must be resolved before the rc5 image is flashed.
+# Supervisor 2025.11.4.6). A device polls candidate/stable-1.4 only once its
+# Supervisor reads /etc/ga-version-url (2025.11.5.6+); with an older one it
+# polls main and reconciles Core/plugin images to main's stable.json.
 #
 # Every consumer reads THIS line, so they cannot disagree: the build (below),
-# ga-ops' hassio_channel_guard.py, run_build_tests.sh (XVER-*), gen_expected.sh
-# and scan-cves.sh. A `make HASSIO_VERSION_URL=…` override bypasses all of
-# them but the build — do not use one for an image that ships.
+# /etc/ga-version-url on the image, ga-ops' hassio_channel_guard.py,
+# run_build_tests.sh (XVER-*), gen_expected.sh and scan-cves.sh. A
+# `make HASSIO_VERSION_URL=…` override bypasses all of them but the build and
+# the baked file — do not use one for an image that ships.
 HASSIO_VERSION_URL ?= "https://raw.githubusercontent.com/greenautarky/haos-version/candidate/stable-1.4/"
 ifeq ($(BR2_PACKAGE_HASSIO_CHANNEL_STABLE),y)
 HASSIO_VERSION_CHANNEL = "stable"
@@ -119,6 +123,22 @@ define HASSIO_BUILD_CMDS
 		$(BR2_PACKAGE_HASSIO_ARCH) $(BR2_PACKAGE_HASSIO_MACHINE) \
 		$(BR2_EXTERNAL_HASSOS_PATH)/package/hassio/addon-images.json \
 		"$(HASSIO_DL_DIR)" "$(@D)/images"
+endef
+
+# /etc/ga-version-url: the haos-version base URL the device POLLS, written from
+# HASSIO_VERSION_URL above — the same make variable the bake reads, so what the
+# image was baked from and what it polls cannot drift apart. The GA Supervisor
+# reads it inside its container from 2025.11.5.6 (absent or invalid -> main,
+# with a warning); hassos-supervisor bind-mounts it read-only at the same path.
+# Mode 0444 on top of the read-only squashfs. Evaluated by
+# scripts/probe-ga-version-url.sh for check-version-url-scope.sh (a final
+# release must carry main/) and run_build_tests.sh XVER-09; GVU-01..03 read the
+# baked rootfs.
+define HASSIO_INSTALL_TARGET_CMDS
+	mkdir -p $(TARGET_DIR)/etc
+	rm -f $(TARGET_DIR)/etc/ga-version-url
+	printf '%s\n' $(HASSIO_VERSION_URL) > $(TARGET_DIR)/etc/ga-version-url
+	chmod 0444 $(TARGET_DIR)/etc/ga-version-url
 endef
 
 HASSIO_INSTALL_IMAGES = YES

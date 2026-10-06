@@ -12,12 +12,20 @@ for d in "$here"/must-fail/*/ "$here"/must-pass/*/; do
   n=$((n+1)); kind="$(basename "$(dirname "$d")")"; name="$(basename "$d")"
   [ "$kind" = must-pass ] && np=$((np+1))
   out="$("$gate" "$d/hassio.mk" "$d/version.yaml" 2>&1)"; rc=$?
-  if { [ "$kind" = must-fail ] && [ "$rc" -ne 0 ]; } || { [ "$kind" = must-pass ] && [ "$rc" -eq 0 ]; }; then
+  # A must-fail fixture names the reason it must fail for (`expect`, a fixed
+  # string). Failing for ANOTHER reason means the rule under test is unproven.
+  why_ok=1
+  if [ "$kind" = must-fail ]; then
+    if [ ! -s "$d/expect" ]; then why_ok=0; out="no expect file — $out"
+    elif ! grep -qF -- "$(head -1 "$d/expect")" <<<"$out"; then why_ok=0; out="wrong reason (want: $(head -1 "$d/expect")) — $out"
+    fi
+  fi
+  if { [ "$kind" = must-fail ] && [ "$rc" -ne 0 ] && [ "$why_ok" = 1 ]; } || { [ "$kind" = must-pass ] && [ "$rc" -eq 0 ]; }; then
     echo "  ok    $kind/$name (rc=$rc) ${out%%$'\n'*}"
   else
     echo "  FAIL  $kind/$name (rc=$rc) ${out%%$'\n'*}"; bad=1
   fi
 done
-[ "$n" -ge 10 ] && [ "$np" -ge 3 ] || { echo "FAIL: only $n fixtures ($np must-pass) inspected"; exit 1; }
+[ "$n" -ge 14 ] && [ "$np" -ge 3 ] || { echo "FAIL: only $n fixtures ($np must-pass) inspected"; exit 1; }
 echo "$n fixtures inspected"
 exit "$bad"

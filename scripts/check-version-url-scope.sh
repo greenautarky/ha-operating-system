@@ -5,15 +5,23 @@
 #        (defaults: the live files of this tree)
 #
 # hassio.mk's HASSIO_VERSION_URL decides which {channel}.json the build bakes
-# Supervisor, Core and plugins from. It is BUILD-TIME ONLY: a flashed device
-# polls the URL compiled into the GA Supervisor (haos-version/main/), whatever
-# the image was baked from. So a bake from a candidate branch ships components
-# the fleet's main has not promoted — legitimate for a release candidate
-# (ADR-0037 dress rehearsal: candidate/stable-1.4 for BOSv1.4.0-rc5), wrong for
-# a final release, which must bake exactly what the fleet polls.
+# Supervisor, Core and plugins from. A bake from a candidate branch ships
+# components the fleet's main has not promoted — legitimate for a release
+# candidate (ADR-0037 dress rehearsal: candidate/stable-1.4 for BOSv1.4.0-rc5),
+# wrong for a final release, which must bake exactly what the fleet polls.
+#
+# The same value is BAKED into the image as /etc/ga-version-url (hassio.mk
+# HASSIO_INSTALL_TARGET_CMDS), and from GA Supervisor 2025.11.5.6 that file is
+# what a device POLLS at runtime (absent or invalid -> main, with a warning;
+# older Supervisors ignore it and poll main). This gate evaluates the real
+# install recipe (scripts/probe-ga-version-url.sh) and judges the file the image
+# would carry, not only the make variable.
 #
 # Rules (fail closed — anything unreadable is a failure, never a pass):
 #   * the URL is greenautarky/haos-version on raw.githubusercontent.com, ending in /
+#   * the image carries /etc/ga-version-url, exactly one line
+#   * a FINAL release (gaos_release without -rc<N>): /etc/ga-version-url is main
+#   * /etc/ga-version-url equals HASSIO_VERSION_URL (one source, not two)
 #   * branch `main`               -> any release
 #   * branch `candidate/<name>`   -> only a gaos_release ending in -rc<N>
 #   * any other branch            -> refused (a stale WIP pointer outlived a
@@ -40,6 +48,20 @@ case "$URL" in
 esac
 BRANCH="${URL#"$PREFIX"}"; BRANCH="${BRANCH%/}"
 
+# What the image would carry: run hassio.mk's install recipe into a scratch dir.
+PROBE="$(mktemp -d)" || fail "mktemp failed"
+trap 'rm -rf "$PROBE" "$PROBE.err"' EXIT
+"$ROOT/scripts/probe-ga-version-url.sh" "$MK" "$PROBE" >/dev/null 2>"$PROBE.err" \
+  || fail "could not evaluate the install recipe of $MK: $(head -c 300 "$PROBE.err")"
+GVU="$PROBE/etc/ga-version-url"
+[ -f "$GVU" ] || fail "the image would carry no /etc/ga-version-url (hassio.mk HASSIO_INSTALL_TARGET_CMDS does not write it) — the Supervisor would poll main whatever this image was baked from"
+[ "$(wc -l < "$GVU")" = 1 ] || fail "/etc/ga-version-url is not exactly one line"
+FILE_URL="$(cat "$GVU")"
+if [[ ! "$REL" =~ -rc[0-9]+$ ]] && [ "$FILE_URL" != "${PREFIX}main/" ]; then
+  fail "$REL is a final release but its /etc/ga-version-url is '$FILE_URL'. A final release must carry ${PREFIX}main/ — devices poll this file at runtime."
+fi
+[ "$FILE_URL" = "$URL" ] || fail "/etc/ga-version-url '$FILE_URL' differs from HASSIO_VERSION_URL '$URL' — the image would poll another branch than it was baked from"
+
 case "$BRANCH" in
   main)
     echo "version-url-scope: OK: $REL bakes from main (what the fleet polls)"
@@ -47,7 +69,7 @@ case "$BRANCH" in
   candidate/?*)
     if [[ "$REL" =~ -rc[0-9]+$ ]]; then
       echo "version-url-scope: OK: $REL is a release candidate; bakes from $BRANCH."
-      echo "  NOTE: devices flashed from it still POLL haos-version/main at runtime."
+      echo "  NOTE: its /etc/ga-version-url names $BRANCH too; Supervisor >= 2025.11.5.6 polls it, an older one polls main."
     else
       fail "$REL is a final release but bakes from $BRANCH. A final release bakes from main — promote the candidate to main and point HASSIO_VERSION_URL back at main first."
     fi

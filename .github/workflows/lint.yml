@@ -365,14 +365,19 @@ jobs:
       - name: hassos-supervisor asks the device's own channel file
         # Sources the live launch script (functions only) against updater.json
         # fixtures for dev/beta/stable and the broken cases. Red-proven: 9 of 9
-        # fail on the script that hardcoded .../main/stable.json.
+        # fail on the script that hardcoded .../main/stable.json. HSC-10..14:
+        # /etc/ga-version-url is bind-mounted read-only into the Supervisor
+        # container, only when it is a file (5 of 5 fail without the mount).
         run: sh tests/ga_tests/hassos_supervisor_channel/test.sh
 
       - name: a non-main version branch only bakes release candidates
         # hassio.mk may read the channel file from a candidate branch of
         # haos-version for an rc (ADR-0037 dress rehearsal), never for a final
-        # release. Self-test runs the live checker over must-fail/must-pass
-        # fixtures, then the checker runs on this tree.
+        # release. It also evaluates hassio.mk's install recipe: the image must
+        # carry /etc/ga-version-url = HASSIO_VERSION_URL, and a final release
+        # must carry main/ there. Self-test runs the live checker over
+        # must-fail/must-pass fixtures (each must-fail names its reason in
+        # `expect`), then the checker runs on this tree.
         run: |
           set -eu
           ./tests/gates/version_url_scope/selftest.sh

@@ -32,8 +32,26 @@ ga_channel_version_url() {
     echo "${GA_VERSION_URL_BASE}$(ga_supervisor_channel "$1").json"
 }
 
-# tests/ga_tests/hassos_supervisor_channel sources this file for the two
-# functions above and must stop here, before anything touches the host.
+# GA: the haos-version base URL the Supervisor polls comes from the IMAGE.
+# The bake writes /etc/ga-version-url from hassio.mk's HASSIO_VERSION_URL, and
+# GA Supervisor 2025.11.5.6+ reads that path inside its container (absent or
+# invalid -> main, with a warning). Prints the docker option that mounts it
+# there read-only. Only for a regular file: a bind mount of a missing source
+# makes Docker create it — a directory, on a read-only /etc — and the container
+# would not be created at all. Missing -> no mount, a loud warning, and the
+# Supervisor's own fallback to main. The argument exists for the test suite.
+# shellcheck disable=SC2120  # production calls it without an argument
+ga_version_url_mount() {
+    _ga_vu_src="${1:-/etc/ga-version-url}"
+    if [ -f "${_ga_vu_src}" ]; then
+        echo "-v ${_ga_vu_src}:/etc/ga-version-url:ro"
+    else
+        echo "[WARNING] ${_ga_vu_src} missing or not a file - the Supervisor polls haos-version main" >&2
+    fi
+}
+
+# tests/ga_tests/hassos_supervisor_channel sources this file for the three
+# helper functions above and must stop here, before anything touches the host.
 if [ "${HASSOS_SUPERVISOR_FUNCTIONS_ONLY:-0}" = "1" ]; then
     return 0
 fi
@@ -162,6 +180,10 @@ if [ -z "${SUPERVISOR_CONTAINER_ID}" ]; then
         GA_SERVICES_MOUNT="${GA_SERVICES_MOUNT} -v /mnt/data/ga-services.conf:/mnt/data/ga-services.conf:ro"
     fi
 
+    # The version URL the Supervisor polls (see ga_version_url_mount above).
+    # shellcheck disable=SC2119
+    GA_VERSION_URL_MOUNT="$(ga_version_url_mount)"
+
     echo "[INFO] Creating a new Supervisor container..."
     # shellcheck disable=SC2086
     docker container create \
@@ -180,6 +202,7 @@ if [ -z "${SUPERVISOR_CONTAINER_ID}" ]; then
         -v /etc/machine-id:/etc/machine-id:ro \
         -v ${SUPERVISOR_DATA}:/data:rw,slave \
         ${GA_SERVICES_MOUNT} \
+        ${GA_VERSION_URL_MOUNT} \
         -e SUPERVISOR_SHARE=${SUPERVISOR_DATA} \
         -e SUPERVISOR_NAME=hassio_supervisor \
         -e SUPERVISOR_MACHINE=${SUPERVISOR_MACHINE} \
