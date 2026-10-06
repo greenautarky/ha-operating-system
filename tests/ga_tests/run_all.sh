@@ -14,7 +14,8 @@
 #   device - needs real iHost hardware, network, Docker, HA running
 #   all    - all device+emu tests (default)
 #
-# Exit code = total number of failures (0 = all pass)
+# Exit code = total number of failures (0 = all pass), capped at 255 and
+# never 0 when anything failed
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -236,4 +237,11 @@ else
 fi
 echo "=============================================="
 
+# An exit status is 8 bits. EXIT is a SUM of failures, so exactly 256 (or 512…)
+# would leave the process as exit 0 — a red run reporting green to every caller
+# that reads the code (run_device_tests.sh, the release-train testgate). A suite
+# with 256 failures already wraps to 0 on its own exit, so the counted failures
+# decide too, not only the codes.
+[ "$EXIT" -gt 255 ] && EXIT=255
+[ "$TOTAL_FAIL" -gt 0 ] && [ "$EXIT" -eq 0 ] && EXIT=1
 exit $EXIT
