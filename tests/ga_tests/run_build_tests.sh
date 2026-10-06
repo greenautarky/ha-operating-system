@@ -2657,12 +2657,19 @@ if [[ -n "$SRC" ]]; then
     STABLE_SUP_IMG="$(echo "$STABLE_JSON" | jq -r '.images.supervisor // "unknown"')"
     STABLE_CORE_TINKER="$(echo "$STABLE_JSON" | jq -r '.homeassistant.tinker // "unknown"')"
 
-    # XVER-01: stable.json core is a 3-part HA calver (YYYY.MM.PATCH). The
-    # GA armv7 build carries upstream's tag unchanged — no `.N` GA suffix.
+    # XVER-01: stable.json core is an HA calver. An upstream image carries the
+    # plain 3-part tag (YYYY.MM.PATCH). The GA armv7 build adds a 4th `.N` GA
+    # rebuild counter since 2026.8.2.1 (2026-09-30, same Core, rebuilt image),
+    # so `.N` is accepted ONLY together with the GA image — an upstream image
+    # has no such tag. Was 3-part only, which went red the first time stable.json
+    # carried the GA build (BOSv1.4.0-rc5 candidate, 2026-10-06); every
+    # promotion of the GA Core to stable would have hit it.
     if [[ "$STABLE_CORE" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
-      _pass "XVER-01: stable.json core is a stock 3-part calver: $STABLE_CORE"
+      _pass "XVER-01: stable.json core is a 3-part calver: $STABLE_CORE"
+    elif [[ "$STABLE_CORE" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+\.[0-9]+$ && "$STABLE_CORE_IMG" == ghcr.io/greenautarky/home-assistant-armv7 ]]; then
+      _pass "XVER-01: stable.json core is a GA-build calver on the GA image: $STABLE_CORE"
     else
-      _fail "XVER-01: stable.json core is NOT a stock 3-part calver: $STABLE_CORE (Core must be plain YYYY.MM.PATCH — no .N / -ga.N suffix)"
+      _fail "XVER-01: stable.json core $STABLE_CORE on image $STABLE_CORE_IMG is not an HA calver (YYYY.MM.PATCH; a .N suffix only on ghcr.io/greenautarky/home-assistant-armv7)"
     fi
 
     # XVER-02 (V1.2-clean): stable.json supervisor is a GA-fork calver. The
