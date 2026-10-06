@@ -7,6 +7,10 @@ After=hassos-overlay.service mnt-data.mount
 # ga_manager's private data dir under its PINNED slug (/etc/ga-addon-prime.conf).
 # Static on purpose: no glob over *_ga_manager.
 PathChanged=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-ssh-principal-label
+# The device's own identity, which the label is compared against. A label
+# delivered before the identity is refused (fail closed); this re-runs the
+# script when identity-write / the fm backfill lands it, so the refusal heals.
+PathChanged=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-identity.json
 Unit=ga-ssh-principal-label.service
 
 [Install]

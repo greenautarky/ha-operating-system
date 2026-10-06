@@ -108,27 +108,29 @@ if [[ -e "$d/root" ]]; then bad "shared-plane image (no CA baked) but a principa
 else ok "no CA baked (below BOSv1.4.0) → prepare leaves the principals alone"; fi
 
 echo "── the label from ga_manager (its own data dir, pinned slug) ──"
-# lab <dir> <source-content|-> [ca|noca] [own-label|-]
+# lab <dir> <source-content|-> [ca|noca] [own-label|-] [identity-device_id|-|@raw]
 # Every path is inside <dir>; stderr goes to <dir>/err so the no-echo cases
-# can read what would have reached the journal.
+# can read what would have reached the journal. The 5th argument writes
+# ga_manager's private ga-identity.json the way identity_write.py does
+# (json.dumps indent=2, sort_keys) — or, prefixed with @, raw content.
+idjson() { printf '{\n  "device_id": "%s",\n  "device_type": "ihost",\n  "schema_version": 1,\n  "url_prefix": "abc123"\n}\n' "$1"; }
 lab() {
   local d="$1"
   [[ "$2" != "-" ]] && printf '%s' "$2" > "$d/src"
   [[ "${3:-ca}" == "ca" ]] && printf 'ssh-ed25519 AAAA test-ca\n' > "$d/ca.pub"
   [[ "${4:--}" != "-" ]] && printf '%s\n' "$4" > "$d/own-label"
+  case "${5:--}" in -) ;; @*) printf '%s' "${5#@}" > "$d/identity.json" ;; *) idjson "$5" > "$d/identity.json" ;; esac
   GA_SSH_CA_PUB="$d/ca.pub" GA_SSH_LABEL_BRIDGE="$d/src" GA_DEVICE_LABEL_FILE="$d/own-label" \
+  GA_IDENTITY_FILE="$d/identity.json" \
   GA_SSH_PRINCIPALS_DIR="$d" GA_SSH_PRINCIPALS_BIN="$PRINCIPALS" \
   /bin/sh "$LABELER" 2>"$d/err"
 }
 anchored() { local d; d="$(fresh "$1")"; P "$d" anchor "RV1109SERIAL0001" >/dev/null; printf '%s' "$d"; }
-d="$(anchored lab-ok)"; lab "$d" $'KIB-SON-00000901\n'
-eq "$d" "RV1109SERIAL0001 KIB-SON-00000901 " "label applied, anchor kept (no own-label file)"
-ran=$((ran + 1))
-if grep -q "no .*ga-device-label\|no .*own-label" "$d/err"; then ok "accepting without an own-label file says why"
-else bad "accepted without an own-label file but did not say why: $(cat "$d/err")"; fi
-d="$(anchored lab-two)"; lab "$d" $'KIB-SON-00000901\nkibu\n'
+d="$(anchored lab-ok)"; lab "$d" $'KIB-SON-00000901\n' ca - "KIB-SON-00000901"
+eq "$d" "RV1109SERIAL0001 KIB-SON-00000901 " "label applied, anchor kept (own identity from ga-identity.json)"
+d="$(anchored lab-two)"; lab "$d" $'KIB-SON-00000901\nkibu\n' ca - "KIB-SON-00000901"
 eq "$d" "RV1109SERIAL0001 " "two-line value refused whole (no first-line trimming)"
-d="$(anchored lab-bad)"; lab "$d" $'kibu\n'
+d="$(anchored lab-bad)"; lab "$d" $'kibu\n' ca - "KIB-SON-00000901"
 eq "$d" "RV1109SERIAL0001 " "label 'kibu' refused"
 d="$(fresh lab-noca)"; lab "$d" $'KIB-SON-00000901\n' noca;                ran=$((ran + 1))
 if [[ -e "$d/root" ]]; then bad "no CA baked but the label was applied"
@@ -144,6 +146,41 @@ eq "$d" "RV1109SERIAL0001 " "own-label file unusable → refused (fail closed)"
 d="$(anchored own-rename)"; lab "$d" $'KIB-SON-00000901\n' ca "KIB-SON-00000901"
 lab "$d" $'KIB-SON-00000955\n' ca "KIB-SON-00000901"
 eq "$d" "RV1109SERIAL0001 KIB-SON-00000901 " "a later foreign label does not replace the device's own"
+
+echo "── (ii-b) no own identity at all → refuse, never accept on shape alone ──"
+# Measured 2026-10-06 on a fresh-flashed BOSv1.4.0-rc4 canary: no
+# /mnt/data/ga-device-label (its flasher stage is retired, the add-on cannot
+# write /mnt/data), so the label was "accepted on shape alone". ga_manager's
+# private ga-identity.json (written by identity-write / the fm backfill) WAS
+# there and is now the second source of the device's own label.
+d="$(anchored noid)"; lab "$d" $'KIB-SON-00000901\n'
+eq "$d" "RV1109SERIAL0001 " "no own-label file AND no ga-identity.json → refused, anchor kept"
+ran=$((ran + 1))
+if grep -q "no own identity" "$d/err" && grep -q "ga-identity.json" "$d/err"; then ok "the refusal says why and names both sources"
+else bad "refused without saying why (or without naming the sources): $(cat "$d/err")"; fi
+ran=$((ran + 1))
+if grep -q "accepting" "$d/err"; then bad "the journal still claims a shape-only accept: $(cat "$d/err")"
+else ok "no shape-only accept message"; fi
+d="$(anchored id-foreign)"; lab "$d" $'KIB-SON-00000955\n' ca - "KIB-SON-00000901"
+eq "$d" "RV1109SERIAL0001 " "label differs from ga-identity.json device_id → refused"
+d="$(anchored id-nodev)"; lab "$d" $'KIB-SON-00000901\n' ca - '@{"url_prefix": "abc123"}'
+eq "$d" "RV1109SERIAL0001 " "ga-identity.json without device_id → refused (fail closed)"
+d="$(anchored id-kibu)"; lab "$d" $'KIB-SON-00000901\n' ca - "kibu"
+eq "$d" "RV1109SERIAL0001 " "ga-identity.json device_id not a fleet label → refused"
+d="$(anchored id-sym)"; idjson "KIB-SON-00000901" > "$d/elsewhere.json"; ln -s "$d/elsewhere.json" "$d/identity.json"
+lab "$d" $'KIB-SON-00000901\n'
+eq "$d" "RV1109SERIAL0001 " "ga-identity.json is a symlink → refused (regular file required)"
+d="$(anchored both-agree)"; lab "$d" $'KIB-SON-00000901\n' ca "KIB-SON-00000901" "KIB-SON-00000901"
+eq "$d" "RV1109SERIAL0001 KIB-SON-00000901 " "both own sources present and equal → applied"
+d="$(anchored both-differ)"; lab "$d" $'KIB-SON-00000901\n' ca "KIB-SON-00000901" "KIB-SON-00000955"
+eq "$d" "RV1109SERIAL0001 " "own sources DISAGREE → refused even though one matches"
+# The window on a fresh device: the label may arrive before the identity. The
+# first run refuses; when ga-identity.json appears the .path unit runs the
+# script again (PathChanged on it, checked below) and the label is applied.
+d="$(anchored late-id)"; lab "$d" $'KIB-SON-00000901\n'
+eq "$d" "RV1109SERIAL0001 " "label before identity → refused for now, anchor kept"
+lab "$d" - ca - "KIB-SON-00000901"
+eq "$d" "RV1109SERIAL0001 KIB-SON-00000901 " "identity arrives, script re-runs → applied"
 
 echo "── (iii) a symlink is refused, and nothing from its target is echoed ──"
 ONELINE="deadbeefcafef00d1234567890abcdef"
@@ -183,6 +220,7 @@ UNITS="$ROOT/buildroot-external/rootfs-overlay/usr/lib/systemd/system"
 PRIME="$ROOT/buildroot-external/rootfs-overlay/etc/ga-addon-prime.conf"
 SLUG="$(grep -vE '^[[:space:]]*(#|$)' "$PRIME" | grep '_ga_manager$' | head -1)"
 WANT="/mnt/data/supervisor/addons/data/$SLUG/ga-ssh-principal-label"
+WANT_ID="/mnt/data/supervisor/addons/data/$SLUG/ga-identity.json"
 PATH_UNIT="$(sed -n 's/^PathChanged=//p' "$UNITS/ga-ssh-principal-label.path")"
 # shellcheck disable=SC2016  # the literal default text in the script
 SCRIPT_DEF="$(sed -n 's/^SRC="\${GA_SSH_LABEL_BRIDGE:-\$R\(.*\)}"$/\1/p' "$LABELER")"
@@ -190,8 +228,16 @@ ran=$((ran + 1))
 if [[ "$SLUG" == "99f1cad4_ga_manager" ]]; then ok "pinned slug from ga-addon-prime.conf: $SLUG"
 else bad "pinned slug from ga-addon-prime.conf is '$SLUG', want 99f1cad4_ga_manager"; fi
 ran=$((ran + 1))
-if [[ "$PATH_UNIT" == "$WANT" ]]; then ok ".path unit watches $WANT"
+if grep -qxF "$WANT" <<<"$PATH_UNIT"; then ok ".path unit watches $WANT"
 else bad ".path unit watches '$PATH_UNIT', want '$WANT'"; fi
+ran=$((ran + 1))
+if grep -qxF "$WANT_ID" <<<"$PATH_UNIT"; then ok ".path unit also watches $WANT_ID (label-before-identity window)"
+else bad ".path unit does not watch $WANT_ID — a label refused before the identity existed is never re-applied"; fi
+# shellcheck disable=SC2016  # the literal default text in the script
+ID_DEF="$(sed -n 's/^ID_FILE="\${GA_IDENTITY_FILE:-\$R\(.*\)}"$/\1/p' "$LABELER")"
+ran=$((ran + 1))
+if [[ "$ID_DEF" == "$WANT_ID" ]]; then ok "script's default identity source is $WANT_ID"
+else bad "script's default identity source is '$ID_DEF' (empty = not found), want '$WANT_ID'"; fi
 ran=$((ran + 1))
 if [[ "$SCRIPT_DEF" == "$WANT" ]]; then ok "script's default source is the same path"
 else bad "script's default source is '$SCRIPT_DEF' (extraction empty = script changed shape), want '$WANT'"; fi
@@ -210,13 +256,19 @@ groot() { local r; r="$(fresh "$1")"; mkdir -p "$r/etc/ssh" "$r/p" "$r/mnt/data/
 gl() { GA_ROOT="$1" GA_SSH_PRINCIPALS_DIR="$1/p" GA_SSH_PRINCIPALS_BIN="$PRINCIPALS" /bin/sh "$LABELER" 2>/dev/null; }
 r="$(groot old-share)"; printf 'KIB-SON-00000901\n' > "$r/mnt/data/supervisor/share/ga-ssh-principal-label"; gl "$r"
 eq "$r/p" "RV1109SERIAL0001 " "a label at the OLD /share path changes nothing"
-r="$(groot new-data)"; printf 'KIB-SON-00000901\n' > "$r/mnt/data/supervisor/addons/data/$SLUG/ga-ssh-principal-label"; gl "$r"
-eq "$r/p" "RV1109SERIAL0001 KIB-SON-00000901 " "the same label in ga_manager's /data is applied"
+r="$(groot new-data)"; printf 'KIB-SON-00000901\n' > "$r/mnt/data/supervisor/addons/data/$SLUG/ga-ssh-principal-label"
+idjson "KIB-SON-00000901" > "$r/mnt/data/supervisor/addons/data/$SLUG/ga-identity.json"; gl "$r"
+eq "$r/p" "RV1109SERIAL0001 KIB-SON-00000901 " "the same label in ga_manager's /data is applied (identity at the default path)"
+r="$(groot new-data-noid)"; printf 'KIB-SON-00000901\n' > "$r/mnt/data/supervisor/addons/data/$SLUG/ga-ssh-principal-label"; gl "$r"
+eq "$r/p" "RV1109SERIAL0001 " "default paths, no own identity anywhere → refused"
+r="$(groot new-data-idforeign)"; printf 'KIB-SON-00000901\n' > "$r/mnt/data/supervisor/addons/data/$SLUG/ga-ssh-principal-label"
+idjson "KIB-SON-00000955" > "$r/mnt/data/supervisor/addons/data/$SLUG/ga-identity.json"; gl "$r"
+eq "$r/p" "RV1109SERIAL0001 " "default identity path is read: another device's label refused"
 r="$(groot new-data-foreign)"; printf 'KIB-SON-00000901\n' > "$r/mnt/data/supervisor/addons/data/$SLUG/ga-ssh-principal-label"
 printf 'KIB-SON-00000955' > "$r/mnt/data/ga-device-label"; gl "$r"
 eq "$r/p" "RV1109SERIAL0001 " "default own-label path is read: another device's label refused"
 
 echo
-if (( ran < 45 )); then echo "${RED}FAIL${NC}  only $ran cases ran — expected at least 45"; exit 1; fi
+if (( ran < 59 )); then echo "${RED}FAIL${NC}  only $ran cases ran — expected at least 59"; exit 1; fi
 if (( fails > 0 )); then echo "${RED}${fails} of ${ran} case(s) failed${NC}"; exit 1; fi
 echo "${GRN}all ${ran} cases passed${NC}"

@@ -14,6 +14,21 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased — the host takes control requests from ga_manager only out of the add-on's own data directory
 
+### Fixed — the SSH label principal is compared with the device's own identity, or refused
+
+`ga-ssh-principal-label` compared the label ga_manager delivers with
+`/mnt/data/ga-device-label` — a file nothing writes any more (its flasher stage
+is retired; the add-on cannot write `/mnt/data`). On a fresh flash the label was
+therefore accepted on shape alone (measured on a BOSv1.4.0-rc4 canary,
+2026-10-06). It now also reads `device_id` from ga_manager's private
+`ga-identity.json` under the pinned slug (the source the telemetry env-builders
+and `ga-manage-ethernet` already use); every own source that exists must equal
+the delivered label, and with no own source the label is refused, logged with
+both paths. No lockout: a refusal leaves the principals file untouched, the
+hardware-serial anchor stays, and `ga-ssh-principal-label.path` now also watches
+`ga-identity.json`, so a label that arrived first is applied when the identity
+lands. Gate: `tests/gates/ssh_principals/selftest.sh` (59 cases).
+
 ### Changed — control requests travel through ga_manager's data directory, not /share
 
 Four host actions are started by a file ga_manager writes: an OS install

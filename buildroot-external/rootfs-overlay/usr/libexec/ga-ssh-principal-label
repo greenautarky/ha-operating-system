@@ -15,10 +15,25 @@
 #   1. a regular file, not a symlink, not a device or FIFO;
 #   2. a bounded read (at most 32 bytes — a label is 16 plus a newline);
 #   3. exactly one label: charset [A-Za-z0-9-], shape ^KIB-SON-[0-9]{8}$;
-#   4. equality with this device's own label when /mnt/data/ga-device-label
-#      exists. Without that file the label is accepted on shape alone (the
-#      worker has already compared it with its own device_id) and the journal
-#      says so.
+#   4. equality with this device's OWN label, from every source that exists:
+#        - /mnt/data/ga-device-label (host-only; written by a flasher stage
+#          that is retired — absent on every fresh flash since), and
+#        - device_id in ga_manager's private ga-identity.json under the same
+#          pinned slug (written by identity-write and the fleet-manager's
+#          identity backfill; what ga-telegraf-env / ga-fluent-bit-env /
+#          ga-manage-ethernet already read).
+#      Every existing source must hold a usable label and all must equal the
+#      delivered one. With NO source the label is REFUSED (fail closed): until
+#      2026-10-06 it was accepted on shape alone, which a fresh-flashed
+#      BOSv1.4.0-rc4 canary did on every delivery.
+#      That refusal cannot lock a fresh device out: it changes nothing in the
+#      principals file, the hardware-serial anchor (ga-sshd-prepare) stays, and
+#      the .path unit also watches ga-identity.json, so a label delivered
+#      before the identity is applied the moment the identity appears.
+#      Trust note: ga-identity.json and the delivered label are both written
+#      by ga_manager, so this catches a wrong or stale delivery (another
+#      device's label), not a compromised ga_manager; the host-only
+#      ga-device-label, where present, is the independent source.
 # A refused value is never printed — only its length. ga-ssh-principals then
 # re-validates and rebuilds the principals file atomically, keeping the anchor.
 #
@@ -33,6 +48,8 @@ R="${GA_ROOT:-}"
 CA_PUB="${GA_SSH_CA_PUB:-$R/etc/ssh/ga_user_ca.pub}"
 SRC="${GA_SSH_LABEL_BRIDGE:-$R/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-ssh-principal-label}"
 OWN_FILE="${GA_DEVICE_LABEL_FILE:-$R/mnt/data/ga-device-label}"
+ID_FILE="${GA_IDENTITY_FILE:-$R/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-identity.json}"
+ID_MAX=4096
 PRINCIPALS_BIN="${GA_SSH_PRINCIPALS_BIN:-/usr/libexec/ga-ssh-principals}"
 MAX=32
 
@@ -64,19 +81,37 @@ if ! valid_label "$label"; then
     exit 2
 fi
 
-if [ -e "$OWN_FILE" ]; then
+# compare_own <source> <own-label-or-empty>: fail closed unless it equals $label.
+compare_own() {
+    if ! valid_label "$2"; then
+        log "$1 exists but holds no usable label — refusing the delivered label (fail closed)"
+        exit 2
+    fi
+    if [ "$label" != "$2" ]; then
+        log "refusing the delivered label — it is not this device's label ($2, from $1); principals unchanged"
+        exit 2
+    fi
+}
+
+sources=0
+if [ -e "$OWN_FILE" ] || [ -L "$OWN_FILE" ]; then
     own=""
     [ -f "$OWN_FILE" ] && [ ! -L "$OWN_FILE" ] && own=$(read_bounded "$OWN_FILE" | tr -d ' \t\r\n')
-    if ! valid_label "$own"; then
-        log "$OWN_FILE exists but holds no usable label — refusing the delivered label (fail closed)"
-        exit 2
+    compare_own "$OWN_FILE" "$own"
+    sources=$((sources + 1))
+fi
+if [ -e "$ID_FILE" ] || [ -L "$ID_FILE" ]; then
+    own=""
+    if [ -f "$ID_FILE" ] && [ ! -L "$ID_FILE" ]; then
+        own=$(head -c "$ID_MAX" "$ID_FILE" 2>/dev/null \
+            | sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
     fi
-    if [ "$label" != "$own" ]; then
-        log "refusing the delivered label — it is not this device's label ($own); principals unchanged"
-        exit 2
-    fi
-else
-    log "no $OWN_FILE — cannot compare with this device's own label; accepting a shape-valid label (ga_manager compared it with its device_id)"
+    compare_own "$ID_FILE" "$own"
+    sources=$((sources + 1))
+fi
+if [ "$sources" -eq 0 ]; then
+    log "no own identity yet (neither $OWN_FILE nor $ID_FILE) — refusing the delivered label (fail closed); principals unchanged, the hardware-serial anchor stays; re-runs when ga-identity.json appears"
+    exit 2
 fi
 
 exec "$PRINCIPALS_BIN" label "$label"
