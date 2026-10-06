@@ -151,15 +151,29 @@ if command -v netbird >/dev/null 2>&1; then
   NB_FQDN=$(netbird status 2>/dev/null | grep -i 'FQDN' | awk '{print $NF}' || true)
   # Extract hostname part from FQDN (e.g. kib-son-00000000.netbird.cloud → kib-son-00000000)
   NB_HOST=$(echo "$NB_FQDN" | cut -d. -f1)
-  # Device label from ga-device-label file or telegraf env
-  DEV_LABEL=$(cat /etc/ga-device-label 2>/dev/null || true)
+  # Device label: legacy label files first, then the device_id of the
+  # ga_manager-private ga-identity.json (ADR-0010) — the same chain as
+  # run_all.sh, ga-fluent-bit-env and ga-manage-ethernet. Identity-derived
+  # devices never have /etc/ga-device-label, and this check skipped on every
+  # one of them with label='empty'.
+  DEV_LABEL=$(cat /etc/ga-device-label 2>/dev/null || cat /mnt/data/ga-device-label 2>/dev/null || true)
+  [ -z "$DEV_LABEL" ] && DEV_LABEL=$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+      /mnt/data/supervisor/addons/data/*_ga_manager/ga-identity.json 2>/dev/null | head -1)
   [ -z "$DEV_LABEL" ] && DEV_LABEL=$(grep 'DEVICE_LABEL=' /etc/default/telegraf 2>/dev/null | cut -d= -f2 || true)
+  DEV_LABEL=$(echo "$DEV_LABEL" | tr -d ' \t\r')
   if [ -n "$NB_HOST" ] && [ -n "$DEV_LABEL" ]; then
     # Case-insensitive comparison: lowercase both sides (BusyBox tr compatible)
     NB_HOST_LC=$(echo "$NB_HOST" | tr 'A-Z' 'a-z')
     DEV_LABEL_LC=$(echo "$DEV_LABEL" | tr 'A-Z' 'a-z')
+    # When the management server already holds a peer with the same hostname
+    # (typically the record of this device before a reflash), NetBird makes the
+    # DNS label unique by appending the last two octets of the new peer's
+    # address: <label>-<octet3>-<octet4>. That suffix is accepted only when it
+    # equals THIS peer's address — any other tail is a different name.
+    NB_IP=$(netbird status 2>/dev/null | sed -n 's/^[[:space:]]*NetBird IP:[[:space:]]*\([0-9.]*\).*/\1/p' | head -1)
+    NB_SUFFIX=$(echo "$NB_IP" | awk -F. 'NF==4 {print "-" $3 "-" $4}')
     run_test_show "HLTH-15" "NetBird hostname matches device label (nb=${NB_HOST} label=${DEV_LABEL})" \
-      "[ \"$NB_HOST_LC\" = \"$DEV_LABEL_LC\" ]"
+      "[ \"$NB_HOST_LC\" = \"$DEV_LABEL_LC\" ] || { [ -n \"$NB_SUFFIX\" ] && [ \"$NB_HOST_LC\" = \"$DEV_LABEL_LC$NB_SUFFIX\" ] && echo 'deduplicated by NetBird (peer-address suffix $NB_SUFFIX)'; }"
   else
     skip_test "HLTH-15" "NetBird hostname matches device label" "netbird FQDN='${NB_FQDN:-empty}' label='${DEV_LABEL:-empty}'"
   fi

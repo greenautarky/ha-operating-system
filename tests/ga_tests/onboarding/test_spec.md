@@ -20,8 +20,8 @@ fork (iHost hardware + GA version-URL); Core and the frontend are stock.
 - **Catches**: Device still on the frozen upstream armv7 image (`ghcr.io/home-assistant/tinker-homeassistant`)
 
 ### OB-02: Core image tag is a pinned HA version
-- **Command**: `docker inspect homeassistant --format '{{.Config.Image}}' | grep -qE ':20(2[6-9]|[3-9][0-9])\.[0-9]+\.[0-9]+$'`
-- **Expected**: Image tag is a pinned HA version from 2026 on (e.g., `2026.8.2`)
+- **Command**: `docker inspect homeassistant --format '{{.Config.Image}}' | grep -qE ':20(2[6-9]|[3-9][0-9])\.[0-9]+\.[0-9]+(\.[0-9]+)?$'`
+- **Expected**: Image tag is a pinned HA version from 2026 on (e.g., `2026.8.2`), optionally with the GA rebuild counter as a fourth component (`2026.8.2.1`). The exact pin is OSI-04.
 - **Catches**: `latest` tag or a missing/upstream version tag
 
 ### OB-03: HA version is displayed
@@ -41,10 +41,10 @@ fork (iHost hardware + GA version-URL); Core and the frontend are stock.
 - **Command**: `docker inspect hassio_supervisor --format '{{.Config.Image}}' | grep -q 'greenautarky'`
 - **Expected**: Supervisor image is from `ghcr.io/greenautarky` (the one permanent GA fork)
 
-### OB-07: All non-core components use upstream registries
-- **Command**: Verify dns, audio, cli, multicast, observer containers use `home-assistant`/`homeassistant`
-- **Expected**: In V1.2-clean **only the Supervisor** is greenautarky; Core, frontend and all plugins are upstream
-- **Catches**: Accidental override of a non-supervisor component in the version repo
+### OB-07: Supervisor plugins come from the declared origin
+- **Command**: for each `slug=image:tag` in `EXPECTED_PLUGINS` of `../os_integrity/expected.env`, the repository of `docker inspect hassio_<slug>` (tag stripped) equals the declared repository; then a coverage row asserts five plugins were checked
+- **Expected**: Every plugin runs from the repository the release declares. Which plugins GA builds is read from the pinned expectation, not written into the test (since BOSv1.4.0-rc3 all five are GA builds). The exact tag is OSI-20..24.
+- **Catches**: A plugin pulled from a registry the release does not declare. A missing `expected.env` or a plugin that does not run is a FAIL, not a skip.
 
 ### OB-08: Core image is not stale
 - **Command**: Show the running core image digest (informational freshness check)
@@ -70,3 +70,13 @@ fork (iHost hardware + GA version-URL); Core and the frontend are stock.
 - **Command**: `docker exec homeassistant test ! -d /usr/src/homeassistant/frontend-build`
 - **Expected**: `frontend-build/` directory does NOT exist inside the container
 - **Catches**: Frontend source-build bloat leaking into the image
+
+### OB-10a/b/c: Onboarding PIN present, 0600, six digits
+- **Command**: first of `.storage/greenautarky_secrets/onboarding_pin` (canonical, Core-private) and `ga-onboarding-pin` (compat) under `/mnt/data/supervisor/homeassistant/` — the order ga_manager's `auth.get_onboarding_pin()` reads them; `stat -c %a`, `grep -qE '^[0-9]{6}$'`
+- **Expected**: file present, mode 600, content is six digits. The PIN is never printed.
+- **Catches**: A provisioned device without a PIN, a world-readable PIN, a malformed PIN. SKIP only when neither file exists.
+
+### OB-14: Ethernet default is OFF without consent or override
+- **Command**: `GA_ENV_FILE=… GA_FORCE_BOOT=… GA_GM_DATA_DIR=… GA_LABEL_FILE=…` (all pointing at a nonexistent path) `/usr/sbin/ga-manage-ethernet status`
+- **Expected**: `ethernet_enabled=false` and `ethernet_source=default`. `status` is read-only.
+- **Catches**: A decision rule that turns Ethernet on when nobody consented (the old `GA_ETHERNET_DISABLED` scheme, where an absent key meant ON). The running link against this device's consent is the ethernet_force suite.
