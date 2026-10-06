@@ -1,0 +1,59 @@
+#!/bin/sh
+# fake-docker — the Docker CLI as ga-update-hosts sees it, modelled on what was
+# MEASURED on a canary running BOSv1.4.0-rc5 (2026-10-06):
+#   * the Supervisor container runs under the AppArmor profile hassio-supervisor,
+#     which DENIES writes to /etc/hosts from inside the container
+#     (`docker exec ... sh -c '... > /etc/hosts'` fails);
+#   * without GA entries in its /etc/hosts the container resolves the GA names
+#     through public DNS — modelled as an answer from 198.51.100.0/24;
+#   * a bind mount at /etc/hosts makes the container read the HOST file.
+# This is the environment of the subject, not the subject: ga-update-hosts
+# itself runs unmodified.
+#
+# State lives in $FAKE_DOCKER_STATE:
+#   running     "true" / "false"; absent = no such container
+#   mount_src   source of the /etc/hosts bind mount; empty/absent = none
+#   own_hosts   the container's Docker-managed /etc/hosts (used without a mount)
+#   log         every invocation, one per line
+S="${FAKE_DOCKER_STATE:?}"
+echo "$*" >> "$S/log"
+
+hosts_file() {
+  src=$(cat "$S/mount_src" 2>/dev/null)
+  if [ -n "$src" ]; then echo "$src"; else echo "$S/own_hosts"; fi
+}
+
+case "$1" in
+  inspect)
+    [ -f "$S/running" ] || { echo "Error: No such object: $*" >&2; exit 1; }
+    case "$*" in
+      *State.Running*) cat "$S/running" ;;
+      *Mounts*RW*)  # the mount is read-only, as hassos-supervisor creates it
+        src=$(cat "$S/mount_src" 2>/dev/null); [ -n "$src" ] && echo "$src rw=false" || echo ;;
+      *Mounts*) cat "$S/mount_src" 2>/dev/null; echo ;;
+      *) echo '[{}]' ;;
+    esac
+    ;;
+  exec)
+    [ "$(cat "$S/running" 2>/dev/null)" = "true" ] || { echo "Error: container is not running" >&2; exit 1; }
+    shift 2   # exec <container>
+    case "$1" in
+      cat)
+        [ "$2" = /etc/hosts ] || exit 1
+        cat "$(hosts_file)" ;;
+      python3)
+        name="$4"
+        ip=$(awk -v h="$name" '{ for (i = 2; i <= NF; i++) if ($i == h) { print $1; exit } }' "$(hosts_file)")
+        if [ -n "$ip" ]; then echo "$ip"; else echo "198.51.100.99"; fi ;;
+      sh)
+        # AppArmor hassio-supervisor: any write to /etc/hosts is denied.
+        if printf '%s' "$3" | grep -q '> */etc/hosts'; then
+          echo "sh: can't create /etc/hosts: Permission denied" >&2
+          exit 1
+        fi
+        exit 0 ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  *) exit 0 ;;
+esac

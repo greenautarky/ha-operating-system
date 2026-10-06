@@ -633,6 +633,14 @@ done
   && _pass "SVC-06: ga-update-hosts.service enabled" \
   || _fail "SVC-06: ga-update-hosts.service NOT enabled"
 
+# SVC-06b: the Supervisor's name resolution is verified once its container runs
+# (ga-update-hosts --verify-supervisor); without the unit a broken mount would
+# only show up when the Supervisor cannot reach the OTA store.
+[[ -L "${TARGET}/etc/systemd/system/multi-user.target.wants/ga-supervisor-hosts-check.service" ]] \
+  && grep -q -- '--verify-supervisor' "${TARGET}/etc/systemd/system/ga-supervisor-hosts-check.service" 2>/dev/null \
+  && _pass "SVC-06b: ga-supervisor-hosts-check.service enabled, runs --verify-supervisor" \
+  || _fail "SVC-06b: ga-supervisor-hosts-check.service NOT enabled or not running --verify-supervisor"
+
 # SVC-07: ga-update-hosts runs before supervisor
 grep -q 'Before=.*hassio-supervisor' "${TARGET}/etc/systemd/system/ga-update-hosts.service" 2>/dev/null \
   && _pass "SVC-07: ga-update-hosts ordered before supervisor" \
