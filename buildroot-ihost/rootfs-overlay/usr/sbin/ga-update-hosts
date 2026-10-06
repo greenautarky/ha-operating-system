@@ -18,6 +18,18 @@
 #
 # Writes to:
 #   /mnt/overlay/etc/hosts           (bind-mounted as /etc/hosts by HAOS)
+#   /mnt/data/ga-supervisor-hosts    (bind-mounted READ-ONLY as /etc/hosts into
+#                                     the Supervisor container by hassos-supervisor)
+#
+# Modes:
+#   ga-update-hosts                     write both files; if the Supervisor
+#                                       container is running, verify it (below)
+#   ga-update-hosts --verify-supervisor write nothing; wait for the Supervisor
+#                                       container, then verify it (run by
+#                                       ga-supervisor-hosts-check.service)
+# Verifying = the container's /etc/hosts carries the GA entries AND a lookup
+# from inside the container returns the configured address for every GA name.
+# A failed verification logs at error level and exits non-zero.
 #
 # IMPORTANT: HAOS bind-mounts /etc/hosts onto /mnt/overlay/etc/hosts.
 # We MUST write the file in-place (truncate + write) — never via rename.
@@ -26,16 +38,30 @@
 
 set -eu
 
-CONF_OVERRIDE="/mnt/data/ga-services.conf"
-CONF_DEFAULT="/etc/ga-services.conf"
-HOSTS_FILE="/mnt/overlay/etc/hosts"
-OTA_ACTIVE_FILE="/run/ga-resolve-ota.active"
+MODE="update"
+case "${1:-}" in
+    "") ;;
+    --verify-supervisor) MODE="verify" ;;
+    *) echo "usage: ga-update-hosts [--verify-supervisor]" >&2; exit 2 ;;
+esac
+
+# Paths are overridable for the host-side test suite (tests/ga_tests/
+# update_hosts); production runs with the defaults.
+CONF_OVERRIDE="${GA_SERVICES_CONF_OVERRIDE:-/mnt/data/ga-services.conf}"
+CONF_DEFAULT="${GA_SERVICES_CONF_BAKED:-/etc/ga-services.conf}"
+HOSTS_FILE="${GA_HOSTS_FILE:-/mnt/overlay/etc/hosts}"
+OTA_ACTIVE_FILE="${GA_OTA_ACTIVE_FILE:-/run/ga-resolve-ota.active}"
+# The Supervisor container's /etc/hosts. hassos-supervisor bind-mounts this
+# file READ-ONLY at /etc/hosts in the container; keep the two paths in step.
+SUP_HOSTS_FILE="${GA_SUPERVISOR_HOSTS_FILE:-/mnt/data/ga-supervisor-hosts}"
+SUP_CONTAINER="hassio_supervisor"
+SUP_WAIT_S="${GA_SUPERVISOR_WAIT_S:-300}"
 MARKER="# ga-services managed entries (do not edit manually)"
 END_MARKER="# end ga-services"
 # Persistent record of the last-applied services IP, so we can detect an
 # endpoint change across runs/reboots and bounce clients that cache the
 # resolved IP (fluent-bit, telegraf). On /mnt/data so it survives OTA reboots.
-APPLIED_IP_FILE="/mnt/data/.ga-services-applied-ip"
+APPLIED_IP_FILE="${GA_APPLIED_IP_FILE:-/mnt/data/.ga-services-applied-ip}"
 # Legacy pre-marker header older versions of this script emitted; stripped below.
 LEGACY_COMMENT="# GreenAutarky services — fallback when NetBird DNS is unavailable"
 # Services that cache the resolved GA endpoint IP and must be bounced when it
@@ -100,6 +126,118 @@ GA_HOSTS_LINE="${GA_SERVICES_IP}"
 [ -n "${GA_MQTT_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_MQTT_HOST}"
 [ -n "${GA_FLEET_HOST:-}" ] && GA_HOSTS_LINE="${GA_HOSTS_LINE} ${GA_FLEET_HOST}"
 
+# ---------------------------------------------------------------------------
+# Supervisor container: what it must resolve, and the check that it does.
+#
+# WHY A MOUNTED FILE, NOT `docker exec ... >> /etc/hosts`. This script used to
+# append the GA entries to the container's /etc/hosts through `docker exec`.
+# The Supervisor runs under the upstream AppArmor profile `hassio-supervisor`,
+# which denies that write — so every append failed, the error went to
+# /dev/null behind `|| true`, and the script still logged "injected". Measured
+# on a canary running BOSv1.4.0-rc5 (2026-10-06): six apparmor="DENIED" lines
+# on /etc/hosts and zero GA entries in the container. The Supervisor then
+# depended on the DNS plugin (CoreDNS) for these names, which carries only
+# influx, loki and ota: mqtt resolved through public DNS to another address
+# and fleet did not resolve at all — and with the DNS plugin down or late
+# (the boot race the plugin itself guards against), none would. Docker would also
+# rebuild that file on the next container start, so the append could never
+# have survived a Supervisor restart or self-update anyway.
+#
+# Now hassos-supervisor bind-mounts $SUP_HOSTS_FILE read-only at /etc/hosts
+# when it creates the container (the same pattern as /etc/ga-services.conf
+# and /etc/ga-version-url), and this script owns the file on the HOST. The
+# container's process never writes, so AppArmor has nothing to deny, and the
+# profile stays exactly as upstream ships it. The file is rewritten IN PLACE
+# (truncate + write): a file bind mount pins the inode, so a rename would
+# leave the container reading the old file. An OTA failover of the active OTA
+# address is therefore visible in the container at once, without a restart.
+# ---------------------------------------------------------------------------
+
+# Log at error level: when stderr is the journal (systemd sets JOURNAL_STREAM),
+# a "<3>" prefix sets the priority to err (SyslogLevelPrefix=, default on).
+err() {
+    if [ -n "${JOURNAL_STREAM:-}" ]; then
+        echo "<3>ga-update-hosts: ERROR — $*" >&2
+    else
+        echo "ga-update-hosts: ERROR — $*" >&2
+    fi
+}
+
+# "name ip" pairs the Supervisor container must resolve.
+expected_pairs() {
+    for _h in "${GA_INFLUX_HOST:-}" "${GA_LOKI_HOST:-}" "${GA_MQTT_HOST:-}" "${GA_FLEET_HOST:-}"; do
+        [ -n "$_h" ] && echo "$_h $GA_SERVICES_IP"
+    done
+    if [ -n "${GA_OTA_HOST:-}" ] && [ -n "$OTA_IP" ]; then
+        echo "$GA_OTA_HOST $OTA_IP"
+    fi
+    return 0
+}
+
+sup_running() {
+    [ "$(docker inspect -f '{{.State.Running}}' "$SUP_CONTAINER" 2>/dev/null)" = "true" ]
+}
+
+# Returns 0 only if the RUNNING container reads the GA-managed file and every
+# GA name resolves, from inside the container, to the configured address.
+# Every failed condition is reported, not just the first one.
+verify_supervisor() {
+    _ok=0
+    _src=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/etc/hosts"}}{{.Source}}{{end}}{{end}}' "$SUP_CONTAINER" 2>/dev/null) || _src=""
+    if [ "$_src" != "$SUP_HOSTS_FILE" ]; then
+        err "$SUP_CONTAINER does not mount $SUP_HOSTS_FILE at /etc/hosts (mount source: '${_src:-none}') — the container was created by a launcher without the GA hosts mount; restart hassos-supervisor.service to recreate it"
+        _ok=1
+    fi
+    _in=$(docker exec "$SUP_CONTAINER" cat /etc/hosts 2>&1) || {
+        err "cannot read /etc/hosts inside $SUP_CONTAINER: $_in"
+        _in=""
+        _ok=1
+    }
+    _pairs=$(expected_pairs)
+    if [ -z "$_pairs" ]; then
+        err "no GA host names configured — nothing to verify is a failure, not a pass"
+        return 1
+    fi
+    _n=0
+    while read -r _name _ip; do
+        [ -n "$_name" ] || continue
+        _n=$((_n + 1))
+        if ! printf '%s\n' "$_in" | awk -v ip="$_ip" -v h="$_name" '
+                $1 == ip { for (i = 2; i <= NF; i++) if ($i == h) f = 1 }
+                END { exit !f }'; then
+            err "$SUP_CONTAINER /etc/hosts has no '$_ip $_name' entry"
+            _ok=1
+        fi
+        # Resolve with the Supervisor's own runtime (Python, the libc resolver
+        # it uses for every HTTP request), not with a tool it never calls.
+        _got=$(docker exec "$SUP_CONTAINER" python3 -c \
+            'import socket, sys; print(socket.gethostbyname(sys.argv[1]))' "$_name" 2>&1) || _got="lookup failed: $_got"
+        if [ "$_got" != "$_ip" ]; then
+            err "$_name resolves to '$_got' inside $SUP_CONTAINER, expected $_ip (the mesh address from ga-services.conf)"
+            _ok=1
+        fi
+    done <<EOF_PAIRS
+$_pairs
+EOF_PAIRS
+    if [ "$_ok" = 0 ]; then
+        echo "ga-update-hosts: verified $SUP_CONTAINER — $_n GA names resolve to their configured addresses"
+    fi
+    return "$_ok"
+}
+
+if [ "$MODE" = "verify" ]; then
+    _deadline=$(( $(date +%s) + SUP_WAIT_S ))
+    until sup_running; do
+        if [ "$(date +%s)" -ge "$_deadline" ]; then
+            err "$SUP_CONTAINER not running after ${SUP_WAIT_S}s — cannot verify its name resolution"
+            exit 1
+        fi
+        sleep 5
+    done
+    verify_supervisor || exit 1
+    exit 0
+fi
+
 # Read the last-applied services IP (persists across reboots) to decide later
 # whether the endpoint changed and clients need a bounce.
 PREV_SERVICES_IP=""
@@ -160,43 +298,43 @@ else
     echo "ga-update-hosts: WARNING — ${GA_INFLUX_HOST} does not resolve yet (may need overlay mount)"
 fi
 
-# Also inject into Supervisor container's /etc/hosts. Supervisor's dns.py
-# reads /run/ga-resolve-ota.active at init but can lose the race with
-# ga-resolve-ota.service on first boot, then cache the negative (= bridge
-# IP 172.30.32.1) for the lifetime of the container. K7 BOSv1.2.12 OTA
-# 2026-06-10 hit this — see memory/incident_supervisor_dns_boot_race.
-#
-# Container's /etc/hosts is a per-container overlay layer. Writes via
-# `docker exec` survive systemctl restart of hassio_supervisor and even
-# host reboot (= the overlay layer is persistent), so this only needs to
-# run on each ga-services.conf change, not every boot.
-#
-# Silently no-op if Supervisor container isn't running (= e.g. very early
-# in boot or on a device that never had Supervisor). Will catch up at
-# the next ga-update-hosts trigger.
-if docker inspect hassio_supervisor >/dev/null 2>&1; then
-    # First strip any stale GA-managed host lines inside the container (same
-    # self-clean as on the host) so a changed endpoint can't leave the OLD IP
-    # winning the lookup, then re-add the fresh entries.
-    for _h in "${GA_INFLUX_HOST:-}" "${GA_LOKI_HOST:-}" "${GA_MQTT_HOST:-}" "${GA_OTA_HOST:-}"; do
-        [ -n "$_h" ] && docker exec hassio_supervisor sh -c \
-            "grep -vF '$_h' /etc/hosts > /tmp/.ga_hosts && cat /tmp/.ga_hosts > /etc/hosts && rm -f /tmp/.ga_hosts" \
-            >/dev/null 2>&1 || true
-    done
-    # Build list of entries to inject. grep -qF before appending so we don't
-    # duplicate on repeated ga-update-hosts invocations.
-    inject() {
-        # $1 = full host-line content (= "IP host1 host2 ...")
-        local line="$1"
-        docker exec hassio_supervisor sh -c \
-            "grep -qF '$line' /etc/hosts 2>/dev/null || echo '$line' >> /etc/hosts" \
-            >/dev/null 2>&1 || true
-    }
-    inject "$GA_HOSTS_LINE"
-    if [ -n "${GA_OTA_HOST:-}" ] && [ -n "$OTA_IP" ]; then
-        inject "$OTA_IP $GA_OTA_HOST"
+# Supervisor container: rewrite its host-managed /etc/hosts in place (see the
+# block comment above verify_supervisor), then prove the container sees it.
+SUP_BASE='127.0.0.1	localhost
+::1		localhost ip6-localhost ip6-loopback
+ff02::1		ip6-allnodes
+ff02::2		ip6-allrouters'
+SUP_CONTENT="$SUP_BASE
+
+$MARKER
+$GA_HOSTS_LINE"
+if [ -n "${GA_OTA_HOST:-}" ] && [ -n "$OTA_IP" ]; then
+    SUP_CONTENT="$SUP_CONTENT
+$OTA_IP $GA_OTA_HOST"
+fi
+SUP_CONTENT="$SUP_CONTENT
+$END_MARKER"
+
+SUP_FAILED=0
+if [ -L "$SUP_HOSTS_FILE" ] || { [ -e "$SUP_HOSTS_FILE" ] && [ ! -f "$SUP_HOSTS_FILE" ]; }; then
+    err "$SUP_HOSTS_FILE is not a regular file — refusing to write through it; the Supervisor keeps resolving GA names without the mesh entries"
+    SUP_FAILED=1
+elif ! printf '%s\n' "$SUP_CONTENT" > "$SUP_HOSTS_FILE"; then
+    # In-place truncate-write, never rename: the bind mount pins the inode.
+    err "cannot write $SUP_HOSTS_FILE — the Supervisor keeps resolving GA names without the mesh entries"
+    SUP_FAILED=1
+else
+    echo "ga-update-hosts: wrote GA entries to $SUP_HOSTS_FILE (the Supervisor container's /etc/hosts)"
+fi
+
+if [ "$SUP_FAILED" = 0 ]; then
+    if sup_running; then
+        verify_supervisor || SUP_FAILED=1
+    else
+        # Not a pass: the container reads the file when it starts, and
+        # ga-supervisor-hosts-check.service verifies it once it runs.
+        echo "ga-update-hosts: $SUP_CONTAINER not running — verification deferred to ga-supervisor-hosts-check.service"
     fi
-    echo "ga-update-hosts: injected entries into hassio_supervisor /etc/hosts"
 fi
 
 # ---------------------------------------------------------------------------
@@ -220,3 +358,8 @@ if [ -n "$PREV_SERVICES_IP" ] && [ "$PREV_SERVICES_IP" != "$GA_SERVICES_IP" ]; t
 fi
 # Record the now-applied IP (best effort; /mnt/data may be unmounted very early).
 printf '%s\n' "$GA_SERVICES_IP" > "$APPLIED_IP_FILE" 2>/dev/null || true
+
+if [ "$SUP_FAILED" != 0 ]; then
+    err "the Supervisor container does not resolve the GA names to their mesh addresses (see above)"
+    exit 1
+fi

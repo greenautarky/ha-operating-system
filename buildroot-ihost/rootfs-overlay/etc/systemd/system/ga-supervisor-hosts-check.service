@@ -1,0 +1,18 @@
+[Unit]
+Description=Verify the Supervisor container resolves the GA names to their mesh addresses
+# ga-update-hosts writes the Supervisor's host-managed /etc/hosts, usually
+# before the container runs, so it cannot check the result itself. This unit
+# waits for the container and fails (error-level journal lines, unit failed)
+# when the container does not mount the file or a GA name resolves elsewhere.
+After=ga-update-hosts.service hassos-supervisor.service
+Wants=ga-update-hosts.service
+
+[Service]
+# simple, not oneshot: the wait for the Supervisor (up to 5 min on a fresh
+# flash) must not hold up multi-user.target. Exit 0 -> inactive, non-zero ->
+# failed, which `systemctl --failed` and the device suite report.
+Type=simple
+ExecStart=/usr/sbin/ga-update-hosts --verify-supervisor
+
+[Install]
+WantedBy=multi-user.target

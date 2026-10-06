@@ -50,7 +50,38 @@ ga_version_url_mount() {
     fi
 }
 
-# tests/ga_tests/hassos_supervisor_channel sources this file for the three
+# GA: the Supervisor container's /etc/hosts is a HOST-managed file, mounted
+# read-only. ga-update-hosts (iHost overlay) writes the GA mesh entries into
+# /mnt/data/ga-supervisor-hosts in place and verifies them from inside the
+# container. Writing the container's own /etc/hosts through `docker exec` does
+# not work: the upstream AppArmor profile hassio-supervisor denies it (measured
+# on BOSv1.4.0-rc5), and Docker rebuilds that file on every container start.
+#
+# Prints the docker option that mounts the file. Called on EVERY launch, before
+# the container is created or started: a container created with this mount
+# would not start if the source disappeared (Docker creates a missing bind
+# source as a directory), so a missing file is re-seeded with the localhost
+# lines, loudly, and ga-update-hosts fills in the GA entries. An image without
+# ga-update-hosts has no writer for the file: no mount, Docker's own hosts file.
+# Arguments exist for the test suite.
+# shellcheck disable=SC2120  # production calls it without an argument
+ga_supervisor_hosts_mount() {
+    _ga_sh_src="${1:-/mnt/data/ga-supervisor-hosts}"
+    _ga_sh_writer="${2:-/usr/sbin/ga-update-hosts}"
+    [ -x "${_ga_sh_writer}" ] || return 0
+    if [ ! -e "${_ga_sh_src}" ] && [ ! -L "${_ga_sh_src}" ]; then
+        echo "[WARNING] ${_ga_sh_src} missing - seeding it without GA entries; ga-update-hosts adds them" >&2
+        printf '127.0.0.1\tlocalhost\n::1\t\tlocalhost ip6-localhost ip6-loopback\nff02::1\t\tip6-allnodes\nff02::2\t\tip6-allrouters\n' \
+            > "${_ga_sh_src}" || echo "[ERROR] cannot seed ${_ga_sh_src}" >&2
+    fi
+    if [ -f "${_ga_sh_src}" ] && [ ! -L "${_ga_sh_src}" ]; then
+        echo "-v ${_ga_sh_src}:/etc/hosts:ro"
+    else
+        echo "[ERROR] ${_ga_sh_src} is not a regular file - the Supervisor gets Docker's /etc/hosts WITHOUT the GA mesh entries" >&2
+    fi
+}
+
+# tests/ga_tests/hassos_supervisor_channel sources this file for the
 # helper functions above and must stop here, before anything touches the host.
 if [ "${HASSOS_SUPERVISOR_FUNCTIONS_ONLY:-0}" = "1" ]; then
     return 0
@@ -139,6 +170,10 @@ if [ -n "${SUPERVISOR_CONTAINER_ID}" ]; then
     fi
 fi
 
+# GA: runs on every launch, so the mount source exists before create AND start.
+# shellcheck disable=SC2119
+GA_SUPERVISOR_HOSTS_MOUNT="$(ga_supervisor_hosts_mount)"
+
 # If Supervisor container is missing, create it
 if [ -z "${SUPERVISOR_CONTAINER_ID}" ]; then
     # We need to remove the CID file here, Docker will refuse to start if the
@@ -203,6 +238,7 @@ if [ -z "${SUPERVISOR_CONTAINER_ID}" ]; then
         -v ${SUPERVISOR_DATA}:/data:rw,slave \
         ${GA_SERVICES_MOUNT} \
         ${GA_VERSION_URL_MOUNT} \
+        ${GA_SUPERVISOR_HOSTS_MOUNT} \
         -e SUPERVISOR_SHARE=${SUPERVISOR_DATA} \
         -e SUPERVISOR_NAME=hassio_supervisor \
         -e SUPERVISOR_MACHINE=${SUPERVISOR_MACHINE} \

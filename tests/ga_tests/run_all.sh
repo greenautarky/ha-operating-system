@@ -35,8 +35,8 @@ SUITES_EMU="environment crash_detection boot_timing disk_guard supervisor_health
 # idle_perf runs BEFORE stress: the 5-min load average and per-process CPU it
 # measures were still carrying the stress suite (K31 rc19+rc20: IDLE-04 got 2.96
 # and 3.01 right after stress — an ordering artefact, not an idle device).
-SUITES_DEVICE="os_integrity ssh_access addons_running heating ha_influxdb health ha_config_applied telemetry network ping config_verify dns_config onboarding ga_frontend_bundle provisioning tailscale watchdog idle_perf stress telemetry_buffering hardware openstick ota_update connectivity_recorder rc19_device firewall audio_disabled rauc_slots ethernet_force lte_standby host_control_device"
-SUITES_ALL="crash_detection os_integrity ssh_access addons_running heating ha_influxdb health ha_config_applied telemetry environment network ping boot_timing disk_guard watchdog config_verify dns_config idle_perf stress onboarding ga_frontend_bundle provisioning tailscale telemetry_buffering hardware openstick ota_update supervisor_health connectivity_recorder rc19_device firewall share_publish audio_disabled rauc_slots stage_components ethernet_force publish_services lte_standby usb_net_posture host_control_device"
+SUITES_DEVICE="os_integrity ssh_access addons_running heating ha_influxdb health ha_config_applied telemetry network ping config_verify dns_config supervisor_hosts onboarding ga_frontend_bundle provisioning tailscale watchdog idle_perf stress telemetry_buffering hardware openstick ota_update connectivity_recorder rc19_device firewall audio_disabled rauc_slots ethernet_force lte_standby host_control_device"
+SUITES_ALL="crash_detection os_integrity ssh_access addons_running heating ha_influxdb health ha_config_applied telemetry environment network ping boot_timing disk_guard watchdog config_verify dns_config supervisor_hosts idle_perf stress onboarding ga_frontend_bundle provisioning tailscale telemetry_buffering hardware openstick ota_update supervisor_health connectivity_recorder rc19_device firewall share_publish audio_disabled rauc_slots stage_components ethernet_force publish_services lte_standby usb_net_posture host_control_device"
 
 # Every suite directory is EITHER in a category above OR named here, with the
 # reason. Nothing else is allowed, and `--selftest` proves it — otherwise a
@@ -58,6 +58,7 @@ SUITES_EXCLUDED="
   share_writers   host suite: CI lint.yml host-suites — needs bubblewrap, drives the writers in a sandbox
   host_control    host suite: CI lint.yml host-suites — needs bubblewrap, drives the host control units in a sandbox (ADR-0041)
   apparmor_profile host suite: CI lint.yml host-suites
+  update_hosts    host suite: CI lint.yml host-suites — runs ga-update-hosts against a model of the AppArmor-confined Supervisor
   hassos_supervisor_channel host suite: CI lint.yml host-suites — sources the launcher functions-only
   device_features on demand: feature surface, not a per-run gate
   ha_init         superseded by ha_config_applied on the device lane
