@@ -199,6 +199,11 @@ export const EXPECTED_ELEMENTS: Record<string, string | null> = {
   'ga-thermostat-card': 'ga-thermostat-card',
   // The whole-home heating controls on the Profil view (bundle 1.18.0).
   'ga-heating-actions-card': 'ga-heating-actions-card',
+  // "Aktivität" under each room's thermostat (bundle 1.22.0) and "Wartung"
+  // under it (1.23.0). Measured unmapped on BOSv1.4.0-rc6, 2026-10-06 — this
+  // check went red, as built to, until they were written down here.
+  'ga-heating-log-card': 'ga-heating-log-card',
+  'ga-maintenance-card': 'ga-maintenance-card',
   'ga-home-strategy': 'll-strategy-dashboard-ga-home',
   'ga-sidebar-default': null,
   // Side-effect module: watches the registry swap and reports elements that
@@ -218,6 +223,8 @@ export const ADVERTISED_CARD_TYPES = [
   'ga-heating-card',
   'ga-master-card',
   'ga-thermostat-card',
+  'ga-heating-log-card',
+  'ga-maintenance-card',
 ] as const;
 
 /**
