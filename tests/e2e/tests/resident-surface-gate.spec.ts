@@ -293,6 +293,8 @@ const HEALTHY_CUSTOM_CARDS = [
   { type: 'ga-heating-card', name: 'GA Heizplan' },
   { type: 'ga-master-card', name: 'GA Verwalten' },
   { type: 'ga-thermostat-card', name: 'GA Thermostat' },
+  { type: 'ga-heating-log-card', name: 'GA Heating Log Card' },
+  { type: 'ga-maintenance-card', name: 'GA Maintenance Card' },
 ];
 
 test.describe('card registration: must-flag', () => {

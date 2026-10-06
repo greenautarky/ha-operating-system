@@ -310,6 +310,21 @@ jobs:
         # the load-budget measurement, which needs exactly that combination.
         run: bash tests/e2e/test_runner_argv.sh
 
+      - name: the e2e judgements, against their must-flag / must-not-flag fixtures
+        # The device specs (resident-surface, heating-cards) keep their verdicts
+        # in helpers/*.ts so these gate specs can prove them red and green with
+        # no device. resident-surface-gate said "on every PR" and nothing ran it;
+        # it went stale the day bundle 1.23.0 shipped two new cards. No browser
+        # is needed: none of these specs opens a page.
+        working-directory: tests/e2e
+        run: |
+          rm -f node_modules   # tracked symlink to a local checkout; npm ci owns this path in CI
+          npm ci --no-audit --no-fund
+          npx playwright test --project=desktop --reporter=line \
+            tests/heating-cards-gate.spec.ts \
+            tests/resident-surface-gate.spec.ts \
+            tests/destructive-fixture-gate.spec.ts
+
       - name: ga-telemetry-gate + consent-apply (consent markers and shippers)
         # Fixture-driven: the gate against v1/v2/stale stores, and the apply
         # script with a stub systemctl — both directions (grant → start,
