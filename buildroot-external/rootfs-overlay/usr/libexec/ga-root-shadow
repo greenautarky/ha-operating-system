@@ -19,6 +19,11 @@
 # The state is published to /share/ga-root-shadow-status.json (through
 # ga-share-publish) so ga_manager can report a device that is not "rotated".
 #
+# The FIRST run of each boot also writes $RUN_DIR/boot ("<uptime> <state>").
+# /run is empty at every boot and a later restart never overwrites it, so the
+# device suite can tell what the boot itself applied, and when, from what a
+# runtime restart applied afterwards.
+#
 # --early  (emergency.service / rescue.service ExecStartPre, ADR-0039 D4b)
 #   Runs before the normal boot may have mounted the overlay:
 #   1. /etc/shadow already bind-mounted          → nothing to do
@@ -31,7 +36,7 @@
 #
 # Test hooks (never set on a device): GA_RS_ROOTFS, GA_RS_OVERLAY,
 # GA_RS_RUN_DIR, GA_RS_STATUS, GA_RS_OVERLAY_DEV, GA_RS_MOUNTINFO,
-# GA_RS_CONSOLE, GA_RS_PUBLISH, GA_RS_BOOT_ID.
+# GA_RS_CONSOLE, GA_RS_PUBLISH, GA_RS_BOOT_ID, GA_RS_UPTIME.
 set -u
 
 ROOTFS="${GA_RS_ROOTFS:-}"          # the filesystem that holds the image's /etc/shadow
@@ -44,6 +49,7 @@ OVERLAY_DEV="${GA_RS_OVERLAY_DEV:-}"
 MOUNTINFO="${GA_RS_MOUNTINFO:-/proc/self/mountinfo}"
 CONSOLE="${GA_RS_CONSOLE:-/dev/console}"
 PUBLISH="${GA_RS_PUBLISH:-/usr/libexec/ga-share-publish}"
+UPTIME="${GA_RS_UPTIME:-/proc/uptime}"
 BOOT_ID="${GA_RS_BOOT_ID:-$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)}"
 
 EARLY=0
@@ -64,8 +70,17 @@ valid_hash() {
 	[ "$(grep -c '' "$1")" -eq 1 ]
 }
 
+# record_boot <state> — once per boot: when this ran and what it applied.
+record_boot() {
+	[ -e "$RUN_DIR/boot" ] && return 0
+	mkdir -p "$RUN_DIR" && chmod 0700 "$RUN_DIR" || return 0
+	printf '%s %s\n' "$(cut -d' ' -f1 "$UPTIME" 2>/dev/null)" "$1" > "$RUN_DIR/boot" \
+		|| log "WARNING: could not record this boot's state"
+}
+
 publish() { # publish <state>
 	[ "$EARLY" -eq 1 ] && return 0
+	record_boot "$1"
 	printf '{"state": "%s", "boot_id": "%s", "ts": %s}\n' \
 		"$1" "$BOOT_ID" "$(date +%s)" | "$PUBLISH" "$STATUS" 0644 \
 		|| log "WARNING: could not publish $STATUS (state $1)"

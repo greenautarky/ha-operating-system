@@ -73,6 +73,7 @@ HF="$W/ov/etc/ga-root-pw-hash"
 ST="$W/share/ga-root-shadow-status.json"
 export GA_RS_ROOTFS="$W/root" GA_RS_OVERLAY="$W/ov" GA_RS_RUN_DIR="$W/run" \
 	GA_RS_STATUS="$ST" GA_RS_CONSOLE="$W/console" GA_RS_BOOT_ID="test-boot" \
+	GA_RS_UPTIME="$W/uptime" \
 	GA_RS_PUBLISH="$OV/usr/libexec/ga-share-publish" GA_SHARE_STAGE_DIR="$W/stage"
 
 rs() { "$TOOL" "$@" 2>>"$W/stderr"; }
@@ -82,10 +83,14 @@ state() { sed -n 's/.*"state": *"\([a-z]*\)".*/\1/p' "$ST" 2>/dev/null; }
 others_identical() { [ "$(grep -v '^root:' "$SH")" = "$(grep -v '^root:' "$W/image-shadow.orig")" ]; }
 
 # ── absent ────────────────────────────────────────────────────────────────
+echo "4.20 3.10" > "$W/uptime"
 rm -f "$HF" "$ST"; rs; RC=$?
 run_test "RS-01" "no hash file → exit 0, nothing mounted, image hash in effect" \
 	"[ $RC -eq 0 ] && [ \$(mounts_on '$SH') -eq 0 ] && [ \"\$(root_field)\" = '$IMG_HASH' ]"
 run_test "RS-02" "no hash file → status 'start'" "[ \"\$(state)\" = start ]"
+run_test "RS-40" "the first run of a boot records its uptime and state" \
+	"[ \"\$(cat '$W/run/boot')\" = '4.20 start' ]"
+echo "99.00 3.10" > "$W/uptime"
 
 # ── valid ─────────────────────────────────────────────────────────────────
 printf '%s\n' "$DEV_HASH" > "$HF"; chmod 0600 "$HF"
@@ -97,6 +102,8 @@ run_test "RS-05" "valid hash → every other line byte-identical (svcroot untouc
 run_test "RS-06" "the merged copy is 0600" "[ \"\$(stat -c %a '$SH')\" = 600 ]"
 run_test "RS-07" "valid hash → status 'rotated' with the boot id" \
 	"[ \"\$(state)\" = rotated ] && grep -q '\"boot_id\": \"test-boot\"' '$ST'"
+run_test "RS-41" "a later run in the same boot does not overwrite the boot record" \
+	"[ \"\$(cat '$W/run/boot')\" = '4.20 start' ]"
 
 # ── re-run (station sets a new hash without a reboot) ─────────────────────
 printf '%s\n' "$DEV_HASH2" > "$HF"
@@ -180,6 +187,52 @@ elif [ "${GA_RS_REQUIRE_ALL:-0}" = 1 ]; then
 else
 	skip_test "RS-24" "--early from an unmounted partition" "needs real root + mkfs.ext4"
 fi
+
+# ── the device suite's verdicts (verdicts.sh), must-pass and must-fail ─────
+# test.sh measures on the device; these functions judge. They are the LIVE
+# definitions test.sh sources, not a copy.
+. "$HERE/verdicts.sh"
+v() { "$@" >/dev/null 2>&1; echo $?; }
+run_test "RS-50" "boot order: overlay 3.0s <= run 4.20s <= sysinit 6.0s → pass" \
+	"[ \$(v rs_boot_order '4.20 rotated' 3000000 6000000) = 0 ]"
+run_test "RS-51" "boot order: run after sysinit.target (a runtime-only run) → fail" \
+	"[ \$(v rs_boot_order '61.33 rotated' 3000000 6000000) = 1 ]"
+run_test "RS-52" "boot order: run before the overlay was mounted → fail" \
+	"[ \$(v rs_boot_order '2.50 start' 3000000 6000000) = 1 ]"
+run_test "RS-53" "boot order: no boot record (the unit did not run this boot) → fail" \
+	"[ \$(v rs_boot_order '' 3000000 6000000) = 1 ]"
+run_test "RS-54" "boot order: sysinit.target time unknown (0) → fail, never pass" \
+	"[ \$(v rs_boot_order '4.20 rotated' 3000000 0) = 1 ]"
+run_test "RS-55" "boot state: hash file + boot applied 'rotated' → pass" \
+	"[ \$(v rs_boot_state '4.20 rotated' 1 0) = 0 ]"
+run_test "RS-56" "boot state: hash file from before this boot, boot left 'start' → fail" \
+	"[ \$(v rs_boot_state '4.20 start' 1 0) = 1 ]"
+run_test "RS-57" "boot state: hash file written during this boot, boot left 'start' → undecided (2)" \
+	"[ \$(v rs_boot_state '4.20 start' 1 1) = 2 ]"
+run_test "RS-58" "boot state: hash file from before this boot + 'malformed' → fail" \
+	"[ \$(v rs_boot_state '4.20 malformed' 1 0) = 1 ]"
+run_test "RS-59" "boot state: no hash file + 'start' → pass; no hash file + 'rotated' → fail" \
+	"[ \$(v rs_boot_state '4.20 start' 0) = 0 ] && [ \$(v rs_boot_state '4.20 rotated' 0) = 1 ]"
+
+R="$W/ota-record"
+rec() { printf 'slot=%s\nversion=%s\nhashsum=%s\n' "$1" "$2" "$3" > "$R"; }
+rm -f "$R"
+run_test "RS-60" "OTA: no previous record → undecided (2)" \
+	"[ \$(v rs_ota_survival '$R' A 17.0 abc) = 2 ]"
+rec A 17.0 abc
+run_test "RS-61" "OTA: slot and version changed, same hash → pass" \
+	"[ \$(v rs_ota_survival '$R' B 17.1 abc) = 0 ]"
+run_test "RS-62" "OTA: slot and version changed, hash file gone → fail" \
+	"[ \$(v rs_ota_survival '$R' B 17.1 none) = 1 ]"
+run_test "RS-63" "OTA: hash file gone without an update → fail too" \
+	"[ \$(v rs_ota_survival '$R' A 17.0 none) = 1 ]"
+run_test "RS-64" "OTA: hash changed across the update → fail" \
+	"[ \$(v rs_ota_survival '$R' B 17.1 def) = 1 ]"
+run_test "RS-65" "OTA: nothing changed since the previous run → undecided (2)" \
+	"[ \$(v rs_ota_survival '$R' A 17.0 abc) = 2 ]"
+rec A 17.0 none
+run_test "RS-66" "OTA: updated, but there was no device password before → undecided (2)" \
+	"[ \$(v rs_ota_survival '$R' B 17.1 abc) = 2 ]"
 
 # ── the units ─────────────────────────────────────────────────────────────
 unit_has() { grep -qx "$2" "$1"; }
