@@ -14,6 +14,15 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased — the host takes control requests from ga_manager only out of the add-on's own data directory
 
+### Fixed — the iHost boot script spends an attempt on a kernel that fails to load
+
+`uboot-boot.ush`: when no slot's kernel could be loaded, the script reset both
+attempt counters to 3 on every boot, so they never counted down. It now
+stores the decremented counters and re-arms only once both slots are spent,
+the same fix upstream HAOS made for ODROID-N2 (b704298a, #4832). Host gate:
+`tests/gates/boot_slot_fallback` runs the live script's slot selection
+across consecutive boots (7 cases; red on the pre-fix script).
+
 ### Security — Docker bridge-subnet firewall patch from upstream HAOS
 
 `buildroot-external/patches/docker-engine/` carries upstream HAOS's Docker
