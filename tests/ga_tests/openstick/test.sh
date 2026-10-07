@@ -19,6 +19,7 @@
 #
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
+. "$SCRIPT_DIR/wifi_scan.sh"
 
 suite_start "OpenStick WiFi"
 
@@ -68,8 +69,9 @@ for _attempt in 1 2 3; do
   sleep 10
 done
 
-run_test "OS-04" "WiFi scan completed" \
-  "nmcli -t -f SSID dev wifi list 2>/dev/null | head -1 | grep -q '.' "
+# Any row counts — see wifi_scan.sh for why the first row alone is wrong.
+SCAN_MSG="$(nmcli -t -f BSSID,SSID dev wifi list 2>/dev/null | wifi_scan_verdict)"; SCAN_RC=$?
+show_verdict "OS-04" "WiFi scan completed" "$SCAN_RC" "$SCAN_MSG"
 
 # No GA-* SSID in range means no stick is powered near this device — a bench
 # fact, not a defect, and OS-06..09 below already skip for exactly that reason.
