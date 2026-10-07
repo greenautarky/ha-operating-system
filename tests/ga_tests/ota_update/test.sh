@@ -242,30 +242,83 @@ fi
 # ---------------------------------------------------------------------------
 OTA_BASE="https://ota.greenautarky.com/releases/${VERSION_ID}"
 DEV_RELEASE=$(head -1 /etc/ga-release 2>/dev/null | tr -d '[:space:]')
+# Ask the server the way ga-rauc-install downloads: through the endpoint
+# ga-resolve-ota pinned, never through name resolution. A check that resolves
+# the name itself measures a path the download does not take.
+OTA_PIN=$(head -c 64 /run/ga-resolve-ota.active 2>/dev/null | tr -d '[:space:]')
+OTA_CURL="curl --resolve ota.greenautarky.com:443:${OTA_PIN:-unpinned}"
 
-run_test "OTA-12" "the OTA host resolves and answers" \
-  "curl -fsS --max-time 20 -o /dev/null -w '%{http_code}' '$OTA_BASE/PROMOTED.json' | grep -q '^200$'"
+run_test "OTA-12" "the OTA host answers via the pinned endpoint" \
+  "$OTA_CURL -fsS --max-time 20 -o /dev/null -w '%{http_code}' '$OTA_BASE/PROMOTED.json' | grep -q '^200$'"
 
 run_test "OTA-13" "the production slot names the release it serves" \
-  "curl -fsS --max-time 20 '$OTA_BASE/PROMOTED.json' | grep -q '\"ga_release\"'"
+  "$OTA_CURL -fsS --max-time 20 '$OTA_BASE/PROMOTED.json' | grep -q '\"ga_release\"'"
 
 # The bundle a version-only dispatch would install must exist AND be the size
 # its own checksum file describes a real file to be. A 404 here is a fleet that
 # cannot update at all; both are silent until someone dispatches.
 run_test "OTA-14" "the production bundle is downloadable" \
-  "curl -fsS -I --max-time 30 '$OTA_BASE/haos_ihost-${VERSION_ID}.raucb' | grep -qi '200'"
+  "$OTA_CURL -fsS -I --max-time 30 '$OTA_BASE/haos_ihost-${VERSION_ID}.raucb' | grep -qi '200'"
 
 run_test "OTA-15" "the production bundle ships its checksum" \
-  "curl -fsS --max-time 20 '$OTA_BASE/haos_ihost-${VERSION_ID}.raucb.sha256' | grep -qE '^[0-9a-f]{64}  haos_ihost'"
+  "$OTA_CURL -fsS --max-time 20 '$OTA_BASE/haos_ihost-${VERSION_ID}.raucb.sha256' | grep -qE '^[0-9a-f]{64}  haos_ihost'"
 
 # The rc slot for the release THIS device runs. A device on an rc whose slot
 # was pruned cannot be re-installed or rolled forward without a re-stage — the
 # check says so while it is cheap to fix, not during an incident.
 if [ -n "$DEV_RELEASE" ]; then
   run_test "OTA-16" "this device's own release ($DEV_RELEASE) is still staged" \
-    "curl -fsS -I --max-time 30 '$OTA_BASE/$DEV_RELEASE/haos_ihost-${VERSION_ID}.raucb' | grep -qi '200'"
+    "$OTA_CURL -fsS -I --max-time 30 '$OTA_BASE/$DEV_RELEASE/haos_ihost-${VERSION_ID}.raucb' | grep -qi '200'"
 else
   skip_test "OTA-16" "/etc/ga-release is empty — cannot ask for this device's slot"
 fi
+
+# OTA-17..20 — WHERE the download connects. ga-rauc-install fetches with
+# `curl --resolve ota.greenautarky.com:443:<pin>` and the pin comes from
+# /run/ga-resolve-ota.active. On the host, nsswitch asks systemd-resolved
+# before /etc/hosts, so the hosts entry alone does not decide the address; only
+# the pin does. These checks hold the device to the mesh path.
+#
+# in_mesh: first octet 100, second 64..127 (the CGNAT range the mesh uses).
+in_mesh() {
+  case "$1" in
+    "" | *[!0-9.]* | *..* | .* | *. | *.*.*.*.* ) return 1 ;;
+    *.*.*.* ) ;;
+    * ) return 1 ;;
+  esac
+  _o1=${1%%.*}; _r=${1#*.}; _o2=${_r%%.*}
+  [ "$_o1" = 100 ] && [ "$_o2" -ge 64 ] 2>/dev/null && [ "$_o2" -le 127 ]
+}
+
+run_test "OTA-17" "the pinned OTA endpoint is a mesh address (${OTA_PIN:-none})" \
+  "in_mesh '$OTA_PIN'"
+
+# Static, on the shipped helper: every curl in it pins the endpoint, and the
+# pin is the resolver's file. A curl without --resolve would follow DNS.
+RAUC_HELPER=/usr/sbin/ga-rauc-install
+rauc_helper_pins() {
+  grep -q '/run/ga-resolve-ota.active' "$RAUC_HELPER" || return 1
+  _curls=$(grep -E '^[[:space:]]*(if ! )?curl ' "$RAUC_HELPER")
+  [ -n "$_curls" ] || return 1          # zero curl lines inspected is a failure
+  ! printf '%s\n' "$_curls" | grep -qv -- '--resolve "$OTA_RESOLVE"'
+}
+run_test "OTA-18" "ga-rauc-install downloads only through the pinned endpoint" \
+  "rauc_helper_pins"
+
+# The probe object the resolver asks for must be served through the pin: this
+# is what makes the pin a measured choice rather than the first list entry.
+OTA_PROBE=$( (. /etc/ga-services.conf; [ -f /mnt/data/ga-services.conf ] && . /mnt/data/ga-services.conf; echo "${GA_OTA_PROBE_PATH:-}") 2>/dev/null)
+if [ -n "$OTA_PROBE" ]; then
+  run_test "OTA-19" "the resolver's probe object ($OTA_PROBE) is served via the pin" \
+    "$OTA_CURL -fsS --max-time 20 -o /dev/null 'https://ota.greenautarky.com$OTA_PROBE'"
+else
+  run_test "OTA-19" "ga-services.conf names the resolver's probe object (GA_OTA_PROBE_PATH)" "false"
+fi
+
+# Live: the connection a download would make lands on a mesh address. curl
+# reports the peer it actually connected to, not the one it was told about.
+OTA_PEER=$($OTA_CURL -sS --max-time 20 -o /dev/null -w '%{remote_ip}' "$OTA_BASE/PROMOTED.json" 2>/dev/null)
+run_test "OTA-20" "an OTA download connects to a mesh address (peer ${OTA_PEER:-none})" \
+  "in_mesh '$OTA_PEER'"
 
 suite_end

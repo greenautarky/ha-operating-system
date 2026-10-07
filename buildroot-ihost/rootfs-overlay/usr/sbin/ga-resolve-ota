@@ -1,10 +1,22 @@
 #!/bin/sh
 # ga-resolve-ota — Health-check OTA endpoints, write best-IP to /run
 #
-# Probes each IP in $GA_OTA_IPS (priority order, space-separated) by issuing
-# a TLS+HTTP HEAD request via curl --resolve. Writes the first reachable IP
-# to /run/ga-resolve-ota.active. If the chosen IP changed, re-triggers
+# Probes each IP in $GA_OTA_IPS (priority order, space-separated) by fetching
+# a known store object ($GA_OTA_PROBE_PATH) via curl --resolve, with TLS
+# verification and --fail. Writes the first IP that serves it to
+# /run/ga-resolve-ota.active. If the chosen IP changed, re-triggers
 # ga-update-hosts.service so /etc/hosts reflects the new path.
+#
+# The consumer that matters is ga-rauc-install: it downloads every bundle with
+# `curl --resolve <host>:443:<this IP>`, so the IP written here IS the address
+# an OTA download connects to. /etc/hosts alone does not decide that on the
+# host: nsswitch asks systemd-resolved before `files`, so the hosts entry is
+# not what reliably decides where a plain lookup of the OTA name goes.
+#
+# "Reachable" means the probe object was SERVED: an HTTP 2xx over a verified
+# TLS session. A 403, a 404, a certificate the download would reject, a
+# timeout — each counts as NOT reachable. A probe that accepts any answer
+# picks an address the download then fails on.
 #
 # Called from:
 #   - ga-resolve-ota.service (boot oneshot, before ga-update-hosts)
@@ -20,6 +32,9 @@ CONF_OVERRIDE="/mnt/data/ga-services.conf"
 CONF_DEFAULT="/etc/ga-services.conf"
 ACTIVE_FILE="/run/ga-resolve-ota.active"
 PROBE_TIMEOUT=4
+# Default probe object, used when ga-services.conf does not name one. It must
+# exist in the store's root (ga-ops owns the store).
+DEFAULT_PROBE_PATH="/ga-ota-health"
 
 # The override LAYERS ON TOP of the baked default (see ga-enroll for why).
 _loaded=""
@@ -41,29 +56,74 @@ if [ -z "${GA_OTA_HOST:-}" ] || [ -z "${GA_OTA_IPS:-}" ]; then
     exit 1
 fi
 
+PROBE_PATH="${GA_OTA_PROBE_PATH:-$DEFAULT_PROBE_PATH}"
+case "$PROBE_PATH" in
+    /*) ;;
+    *) PROBE_PATH="/$PROBE_PATH" ;;
+esac
+
+# Log at error level when stderr is the journal ("<3>" = err, SyslogLevelPrefix=).
+err() {
+    if [ -n "${JOURNAL_STREAM:-}" ]; then
+        echo "<3>ga-resolve-ota: ERROR — $*" >&2
+    else
+        echo "ga-resolve-ota: ERROR — $*" >&2
+    fi
+}
+
+# in_mesh <addr> — true for a dotted IPv4 address in the CGNAT range the GA
+# mesh uses (first octet 100, second octet 64..127). The OTA store serves the
+# mesh only, so a candidate outside it can never be the right pick — most
+# likely a stale /mnt/data override. It is skipped, loudly, never probed.
+in_mesh() {
+    case "$1" in
+        "" | *[!0-9.]* | *..* | .* | *. | *.*.*.*.* ) return 1 ;;
+        *.*.*.* ) ;;
+        * ) return 1 ;;
+    esac
+    _o1=${1%%.*}; _r=${1#*.}; _o2=${_r%%.*}
+    [ "$_o1" = 100 ] && [ "$_o2" -ge 64 ] 2>/dev/null && [ "$_o2" -le 127 ]
+}
+
+MESH_IPS=""
+for ip in $GA_OTA_IPS; do
+    if in_mesh "$ip"; then
+        MESH_IPS="${MESH_IPS:+$MESH_IPS }$ip"
+    else
+        err "GA_OTA_IPS entry ${ip} is not a mesh address — skipped (check /mnt/data/ga-services.conf)"
+    fi
+done
+if [ -z "$MESH_IPS" ]; then
+    err "GA_OTA_IPS has no mesh address — no OTA endpoint pinned"
+    rm -f "$ACTIVE_FILE"
+    exit 1
+fi
+
 CURRENT=""
 [ -f "$ACTIVE_FILE" ] && CURRENT=$(cat "$ACTIVE_FILE" 2>/dev/null || echo "")
 
 CHOSEN=""
-for ip in $GA_OTA_IPS; do
-    if curl -sk --resolve "${GA_OTA_HOST}:443:${ip}" \
+for ip in $MESH_IPS; do
+    # --fail: an HTTP error status is a failed probe, not a reachable path.
+    # No -k: the download verifies TLS, so the probe does too.
+    if curl -sf --resolve "${GA_OTA_HOST}:443:${ip}" \
             --connect-timeout "$PROBE_TIMEOUT" --max-time "$PROBE_TIMEOUT" \
-            -o /dev/null -I "https://${GA_OTA_HOST}/" 2>/dev/null; then
+            -o /dev/null "https://${GA_OTA_HOST}${PROBE_PATH}" 2>/dev/null; then
         CHOSEN="$ip"
-        echo "ga-resolve-ota: ${GA_OTA_HOST} reachable via ${ip}"
+        echo "ga-resolve-ota: ${GA_OTA_HOST}${PROBE_PATH} served via ${ip}"
         break
     else
-        echo "ga-resolve-ota: ${GA_OTA_HOST} NOT reachable via ${ip}"
+        echo "ga-resolve-ota: ${GA_OTA_HOST}${PROBE_PATH} NOT served via ${ip}"
     fi
 done
 
 if [ -z "$CHOSEN" ]; then
-    if [ -n "$CURRENT" ]; then
-        echo "ga-resolve-ota: WARN — no path reachable, retaining last-known ${CURRENT}"
+    if [ -n "$CURRENT" ] && in_mesh "$CURRENT"; then
+        err "no OTA path serves ${PROBE_PATH} — retaining last-known ${CURRENT} (unverified)"
         exit 0
     fi
-    FIRST_IP=$(echo "$GA_OTA_IPS" | awk '{print $1}')
-    echo "ga-resolve-ota: WARN — no path reachable, defaulting to first ${FIRST_IP}"
+    FIRST_IP=$(echo "$MESH_IPS" | awk '{print $1}')
+    err "no OTA path serves ${PROBE_PATH} — defaulting to first entry ${FIRST_IP} (unverified)"
     CHOSEN="$FIRST_IP"
 fi
 

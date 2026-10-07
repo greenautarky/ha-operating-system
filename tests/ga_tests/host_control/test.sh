@@ -121,6 +121,11 @@ fresh() {
   mkdir -p "$C/data/supervisor/share" "$C/data/supervisor/addons/data/99f1cad4_ga_manager" \
            "$C/boot" "$C/run" "$C/tmp"
   printf 'UNRELATED-CONTENT-1\n' > "$C/data/other-file"
+  # ga-rauc-install downloads only through the endpoint ga-resolve-ota pinned
+  # (tests/ga_tests/ota_fetch covers that seam); give every case a pin so this
+  # suite keeps testing WHICH requests are acted on. Mesh address assembled at
+  # run time so the public repo gains no address literal.
+  printf '100.%d.0.21\n' 100 > "$C/run/ga-resolve-ota.active"
   : > "$C/data/.calls"
   SHARE="$C/data/supervisor/share"
   GM="$C/data/supervisor/addons/data/99f1cad4_ga_manager"
