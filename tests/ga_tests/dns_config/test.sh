@@ -11,6 +11,7 @@
 # ga-flasher-py TODO §"DNS Fallback CPU Spike".
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
+. "$SCRIPT_DIR/expected_ip.sh"
 
 suite_start "DNS Config"
 
@@ -76,16 +77,27 @@ run_test "DNS-11" "github.com resolves" \
   "nslookup github.com $COREDNS_HOST 2>/dev/null | grep -E 'Address[: ]+[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+' | grep -v '$COREDNS_HOST'"
 
 # GA hostnames must resolve via Supervisor /etc/hosts (commit 8f911d6 etc.) before
-# any external query. Verify the IP matches what's in ga-services.conf.
-EXPECTED_GA_IP=$(. /etc/ga-services.conf 2>/dev/null && echo "$GA_SERVICES_IP")
-[ -f /mnt/data/ga-services.conf ] && EXPECTED_GA_IP=$(. /mnt/data/ga-services.conf 2>/dev/null && echo "$GA_SERVICES_IP")
-EXPECTED_GA_IP="${EXPECTED_GA_IP:-100.126.142.217}"
+# any external query, to the address the device is configured for. The
+# expectation follows the writers' precedence (expected_ip.sh): baked conf,
+# override layered on top per key, and for ota the active OTA pick first.
+# No hardcoded fallback — an unreadable expectation is a FAIL with the reason.
+CONF_BAKED=/etc/ga-services.conf
+CONF_OVERRIDE=/mnt/data/ga-services.conf
+OTA_ACTIVE=/run/ga-resolve-ota.active
 
-run_test "DNS-12" "ota.greenautarky.com resolves to GA IP ($EXPECTED_GA_IP)" \
-  "nslookup ota.greenautarky.com $COREDNS_HOST 2>/dev/null | grep -q '$EXPECTED_GA_IP'"
+if WANT_OTA="$(ga_expected_ota_ip "$CONF_BAKED" "$CONF_OVERRIDE" "$OTA_ACTIVE")"; then
+  run_test "DNS-12" "ota.greenautarky.com resolves to the OTA address ($WANT_OTA)" \
+    "nslookup ota.greenautarky.com $COREDNS_HOST 2>/dev/null | grep -qwF '$WANT_OTA'"
+else
+  show_verdict "DNS-12" "ota.greenautarky.com resolves to the OTA address" 1 "$WANT_OTA"
+fi
 
-run_test "DNS-13" "influx.greenautarky.com resolves to GA IP ($EXPECTED_GA_IP)" \
-  "nslookup influx.greenautarky.com $COREDNS_HOST 2>/dev/null | grep -q '$EXPECTED_GA_IP'"
+if WANT_SVC="$(ga_expected_services_ip "$CONF_BAKED" "$CONF_OVERRIDE")"; then
+  run_test "DNS-13" "influx.greenautarky.com resolves to GA_SERVICES_IP ($WANT_SVC)" \
+    "nslookup influx.greenautarky.com $COREDNS_HOST 2>/dev/null | grep -qwF '$WANT_SVC'"
+else
+  show_verdict "DNS-13" "influx.greenautarky.com resolves to GA_SERVICES_IP" 1 "$WANT_SVC"
+fi
 
 # =========================================================================
 # CPU spike protection (DNS-20..21)
