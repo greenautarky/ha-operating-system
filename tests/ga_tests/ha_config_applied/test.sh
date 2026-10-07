@@ -100,7 +100,7 @@ run_test "HCA-06" "at least one GA integration is declared" \
 # a component staged by an OTA that nothing ever enabled.
 for d in $STAGED; do
   run_test "HCA-07:$d" "staged component '$d' is declared for loading" \
-    "echo '$DECLARED' | grep -qx '$d'"
+    "echo \"\$DECLARED\" | grep -qx '$d'"
 done
 
 # Every declared domain must be LOADED IN CORE. This is the assertion that
@@ -202,7 +202,7 @@ elif [ -n "$HOSTNAME_NOW" ] && require_ha_port "HCA-16a"; then
   # url failed and one with a stale `:8123` url (a closed port there) passed.
   _want_suffix=$(ga_ha_url_port "$HA_PORT")
   run_test_show "HCA-16" "internal_url is http://$HOSTNAME_NOW.local$_want_suffix (live hostname, Core port $HA_PORT)" \
-    "echo 'internal_url=$want_int'; echo '$want_int' | grep -qix 'http://$HOSTNAME_NOW\.local$_want_suffix/\{0,1\}'"
+    "echo \"internal_url=\$want_int\"; echo \"\$want_int\" | grep -qix 'http://$HOSTNAME_NOW\.local$_want_suffix/\{0,1\}'"
 elif [ -n "$HOSTNAME_NOW" ]; then
   : # require_ha_port recorded HCA-16a as failed, with the reason
 else
@@ -212,7 +212,7 @@ fi
 if [ -n "$URL_PREFIX" ]; then
   want_ext=$(cfg_value external_url)
   run_test "HCA-17" "external_url names THIS device's prefix ($URL_PREFIX)" \
-    "echo '$want_ext' | grep -q '://$URL_PREFIX\.'"
+    "echo \"\$want_ext\" | grep -q '://$URL_PREFIX\.'"
   if [ -n "$want_ext" ]; then
     run_test "HCA-17b" "Core runs the configured external_url" \
       "grep -q '\"external_url\": *\"$want_ext\"' $CORE_CFG"

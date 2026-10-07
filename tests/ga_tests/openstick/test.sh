@@ -78,7 +78,7 @@ run_test "OS-04" "WiFi scan completed" \
 # being read. A stick that IS in range still has to be a valid GA-#### one:
 # that is OS-06, and it still fails.
 if [ -n "$GA_SSIDS" ]; then
-  run_test "OS-05" "OpenStick GA-* SSID detected in range" "[ -n '$GA_SSIDS' ]"
+  run_test "OS-05" "OpenStick GA-* SSID detected in range" "[ -n \"\$GA_SSIDS\" ]"
 else
   skip_test "OS-05" "OpenStick GA-* SSID detected in range" \
     "no GA-* SSID in scan range — no OpenStick powered near this device"
@@ -100,7 +100,7 @@ else
   # OS-05 already passed above
 
   run_test "OS-06" "SSID format valid (GA-XXXX)" \
-    "echo '$TARGET_SSID' | grep -qE '^GA-[0-9]{4}$'"
+    "echo \"\$TARGET_SSID\" | grep -qE '^GA-[0-9]{4}$'"
 
   # Derive PSK
   SECRET=$(cat "$KEY_FILE" | tr -d '\n')
@@ -267,7 +267,7 @@ if [ "$CONN_EXISTS" -gt 0 ]; then
     sleep 1
     GW_ARP=$(ip neigh show "$GW" dev wlan0 2>/dev/null)
     run_test "OS-23" "Gateway ARP resolves on wlan0 (no INCOMPLETE)" \
-      "echo '$GW_ARP' | grep -qE 'lladdr [0-9a-f:]+' && ! echo '$GW_ARP' | grep -q INCOMPLETE"
+      "echo \"\$GW_ARP\" | grep -qE 'lladdr [0-9a-f:]+' && ! echo \"\$GW_ARP\" | grep -q INCOMPLETE"
   else
     # NM doesn't expose IP4.GATEWAY (e.g. connection just created, DHCP not
     # yet completed, or interface inactive). Not a regression of the bug

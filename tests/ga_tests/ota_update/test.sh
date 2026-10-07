@@ -94,7 +94,7 @@ if [ -f "$OTA_MARKER" ] && grep -q "phase2_rollback" "$OTA_MARKER" 2>/dev/null; 
   ROLLBACK_FROM=$(grep 'ROLLBACK_FROM=' "$OTA_MARKER" 2>/dev/null | cut -d= -f2)
 
   run_test "OTA-11c" "Booted from OLD slot after rollback (expect $EXPECTED_SLOT)" \
-    "echo '$BOOTED_SLOT' | grep -q '$EXPECTED_SLOT'"
+    "echo \"\$BOOTED_SLOT\" | grep -q '$EXPECTED_SLOT'"
 
   if [ -f "$OTA_DATA_MARKER" ]; then
     MARKER_VAL=$(cat "$OTA_DATA_MARKER" 2>/dev/null)
@@ -130,7 +130,7 @@ elif [ -f "$OTA_MARKER" ] && grep -q "phase1_done" "$OTA_MARKER" 2>/dev/null; th
   PRE_OTA_SLOT=$(grep 'PRE_OTA_SLOT=' "$OTA_MARKER" 2>/dev/null | cut -d= -f2)
 
   run_test "OTA-09d" "Booted from NEW slot (was $PRE_OTA_SLOT, now $EXPECTED_SLOT)" \
-    "echo '$BOOTED_SLOT' | grep -q '$EXPECTED_SLOT'"
+    "echo \"\$BOOTED_SLOT\" | grep -q '$EXPECTED_SLOT'"
 
   if [ -n "$EXPECTED_VER" ]; then
     run_test "OTA-09e" "OS version matches bundle ($EXPECTED_VER)" \

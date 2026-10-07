@@ -217,7 +217,7 @@ else
     skip_test "CFG-34" "Core RUNS trusted_proxies with the services address" "publisher reports no ga_services_ip in $SERVICES_JSON"
   else
     run_test_show "CFG-34" "Core RUNS trusted_proxies with the services address" \
-      "echo '$SERVICES_JSON missing — the OS did not publish the services address (see publish_services)'; false"
+      "echo \"\$SERVICES_JSON missing — the OS did not publish the services address (see publish_services)\"; false"
   fi
   # A config configured but not promoted auto-reverts in 5 min; one that failed
   # its trial is kept as pending with an error. Either way what runs is not
@@ -238,7 +238,7 @@ if [ "$_core_lines" -eq 0 ]; then
   warn_test "CFG-32c" "Core refused no proxied request (last $PROXY_LOG_WINDOW: 0 log lines to inspect)" "false"
 else
   run_test_show "CFG-32c" "Core refused no proxied request: no 'not set-up for reverse proxies' / 'untrusted proxy' in its log (last $PROXY_LOG_WINDOW)" \
-    "echo '$_core_lines lines inspected, $_proxy_refusals proxy refusals'; [ '$_proxy_refusals' -eq 0 ]"
+    "echo \"\$_core_lines lines inspected, \$_proxy_refusals proxy refusals\"; [ '$_proxy_refusals' -eq 0 ]"
 fi
 
 if [ -f "$HA_CFG" ]; then

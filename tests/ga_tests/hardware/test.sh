@@ -205,6 +205,6 @@ run_test "HW-19d" "jq works" \
 
 DMESG_ERRS=$(dmesg | grep -ciE 'error|fail' 2>/dev/null || echo 0)
 run_test_show "HW-SUM" "Total dmesg error/fail mentions" \
-  "echo '$DMESG_ERRS lines (review with: dmesg | grep -iE error.fail)'"
+  "echo \"\$DMESG_ERRS lines (review with: dmesg | grep -iE error.fail)\""
 
 suite_end
