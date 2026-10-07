@@ -1,0 +1,18 @@
+[Unit]
+Description=Apply this device's own root password hash (ADR-0039)
+Documentation=https://github.com/greenautarky/ha-operating-system/blob/master/buildroot-external/rootfs-overlay/usr/libexec/ga-root-shadow
+# Runs before sysinit.target, so before every getty and before rescue.service
+# (which is ordered after sysinit.target). The default dependencies would order
+# it AFTER sysinit.target, hence DefaultDependencies=no.
+DefaultDependencies=no
+After=mnt-overlay.mount hassos-overlay.service mnt-data.mount
+Before=sysinit.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/ga-root-shadow
+
+[Install]
+WantedBy=sysinit.target
