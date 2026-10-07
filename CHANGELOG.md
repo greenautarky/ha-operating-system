@@ -14,6 +14,16 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased — the host takes control requests from ga_manager only out of the add-on's own data directory
 
+### Security — Docker bridge-subnet firewall patch from upstream HAOS
+
+`buildroot-external/patches/docker-engine/` carries upstream HAOS's Docker
+engine patch "bridge: protect bridge subnet from direct external access in raw
+PREROUTING" (HAOS #4605, refreshed for Docker 29.8.2 in #5056), byte-identical
+to HAOS master. Docker drops packets addressed to a NAT bridge network's
+subnet unless they arrive on that bridge, on loopback or on a configured
+trusted interface. This is Docker-level hardening that complements the
+Supervisor's gateway rule.
+
 ### Security — kernel 6.12.103 -> 6.12.112
 
 The iHost kernel moves to the 6.12.112 longterm stable release (kernel.org
