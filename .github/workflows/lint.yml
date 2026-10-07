@@ -209,6 +209,18 @@ jobs:
         timeout-minutes: 10
         run: sh tests/ga_tests/host_control/test.sh
 
+      - name: OTA downloads use the pinned mesh endpoint
+        # Drives the REAL ga-resolve-ota and ga-rauc-install inside a bubblewrap
+        # sandbox with a curl stub that models a server per address. The
+        # resolver must pin only a mesh endpoint that SERVES the probe object
+        # (403/404/TLS failure = not reachable, non-mesh candidates never
+        # probed); the installer must download with `curl --resolve` to that
+        # pin, run the resolver once when there is none, and fail closed —
+        # never through name resolution. Red-proven against origin/master
+        # before this change: 19 of 21 checks fail.
+        timeout-minutes: 10
+        run: sh tests/ga_tests/ota_fetch/test.sh
+
       - name: gen_expected.sh works from any cwd (the release-train's call shape)
         # The generator computed its output path relative to the CALLER's cwd and
         # then cd'd to the repo root. So it worked from the repo root — how every

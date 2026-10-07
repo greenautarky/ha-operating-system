@@ -298,9 +298,15 @@ DS="$W/dstub"; mkdir -p "$DS"
 printf '#!/bin/sh\nexit 0\n' > "$DS/mkdir"
 printf '#!/bin/sh\nfor a; do case "$a" in https://*) echo "$a" >> "%s/curl.log";; esac; done\nexit 22\n' "$W" > "$DS/curl"
 chmod +x "$DS/mkdir" "$DS/curl"
+# ga-rauc-install downloads only through the endpoint ga-resolve-ota pinned
+# (tests/ga_tests/ota_fetch covers that); give it one so this part keeps testing
+# the label. Mesh address assembled at run time: no address literal in a
+# public repository.
+printf '100.%d.0.21\n' 100 > "$W/ota.active"
 label() {  # <want: ok|refuse> <label> <desc> [<expected first URL>]
   rm -f "$W/curl.log"
-  local rc=0; PATH="$DS:$PATH" sh "$INSTALL" 16.3.1.9 "$2" >"$W/d.out" 2>&1 || rc=$?
+  local rc=0; PATH="$DS:$PATH" GA_OTA_ACTIVE_FILE="$W/ota.active" GA_RESOLVE_OTA_BIN=/bin/false \
+    sh "$INSTALL" 16.3.1.9 "$2" >"$W/d.out" 2>&1 || rc=$?
   if [[ "$1" == refuse ]]; then
     if [[ "$rc" == 2 ]] && grep -q 'refusing ga_release' "$W/d.out" && [[ ! -s "$W/curl.log" ]]; then ok "label $3 → refused, nothing downloaded"
     else bad "label $3 → rc=$rc, downloads=$(cat "$W/curl.log" 2>/dev/null | tr '\n' ' '): $(tail -1 "$W/d.out")"; fi

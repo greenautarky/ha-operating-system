@@ -14,6 +14,26 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased — the host takes control requests from ga_manager only out of the add-on's own data directory
 
+### Changed — OTA downloads use the pinned mesh endpoint
+
+`ga-rauc-install` now downloads every bundle with
+`curl --resolve ota.greenautarky.com:443:<pin>`, where the pin is the endpoint
+`ga-resolve-ota` wrote to `/run/ga-resolve-ota.active`. On the host, nsswitch
+asks systemd-resolved before `/etc/hosts`, so the hosts entry alone did not
+decide where the download connected. With no pin the installer runs the
+resolver once; with still no mesh pin it refuses to download (exit 3) rather
+than fall back to name resolution. TLS verification against the host name is
+unchanged.
+
+`ga-resolve-ota` now probes a known store object (`GA_OTA_PROBE_PATH`,
+default `/ga-ota-health`) with `--fail` and TLS verification: a 403, a 404 or a
+rejected certificate is not reachable. Candidates outside the mesh address
+range are skipped and logged at error level, so a stale `/mnt/data` override
+cannot pin one. `GA_OTA_IPS` lists the two mesh endpoints only. Nsswitch is
+unchanged on purpose: reordering it would change resolution for every name on
+the host. Host suite: `tests/ga_tests/ota_fetch` (21 checks); device checks
+OTA-17..20, and OTA-12..16 now ask the store through the pin.
+
 ### Fixed — the SSH label principal is compared with the device's own identity, or refused
 
 `ga-ssh-principal-label` compared the label ga_manager delivers with

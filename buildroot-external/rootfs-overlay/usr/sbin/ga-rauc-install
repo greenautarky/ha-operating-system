@@ -29,6 +29,14 @@
 # releases/<version>/haos_ihost-<version>.raucb. Then `rauc info` +
 # `rauc install` + a 5-second-delayed reboot.
 #
+# Every download connects to the OTA endpoint ga-resolve-ota pinned in
+# /run/ga-resolve-ota.active, via `curl --resolve`. Name resolution is not
+# consulted for the OTA host: on the host, nsswitch asks systemd-resolved
+# before /etc/hosts, so the /etc/hosts entry ga-update-hosts writes is not
+# what reliably decides where a plain `curl https://ota...` connects. The
+# URL keeps the host name, so TLS still verifies the certificate against it.
+# No pinned endpoint (after one resolver run) = no download.
+#
 # Background — why the path-watcher pattern instead of the original
 # BOSv1.2.17 systemd template @.service: Supervisor's REST API
 # (verified in 2025.11.4.6 source) exposes /host/services as GET-only;
@@ -43,6 +51,11 @@ set -eu
 # GA_GM_DATA_DIR relocates ga_manager's data directory (host tests only;
 # nothing on a device sets it).
 GM_DATA_DIR="${GA_GM_DATA_DIR:-/mnt/data/supervisor/addons/data/99f1cad4_ga_manager}"
+# GA_RESOLVE_OTA_BIN and GA_OTA_ACTIVE_FILE relocate the resolver and its pick
+# (host tests only; nothing on a device sets them).
+RESOLVE_OTA_BIN="${GA_RESOLVE_OTA_BIN:-/usr/sbin/ga-resolve-ota}"
+OTA_ACTIVE_FILE="${GA_OTA_ACTIVE_FILE:-/run/ga-resolve-ota.active}"
+OTA_HOST="ota.greenautarky.com"
 REQUEST_FILE="$GM_DATA_DIR/ga-rauc-install-request"
 # Optional sidecar carrying the GA release label (e.g. BOSv1.2.21-rc19). When
 # present, the bundle is pulled from the per-rc CANARY slot
@@ -122,7 +135,45 @@ fi
 # Per-rc slot when a ga_release is given, else the version-only prod slot.
 # With a ga_release we FALL BACK to the prod slot on a 404 so a device is never
 # stranded if the per-rc bundle wasn't staged (e.g. transitional roll).
-BASE_URL="https://ota.greenautarky.com/releases/${VERSION}"
+# The endpoint every download below connects to. Read it from the resolver's
+# pick; if there is none yet (boot race, /run cleared), run the resolver once.
+# Only a dotted IPv4 address in the mesh's CGNAT range (first octet 100,
+# second 64..127) is accepted — the same rule ga-resolve-ota applies to its
+# candidates. Anything else is treated as no pick at all.
+in_mesh() {
+    case "$1" in
+        "" | *[!0-9.]* | *..* | .* | *. | *.*.*.*.* ) return 1 ;;
+        *.*.*.* ) ;;
+        * ) return 1 ;;
+    esac
+    _o1=${1%%.*}; _r=${1#*.}; _o2=${_r%%.*}
+    [ "$_o1" = 100 ] && [ "$_o2" -ge 64 ] 2>/dev/null && [ "$_o2" -le 127 ]
+}
+read_pinned_ip() {
+    _ip=""
+    if regular_file "$OTA_ACTIVE_FILE"; then
+        _ip="$(head -c 64 "$OTA_ACTIVE_FILE" | tr -d '[:space:]')"
+    fi
+    if [ -n "$_ip" ] && ! in_mesh "$_ip"; then
+        echo "[ga-rauc-install] $OTA_ACTIVE_FILE holds '$_ip', not a mesh address — ignored" >&2
+        _ip=""
+    fi
+    printf '%s' "$_ip"
+}
+OTA_IP="$(read_pinned_ip)"
+if [ -z "$OTA_IP" ]; then
+    echo "[ga-rauc-install] no pinned OTA endpoint in $OTA_ACTIVE_FILE — running $RESOLVE_OTA_BIN" >&2
+    "$RESOLVE_OTA_BIN" >&2 || true
+    OTA_IP="$(read_pinned_ip)"
+fi
+if [ -z "$OTA_IP" ]; then
+    echo "[ga-rauc-install] FATAL: no pinned OTA endpoint — $OTA_ACTIVE_FILE is missing or invalid after running $RESOLVE_OTA_BIN; refusing to download via name resolution" >&2
+    exit 3
+fi
+OTA_RESOLVE="${OTA_HOST}:443:${OTA_IP}"
+echo "[ga-rauc-install] OTA endpoint: ${OTA_HOST} pinned to ${OTA_IP} (from $OTA_ACTIVE_FILE)"
+
+BASE_URL="https://${OTA_HOST}/releases/${VERSION}"
 if [ -n "$GA_RELEASE" ]; then
     PRIMARY_URL="${BASE_URL}/${GA_RELEASE}/haos_ihost-${VERSION}.raucb"
     FALLBACK_URL="${BASE_URL}/haos_ihost-${VERSION}.raucb"
@@ -141,15 +192,15 @@ mkdir -p "$STAGING_DIR"
 BUNDLE="$STAGING_DIR/ga-rauc-install-${VERSION}.raucb"
 
 echo "[ga-rauc-install] downloading $PRIMARY_URL"
-if ! curl --fail --silent --show-error --location --output "$BUNDLE" "$PRIMARY_URL"; then
+if ! curl --fail --silent --show-error --location --resolve "$OTA_RESOLVE" --output "$BUNDLE" "$PRIMARY_URL"; then
     if [ -n "$FALLBACK_URL" ]; then
         echo "[ga-rauc-install] per-rc slot miss — falling back to $FALLBACK_URL" >&2
-        if ! curl --fail --silent --show-error --location --output "$BUNDLE" "$FALLBACK_URL"; then
-            echo "[ga-rauc-install] FATAL: download failed for $PRIMARY_URL and $FALLBACK_URL" >&2
+        if ! curl --fail --silent --show-error --location --resolve "$OTA_RESOLVE" --output "$BUNDLE" "$FALLBACK_URL"; then
+            echo "[ga-rauc-install] FATAL: download failed for $PRIMARY_URL and $FALLBACK_URL via the pinned endpoint ${OTA_IP}" >&2
             exit 3
         fi
     else
-        echo "[ga-rauc-install] FATAL: download failed for $PRIMARY_URL" >&2
+        echo "[ga-rauc-install] FATAL: download failed for $PRIMARY_URL via the pinned endpoint ${OTA_IP}" >&2
         exit 3
     fi
 fi
