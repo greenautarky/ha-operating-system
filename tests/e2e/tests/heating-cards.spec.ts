@@ -53,11 +53,13 @@ import {
   expectedLowCount,
   foreignBatteries,
   loggableEntries,
+  maintenanceRowProblems,
   reasonMismatches,
   reasonText,
   targetLine,
   type ChangeEntry,
   type EntityInfo,
+  type MaintenanceRow,
   type RenderedLine,
 } from '../helpers/heating-cards';
 
@@ -505,9 +507,22 @@ test.describe('Wartung — ga-maintenance-card', () => {
       const card = page.locator('ga-maintenance-card').first();
       await expect(card, `${v.path}: Wartung not rendered`).toBeVisible({ timeout: 30_000 });
       await expect(card.locator('.hdr')).toHaveText('Wartung');
-      const low = expectedLowCount(batteries.map(b => byId.get(b)?.state));
-      await expect(card.locator('li'), `${v.path}: one line per low battery`).toHaveCount(low);
-      if (low === 0) await expect(card.locator('.quiet')).toHaveText(MAINTENANCE_QUIET);
+      // Rows are judged BY KIND. Since bundle 1.23.2 Wartung also lists radio
+      // health ("Funkverbindung schwach", "setzt eigenen Sollwert (2×)"), so
+      // counting every `li` as a low battery failed on a correct card (bench canary,
+      // rc8, 2026-10-07). One battery row per low reading; no row of a kind
+      // nobody pinned.
+      const readings = batteries.map(b => byId.get(b)?.state);
+      const low = expectedLowCount(readings);
+      let rows: MaintenanceRow[] = [];
+      await expect.poll(async () => {
+        rows = await card.locator('li').evaluateAll(lis => lis.map(li => ({
+          who: (li.querySelector('.who')?.textContent || '').trim(),
+          what: (li.querySelector('.what')?.textContent || '').trim(),
+        })));
+        return maintenanceRowProblems(readings, rows);
+      }, { timeout: 5_000, message: `${v.path}: Wartung rows do not match the readings` }).toEqual([]);
+      if (rows.length === 0) await expect(card.locator('.quiet')).toHaveText(MAINTENANCE_QUIET);
       roomsChecked++;
       batteriesChecked += batteries.length;
     }

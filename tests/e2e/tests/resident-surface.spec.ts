@@ -15,6 +15,7 @@ import {
   missingExpectedPanels,
   personalDashboardsInSidebar,
   renderedLabels,
+  runningBadgeProblems,
   unmappedAssets,
   unregisteredAssets,
   type CustomCardEntry,
@@ -155,6 +156,14 @@ async function isAdmin(page: import('@playwright/test').Page): Promise<boolean> 
   })()`) as Promise<boolean>;
 }
 
+/** The Core version the frontend is talking to (`hass.config.version`), or null. */
+async function coreVersion(page: import('@playwright/test').Page): Promise<string | null> {
+  return page.evaluate(`(() => {
+    const hass = (document.querySelector('home-assistant') || {}).hass;
+    return (hass && hass.config && hass.config.version) || null;
+  })()`) as Promise<string | null>;
+}
+
 /** How many areas hold at least one entity the room strategy could show. */
 async function furnishedAreaCount(page: import('@playwright/test').Page): Promise<number> {
   return page.evaluate(`(() => {
@@ -267,15 +276,18 @@ test.describe('Resident surface', () => {
     await openResidentDashboard(page, deviceUrl);
     const all = await panels(page);
     const admin = await isAdmin(page);
+    const core = await coreVersion(page);
 
     // `config` and `developer-tools` are admin-only in Home Assistant itself; a
     // resident never had them. Measured on the first resident-account run
     // (K31, rc39, 2026-09-16): the admin-derived list reported both "gone".
-    const missing = missingExpectedPanels(all, admin);
+    // From Core 2026.2 the developer tools are a page of `config`, not a panel
+    // (2026.8 renamed it /config/tools) — see `missingExpectedPanels`.
+    const missing = missingExpectedPanels(all, admin, core);
     expect(
       missing,
-      `Panels a ${admin ? 'admin' : 'resident'} must keep are gone: ${missing.join(', ')}. Present: ` +
-        `${all.map(p => p.url_path).sort().join(', ')}`,
+      `Panels a ${admin ? 'admin' : 'resident'} must keep on Core ${core ?? '?'} are gone: ` +
+        `${missing.join(', ')}. Present: ${all.map(p => p.url_path).sort().join(', ')}`,
     ).toEqual([]);
   });
 
@@ -818,12 +830,14 @@ test.describe('Resident surface', () => {
         'the screen.',
     ).not.toEqual([]);
 
-    const known = badges.filter(b => ['Heizt', 'Bereit', 'Aus'].includes(b));
+    // Every badge must say one of the pinned words. "Leerlauf" is Home
+    // Assistant's own German for idle and the bundle's word since 1.22.0; the
+    // list without it failed on a correct card (bench canary, rc8, 2026-10-07).
     expect(
-      known.length,
-      `Badges rendered, but none of them says anything a resident reads: ` +
-        `${badges.join(' | ')}. A colour alone is not a statement.`,
-    ).toBeGreaterThan(0);
+      runningBadgeProblems(badges),
+      `Badges rendered that say nothing a resident reads: ` +
+        `${badges.join(' | ')}. A colour or an unknown word is not a statement.`,
+    ).toEqual([]);
   });
 
   test('the sidebar starts collapsed for a resident', async ({ page, deviceUrl }) => {

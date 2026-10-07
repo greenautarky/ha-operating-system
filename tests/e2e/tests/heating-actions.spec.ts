@@ -29,6 +29,7 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/device';
 import { haLogin } from '../helpers/auth';
+import { boostDisplayProblems, boostRoomProblems } from '../helpers/heating-cards';
 
 type State = { entity_id: string; state: string; attributes: Record<string, any> };
 
@@ -140,7 +141,11 @@ test.describe('Heating actions card — layout', () => {
 });
 
 test.describe('Heating actions card — effects on the rooms', () => {
-  test.describe.configure({ mode: 'serial' });
+  // NOT serial. Every test starts from an asserted clean baseline and
+  // restores it in afterEach, so none depends on another; `serial` only made
+  // one failure skip every test after it (12 skipped behind one stale
+  // assertion, bench canary, rc8, 2026-10-07). Order is still file order: one worker,
+  // fullyParallel off (playwright.config.ts).
   let tok = '';
 
   test.beforeEach(async ({ page, deviceUrl }, info) => {
@@ -163,22 +168,26 @@ test.describe('Heating actions card — effects on the rooms', () => {
   test('Boost setzen boosts EVERY room for at most 5 minutes, and Alle → KI ends it', async ({ page, deviceUrl }) => {
     const card = page.locator('ga-heating-actions-card');
     await card.locator('.boost').click();
+    // What the ROOMS did: every room carries an active boost of at most 5 min.
     await expect
-      .poll(async () => rooms(await states(deviceUrl, tok)).filter(r => active(r, 'boost')).length,
-        { timeout: 30_000, message: 'not every room reports an active boost' })
-      .toBe(rooms(await states(deviceUrl, tok)).length);
-    for (const r of rooms(await states(deviceUrl, tok))) {
-      const rem = Number(r.attributes.override.boost.remaining_s);
-      expect(rem, `${r.entity_id} remaining_s`).toBeGreaterThan(0);
-      expect(rem, `${r.entity_id} boosts longer than the card's 5 minutes`).toBeLessThanOrEqual(300);
-    }
-    // The resident sees that a boost is running, without opening anything.
-    // Two elements say it, and both must: the status line (what is running,
-    // and for how long) and the hint (how many rooms, and that the valves are
-    // wide open). One combined locator matched both and failed in strict mode
-    // on a canary on 2026-09-24 while the card was showing exactly the right thing.
-    await expect(card.locator('.status')).toContainText(/Boost/i);
-    await expect(card.locator('.boosthint')).toContainText(/Boost/i);
+      .poll(async () => boostRoomProblems(rooms(await states(deviceUrl, tok))),
+        { timeout: 30_000, message: 'not every room reports an active boost of at most 5 minutes' })
+      .toEqual([]);
+    const n = rooms(await states(deviceUrl, tok)).length;
+    // What the resident SEES, without opening anything: the status line says a
+    // boost runs, in how many rooms and for how long; the hint beside the
+    // "Boost" heading says in how many rooms. The statement is asserted, not
+    // the sentence — bundle 1.23.0 dropped the word "Boost" from the hint (the
+    // heading already says it), and a test that wanted the word failed on a
+    // correct card (bench canary, rc8, 2026-10-07). Two separate locators: one combined
+    // locator matched both and failed in strict mode on 2026-09-24.
+    await expect
+      .poll(async () => boostDisplayProblems(
+        n,
+        (await card.locator('.status').textContent()) ?? '',
+        (await card.locator('.boosthint').textContent()) ?? '',
+      ), { timeout: 10_000, message: 'the card does not show the running boost' })
+      .toEqual([]);
 
     await card.locator('.planall').click();
     await expect

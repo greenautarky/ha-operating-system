@@ -10,10 +10,14 @@
 import { test, expect } from '@playwright/test';
 import {
   SOURCE_REASON,
+  boostDisplayProblems,
+  boostRoomProblems,
   cardFailures,
   expectedLowCount,
   foreignBatteries,
   loggableEntries,
+  maintenanceRowKind,
+  maintenanceRowProblems,
   reasonMismatches,
   targetLine,
   versionAtLeast,
@@ -117,5 +121,112 @@ test.describe('heating-card checks: the shapes they read', () => {
     expect(versionAtLeast('0.13.0', '0.13.0')).toBe(true);
     expect(versionAtLeast('0.12.9', '0.13.0')).toBe(false);
     expect(versionAtLeast('1.0', '0.13.0')).toBe(true);
+  });
+});
+
+// ── Wartung rows by kind (bundle 1.23.2+) ──────────────────────────────────
+
+/** The row measured on a correct card, rc8 (bench canary, 2026-10-07). */
+const RADIO_ROW = { who: 'Thermostat 1', what: 'setzt eigenen Sollwert (2×)' };
+const LOW_ROW = { who: 'Thermostat 2', what: 'Batterie niedrig' };
+const FLAT_ROW = { who: 'Thermometer', what: 'Batterie fast leer' };
+
+test.describe('Wartung rows: must-flag', () => {
+  test('a low battery with no battery row is flagged, even when another row is there', () => {
+    // The radio row must not stand in for the missing battery line.
+    expect(maintenanceRowProblems(['25', '90'], [RADIO_ROW])).toHaveLength(1);
+  });
+
+  test('a battery row for a battery that is fine is flagged', () => {
+    expect(maintenanceRowProblems(['90'], [LOW_ROW])).toHaveLength(1);
+  });
+
+  test('one battery row for two low batteries is flagged', () => {
+    expect(maintenanceRowProblems(['25', '10'], [FLAT_ROW, RADIO_ROW])).toHaveLength(1);
+  });
+
+  test('a row of a kind nobody pinned fails closed', () => {
+    const p = maintenanceRowProblems(['90'], [{ who: 'Ventil', what: 'Ventil klemmt' }]);
+    expect(p).toHaveLength(1);
+    expect(p[0]).toContain('unknown kind');
+  });
+});
+
+test.describe('Wartung rows: must-NOT-flag', () => {
+  test('a radio-health row beside healthy batteries is not a battery line (rc8)', () => {
+    expect(maintenanceRowProblems(['100', '97'], [RADIO_ROW])).toEqual([]);
+  });
+
+  test('every kind the bundle renders is recognised', () => {
+    expect(maintenanceRowKind('Batterie niedrig')).toBe('battery');
+    expect(maintenanceRowKind('Batterie fast leer')).toBe('battery');
+    expect(maintenanceRowKind('Funkverbindung schwach')).toBe('link');
+    expect(maintenanceRowKind('Funkverbindung sehr schwach')).toBe('link');
+    expect(maintenanceRowKind('antwortet verzögert (58 s)')).toBe('radiator');
+    expect(maintenanceRowKind('setzt eigenen Sollwert')).toBe('radiator');
+    expect(maintenanceRowKind('antwortet verzögert (31 s), setzt eigenen Sollwert (3×)')).toBe('radiator');
+  });
+
+  test('low batteries with their rows, plus radio rows, pass', () => {
+    expect(maintenanceRowProblems(['25', '10', '80'], [
+      FLAT_ROW, LOW_ROW, { who: 'Thermostat 3', what: 'Funkverbindung schwach' }, RADIO_ROW,
+    ])).toEqual([]);
+  });
+
+  test('no rows and no low readings pass', () => {
+    expect(maintenanceRowProblems(['100', '', null], [])).toEqual([]);
+  });
+});
+
+// ── a running boost on the Profil card ─────────────────────────────────────
+
+const boosted = (id: string, remaining_s: unknown, active = true) =>
+  ({ entity_id: id, attributes: { override: { boost: { active, remaining_s } } } });
+
+/** What the card showed on rc8 (bench canary, 2026-10-07) — correct. */
+const RC8_STATUS = 'AKTIVBoost läuft — noch 4:58 in 3 Räumen';
+const RC8_HINT = '(läuft in 3 Räumen · Ventile ganz offen)';
+
+test.describe('boost: must-flag', () => {
+  test('a room without an active boost is flagged', () => {
+    expect(boostRoomProblems([boosted('climate.a', 290), boosted('climate.b', 0, false),
+      { entity_id: 'climate.c', attributes: { override: null } }])).toHaveLength(2);
+  });
+
+  test('a boost longer than 5 minutes is flagged', () => {
+    expect(boostRoomProblems([boosted('climate.a', 301)])).toHaveLength(1);
+  });
+
+  test('no rooms at all fails closed', () => {
+    expect(boostRoomProblems([])).toHaveLength(1);
+  });
+
+  test('the idle card is flagged — no boost shown', () => {
+    expect(boostDisplayProblems(3, 'Inaktiv — es gilt der Wochenplan.', '(Ventile kurzzeitig ganz öffnen)').length)
+      .toBeGreaterThanOrEqual(3);
+  });
+
+  test('a wrong room count is flagged on both lines', () => {
+    expect(boostDisplayProblems(3, 'AKTIVBoost läuft — noch 4:58 in 1 Raum', '(läuft in 1 Raum · Ventile ganz offen)'))
+      .toHaveLength(2);
+  });
+
+  test('a countdown past 5:00 is flagged', () => {
+    expect(boostDisplayProblems(3, 'AKTIVBoost läuft — noch 9:59 in 3 Räumen', RC8_HINT)).toHaveLength(1);
+  });
+});
+
+test.describe('boost: must-NOT-flag', () => {
+  test('every room boosted for at most 5 minutes passes', () => {
+    expect(boostRoomProblems([boosted('climate.a', 300), boosted('climate.b', 1)])).toEqual([]);
+  });
+
+  test('the card as rc8 shows it passes — the hint need not repeat "Boost"', () => {
+    expect(boostDisplayProblems(3, RC8_STATUS, RC8_HINT)).toEqual([]);
+  });
+
+  test('one room is "1 Raum", not "1 Räumen"', () => {
+    expect(boostDisplayProblems(1, 'AKTIVBoost läuft — noch 0:42 in 1 Raum', '(läuft in 1 Raum · Ventile ganz offen)'))
+      .toEqual([]);
   });
 });
