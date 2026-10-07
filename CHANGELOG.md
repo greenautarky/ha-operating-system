@@ -14,6 +14,13 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased — the host takes control requests from ga_manager only out of the add-on's own data directory
 
+### Security — kernel 6.12.103 -> 6.12.112
+
+The iHost kernel moves to the 6.12.112 longterm stable release (kernel.org
+tarball, nine point releases of stable fixes). The GA kernel patches
+(0001..0005) and the HAOS ipv6 patch apply unchanged; `expected.env` declares
+6.12.112 (OSI kernel check).
+
 ### Security — buildroot 2025.02.16 -> 2025.02.18 (HA fork, Docker 29.8.2)
 
 The buildroot submodule moves from `31f3962adb` (2025.02.16) to `de21723663`
