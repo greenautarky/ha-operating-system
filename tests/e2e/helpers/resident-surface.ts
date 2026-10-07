@@ -112,11 +112,81 @@ export function personalDashboardsInSidebar(panels: PanelInfo[]): string[] {
     .map(p => `${p.url_path} ("${p.title}")`);
 }
 
-/** Panels a resident must keep that are not registered at all. */
-export function missingExpectedPanels(panels: PanelInfo[], isAdmin = true): string[] {
+/**
+ * Where Home Assistant keeps the developer tools, by Core version.
+ *
+ * MEASURED IN CORE'S SOURCE (`components/frontend/__init__.py`):
+ *   - up to 2026.1  a panel of its own, `developer-tools`;
+ *   - 2026.2        no longer a panel: a page of the `config` panel,
+ *                   `/config/developer-tools`, with `/developer-tools/*`
+ *                   redirected there;
+ *   - 2026.8        renamed to `/config/tools`; both older URLs redirect.
+ *
+ * So from 2026.2 on, an admin keeps the developer tools by keeping `config`,
+ * and a `developer-tools` entry in `hass.panels` is no longer expected. The
+ * first run on Core 2026.8 (bench canary, rc8, 2026-10-07) reported it "gone"
+ * while the tools were one click away.
+ */
+export const DEVTOOLS_PANEL_GONE_IN = '2026.2';
+
+/** `2026.8.1` → [2026, 8, 1]; null when it is not a Core version. */
+export function coreVersionParts(v: string | null | undefined): number[] | null {
+  const m = /^(\d{4})\.(\d{1,2})(?:\.(\d+))?/.exec(String(v ?? '').trim());
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)] : null;
+}
+
+/** `a >= b` for Core versions; an unreadable `a` is treated as OLD. */
+export function coreAtLeast(a: string | null | undefined, b: string): boolean {
+  const pa = coreVersionParts(a);
+  const pb = coreVersionParts(b)!;
+  if (!pa) return false;
+  for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] > pb[i];
+  return true;
+}
+
+/**
+ * Panels a resident must keep that are not registered at all.
+ *
+ * `coreVersion` decides whether an admin still needs a `developer-tools`
+ * panel (Core < 2026.2) or reaches the tools through `config` (2026.2+).
+ * Unknown or unreadable → the OLD rule, so a device that cannot say its
+ * version is held to the stricter list rather than let off.
+ */
+export function missingExpectedPanels(
+  panels: PanelInfo[],
+  isAdmin = true,
+  coreVersion?: string | null,
+): string[] {
   const present = new Set(panels.map(p => p.url_path));
-  const expected: readonly string[] = isAdmin ? EXPECTED_PANELS : EXPECTED_PANELS_RESIDENT;
+  let expected: readonly string[] = isAdmin ? EXPECTED_PANELS : EXPECTED_PANELS_RESIDENT;
+  if (isAdmin && coreAtLeast(coreVersion, DEVTOOLS_PANEL_GONE_IN)) {
+    expected = expected.filter(p => p !== 'developer-tools');
+  }
   return expected.filter(p => !present.has(p));
+}
+
+/**
+ * The words the room card's running-state badge may say (`ga-thermostat-card`
+ * `.act`). PINNED.
+ *
+ *   Heizt     hvac_action heating
+ *   Leerlauf  hvac_action idle — Home Assistant's own German for it, used by
+ *             the bundle since 1.22.0
+ *   Bereit    idle, as bundles before 1.22.0 said it
+ *   Aus       the room is off
+ */
+export const RUNNING_BADGES = ['Heizt', 'Leerlauf', 'Bereit', 'Aus'] as const;
+
+/**
+ * What is wrong with the running-state badges a page renders. Empty is the
+ * healthy answer. No badge at all is a finding (the state is not drawn), and
+ * so is any badge whose word is not pinned above — a colour or an unknown
+ * word is not a statement a resident can read.
+ */
+export function runningBadgeProblems(badges: string[]): string[] {
+  if (!badges.length) return ['no running-state badge rendered'];
+  const known = RUNNING_BADGES as readonly string[];
+  return [...new Set(badges.filter(b => !known.includes(b)))].map(b => `unknown badge "${b}"`);
 }
 
 /** Every card in a view, wherever the strategy chose to put it, nesting included. */

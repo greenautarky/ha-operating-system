@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { test, expect, sshCmd } from '../fixtures/device';
 import { getGAOnboardingStatus } from '../helpers/ha-api';
 import { haPort } from '../helpers/ha-url';
+import { cleanupProbeAccounts } from '../helpers/onboarding-probe';
 
 /**
  * The account step has to survive being pressed twice.
@@ -76,6 +77,13 @@ const PROBE_PREFIX = 'e2e-account-step-';
 const PROBE_SECRET = `Ee2!${randomUUID()}`;
 
 let mintCounter = 0;
+
+/**
+ * Account submits this worker has SENT — counted before the request, because a
+ * submit that timed out may still have created the user. Cleanup (which
+ * restarts Core) runs only when this is above zero; see `onboarding-probe.ts`.
+ */
+let submissions = 0;
 
 /**
  * A username no human will have, unique within this run AND across runs.
@@ -159,6 +167,7 @@ function submitAccountStep(
   username: string,
   secret: string,
 ) {
+  submissions += 1;
   return request.post(`${deviceUrl}/api/greenautarky_site/create_user`, {
     data: { client_id: `${deviceUrl}/`, name: PROBE_NAME, username, password: secret },
   });
@@ -190,9 +199,15 @@ test.describe('Onboarding account step — pressing it twice is not a dead end',
   });
 
   test.afterAll(() => {
-    if (!process.env.DEVICE_IP) return;
+    // Only when this suite actually submitted an account. With every test
+    // skipped (wizard already completed, PIN not verified) there is nothing to
+    // remove, and the Core restart the purge needs broke the NEXT spec.
     try {
-      purgeProbeAccounts();
+      cleanupProbeAccounts({
+        deviceIp: process.env.DEVICE_IP,
+        submissions,
+        purge: purgeProbeAccounts,
+      });
     } catch {
       // A leftover probe account is visible and harmless; failing the suite in
       // cleanup would hide the result the run actually produced.

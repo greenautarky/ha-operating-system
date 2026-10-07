@@ -23,6 +23,7 @@
  */
 import { expect } from '@playwright/test';
 import { test } from '../fixtures/device';
+import { cleanupProbeAccounts } from '../helpers/onboarding-probe';
 
 function withEnv(overrides: Record<string, string | undefined>, fn: () => void) {
   const saved: Record<string, string | undefined> = {};
@@ -57,5 +58,29 @@ test.describe('destructive fixtures refuse to run without the opt-in', () => {
       // gate has become unconditional and the suite can no longer run at all.
       expect(() => resetOnboarding()).toThrow(/DEVICE_IP not set/);
     });
+  });
+});
+
+// The account-step suite's cleanup stops and starts Core. It must not do that
+// when the suite created nothing — on rc8 it did, mid-run, and the next spec
+// failed against a booting Core (bench canary, 2026-10-07).
+test.describe('account-step cleanup restarts Core only when it has something to remove', () => {
+  const run = (deviceIp: string | undefined, submissions: number) => {
+    let purged = 0;
+    const r = cleanupProbeAccounts({ deviceIp, submissions, purge: () => { purged++; } });
+    return { r, purged };
+  };
+
+  test('must-flag: every test skipped — no purge, no Core restart', () => {
+    expect(run('192.0.2.1', 0)).toEqual({ r: 'nothing-submitted', purged: 0 });
+  });
+
+  test('must-flag: no device — no purge', () => {
+    expect(run(undefined, 3)).toEqual({ r: 'no-device', purged: 0 });
+  });
+
+  test('must-NOT-flag: a submit was sent — the purge runs, once', () => {
+    expect(run('192.0.2.1', 1)).toEqual({ r: 'purged', purged: 1 });
+    expect(run('192.0.2.1', 4)).toEqual({ r: 'purged', purged: 1 });
   });
 });

@@ -51,6 +51,7 @@ import {
   missingExpectedPanels,
   personalDashboardsInSidebar,
   renderedLabels,
+  runningBadgeProblems,
   sidebarPanels,
   unmappedAssets,
   unregisteredAssets,
@@ -443,5 +444,61 @@ test.describe('card registration: the shapes they read', () => {
     for (const t of ADVERTISED_CARD_TYPES) {
       expect(Object.values(EXPECTED_ELEMENTS)).toContain(t);
     }
+  });
+});
+
+// ── developer tools by Core version, and running-state badges ──────────────
+
+/** An admin's panels as Core 2026.8 registers them — no `developer-tools` panel. */
+const CORE_2026_8_ADMIN = HEALTHY_PANELS.filter(p => p.url_path !== 'developer-tools');
+
+test.describe('developer tools: must-flag', () => {
+  test('Core before 2026.2 without a developer-tools panel is flagged', () => {
+    expect(missingExpectedPanels(CORE_2026_8_ADMIN, true, '2026.1.3')).toEqual(['developer-tools']);
+  });
+
+  test('Core 2026.8 without the config panel is flagged — the tools live there', () => {
+    const noConfig = CORE_2026_8_ADMIN.filter(p => p.url_path !== 'config');
+    expect(missingExpectedPanels(noConfig, true, '2026.8.1')).toEqual(['config']);
+  });
+
+  test('an unreadable version is held to the old, stricter list', () => {
+    expect(missingExpectedPanels(CORE_2026_8_ADMIN, true, 'dev')).toEqual(['developer-tools']);
+    expect(missingExpectedPanels(CORE_2026_8_ADMIN, true, undefined)).toEqual(['developer-tools']);
+  });
+});
+
+test.describe('developer tools: must-NOT-flag', () => {
+  test('Core 2026.8 without a developer-tools panel passes (rc8)', () => {
+    expect(missingExpectedPanels(CORE_2026_8_ADMIN, true, '2026.8.1')).toEqual([]);
+  });
+
+  test('Core 2026.2 – 2026.7 without it passes too — that is when it moved into config', () => {
+    expect(missingExpectedPanels(CORE_2026_8_ADMIN, true, '2026.2.0')).toEqual([]);
+    expect(missingExpectedPanels(CORE_2026_8_ADMIN, true, '2026.7.2')).toEqual([]);
+  });
+
+  test('Core before 2026.2 with the panel passes', () => {
+    expect(missingExpectedPanels(HEALTHY_PANELS, true, '2025.11.3')).toEqual([]);
+  });
+});
+
+test.describe('running-state badges: must-flag', () => {
+  test('no badge at all is flagged', () => {
+    expect(runningBadgeProblems([])).toHaveLength(1);
+  });
+
+  test('an unknown word is flagged, even beside a known one', () => {
+    expect(runningBadgeProblems(['Heizt', 'heating'])).toEqual(['unknown badge "heating"']);
+  });
+});
+
+test.describe('running-state badges: must-NOT-flag', () => {
+  test('"Leerlauf" passes (rc8)', () => {
+    expect(runningBadgeProblems(['Leerlauf'])).toEqual([]);
+  });
+
+  test('every pinned word passes, old bundles\' "Bereit" included', () => {
+    expect(runningBadgeProblems(['Heizt', 'Leerlauf', 'Bereit', 'Aus'])).toEqual([]);
   });
 });

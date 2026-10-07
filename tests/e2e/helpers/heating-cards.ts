@@ -203,3 +203,118 @@ export const CARD_FAILURE = /custom element doesn'?t exist|Konfigurationsfehler/
 export function cardFailures(lines: string[]): string[] {
   return [...new Set((lines ?? []).filter(l => CARD_FAILURE.test(l ?? '')))];
 }
+
+// ── Wartung rows by kind ────────────────────────────────────────────────────
+
+/**
+ * The words that say what KIND a Wartung row is (ga-frontend-bundle 1.23.2+).
+ *
+ * The card renders `<li><span class="who">…</span><span class="what">…</span>`
+ * and the kind lives only in the `.what` text. Until 1.23.2 every row was a
+ * battery, so counting `li` was counting batteries; 1.23.2 added radio-health
+ * rows ("Funkverbindung schwach", "setzt eigenen Sollwert (2×)") and that count
+ * went wrong on a correct card (bench canary, rc8, 2026-10-07).
+ *
+ * PINNED. A row matching none of these is `unknown`, and an unknown row is a
+ * finding (fails closed): a new kind of row is unjudged until someone writes
+ * down what it is.
+ */
+export const MAINTENANCE_KIND_WORDS: { kind: MaintenanceKind; re: RegExp }[] = [
+  { kind: 'battery', re: /^Batterie (niedrig|fast leer)$/ },
+  { kind: 'link', re: /^Funkverbindung (sehr )?schwach$/ },
+  { kind: 'radiator', re: /^(antwortet verzögert \(\d+ s\)|setzt eigenen Sollwert( \(\d+×\))?)(, (antwortet verzögert \(\d+ s\)|setzt eigenen Sollwert( \(\d+×\))?))*$/ },
+];
+
+export type MaintenanceKind = 'battery' | 'link' | 'radiator' | 'unknown';
+
+/** One rendered Wartung row, as the browser reads it. */
+export interface MaintenanceRow {
+  who: string;
+  what: string;
+}
+
+export function maintenanceRowKind(what: string): MaintenanceKind {
+  const t = String(what ?? '').trim();
+  for (const k of MAINTENANCE_KIND_WORDS) if (k.re.test(t)) return k.kind;
+  return 'unknown';
+}
+
+/**
+ * What is wrong with a room's Wartung rows, given the battery readings the card
+ * was handed. Empty is the healthy answer.
+ *
+ *  - every row must be of a kind this file knows;
+ *  - there must be exactly one BATTERY row per low battery — other kinds do
+ *    not count towards it, in either direction.
+ */
+export function maintenanceRowProblems(
+  readings: (string | null | undefined)[],
+  rows: MaintenanceRow[],
+): string[] {
+  const out: string[] = [];
+  const unknown = rows.filter(r => maintenanceRowKind(r.what) === 'unknown');
+  for (const r of unknown) out.push(`row of unknown kind: "${r.who} · ${r.what}"`);
+  const batteryRows = rows.filter(r => maintenanceRowKind(r.what) === 'battery').length;
+  const low = expectedLowCount(readings);
+  if (batteryRows !== low) {
+    out.push(`${batteryRows} battery row(s) for ${low} low battery reading(s)`);
+  }
+  return out;
+}
+
+// ── a running boost on the Profil card ──────────────────────────────────────
+
+/** The longest boost the card's "Boost setzen" may start, in seconds. */
+export const BOOST_MAX_S = 300;
+
+/** One room as Core publishes it — only what the boost judgement reads. */
+export interface BoostRoom {
+  entity_id: string;
+  attributes?: { override?: { boost?: { active?: boolean; remaining_s?: unknown } | null } | null };
+}
+
+/**
+ * What is wrong with the ROOMS after "Boost setzen": every room must carry an
+ * active boost with 0 < remaining_s ≤ BOOST_MAX_S. Fails closed on no rooms.
+ */
+export function boostRoomProblems(rooms: BoostRoom[]): string[] {
+  if (!rooms.length) return ['no room to judge'];
+  const out: string[] = [];
+  for (const r of rooms) {
+    const b = r.attributes?.override?.boost;
+    if (!b || !b.active) { out.push(`${r.entity_id}: no active boost`); continue; }
+    const rem = Number(b.remaining_s);
+    if (!Number.isFinite(rem) || rem <= 0) out.push(`${r.entity_id}: remaining_s ${String(b.remaining_s)}`);
+    else if (rem > BOOST_MAX_S) out.push(`${r.entity_id}: boosts ${rem} s, longer than ${BOOST_MAX_S} s`);
+  }
+  return out;
+}
+
+/** True if `text` states `n` rooms — "1 Raum", "3 Räume", "in 3 Räumen". */
+export function saysRoomCount(text: string, n: number): boolean {
+  return new RegExp(`(^|\\D)${n}\\s+R(ä|a)um`).test(String(text ?? ''));
+}
+
+/**
+ * What is wrong with what a resident SEES while a boost runs in `n` rooms.
+ *
+ * Asserts the statement, not the sentence: the status line says a boost is
+ * running, in how many rooms, and for how much longer (m:ss, at most 5:00);
+ * the hint beside the "Boost" heading says in how many rooms. Bundle 1.23.0
+ * dropped the word "Boost" from the hint because the heading already says it —
+ * a test that wanted the word failed on a correct card (bench canary, rc8, 2026-10-07).
+ */
+export function boostDisplayProblems(n: number, status: string, hint: string): string[] {
+  const out: string[] = [];
+  const s = String(status ?? '');
+  if (!/Boost/i.test(s)) out.push(`status line does not say a boost runs: "${s}"`);
+  if (!saysRoomCount(s, n)) out.push(`status line does not say ${n} room(s): "${s}"`);
+  const m = /(\d+):(\d{2})/.exec(s);
+  if (!m) out.push(`status line says no time left: "${s}"`);
+  else {
+    const secs = Number(m[1]) * 60 + Number(m[2]);
+    if (secs <= 0 || secs > BOOST_MAX_S) out.push(`status line says ${m[0]} left, not within 0:01–5:00`);
+  }
+  if (!saysRoomCount(hint, n)) out.push(`boost hint does not say ${n} room(s): "${hint}"`);
+  return out;
+}
