@@ -57,6 +57,7 @@ SUITES_EXCLUDED="
   uplink_units    host suite: CI lint.yml host-suites
   share_writers   host suite: CI lint.yml host-suites — needs bubblewrap, drives the writers in a sandbox
   host_control    host suite: CI lint.yml host-suites — needs bubblewrap, drives the host control units in a sandbox (ADR-0041)
+  ota_fetch       host suite: CI lint.yml host-suites — needs bubblewrap, drives ga-resolve-ota + ga-rauc-install in a sandbox
   apparmor_profile host suite: CI lint.yml host-suites
   update_hosts    host suite: CI lint.yml host-suites — runs ga-update-hosts against a model of the AppArmor-confined Supervisor
   hassos_supervisor_channel host suite: CI lint.yml host-suites — sources the launcher functions-only

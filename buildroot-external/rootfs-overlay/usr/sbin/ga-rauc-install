@@ -51,10 +51,10 @@ set -eu
 # GA_GM_DATA_DIR relocates ga_manager's data directory (host tests only;
 # nothing on a device sets it).
 GM_DATA_DIR="${GA_GM_DATA_DIR:-/mnt/data/supervisor/addons/data/99f1cad4_ga_manager}"
-# GA_RESOLVE_OTA_BIN relocates the resolver (host tests only; nothing on a
-# device sets it).
+# GA_RESOLVE_OTA_BIN and GA_OTA_ACTIVE_FILE relocate the resolver and its pick
+# (host tests only; nothing on a device sets them).
 RESOLVE_OTA_BIN="${GA_RESOLVE_OTA_BIN:-/usr/sbin/ga-resolve-ota}"
-OTA_ACTIVE_FILE="/run/ga-resolve-ota.active"
+OTA_ACTIVE_FILE="${GA_OTA_ACTIVE_FILE:-/run/ga-resolve-ota.active}"
 OTA_HOST="ota.greenautarky.com"
 REQUEST_FILE="$GM_DATA_DIR/ga-rauc-install-request"
 # Optional sidecar carrying the GA release label (e.g. BOSv1.2.21-rc19). When
