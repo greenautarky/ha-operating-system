@@ -125,7 +125,12 @@ fi
 # /usr/libexec/ga-telegraf-env, NOT in inline unit shell — assert the BEHAVIOUR
 # where it now lives (the unit itself must stay shell-free, see CFG-48).
 TG_ENV_SH="${TARGET}/usr/libexec/ga-telegraf-env"
-grep -qE 'mkdir .*-p .*/mnt/data/telegraf/buffer' "$TG_ENV_SH" 2>/dev/null \
+# The script may name the dir through TG_DIR (default /mnt/data/telegraf, overridable for
+# tests) since #729; accept the literal path or "$TG_DIR/buffer" — but then TG_DIR must
+# default to /mnt/data/telegraf, so the assertion stays as strict as before.
+{ grep -qE 'mkdir .*-p .*/mnt/data/telegraf/buffer' "$TG_ENV_SH" 2>/dev/null \
+  || { grep -qE 'mkdir .*-p .*"?\$\{?TG_DIR\}?/buffer' "$TG_ENV_SH" 2>/dev/null \
+       && grep -qE '^TG_DIR="\$\{GA_TELEGRAF_DIR:-/mnt/data/telegraf\}"' "$TG_ENV_SH" 2>/dev/null; }; } \
   && _pass "CFG-26: ga-telegraf-env creates the buffer dir" \
   || _fail "CFG-26: ga-telegraf-env missing buffer-dir mkdir"
 
