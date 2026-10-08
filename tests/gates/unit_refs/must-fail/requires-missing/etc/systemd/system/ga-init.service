@@ -1,0 +1,7 @@
+[Unit]
+Description=needs a unit that is not there
+Requires=nope.service
+After=nope.service
+
+[Service]
+ExecStart=/bin/true

@@ -1,7 +1,12 @@
 [Unit]
 Description=Fluent Bit Tier-0 (always-on, no consent gate)
 Documentation=https://github.com/greenautarky/ga-ihost-docs/blob/main/PRIVACY_TIERS.md
-After=network-online.target hassio-supervisor.service netbird.service
+# The Supervisor ordering that stood here named hassio-supervisor.service, a
+# unit this image does not ship, so it was never in effect. It is not switched
+# on: ordering after hassos-supervisor.service would hold this unit until the
+# Supervisor's whole start chain is through (docker, time sync, the OTA endpoint
+# probe), which delays the log stream at boot. Open decision, see CHANGELOG.
+After=network-online.target netbird.service
 Wants=network-online.target
 # NO ConditionPathExists — Tier 0 ships regardless of consent state.
 # Legal basis: DSGVO Art. 6 (b) Vertragserfüllung + (f) berechtigtes Interesse.
@@ -33,7 +38,7 @@ ExecStartPre=/usr/libexec/ga-fluent-bit-env
 # reproduce the pre-ADR-0003-Step-3 behaviour: plain :3100, no auth. Loki in
 # single-tenant mode ignores both the Authorization header and X-Scope-OrgID,
 # so the "anonymous" sentinels are wire-inert.
-Environment=GA_ENV=dev DEVICE_UUID=unknown DEVICE_LABEL=unknown
+Environment=GA_ENV=unknown DEVICE_UUID=unknown DEVICE_LABEL=unknown
 Environment=LOKI_HOST=loki.greenautarky.com LOKI_PORT=3100 LOKI_USER=anonymous LOKI_PASSWORD=anonymous LOKI_TENANT=anonymous
 
 # Written by the ExecStartPre above; overrides the defaults for ExecStart.

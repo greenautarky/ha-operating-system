@@ -1,0 +1,6 @@
+[Unit]
+Description=worker %i
+After=sys-subsystem-net-devices-%i.device
+
+[Service]
+ExecStart=/bin/true

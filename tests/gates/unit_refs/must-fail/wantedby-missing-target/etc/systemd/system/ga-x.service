@@ -1,0 +1,8 @@
+[Unit]
+Description=x
+
+[Service]
+ExecStart=/bin/true
+
+[Install]
+WantedBy=multiuser.target

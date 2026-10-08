@@ -1,0 +1,6 @@
+[Unit]
+Description=a
+After=ga-b.service
+
+[Service]
+ExecStart=/bin/true

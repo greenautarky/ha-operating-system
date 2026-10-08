@@ -1,9 +1,19 @@
 [Unit]
 Description=Fluent Bit log agent
-After=network-online.target hassio-supervisor.service netbird.service ga-telemetry-consent.service
+# The Supervisor ordering that stood here named hassio-supervisor.service, a
+# unit this image does not ship, so it was never in effect. It is not switched
+# on: ordering after hassos-supervisor.service would hold this unit until the
+# Supervisor's whole start chain is through (docker, time sync, the OTA endpoint
+# probe), which delays the log stream at boot. Open decision, see CHANGELOG.
+After=network-online.target netbird.service ga-telemetry-consent.service
 Wants=network-online.target
 # Only start if user consented to error log collection (marker written by ga-telemetry-consent.service)
 ConditionPathExists=/mnt/data/.ga-consent-error_logs
+# At most 10 starts in 5 min, then the unit stays failed. [Unit], not
+# [Service]: there systemd ignores StartLimitIntervalSec= and the burst ran
+# against the 10 s default, which a 5 s restart never reaches.
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -27,7 +37,7 @@ ExecStartPre=/usr/libexec/ga-fluent-bit-env
 # reproduce the pre-ADR-0003-Step-3 behaviour: plain :3100, no auth. Loki in
 # single-tenant mode (auth_enabled: false) IGNORES both the Authorization header
 # and X-Scope-OrgID, so the "anonymous" sentinels are wire-inert.
-Environment=GA_ENV=dev DEVICE_UUID=unknown DEVICE_LABEL=unknown
+Environment=GA_ENV=unknown DEVICE_UUID=unknown DEVICE_LABEL=unknown
 Environment=LOKI_HOST=loki.greenautarky.com LOKI_PORT=3100 LOKI_USER=anonymous LOKI_PASSWORD=anonymous LOKI_TENANT=anonymous
 
 # Written by the ExecStartPre above; overrides the defaults for ExecStart.
@@ -40,8 +50,6 @@ ExecStart=/bin/sh -c 'if [ -f /mnt/data/fluent-bit/override.conf ]; then exec /u
 
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=300
-StartLimitBurst=10
 
 [Install]
 WantedBy=multi-user.target

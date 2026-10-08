@@ -250,6 +250,16 @@ jobs:
         # (5 of 7 fail) before it was added.
         run: sh tests/ga_tests/enroll_env/test.sh
 
+      - name: Telemetry env label is the device's fleet env (Odoo 1191)
+        # Drives the REAL ga-telemetry-env resolver, ga-fluent-bit-env
+        # and ga-telegraf-env with fixture configs: staging device -> GA_ENV=
+        # staging in both env files (= tier-0/tier-1 Loki `env` + telegraf
+        # `env`), prod -> prod, invalid/unreadable -> unknown + WARNING, never
+        # prod; resolver and ga-enroll agree. Red-proven against master's
+        # builders and units (8 of 16 fail) and by two resolver mutations that
+        # print prod instead of unknown (TENV-03, TENV-04 each go red).
+        run: sh tests/ga_tests/telemetry_env/test.sh
+
       - name: HW-02b reads the kernel log it can actually see
         # HW-02 was one check over a VOLATILE source and went red on a healthy
         # K31 whose logs had aged past boot. Split into a durable half
@@ -481,6 +491,19 @@ jobs:
       # 2026-08-19.
       - name: apt-install action (a hang must fail, not wedge)
         run: ./tests/gates/apt_install/selftest.sh
+
+      # systemd ignores an After=/Before=/Wants= on a unit that does not exist,
+      # and StartLimitIntervalSec= in [Service], without failing anything:
+      # nine GA directives named hassio-supervisor.service (the image ships
+      # hassos-supervisor.service) and were never in effect. The self-test runs
+      # the live lint over must-fail/must-pass fixture trees and an empty tree
+      # (must be rc 2); then the lint runs on this tree. Red-proven: on the
+      # previous master it reports the 9 references and 8 StartLimit* lines.
+      - name: unit references resolve, start limits sit in [Unit]
+        run: |
+          set -eu
+          ./tests/gates/unit_refs/selftest.sh
+          ./scripts/check-unit-refs.py
 
       # The device-test runner ran run_all.sh with `|| true` and exited 0 on a
       # red device run (measured: 3 failures, RC=0). Drives the REAL runner

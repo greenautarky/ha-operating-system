@@ -1,0 +1,9 @@
+[Unit]
+Description=supervisor stand-in
+After=docker.service
+
+[Service]
+ExecStart=/bin/true
+
+[Install]
+WantedBy=multi-user.target

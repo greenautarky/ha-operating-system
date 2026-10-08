@@ -27,8 +27,17 @@
 
 set -u
 
-ENV_FILE=/mnt/data/fluent-bit/env
+FB_DIR="${GA_FLUENT_BIT_DIR:-/mnt/data/fluent-bit}"
+ENV_FILE="$FB_DIR/env"
 LABEL_FILE=/mnt/data/ga-device-label
+# The telemetry environment label (Odoo #1191): resolved from the device's
+# FLEET env (GA_FLEET_ENV, ADR-0027 D4), never from the baked GA_ENV — see the
+# header of ga-telemetry-env. Published for ga_manager's `telemetry.env_label`
+# health check through the /share bridge, because no add-on can read this
+# env file.
+TENV_BIN="${GA_TELEMETRY_ENV_BIN:-/usr/libexec/ga-telemetry-env}"
+TENV_BRIDGE="${GA_TELEMETRY_ENV_BRIDGE:-/mnt/data/supervisor/share/ga-telemetry-env.json}"
+SHARE_PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
 # Canonical per-device identity (ADR-0010): device_id + url_prefix, placed by
 # identity-write / the fleet-manager identity backfill. Read from the addon's
 # PRIVATE data dir, not /share: the share bridge is writable by every add-on
@@ -45,15 +54,24 @@ CRED_GLOB=/mnt/data/supervisor/addons/data/*_ga_manager/ga-fleet-loki.yaml
 
 log() { echo "ga-fluent-bit-env: $*"; }
 
-mkdir -p /mnt/data/fluent-bit/storage /mnt/data/fluent-bit/db
+mkdir -p "$FB_DIR/storage" "$FB_DIR/db"
 
 # ── base identity ────────────────────────────────────────────────────────────
-if [ -f /mnt/data/ga-env.conf ]; then
-    . /mnt/data/ga-env.conf
-elif [ -f /etc/ga-env.conf ]; then
-    . /etc/ga-env.conf
-fi
-GA_ENV="${GA_ENV:-dev}"
+# GA_ENV in the env file is the telemetry LABEL (tier-1 `env`, tier-0 `env` +
+# its one-release alias `ga_env`). It comes from the fleet env. It used to be
+# GA_ENV from ga-env.conf with a `dev` default: a baked `prod` on a staging
+# canary, and `dev` on any device whose /mnt/data/ga-env.conf lacked the key.
+TENV=""
+[ -x "$TENV_BIN" ] && TENV=$("$TENV_BIN")
+case "$TENV" in
+    prod|staging|unknown) ;;
+    *)
+        log "WARNING: $TENV_BIN missing or returned '${TENV}' — telemetry env label is 'unknown'"
+        logger -t ga-fluent-bit-env -p daemon.warning "telemetry env label is 'unknown' ($TENV_BIN missing or returned '${TENV}')" 2>/dev/null || true
+        TENV=unknown
+        ;;
+esac
+GA_ENV="$TENV"
 
 UUID=$(grep -oE '[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}' \
        "$UUID_FILE" 2>/dev/null | head -1)
@@ -134,6 +152,7 @@ fi
 TMP="$ENV_FILE.new.$$"
 {
     echo "GA_ENV=$GA_ENV"
+    echo "GA_TELEMETRY_ENV=$GA_ENV"
     echo "DEVICE_UUID=${UUID:-unknown}"
     echo "DEVICE_LABEL=${LABEL:-unknown}"
     echo "LOKI_HOST=$L_HOST"
@@ -146,5 +165,16 @@ chmod 600 "$TMP"
 mv "$TMP" "$ENV_FILE"
 
 [ -n "${LABEL:-}" ] || log "WARNING: $LABEL_FILE missing — logs will be labelled 'unknown'"
+
+# ── publish the label for ga_manager (telemetry.env_label) ───────────────────
+# Through ga-share-publish (staged + renamed, never written in place: /share is
+# mounted into every share:rw add-on). Only when the share dir exists — not on
+# a device that has no Supervisor data yet.
+if [ -d "$(dirname "$TENV_BRIDGE")" ] && [ -x "$SHARE_PUBLISH" ]; then
+    printf '{"telemetry_env":"%s","source":"GA_FLEET_ENV","written_at":"%s"}\n' \
+        "$GA_ENV" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        | "$SHARE_PUBLISH" "$TENV_BRIDGE" 0644 \
+        || log "WARNING: could not publish $TENV_BRIDGE"
+fi
 
 exit 0

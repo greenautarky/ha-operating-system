@@ -51,6 +51,7 @@ SUITES_EXCLUDED="
   reboot          destructive: reboots the device, host-side, run on demand
   e2e_user_flows  own lane: run_e2e_tests.sh, needs a resident account
   enroll_env      host suite: CI lint.yml host-suites
+  telemetry_env   host suite: CI lint.yml host-suites — env label from the fleet env (#1191); the device half is TEL-13..16 in telemetry
   wifi_probe_verdict host suite: CI lint.yml host-suites — HW-02b's fixtures
   device_run_lock host suite: CI lint.yml host-suites — the runner's one-run-per-device lock
   uplink_ladder   host suite: CI lint.yml host-suites

@@ -1,0 +1,11 @@
+[Unit]
+Description=d
+After=network-online.target docker.service time-sync.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+ExecStart=/bin/true
+
+[Install]
+WantedBy=multi-user.target
