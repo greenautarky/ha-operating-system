@@ -22,16 +22,27 @@
 #
 # IDEMPOTENT
 # ----------
-# Safe to run on every boot. Exits 0 early if the daemon already
-# reports a non-NeedsLogin state. Won't re-register, won't rotate
-# the peer key.
+# Safe to run on every boot. Exits 0 early ONLY on a positive
+# "registered" probe (a Management: line in the status output). Won't
+# re-register, won't rotate the peer key.
+#
+# The check used to be negative ("status is not NeedsLogin ⇒ already
+# registered — nothing to do"), which misfired on first boot: a
+# just-started daemon (WiFi not associated yet) emits a transient
+# status WITHOUT "NeedsLogin", the script exited 0, RemainAfterExit
+# latched the unit active, and the unregistered device never joined
+# the mesh — ga-enroll then retried the fleet-manager over the public
+# path forever. Observed live 2026-07-14 (KIB-SON-00000055); third
+# instance of the guard-idempotent-on-wrong-value class (fluent-bit
+# DEVICE_LABEL, telegraf ${VAR}).
 #
 # RETRY BEHAVIOR
 # --------------
-# On failure (no internet, expired key, mgmt unreachable) we exit 1.
-# The unit has Restart=on-failure RestartSec=60s so the next attempt
-# happens 60 s later — devices that come up without internet (boot
-# before WiFi associates) will register as soon as the network is up.
+# On failure (no internet, expired key, mgmt unreachable) AND on an
+# inconclusive daemon state we exit 1. The unit has Restart=on-failure
+# RestartSec=60s so the next attempt happens 60 s later — devices that
+# come up without internet (boot before WiFi associates) will register
+# as soon as the network is up.
 set -e
 
 KEY_FILE="/usr/share/ga-netbird/setup-key"
@@ -48,17 +59,25 @@ die()  { echo "${LOG_TAG}: ERROR: $*" >&2; exit 1; }
 
 # 1. Idempotency check — already registered?
 #    `netbird status` returns "Daemon status: NeedsLogin" when no `up`
-#    has run, and otherwise emits Management/Signal/NetBird IP lines.
-#    A simple "NeedsLogin" grep handles both 0.66 and 0.71 output.
+#    has run. A REGISTERED daemon emits the full status block including
+#    a "Management:" line (Connected or Disconnected — both mean the
+#    peer config exists; stable across 0.66 and 0.71). Anything else —
+#    daemon socket not ready, transient startup states, error text — is
+#    INCONCLUSIVE: exit 1 and let Restart=on-failure re-probe in 60 s.
+#    Never conclude "registered" from the absence of "NeedsLogin".
 status_out=$("$NB_BIN" --daemon-addr "$NB_SOCK" status 2>&1 || true)
 case "$status_out" in
     *NeedsLogin*)
         log "daemon in NeedsLogin — attempting registration"
         ;;
-    *)
-        log "daemon already registered (status not NeedsLogin) — nothing to do"
+    *Management:*)
+        log "daemon already registered (Management line present) — nothing to do"
         log "$(printf '%s' "$status_out" | head -3 | sed 's/^/  /')"
         exit 0
+        ;;
+    *)
+        warn "daemon state inconclusive (no NeedsLogin, no Management line) — retrying in 60s"
+        die "$(printf '%s' "$status_out" | head -3 | sed 's/^/  /')"
         ;;
 esac
 
