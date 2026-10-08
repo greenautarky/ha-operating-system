@@ -1,7 +1,12 @@
 [Unit]
 Description=Fluent Bit Tier-0 (always-on, no consent gate)
 Documentation=https://github.com/greenautarky/ga-ihost-docs/blob/main/PRIVACY_TIERS.md
-After=network-online.target hassio-supervisor.service netbird.service
+# The Supervisor ordering that stood here named hassio-supervisor.service, a
+# unit this image does not ship, so it was never in effect. It is not switched
+# on: ordering after hassos-supervisor.service would hold this unit until the
+# Supervisor's whole start chain is through (docker, time sync, the OTA endpoint
+# probe), which delays the log stream at boot. Open decision, see CHANGELOG.
+After=network-online.target netbird.service
 Wants=network-online.target
 # NO ConditionPathExists — Tier 0 ships regardless of consent state.
 # Legal basis: DSGVO Art. 6 (b) Vertragserfüllung + (f) berechtigtes Interesse.

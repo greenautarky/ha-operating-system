@@ -1,0 +1,8 @@
+[Unit]
+Description=config
+
+[Service]
+ExecStart=/bin/true
+
+[Install]
+Alias=hassos-config.service

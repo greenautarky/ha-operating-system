@@ -1,9 +1,14 @@
 [Unit]
 Description=Telegraf metrics agent
-After=network-online.target docker.service hassio-supervisor.service netbird.service ga-telemetry-consent.service
+After=network-online.target docker.service hassos-supervisor.service netbird.service ga-telemetry-consent.service
 Wants=network-online.target
 # Only start if user consented to metrics collection (marker written by ga-telemetry-consent.service)
 ConditionPathExists=/mnt/data/.ga-consent-metrics
+# At most 10 starts in 5 min, then the unit stays failed. [Unit], not
+# [Service]: there systemd ignores StartLimitIntervalSec= and the burst ran
+# against the 10 s default, which a 5 s restart never reaches.
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -27,8 +32,6 @@ ExecStart=/bin/sh -c 'if [ -f /mnt/data/telegraf/override.conf ]; then exec /usr
 
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=300
-StartLimitBurst=10
 Nice=10
 
 [Install]

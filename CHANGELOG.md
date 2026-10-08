@@ -14,6 +14,62 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased — the host takes control requests from ga_manager only out of the add-on's own data directory
 
+### Fixed — GA units order against the Supervisor unit the image ships
+
+Nine directive lines in eight GA units named `hassio-supervisor.service`. The
+image ships `hassos-supervisor.service`; systemd treats an ordering against a
+unit that does not exist as a silent no-op, so none of them was ever in effect.
+Three of them are orderings the code relies on and are now switched on, by
+naming the real unit:
+
+- `ga-supervisor-state-migrate.service` `Before=` — the Core image record is
+  healed before the Supervisor reads it (the unit documents this as its race
+  guard).
+- `ga-update-hosts.service` `Before=` — the Supervisor's hosts file exists when
+  the launcher creates the container (the launcher mounts it only if present).
+- `ga-publish-services.service` `Before=` — add-ons read a value, not a gap.
+
+Two more are switched on with no functional dependency, only order:
+`telegraf.service` and `ga-telemetry-consent-refresh.service` `After=`.
+
+Not switched on (the dead name is removed, behaviour is exactly as before):
+`fluent-bit.service` and `fluent-bit-tier0.service` `After=`, and
+`ga-telemetry-consent.service` `After=`/`Wants=` (both shippers are ordered after
+it). Ordering a log stream after the Supervisor would hold it until the
+Supervisor's whole start chain is through (Docker, time sync, the OTA endpoint
+probe) and delay boot logs; that is an open decision, not a fix.
+
+`systemd-analyze verify` over the assembled unit set finds no ordering cycle
+(an injected one is reported, so the check can fail).
+
+### Fixed — start-rate limits sit in `[Unit]`, where systemd reads them
+
+`ga-ha-init.service`, `fluent-bit.service` and `telegraf.service` set
+`StartLimitIntervalSec=` in `[Service]`, where systemd ignores it ("Unknown
+key"); `StartLimitBurst=` is still honoured there, so the burst counted against
+the 10 s default interval and was never reached. Moved to `[Unit]`, the limits
+take effect as written: `ga-ha-init` stops retrying after 30 failed starts in
+30 min, the two shippers after 10 starts in 5 min — until the next boot or a
+manual start. Before, all three retried without limit. `lxd-agent.service`
+(VM images) moves its compatible-spelling limit too, without behaviour change.
+
+### Tests — `scripts/check-unit-refs.py`, a source lint in the required `gate-selftest`
+
+Fails on any `After/Before/Wants/Requires/Requisite/BindsTo/PartOf/Upholds/
+Conflicts/OnFailure/OnSuccess` (and `[Install]` `WantedBy/RequiredBy/UpheldBy/
+Also`) that names a unit neither shipped in the tree, nor an `Alias=`, nor an
+instance of a shipped template, nor in a short commented list of units systemd
+and Buildroot packages provide; and on any `StartLimit*` key in `[Service]`.
+Reads unit files and drop-ins; zero unit files is a failure. On the previous
+master it reports the 9 references and 8 `StartLimit*` lines.
+`tests/gates/unit_refs/selftest.sh` runs the live lint over 9 must-fail and 4
+must-pass fixture trees (each must-fail names its reason) plus the empty-tree
+case. TEL-BLD-06 asserted the consent unit's `After=hassio-supervisor` and
+SVC-07/SVC-27 the update-hosts `Before=hassio-supervisor` — all three were green
+on the no-op. TEL-BLD-06 now fails if any unit in the built rootfs names
+`hassio-supervisor.service`; SVC-07 greps the real name; SVC-27 asks systemd for
+the Supervisor's effective `After=` list on the device.
+
 ### Fixed — the always-on log stream carries the OS update host path
 
 An OTA could be accepted by ga_manager, written to the host as a request file and

@@ -25,7 +25,7 @@
 #
 # What this service does
 #
-# Runs as a systemd oneshot Before=hassio-supervisor.service. On
+# Runs as a systemd oneshot Before=hassos-supervisor.service. On
 # every boot:
 #
 # 1. If `/mnt/data/supervisor/homeassistant.json` exists AND its
@@ -88,7 +88,7 @@ log "rewriting to $UPSTREAM_URL"
 
 # Atomic in-place rewrite. sed -i with a tmp+rename is safest because
 # Supervisor may briefly read the file mid-write otherwise (this
-# service runs Before=hassio-supervisor.service so there's no race
+# service runs Before=hassos-supervisor.service so there's no race
 # in practice, but defensive coding is cheap here).
 TMP="${JSON}.migrate.$$"
 # Braces on the variable: `$STALE_PATTERN[^"]*` is correct here — bash

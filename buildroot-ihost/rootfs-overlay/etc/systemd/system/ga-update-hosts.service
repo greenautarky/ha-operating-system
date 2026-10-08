@@ -4,7 +4,7 @@ Description=Generate /etc/hosts from ga-services.conf
 # ga-resolve-ota has picked the best OTA IP. Before services that need DNS
 # resolution (telegraf, fluent-bit, supervisor).
 After=hassos-overlay.service hassos-config.service ga-resolve-ota.service
-Before=hassio-supervisor.service telegraf.service fluent-bit.service netbird.service
+Before=hassos-supervisor.service telegraf.service fluent-bit.service netbird.service
 Wants=hassos-overlay.service ga-resolve-ota.service
 
 [Service]

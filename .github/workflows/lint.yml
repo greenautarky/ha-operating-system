@@ -492,6 +492,19 @@ jobs:
       - name: apt-install action (a hang must fail, not wedge)
         run: ./tests/gates/apt_install/selftest.sh
 
+      # systemd ignores an After=/Before=/Wants= on a unit that does not exist,
+      # and StartLimitIntervalSec= in [Service], without failing anything:
+      # nine GA directives named hassio-supervisor.service (the image ships
+      # hassos-supervisor.service) and were never in effect. The self-test runs
+      # the live lint over must-fail/must-pass fixture trees and an empty tree
+      # (must be rc 2); then the lint runs on this tree. Red-proven: on the
+      # previous master it reports the 9 references and 8 StartLimit* lines.
+      - name: unit references resolve, start limits sit in [Unit]
+        run: |
+          set -eu
+          ./tests/gates/unit_refs/selftest.sh
+          ./scripts/check-unit-refs.py
+
       # The device-test runner ran run_all.sh with `|| true` and exited 0 on a
       # red device run (measured: 3 failures, RC=0). Drives the REAL runner
       # with a stub ssh (remote 1/2/3/255 must go red, 0 stays green, cleanup

@@ -1,0 +1,5 @@
+[Unit]
+Description=ga-z
+
+[Service]
+ExecStart=/bin/true

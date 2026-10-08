@@ -1,0 +1,7 @@
+[Unit]
+Description=agent
+
+[Service]
+ExecStart=/bin/true
+Restart=always
+StartLimitIntervalSec=300

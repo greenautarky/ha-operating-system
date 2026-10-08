@@ -145,8 +145,11 @@ rm -rf "$TMPDIR_SVC"
 echo ""
 echo "--- Service ordering ---"
 
+# Asks systemd for the EFFECTIVE order (the Supervisor's After= list), not the
+# unit text: the text used to say Before=hassio-supervisor.service, a unit the
+# image does not ship, and the old text grep was green on that no-op.
 run_test "SVC-27" "ga-update-hosts runs before supervisor" \
-  "systemctl cat ga-update-hosts 2>/dev/null | grep -q 'Before=.*hassio-supervisor'"
+  "systemctl show -p After --value hassos-supervisor.service 2>/dev/null | tr ' ' '\\n' | grep -qx 'ga-update-hosts.service'"
 
 run_test "SVC-28" "ga-update-hosts runs after overlay mount" \
   "systemctl cat ga-update-hosts 2>/dev/null | grep -q 'After=.*hassos-overlay'"
