@@ -1,0 +1,14 @@
+[Unit]
+Description=runs before the Supervisor
+# Before=hassio-supervisor.service was the old, wrong name (comment only)
+Before=hassos-supervisor.service
+StartLimitIntervalSec=300
+StartLimitBurst=10
+StartLimitAction=none
+
+[Service]
+Type=oneshot
+ExecStart=/bin/true
+
+[Install]
+WantedBy=multi-user.target

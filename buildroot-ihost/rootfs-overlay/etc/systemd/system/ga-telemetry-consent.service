@@ -1,8 +1,12 @@
 [Unit]
 Description=Evaluate telemetry consent and write marker files
-# Must run after Supervisor has started (consent file lives in HA storage)
-After=hassio-supervisor.service
-Wants=hassio-supervisor.service
+# The After=/Wants= on the Supervisor that stood here named
+# hassio-supervisor.service, a unit this image does not ship, so they were never
+# in effect: this unit has always run without waiting for the Supervisor (a
+# later consent change is applied by ga-telemetry-consent-refresh.path). Not
+# switched on: fluent-bit and telegraf are ordered after this unit, so it would
+# hold both shippers until the Supervisor's start chain is through. Open
+# decision, see CHANGELOG.
 
 [Service]
 Type=oneshot

@@ -1,0 +1,7 @@
+[Unit]
+Description=agent
+StartLimitIntervalSec=300
+
+[Service]
+ExecStart=/bin/true
+StartLimitBurst=10

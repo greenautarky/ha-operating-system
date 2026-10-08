@@ -1,0 +1,7 @@
+[Unit]
+Description=runs before the Supervisor
+Before=hassio-supervisor.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/true

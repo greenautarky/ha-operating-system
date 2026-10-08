@@ -6,7 +6,7 @@ After=hassos-overlay.service mnt-data.mount
 Wants=hassos-overlay.service
 # The add-ons that consume it start with the Supervisor; being there first
 # means the first read is a value rather than a gap.
-Before=hassio-supervisor.service
+Before=hassos-supervisor.service
 
 [Service]
 Type=oneshot

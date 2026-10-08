@@ -1,0 +1,7 @@
+[Unit]
+Description=c
+After=hassos-config.service ga-worker@eth0.service dev-disk-by\x2dlabel-hassos\x2ddata.device
+Wants=systemd-fsck@dev-disk-by\x2dlabel-hassos\x2ddata.service
+
+[Service]
+ExecStart=/bin/true

@@ -5,7 +5,7 @@
 # no-op, and `stop` on one whose marker just vanished ends it — so this is the
 # whole "consent revoked" path too, not only the "consent given" one.
 Description=Apply a changed telemetry consent to the shippers
-After=hassio-supervisor.service
+After=hassos-supervisor.service
 
 [Service]
 Type=oneshot

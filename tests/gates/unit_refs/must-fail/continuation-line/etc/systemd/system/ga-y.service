@@ -1,0 +1,7 @@
+[Unit]
+Description=y
+After=network-online.target \
+  hassio-supervisor.service
+
+[Service]
+ExecStart=/bin/true

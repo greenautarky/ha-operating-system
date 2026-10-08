@@ -4,6 +4,11 @@ Description=GA — Home Assistant first-boot fleet-wide config (DNS, watchdog, w
 Requires=hassos-supervisor.service
 After=hassos-supervisor.service network-online.target
 Wants=network-online.target
+# Don't hammer on persistent failures — give up after ~30 min of trying.
+# [Unit], not [Service]: there systemd ignores StartLimitIntervalSec= and the
+# burst ran against the 10 s default, so the limit was never reached.
+StartLimitBurst=30
+StartLimitIntervalSec=1800
 
 [Service]
 Type=oneshot
@@ -16,9 +21,6 @@ TimeoutStartSec=1500
 # Script's marker-check short-circuits subsequent runs once successful.
 Restart=on-failure
 RestartSec=60s
-# Don't hammer on persistent failures — give up after ~30 min of trying.
-StartLimitBurst=30
-StartLimitIntervalSec=1800
 
 [Install]
 WantedBy=multi-user.target

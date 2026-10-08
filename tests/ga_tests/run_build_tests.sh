@@ -597,10 +597,16 @@ grep -q 'ConditionPathExists=.*ga-consent-error_logs' "$FB_SVC_TEL" 2>/dev/null 
   && _pass "TEL-BLD-05: ga-telemetry-consent.service exists" \
   || _fail "TEL-BLD-05: ga-telemetry-consent.service NOT found"
 
-# TEL-BLD-06: ga-telemetry-consent.service ordered after supervisor
-grep -q 'After=.*hassio-supervisor' "${TARGET}/etc/systemd/system/ga-telemetry-consent.service" 2>/dev/null \
-  && _pass "TEL-BLD-06: consent service ordered after supervisor" \
-  || _fail "TEL-BLD-06: consent service NOT ordered after supervisor"
+# TEL-BLD-06: no unit in the image names hassio-supervisor.service. The image
+# ships hassos-supervisor.service; an After=/Before=/Wants= on the other name is
+# a silent no-op (this check used to ASSERT the consent unit's After= on it, so
+# it was green on an ordering that never existed). The source tree is linted by
+# scripts/check-unit-refs.py; this is the same question asked of the built
+# rootfs, which also holds units installed by packages.
+_hsup=$(grep -rlE '^[^#]*hassio-supervisor\.service' "${TARGET}/etc/systemd" "${TARGET}/usr/lib/systemd" 2>/dev/null | head -5)
+[[ -f "${TARGET}/usr/lib/systemd/system/hassos-supervisor.service" && -z "$_hsup" ]] \
+  && _pass "TEL-BLD-06: hassos-supervisor.service shipped, no unit names hassio-supervisor.service" \
+  || _fail "TEL-BLD-06: hassos-supervisor.service missing or units name hassio-supervisor.service: ${_hsup:-<none>}"
 
 # TEL-BLD-07: ga-telemetry-gate checks GA_TELEMETRY_FORCE override
 grep -q 'GA_TELEMETRY_FORCE' "${TARGET}/usr/sbin/ga-telemetry-gate" 2>/dev/null \
@@ -673,7 +679,7 @@ done
   || _fail "SVC-06b: ga-supervisor-hosts-check.service NOT enabled or not running --verify-supervisor"
 
 # SVC-07: ga-update-hosts runs before supervisor
-grep -q 'Before=.*hassio-supervisor' "${TARGET}/etc/systemd/system/ga-update-hosts.service" 2>/dev/null \
+grep -qE '^Before=.*hassos-supervisor\.service' "${TARGET}/etc/systemd/system/ga-update-hosts.service" 2>/dev/null \
   && _pass "SVC-07: ga-update-hosts ordered before supervisor" \
   || _fail "SVC-07: ga-update-hosts NOT ordered before supervisor"
 

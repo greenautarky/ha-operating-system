@@ -6,7 +6,7 @@ Documentation=https://github.com/greenautarky/ha-operating-system
 # image left over from PATCH B on field devices upgraded to BOSv1.2.0
 # via OTA. See script header for full rationale.
 RequiresMountsFor=/mnt/data
-Before=hassio-supervisor.service
+Before=hassos-supervisor.service
 After=local-fs.target
 Wants=local-fs.target
 
