@@ -84,8 +84,51 @@ run_test "TEL-09" "Telegraf no persistent errors (last 5 min)" \
 run_test "TEL-10" "Fluent-Bit no persistent errors (last 5 min)" \
   "! journalctl -u fluent-bit --since '5 min ago' --no-pager -q 2>/dev/null | grep -qi 'error.*output\|connection refused'"
 
-run_test "TEL-11" "Safe defaults in telegraf unit" \
-  "systemctl cat telegraf 2>/dev/null | grep -q 'Environment=.*GA_ENV=dev'"
+# The unit fallback for the env label is `unknown` (Odoo #1191): an env file
+# that could not be read must never label a device dev or prod.
+run_test "TEL-11" "Safe defaults in telegraf unit (GA_ENV=unknown, never dev/prod)" \
+  "systemctl cat telegraf 2>/dev/null | grep -q 'Environment=.*GA_ENV=unknown'"
+
+# =========================================================================
+# Env label = the device's FLEET env (Odoo #1191, TEL-13..16)
+# =========================================================================
+# GA_ENV in the RUNNING shipper's environment is what fluent-bit substitutes
+# into the Loki labels (tier-0 `env` + alias `ga_env`, tier-1 `env`) and what
+# telegraf writes as the `env` tag. So these read /proc/<pid>/environ of the
+# running process — the value actually on the wire — and compare it with the
+# fleet env the device is provisioned into (GA_FLEET_ENV in ga-services.conf,
+# baked then /mnt/data override, absent = prod), resolved independently here.
+_fleet_env=$( (
+  GA_FLEET_ENV=""
+  [ -r /etc/ga-services.conf ] && . /etc/ga-services.conf
+  [ -r /mnt/data/ga-services.conf ] && . /mnt/data/ga-services.conf
+  echo "${GA_FLEET_ENV:-prod}" ) 2>/dev/null)
+_proc_env() { # _proc_env <unit> -> GA_ENV of its running main process
+  _pid=$(systemctl show -p MainPID --value "$1" 2>/dev/null)
+  [ -n "$_pid" ] && [ "$_pid" != 0 ] && tr '\0' '\n' < "/proc/$_pid/environ" 2>/dev/null | sed -n 's/^GA_ENV=//p' | head -1
+}
+
+run_test "TEL-13" "resolver says the fleet env ($_fleet_env), not unknown" \
+  "[ \"\$(/usr/libexec/ga-telemetry-env 2>/dev/null)\" = '$_fleet_env' ]"
+
+if systemctl is-active -q fluent-bit-tier0; then
+  run_test "TEL-14" "tier-0 fluent-bit runs with GA_ENV=$_fleet_env (its Loki env/ga_env labels)" \
+    "[ \"\$(_proc_env fluent-bit-tier0)\" = '$_fleet_env' ]"
+else
+  run_test "TEL-14" "tier-0 fluent-bit running (always-on, no consent gate)" "false"
+fi
+if systemctl is-active -q fluent-bit; then
+  run_test "TEL-15" "tier-1 fluent-bit runs with GA_ENV=$_fleet_env (its Loki env label)" \
+    "[ \"\$(_proc_env fluent-bit)\" = '$_fleet_env' ]"
+else
+  skip_test "TEL-15" "tier-1 env label" "fluent-bit not running (error-log consent not given)"
+fi
+if systemctl is-active -q telegraf; then
+  run_test "TEL-16" "telegraf runs with GA_ENV=$_fleet_env (its env tag)" \
+    "[ \"\$(_proc_env telegraf)\" = '$_fleet_env' ]"
+else
+  skip_test "TEL-16" "telegraf env tag" "telegraf not running (metrics consent not given)"
+fi
 
 if [ -f /mnt/data/telegraf/env ]; then
   run_test_show "TEL-ENV" "Telegraf env file contents" \

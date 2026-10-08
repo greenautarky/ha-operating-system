@@ -26,12 +26,12 @@
 ### TEL-03: GA_ENV set in telegraf env file
 - **Action**: Verify GA_ENV is populated
 - **Command**: `grep GA_ENV /mnt/data/telegraf/env`
-- **Expected**: `GA_ENV=dev` or `GA_ENV=prod` (not empty)
+- **Expected**: `GA_ENV=prod` or `GA_ENV=staging` (the fleet env, #1191; `unknown` = misprovisioned)
 
 ### TEL-04: GA_ENV set in fluent-bit env file
 - **Action**: Verify GA_ENV is populated
 - **Command**: `grep GA_ENV /mnt/data/fluent-bit/env`
-- **Expected**: `GA_ENV=dev` or `GA_ENV=prod` (not empty)
+- **Expected**: `GA_ENV=prod` or `GA_ENV=staging` (the fleet env, #1191; `unknown` = misprovisioned)
 
 ### TEL-05: DEVICE_UUID extracted correctly
 - **Action**: Verify UUID is a valid format (not "unknown")
@@ -66,10 +66,21 @@
 ### TEL-11: Safe defaults prevent crash on first boot
 - **Action**: Verify Environment= defaults are set in service files
 - **Command**: `systemctl cat telegraf | grep "^Environment="`
-- **Expected**: Contains `GA_ENV=dev DEVICE_UUID=unknown`
+- **Expected**: Contains `GA_ENV=unknown DEVICE_UUID=unknown`
 
 ### TEL-12: ga-env.conf override works
 - **Action**: Write override to /mnt/data/ga-env.conf, restart service, verify
 - **Command**: `echo "GA_ENV=test" > /mnt/data/ga-env.conf && systemctl restart telegraf && grep GA_ENV /mnt/data/telegraf/env`
 - **Expected**: `GA_ENV=test`
 - **Cleanup**: Remove override file, restart service
+
+### TEL-13..16: env label = the device's fleet env (Odoo #1191)
+- **TEL-13**: `/usr/libexec/ga-telemetry-env` prints the fleet env resolved from
+  `GA_FLEET_ENV` (`/etc/ga-services.conf`, then `/mnt/data/ga-services.conf`;
+  absent = prod). Never `unknown` on a provisioned device.
+- **TEL-14**: the running `fluent-bit-tier0` process has `GA_ENV=<fleet env>` in
+  `/proc/<pid>/environ` — the value of its Loki `env` and `ga_env` labels.
+  Tier-0 is always on, so not running is a FAIL.
+- **TEL-15 / TEL-16**: same for tier-1 `fluent-bit` and `telegraf`; SKIP when the
+  consent marker is absent (the unit is inactive by design).
+- **Expected on a staging device**: `staging` everywhere; on prod: `prod`.

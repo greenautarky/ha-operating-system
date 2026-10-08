@@ -32,7 +32,11 @@
 
 set -u
 
-ENV_FILE=/mnt/data/telegraf/env
+TG_DIR="${GA_TELEGRAF_DIR:-/mnt/data/telegraf}"
+ENV_FILE="$TG_DIR/env"
+# Telemetry environment label (Odoo #1191) — the device's FLEET env, same
+# resolver as ga-fluent-bit-env, so logs and metrics cannot disagree.
+TENV_BIN="${GA_TELEMETRY_ENV_BIN:-/usr/libexec/ga-telemetry-env}"
 # Per-device InfluxDB credential. PREFERRED source is the addon-PRIVATE /data
 # sidecar written by ga_manager's creds-write worker (ADR-0003: no secret under
 # /share — the /share view is readable by any share:rw addon; Vuln-8). Read it
@@ -43,15 +47,23 @@ ENV_FILE=/mnt/data/telegraf/env
 CRED_GLOB=/mnt/data/supervisor/addons/data/*_ga_manager/ga-fleet-influx.yaml
 LEGACY_CRED=/mnt/data/supervisor/share/ga-fleet-influx.yaml
 
-mkdir -p /mnt/data/telegraf /mnt/data/telegraf/buffer
+mkdir -p "$TG_DIR" "$TG_DIR/buffer"
 
 # --- base env (rebuilt in full every start, so a wrong value can heal) -------
 
-if [ -f /mnt/data/ga-env.conf ]; then
-    . /mnt/data/ga-env.conf
-elif [ -f /etc/ga-env.conf ]; then
-    . /etc/ga-env.conf
-fi
+# GA_ENV here is the `env` tag. It comes from the fleet env, not from the baked
+# GA_ENV in ga-env.conf (a `prod` constant on a staging canary, and `dev` when
+# /mnt/data/ga-env.conf existed without the key).
+TENV=""
+[ -x "$TENV_BIN" ] && TENV=$("$TENV_BIN")
+case "$TENV" in
+    prod|staging|unknown) ;;
+    *)
+        echo "telegraf: WARNING: $TENV_BIN missing or returned '${TENV}' — env tag is 'unknown'"
+        logger -t ga-telegraf-env -p daemon.warning "env tag is 'unknown' ($TENV_BIN missing or returned '${TENV}')" 2>/dev/null || true
+        TENV=unknown
+        ;;
+esac
 
 UUID=$(grep -oE '[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}' \
        /mnt/data/supervisor/homeassistant/.storage/core.uuid 2>/dev/null | head -1)
@@ -80,7 +92,8 @@ if [ -f /etc/os-release ]; then
 fi
 
 {
-    printf 'GA_ENV=%s\n'             "${GA_ENV:-dev}"
+    printf 'GA_ENV=%s\n'             "$TENV"
+    printf 'GA_TELEMETRY_ENV=%s\n'   "$TENV"
     printf 'DEVICE_UUID=%s\n'        "${UUID:-unknown}"
     printf 'DEVICE_LABEL=%s\n'       "${LABEL:-unknown}"
     printf 'GATEWAY_IP=%s\n'         "${GW:-unknown}"
