@@ -11,7 +11,7 @@ Wants=network-online.target
 # It must carry the per-device credential before Loki enforces auth_enabled, or
 # those devices go dark. Its Loki OUTPUT lives in fluent-bit-tier0.conf, shipped
 # by the ga-telemetry-config OCI overlay (pinned in version.yaml) — not in this
-# repo. That is why an earlier "tier-0 auth fix" patched network-details.conf,
+# repo; the config this unit loads, fluent-bit-tier0-os.conf, includes it. That is why an earlier "tier-0 auth fix" patched network-details.conf,
 # a scaffold no service loads, and changed nothing.
 
 [Service]
@@ -39,7 +39,9 @@ Environment=LOKI_HOST=loki.greenautarky.com LOKI_PORT=3100 LOKI_USER=anonymous L
 # Written by the ExecStartPre above; overrides the defaults for ExecStart.
 EnvironmentFile=-/mnt/data/fluent-bit/env
 
-ExecStart=/usr/bin/fluent-bit -c /etc/fluent-bit/fluent-bit-tier0.conf
+# The entry point is fluent-bit-tier0-os.conf (this repo): it @INCLUDEs the
+# component's fluent-bit-tier0.conf and adds the OS update units' journal lines.
+ExecStart=/usr/bin/fluent-bit -c /etc/fluent-bit/fluent-bit-tier0-os.conf
 
 Restart=on-failure
 RestartSec=10

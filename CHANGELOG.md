@@ -14,6 +14,31 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased — the host takes control requests from ga_manager only out of the add-on's own data directory
 
+### Fixed — the always-on log stream carries the OS update host path
+
+An OTA could be accepted by ga_manager, written to the host as a request file and
+reported as successful while RAUC never installed anything — and the cloud could
+not tell, because tier-0 (the only log stream on a device without telemetry
+consent) carried ga_manager's side and nothing from the host. "The host did
+nothing" and "the host logged nothing" looked the same.
+
+`fluent-bit-tier0.service` now loads `fluent-bit-tier0-os.conf`, which includes
+the component's `fluent-bit-tier0.conf` unchanged and adds, at every priority:
+`ga-rauc-install.service`'s own output, and PID 1's lines for
+`ga-rauc-install.service`, `ga-rauc-install.path` and `rauc.service` (started,
+finished, failed, timed out — logged by systemd itself, so a unit match alone
+never sees them, and a `.path` unit has no other lines). `rauc.service`'s own
+output, including the `ga-release-floor` handler, already shipped and is not
+duplicated. The lines carry versions, release labels, slots, byte counts and
+download URLs without credentials — no personal data.
+
+`tests/gates/tier0_ota_journal/selftest.sh` runs the real fluent-bit with the
+live configs over a fixture journal: each OTA line ships exactly once, unrelated
+units (and the 5-minute `ga-resolve-ota` timer) stay off the stream; the
+pre-change config and an input without its `UNIT=` matches go red. The build
+suite follows `@INCLUDE`, so CFG-42/43 still check the Loki output tier-0
+actually uses (new CFG-42b).
+
 ### Changed — the OS version moves to 16.3.1.10
 
 `buildroot-external/meta` `VERSION_SUFFIX` goes from `1.9` to `1.10`, so the

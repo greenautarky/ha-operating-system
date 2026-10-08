@@ -255,6 +255,37 @@ for _u in "${_fb_units[@]}"; do
   done < <(_configs_of_unit "$_u")
 done
 
+# A loaded config's @INCLUDEs are loaded too. fluent-bit-tier0.service loads
+# fluent-bit-tier0-os.conf, which @INCLUDEs the component's fluent-bit-tier0.conf
+# — and THAT file carries the Loki OUTPUT CFG-42/43 must check. Without this the
+# real output would drop out of CFG-42 (no loki block in the entry file, so it
+# is skipped) and CFG-46 would call it unloaded. One level is all that ships.
+for _name in "${_loaded_confs[@]}"; do
+  while read -r _inc; do
+    [[ -n "$_inc" ]] && _loaded_confs+=("${_inc##*/}")
+  done < <(sed -n 's/^@INCLUDE[[:space:]]\{1,\}//p' "${TARGET}/etc/fluent-bit/${_name}" 2>/dev/null)
+done
+
+# CFG-42b: every unit reaches a loki OUTPUT through what it loads (+ includes).
+# CFG-42 below skips a config without a loki block, so a unit whose output moved
+# into an include nobody follows would leave CFG-42 green over nothing.
+_cfg42b_bad=""
+for _u in "${_fb_units[@]}"; do
+  _found=0
+  while read -r _c; do
+    [[ -n "$_c" ]] || continue
+    _f="${TARGET}/etc/fluent-bit/${_c##*/}"
+    [[ -n "$(_loki_block "$_f")" ]] && _found=1
+    while read -r _inc; do
+      [[ -n "$_inc" && -n "$(_loki_block "${TARGET}/etc/fluent-bit/${_inc##*/}")" ]] && _found=1
+    done < <(sed -n 's/^@INCLUDE[[:space:]]\{1,\}//p' "$_f" 2>/dev/null)
+  done < <(_configs_of_unit "$_u")
+  [[ "$_found" = 1 ]] || _cfg42b_bad+=" ${_u##*/}"
+done
+[[ -z "$_cfg42b_bad" ]] \
+  && _pass "CFG-42b: every fluent-bit unit reaches a loki OUTPUT through its config or an @INCLUDE" \
+  || _fail "CFG-42b: no loki OUTPUT reachable from:${_cfg42b_bad}"
+
 if [[ ${#_fb_units[@]} -gt 0 && ${#_loaded_confs[@]} -gt 0 ]]; then
   _pass "CFG-42a: discovered ${#_fb_units[@]} fluent-bit unit(s) loading ${#_loaded_confs[@]} config(s)"
 else
