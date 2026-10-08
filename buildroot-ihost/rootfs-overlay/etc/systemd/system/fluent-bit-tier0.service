@@ -33,7 +33,7 @@ ExecStartPre=/usr/libexec/ga-fluent-bit-env
 # reproduce the pre-ADR-0003-Step-3 behaviour: plain :3100, no auth. Loki in
 # single-tenant mode ignores both the Authorization header and X-Scope-OrgID,
 # so the "anonymous" sentinels are wire-inert.
-Environment=GA_ENV=dev DEVICE_UUID=unknown DEVICE_LABEL=unknown
+Environment=GA_ENV=unknown DEVICE_UUID=unknown DEVICE_LABEL=unknown
 Environment=LOKI_HOST=loki.greenautarky.com LOKI_PORT=3100 LOKI_USER=anonymous LOKI_PASSWORD=anonymous LOKI_TENANT=anonymous
 
 # Written by the ExecStartPre above; overrides the defaults for ExecStart.

@@ -15,7 +15,7 @@ Type=simple
 ExecStartPre=/usr/libexec/ga-telegraf-env
 
 # Safe defaults (EnvironmentFile is read BEFORE ExecStartPre, so first boot needs these)
-Environment=GA_ENV=dev DEVICE_UUID=unknown GATEWAY_IP=unknown DEVICE_LABEL=unknown GA_BUILD_TIMESTAMP=unknown
+Environment=GA_ENV=unknown DEVICE_UUID=unknown GATEWAY_IP=unknown DEVICE_LABEL=unknown GA_BUILD_TIMESTAMP=unknown
 
 # EnvironmentFile overrides defaults above on subsequent starts
 EnvironmentFile=-/mnt/data/telegraf/env

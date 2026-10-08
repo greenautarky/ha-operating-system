@@ -1,0 +1,106 @@
+#!/bin/sh
+# ga-telemetry-env — print the environment this device's logs and metrics are
+# labelled with: `prod`, `staging`, or `unknown`. One word on stdout, nothing
+# else; every diagnostic goes to stderr AND the journal.
+#
+# WHY (Odoo #1191, measured 2026-10-08)
+# -------------------------------------
+# The `env` / `ga_env` label on every Loki stream and the `env` tag on every
+# telegraf point used to be GA_ENV from /etc/ga-env.conf: a BAKED constant,
+# `prod` on every image since ADR-0027 D9. The staging canary therefore shipped
+# all of its logs as prod, and nothing said so. Older images baked `dev`, and a
+# /mnt/data/ga-env.conf without a GA_ENV line made both env builders fall back
+# to `dev` as well.
+#
+# The environment a device belongs to is PROVISIONED DATA, not an image
+# property: GA_FLEET_ENV in ga-services.conf (baked default, then the
+# /mnt/data override), the same key ga-enroll uses to choose — and to declare
+# to — its fleet-manager (ADR-0027 D4). Using that key means the label names
+# the fleet the device actually reports to; it is readable on the host before
+# any fleet-manager contact (a fresh device's first logs are labelled right),
+# and it needs no add-on or bridge in between.
+#
+# RESOLUTION — identical to ga-enroll, so the two can never disagree:
+#   baked /etc/ga-services.conf, then the /mnt/data override layered on top.
+#   GA_FLEET_ENV=prod|staging   -> that value
+#   GA_FLEET_ENV absent         -> prod. That is the documented contract
+#                                  (ADR-0027 D4: absent means production), and
+#                                  it is said in the journal every time.
+#   GA_FLEET_ENV anything else  -> unknown + WARNING (ga-enroll refuses to enrol)
+#   no config readable at all   -> unknown + WARNING
+# It never prints `prod` because something was missing.
+#
+# Cross-check: when ga-enroll's bridge already holds a fleet_env that differs
+# from what the config says now, that is logged at WARNING (the bridge is stale
+# until the next ga-enroll run). The config value is still used: it is what the
+# next enrolment will send.
+#
+# GA_ENV in ga-env.conf is NOT read here. It stays what it is today (the input
+# of ga_manager's canary-only consent guardrail and the `ga_env` bridge field);
+# only the telemetry LABEL stops depending on it.
+#
+# Test hooks (tests/ga_tests/telemetry_env): GA_TENV_CONF_DEFAULT,
+# GA_TENV_CONF_OVERRIDE, GA_TENV_ENROLL_STATE, GA_TENV_NO_LOGGER.
+
+set -u
+
+CONF_DEFAULT="${GA_TENV_CONF_DEFAULT:-/etc/ga-services.conf}"
+CONF_OVERRIDE="${GA_TENV_CONF_OVERRIDE:-/mnt/data/ga-services.conf}"
+ENROLL_STATE="${GA_TENV_ENROLL_STATE:-/mnt/data/supervisor/share/ga-enroll-state.json}"
+
+say() { # say <priority> <message>
+    echo "ga-telemetry-env: $2" >&2
+    [ -n "${GA_TENV_NO_LOGGER:-}" ] || logger -t ga-telemetry-env -p "daemon.$1" "$2" 2>/dev/null || true
+}
+
+# Source both files in a subshell so nothing else they define leaks into the
+# result, and so a syntax error in the override cannot abort this script.
+# Prints "<readable-count> <GA_FLEET_ENV>".
+resolved=$(
+    n=0
+    GA_FLEET_ENV=""
+    if [ -r "$CONF_DEFAULT" ]; then
+        # shellcheck disable=SC1090
+        . "$CONF_DEFAULT"
+        n=$((n + 1))
+    fi
+    if [ -r "$CONF_OVERRIDE" ]; then
+        # shellcheck disable=SC1090
+        . "$CONF_OVERRIDE"
+        n=$((n + 1))
+    fi
+    printf '%s %s' "$n" "${GA_FLEET_ENV:-}"
+) || resolved="0 "
+
+readable=${resolved%% *}
+raw=${resolved#* }
+raw=$(printf '%s' "$raw" | tr -d ' \t\r\n"'"'")
+
+if [ "$readable" = 0 ]; then
+    say warning "WARNING: neither $CONF_DEFAULT nor $CONF_OVERRIDE is readable — telemetry env label is 'unknown'"
+    echo unknown
+    exit 0
+fi
+
+case "$raw" in
+    prod|staging) env=$raw ;;
+    "")
+        env=prod
+        say notice "GA_FLEET_ENV absent in $CONF_DEFAULT and $CONF_OVERRIDE — telemetry env label 'prod' (ADR-0027 D4: absent means production)"
+        ;;
+    *)
+        say warning "WARNING: GA_FLEET_ENV='$raw' is neither prod nor staging — telemetry env label is 'unknown' (fix it in $CONF_OVERRIDE)"
+        echo unknown
+        exit 0
+        ;;
+esac
+
+if [ -r "$ENROLL_STATE" ]; then
+    bridged=$(sed -n 's/.*"fleet_env"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ENROLL_STATE" 2>/dev/null | head -1)
+    if [ -n "$bridged" ] && [ "$bridged" != "$env" ]; then
+        say warning "WARNING: ga-enroll last declared fleet_env='$bridged' but the config now says '$env' — labelling '$env'; the bridge is stale until ga-enroll runs again"
+    fi
+fi
+
+echo "$env"
+exit 0
