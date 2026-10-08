@@ -82,3 +82,32 @@ rs_ota_survival() {
 	echo "device password unchanged across the update $_pver ($_pslot) -> $_ver ($_slot)"
 	return 0
 }
+
+# ── reporting ──────────────────────────────────────────────────────────────
+# test.sh calls these with what the verdicts above returned; selftest.sh calls
+# the same functions and checks what they PRINT. The reason is free text
+# ("the boot left the image's password") and goes to show_verdict as an
+# argument: pasted into an eval'd "echo '…'" it broke on the apostrophe and a
+# PASS was reported as a FAIL. Needs test_helpers.sh (show_verdict, skip_test).
+
+# rs_report_boot_state <rc> <reason> — RSD-10b
+rs_report_boot_state() {
+	if [ "$1" = 2 ]; then
+		skip_test "RSD-10b" "the boot's own run applied what the hash file says" "$2"
+	else
+		show_verdict "RSD-10b" "the boot's own run applied what the hash file says" "$1" "$2"
+	fi
+}
+
+# rs_report_ota <rc> <reason> <expect_ota 0|1> — RSD-11. Undecided (2) is a
+# SKIP, unless this run is the one right after an update (expect_ota=1).
+rs_report_ota() {
+	case "$1" in
+		0|1) show_verdict "RSD-11" "the device password survived the OS update" "$1" "$2" ;;
+		*) if [ "$3" = 1 ]; then
+			show_verdict "RSD-11" "the device password survived the OS update (GA_RS_EXPECT_OTA=1)" 1 "$2"
+		   else
+			skip_test "RSD-11" "survival across an OS update" "$2"
+		   fi ;;
+	esac
+}

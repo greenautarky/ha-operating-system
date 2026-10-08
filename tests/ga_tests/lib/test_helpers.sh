@@ -52,6 +52,31 @@ run_test_show() {
   [ -n "$_out" ] && echo "        -> $_out"
 }
 
+# show_verdict <id> <desc> <rc> <reason> — report a verdict a function already
+# reached: PASS when <rc> is 0, FAIL otherwise (a non-numeric <rc> is a FAIL),
+# then the reason on its own line, exactly as given.
+#
+# No eval. A reason pasted into a command string (echo '$MSG') and then
+# eval'd breaks on the first apostrophe in the reason — "unterminated quoted
+# string" — and a correct PASS is reported as a FAIL. That happened on a real
+# device run with the reason "the boot left the image's password". Pass
+# reasons here instead.
+show_verdict() {
+  _id="$1"
+  _desc="$2"
+  _vrc="$3"
+  _why="$4"
+  if [ "$_vrc" -eq 0 ] 2>/dev/null; then
+    printf "${_GREEN}  PASS${_RESET}  %s: %s\n" "$_id" "$_desc"
+    _PASS=$((_PASS+1))
+  else
+    printf "${_RED}  FAIL${_RESET}  %s: %s\n" "$_id" "$_desc"
+    _FAIL=$((_FAIL+1))
+  fi
+  [ -n "$_why" ] && printf '        -> %s\n' "$_why"
+  return 0
+}
+
 # wait_for <timeout_s> <command> — poll <command> until it returns 0, up to
 # <timeout_s> seconds. Returns 0 as soon as it passes, non-zero on timeout.
 #
@@ -130,9 +155,9 @@ require_ha_port() {
     HA_BASE="http://127.0.0.1:${HA_PORT}"
     return 0
   fi
-  _rhp_why=$(tr -d "'" < "${TMPDIR:-/tmp}/ga-ha-port.err" 2>/dev/null)
-  run_test_show "$1" "Home Assistant port resolvable (ha core info: port, else Core version)" \
-    "echo '${_rhp_why:-ha_port.sh not found next to test_helpers.sh}'; false"
+  _rhp_why=$(cat "${TMPDIR:-/tmp}/ga-ha-port.err" 2>/dev/null)
+  show_verdict "$1" "Home Assistant port resolvable (ha core info: port, else Core version)" 1 \
+    "${_rhp_why:-ha_port.sh not found next to test_helpers.sh}"
   HA_PORT="UNRESOLVED"
   HA_BASE="http://127.0.0.1:UNRESOLVED-PORT"
   return 1

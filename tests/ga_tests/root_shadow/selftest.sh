@@ -234,6 +234,55 @@ rec A 17.0 none
 run_test "RS-66" "OTA: updated, but there was no device password before → undecided (2)" \
 	"[ \$(v rs_ota_survival '$R' B 17.1 abc) = 2 ]"
 
+# ── what the device suite PRINTS for a verdict (RSD-10b, RSD-11) ───────────
+# The return codes above say nothing about the report. On BOSv1.5.0-rc1 the
+# report was the defect: test.sh pasted the reason into an eval'd "echo '…'",
+# the reason "…the image's password" closed the quote, and a correct PASS was
+# printed as "unterminated quoted string" + FAIL. These cases drive the LIVE
+# report functions test.sh calls (verdicts.sh) with reasons produced by the
+# LIVE verdict functions, and compare the printed lines exactly.
+# The subshell keeps the inner PASS/FAIL counts out of this suite's totals.
+report() { ( _GREEN='' _RED='' _YELLOW='' _RESET=''; "$@" ) 2>&1; }
+has_apostrophe() { case "$1" in *\'*) return 0 ;; esac; return 1; }
+D10="the boot's own run applied what the hash file says"
+D11="the device password survived the OS update"
+
+M="$(rs_boot_state '4.20 start' 0)"; R=$?
+OUT="$(report rs_report_boot_state "$R" "$M")"
+EXP="$(printf '  PASS  RSD-10b: %s\n        -> %s' "$D10" "no hash file, the boot left the image's password")"
+run_test "RS-70" "RSD-10b, reason with an apostrophe, pass → PASS and the reason verbatim" \
+	'has_apostrophe "$M" && [ "$OUT" = "$EXP" ]'
+M="$(rs_boot_state '4.20 rotated' 0)"; R=$?
+OUT="$(report rs_report_boot_state "$R" "$M")"
+EXP="$(printf '  FAIL  RSD-10b: %s\n        -> %s' "$D10" "no hash file, but the boot's own run ended in 'rotated'")"
+run_test "RS-71" "RSD-10b, reason with apostrophes and quotes, fail → FAIL and the reason verbatim" \
+	'has_apostrophe "$M" && [ "$OUT" = "$EXP" ]'
+M="$(rs_boot_state '4.20 start' 1 1)"; R=$?
+OUT="$(report rs_report_boot_state "$R" "$M")"
+EXP="$(printf '  SKIP  RSD-10b: %s (%s)' "$D10" "$M")"
+run_test "RS-72" "RSD-10b, undecided → SKIP with the reason" '[ "$R" = 2 ] && [ "$OUT" = "$EXP" ]'
+Q="it's \"quoted\"; \$(false) \`false\` and a \\ backslash"
+OUT="$(report rs_report_ota 0 "$Q" 0)"
+EXP="$(printf '  PASS  RSD-11: %s\n        -> %s' "$D11" "$Q")"
+run_test "RS-73" "RSD-11, pass with shell metacharacters in the reason → PASS, reason verbatim, nothing executed" \
+	'[ "$OUT" = "$EXP" ]'
+OUT="$(report rs_report_ota 1 "$Q" 0)"
+EXP="$(printf '  FAIL  RSD-11: %s\n        -> %s' "$D11" "$Q")"
+run_test "RS-74" "RSD-11, fail → FAIL and the reason verbatim" '[ "$OUT" = "$EXP" ]'
+OUT="$(report rs_report_ota 2 "$Q" 1)"
+EXP="$(printf '  FAIL  RSD-11: %s (GA_RS_EXPECT_OTA=1)\n        -> %s' "$D11" "$Q")"
+run_test "RS-75" "RSD-11, undecided right after an update → FAIL and the reason" '[ "$OUT" = "$EXP" ]'
+OUT="$(report rs_report_ota 2 "$Q" 0)"
+EXP="$(printf '  SKIP  RSD-11: survival across an OS update (%s)' "$Q")"
+run_test "RS-76" "RSD-11, undecided otherwise → SKIP with the reason" '[ "$OUT" = "$EXP" ]'
+# test.sh must report through these functions, or the cases above test a path
+# the device suite does not take.
+T="$HERE/test.sh"
+run_test "RS-77" "test.sh reports RSD-10b and RSD-11 through the functions pinned above" \
+	"grep -q '^rs_report_boot_state \"\$BS_RC\" \"\$BS_MSG\"\$' '$T' && grep -q '^rs_report_ota \"\$OTA_RC\" \"\$OTA_MSG\"' '$T'"
+no_quoted_echo() { ! grep -nF "echo '\$" "$1"; }
+run_test "RS-78" "test.sh pastes no message into an eval'd single-quoted echo" "no_quoted_echo '$T'"
+
 # ── the units ─────────────────────────────────────────────────────────────
 unit_has() { grep -qx "$2" "$1"; }
 run_test "RS-30" "unit runs before sysinit.target, after the overlay" \

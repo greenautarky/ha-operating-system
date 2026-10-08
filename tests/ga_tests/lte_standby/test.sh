@@ -150,7 +150,7 @@ LOG_MISS="$(cat "$TMPD/logcap")"
 run_test "LSB-22" "MISSING verdict manages nothing: the primary default route is untouched (rc30 defect, measured on a canary)" \
   "grep -q present '$PRIMARY_STATE' && test '$D_MISS' = unmanaged"
 run_test "LSB-23" "MISSING verdict leaves even the standby route alone and says so at info level, not as a warning" \
-  "grep -q present '$FAKE_STATE' && echo '$LOG_MISS' | grep -qi 'no standby verdict'"
+  "grep -q present '$FAKE_STATE' && echo \"\$LOG_MISS\" | grep -qi 'no standby verdict'"
 
 # stale verdict (old mtime) must withdraw AND warn with the age
 printf '{"usable":true,"updated_at":"y"}\n' > "$VERDICT"; touch "$VERDICT"; _route >/dev/null
@@ -161,7 +161,7 @@ WARN_STALE="$(cat "$TMPD/logcap")"
 run_test "LSB-24" "STALE verdict (>10min) withdraws the STANDBY route only — the primary stays" \
   "! grep -q present '$FAKE_STATE' && grep -q present '$PRIMARY_STATE'"
 run_test "LSB-25" "STALE verdict logs a WARNING with the file age (rule 44)" \
-  "echo '$WARN_STALE' | grep -qi 'STALE'"
+  "echo \"\$WARN_STALE\" | grep -qi 'STALE'"
 
 # must-pass: a fresh usable verdict re-adds; the standby metric stays high so
 # the primary (eth0, metric ~100) is always preferred — the route never

@@ -311,6 +311,24 @@ jobs:
         # latitude, an uncompared unit_system passes imperial units.
         run: sh tests/ga_tests/ha_config_applied/selftest.sh
 
+      - name: DNS-12/13 expect the configured address (override layered per key, no constant)
+        # An override file that set only other keys made DNS-12/13 expect ""
+        # and then a stale constant, so a correctly configured device failed.
+        # Drives the live expected_ip.sh with fixture configs: an override
+        # without the key must yield the baked value; a value set nowhere, a
+        # blanked key and a non-address must fail with a reason. Red-proven by
+        # restoring the pre-fix rule: 6 of 10 verdict cases fail, and the two
+        # static checks fail against the pre-fix test.sh.
+        run: sh tests/ga_tests/dns_config/selftest.sh
+
+      - name: OS-04 counts any row of the WiFi scan
+        # The pre-fix check read only the first SSID, and the strongest BSS
+        # (first row) can be a hidden network with an empty SSID. Drives the
+        # live wifi_scan.sh with nmcli-shaped fixtures: hidden-first and
+        # hidden-only must pass, an empty scan must fail with a reason.
+        # Red-proven by restoring the first-row rule: OSV-01 and OSV-02 fail.
+        run: sh tests/ga_tests/openstick/selftest.sh
+
       - name: every suite directory is registered or explicitly excluded
         run: sh tests/ga_tests/run_all.sh --selftest
 
@@ -434,6 +452,9 @@ jobs:
         # Drives the real helper with real bind mounts in a private mount
         # namespace; the emergency-mode case loop-mounts an ext4 image, hence
         # sudo. GA_RS_REQUIRE_ALL=1: a skipped case fails the step.
+        # RS-70..78 check what RSD-10b/RSD-11 PRINT, not only the verdict's
+        # return code: a reason with an apostrophe, pasted into an eval'd
+        # single-quoted echo, turned a PASS into a FAIL on a device run.
         run: sudo env GA_RS_REQUIRE_ALL=1 sh tests/ga_tests/root_shadow/selftest.sh
 
   # Prove the GATES can go red AND green — the thing review cannot see.

@@ -121,11 +121,7 @@ if [ "$HAVE_HF" = 1 ]; then
 	[ "$(stat -c %Y "$HF")" -gt "$BOOT_EPOCH" ] && HF_NEW=1
 fi
 BS_MSG="$(rs_boot_state "$BOOTREC" "$HAVE_HF" "$HF_NEW")"; BS_RC=$?
-if [ "$BS_RC" = 2 ]; then
-	skip_test "RSD-10b" "the boot's own run applied what the hash file says" "$BS_MSG"
-else
-	run_test_show "RSD-10b" "the boot's own run applied what the hash file says" "echo '$BS_MSG'; [ $BS_RC -eq 0 ]"
-fi
+rs_report_boot_state "$BS_RC" "$BS_MSG"
 # Every login path that asks for root's password starts after sysinit.target.
 # Fail closed when no serial getty is found: zero inspected is not a pass.
 GETTYS="$(systemctl list-units --all --plain --no-legend 'serial-getty@*.service' 2>/dev/null | awk '{ print $1 }')"
@@ -153,15 +149,7 @@ SLOT="$(rauc status 2>/dev/null | sed -n 's/^Booted from: *\([^ ]*\).*/\1/p' | h
 VER="$(sed -n 's/^VERSION_ID=//p' /etc/os-release | tr -d '"')"
 SUM=none; [ -e "$HF" ] && SUM="$(sha256sum < "$HF" | awk '{ print $1 }')"
 OTA_MSG="$(rs_ota_survival "$OTA_REC" "${SLOT:-unknown}" "${VER:-unknown}" "$SUM")"; OTA_RC=$?
-case "$OTA_RC" in
-	0) run_test_show "RSD-11" "the device password survived the OS update" "echo '$OTA_MSG'" ;;
-	1) run_test_show "RSD-11" "the device password survived the OS update" "echo '$OTA_MSG'; false" ;;
-	*) if [ "${GA_RS_EXPECT_OTA:-0}" = 1 ]; then
-		run_test_show "RSD-11" "the device password survived the OS update (GA_RS_EXPECT_OTA=1)" "echo '$OTA_MSG'; false"
-	   else
-		skip_test "RSD-11" "survival across an OS update" "$OTA_MSG"
-	   fi ;;
-esac
+rs_report_ota "$OTA_RC" "$OTA_MSG" "${GA_RS_EXPECT_OTA:-0}"
 if [ -n "$SLOT" ] && [ -n "$VER" ]; then
 	( umask 077; printf 'slot=%s\nversion=%s\nhashsum=%s\n' "$SLOT" "$VER" "$SUM" > "$OTA_REC" )
 else

@@ -48,7 +48,7 @@ else
   fi
 
   run_test_show "TS-03b" "Tailscale hostname" \
-    "echo 'tailscale=$TS_HOSTNAME device_label=$DEVICE_LABEL'"
+    "echo \"tailscale=\$TS_HOSTNAME device_label=\$DEVICE_LABEL\""
 
   # --- IP assigned ---
   run_test "TS-04" "Tailscale has IP assigned" \
@@ -60,10 +60,10 @@ else
   # --- Image registry ---
   TS_IMAGE=$(docker inspect "$TS_CONTAINER" --format '{{.Config.Image}}' 2>/dev/null)
   run_test "TS-05" "Uses greenautarky addon image (not upstream)" \
-    "echo '$TS_IMAGE' | grep -q 'greenautarky'"
+    "echo \"\$TS_IMAGE\" | grep -q 'greenautarky'"
 
   run_test_show "TS-05b" "Addon image" \
-    "echo '$TS_IMAGE'"
+    "echo \"\$TS_IMAGE\""
 fi
 
 suite_end

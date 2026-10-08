@@ -73,11 +73,11 @@ run_test "BLD-MAC-02r" "RED-proof: scan-rand=yes is flagged" "! scan_rand_off '$
 # helper fails CLOSED: a device NOT on the allowlist is denied; one ON it is authorized
 DENY="$(GA_USB_TEST=1 GA_USB_ALLOWLIST="$ALLOW" sh "$HELPER" /sys/x 1a86 55d3 2>/dev/null)"
 run_test "BLD-USB-05" "helper DENIES a device absent from the (empty) allowlist" \
-  "echo '$DENY' | grep -q '^deny 1a86:55d3'"
+  "echo \"\$DENY\" | grep -q '^deny 1a86:55d3'"
 printf '1a86:55d3\n' > "$TMP/allow.one"
 ALLOWED="$(GA_USB_TEST=1 GA_USB_ALLOWLIST="$TMP/allow.one" sh "$HELPER" /sys/x 1A86 55D3 2>/dev/null)"
 run_test "BLD-USB-06" "helper AUTHORIZES an allowlisted device (case-insensitive)" \
-  "echo '$ALLOWED' | grep -q '^authorize 1a86:55d3'"
+  "echo \"\$ALLOWED\" | grep -q '^authorize 1a86:55d3'"
 
 rm -rf "$TMP"
 suite_end

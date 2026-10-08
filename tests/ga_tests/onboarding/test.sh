@@ -14,7 +14,7 @@ CORE_IMAGE=$(docker inspect homeassistant --format '{{.Config.Image}}' 2>/dev/nu
 # 2026-09-28: Core is the GA armv7 build — upstream stopped building armv7
 # Core in late 2025, so the stock image is frozen at 2025.11.3.
 run_test "OB-01" "Core image is the GA armv7 build" \
-  "echo '$CORE_IMAGE' | grep -q '^ghcr.io/greenautarky/home-assistant-armv7:'"
+  "echo \"\$CORE_IMAGE\" | grep -q '^ghcr.io/greenautarky/home-assistant-armv7:'"
 
 # A floor, not a pin: any calver from 2026 on. The exact pin is OSI-04.
 # An optional fourth component is the GA rebuild counter: 2026.8.2.1 is HA
@@ -23,10 +23,10 @@ run_test "OB-01" "Core image is the GA armv7 build" \
 # "not pinned" on the first rc that carried it, while OSI-04 passed on the same
 # tag — two checks of one fact disagreeing.
 run_test "OB-02" "Core image tag is a pinned HA version from 2026 on" \
-  "echo '$CORE_IMAGE' | grep -qE ':20(2[6-9]|[3-9][0-9])\.[0-9]+\.[0-9]+(\.[0-9]+)?$'"
+  "echo \"\$CORE_IMAGE\" | grep -qE ':20(2[6-9]|[3-9][0-9])\.[0-9]+\.[0-9]+(\.[0-9]+)?$'"
 
 run_test_show "OB-02b" "Core image" \
-  "echo '$CORE_IMAGE'"
+  "echo \"\$CORE_IMAGE\""
 
 # --- HA version ---
 run_test_show "OB-03" "HA version" \
@@ -80,13 +80,13 @@ _root_redirect=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --connec
 
 if [ "$_wizard_completed" = "false" ]; then
   run_test "OB-WR-01" "/ redirects to /greenautarky-setup.html (wizard incomplete)" \
-    "echo '$_root_redirect' | grep -qE '^302 .*greenautarky-setup\.html'"
+    "echo \"\$_root_redirect\" | grep -qE '^302 .*greenautarky-setup\.html'"
 
   # Reaching the wizard is necessary but not sufficient. Separate assertion, so
   # a lost PIN reports as a lost PIN instead of hiding inside OB-WR-01 or, worse,
   # passing because OB-WR-01 only ever looked at the status and the path.
   run_test "OB-WR-03" "/ carries the label's ?pin= through to the wizard" \
-    "echo '$_root_redirect' | grep -qE 'greenautarky-setup\.html\?.*pin=${_wizard_probe_pin}'"
+    "echo \"\$_root_redirect\" | grep -qE 'greenautarky-setup\.html\?.*pin=${_wizard_probe_pin}'"
 else
   skip_test "OB-WR-01" "wizard already completed — incomplete-state gate doesn't apply"
   skip_test "OB-WR-03" "wizard already completed — incomplete-state gate doesn't apply"
@@ -94,7 +94,7 @@ fi
 
 if [ "$_wizard_completed" = "true" ]; then
   run_test "OB-WR-02" "/ does NOT redirect to wizard once wizard is complete" \
-    "! echo '$_root_redirect' | grep -qE 'greenautarky-setup\.html'"
+    "! echo \"\$_root_redirect\" | grep -qE 'greenautarky-setup\.html'"
 else
   skip_test "OB-WR-02" "wizard not yet completed — complete-state gate doesn't apply"
 fi
@@ -130,7 +130,7 @@ else
     _want="${_ref%:*}"
     _img=$(docker inspect "hassio_${_slug}" --format '{{.Config.Image}}' 2>/dev/null)
     run_test_show "OB-07-${_slug}" "plugin ${_slug} comes from the declared ${_want}" \
-      "echo 'running: ${_img:-<not running>}'; [ '${_img%:*}' = '$_want' ]"
+      "echo \"running: \${_img:-<not running>}\"; [ '${_img%:*}' = '$_want' ]"
     _ob07_n=$((_ob07_n+1))
   done
   run_test "OB-07" "coverage: all five Supervisor plugins checked for origin (${_ob07_n})" \

@@ -19,6 +19,7 @@
 #
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
+. "$SCRIPT_DIR/wifi_scan.sh"
 
 suite_start "OpenStick WiFi"
 
@@ -68,8 +69,9 @@ for _attempt in 1 2 3; do
   sleep 10
 done
 
-run_test "OS-04" "WiFi scan completed" \
-  "nmcli -t -f SSID dev wifi list 2>/dev/null | head -1 | grep -q '.' "
+# Any row counts — see wifi_scan.sh for why the first row alone is wrong.
+SCAN_MSG="$(nmcli -t -f BSSID,SSID dev wifi list 2>/dev/null | wifi_scan_verdict)"; SCAN_RC=$?
+show_verdict "OS-04" "WiFi scan completed" "$SCAN_RC" "$SCAN_MSG"
 
 # No GA-* SSID in range means no stick is powered near this device — a bench
 # fact, not a defect, and OS-06..09 below already skip for exactly that reason.
@@ -78,7 +80,7 @@ run_test "OS-04" "WiFi scan completed" \
 # being read. A stick that IS in range still has to be a valid GA-#### one:
 # that is OS-06, and it still fails.
 if [ -n "$GA_SSIDS" ]; then
-  run_test "OS-05" "OpenStick GA-* SSID detected in range" "[ -n '$GA_SSIDS' ]"
+  run_test "OS-05" "OpenStick GA-* SSID detected in range" "[ -n \"\$GA_SSIDS\" ]"
 else
   skip_test "OS-05" "OpenStick GA-* SSID detected in range" \
     "no GA-* SSID in scan range — no OpenStick powered near this device"
@@ -100,7 +102,7 @@ else
   # OS-05 already passed above
 
   run_test "OS-06" "SSID format valid (GA-XXXX)" \
-    "echo '$TARGET_SSID' | grep -qE '^GA-[0-9]{4}$'"
+    "echo \"\$TARGET_SSID\" | grep -qE '^GA-[0-9]{4}$'"
 
   # Derive PSK
   SECRET=$(cat "$KEY_FILE" | tr -d '\n')
@@ -267,7 +269,7 @@ if [ "$CONN_EXISTS" -gt 0 ]; then
     sleep 1
     GW_ARP=$(ip neigh show "$GW" dev wlan0 2>/dev/null)
     run_test "OS-23" "Gateway ARP resolves on wlan0 (no INCOMPLETE)" \
-      "echo '$GW_ARP' | grep -qE 'lladdr [0-9a-f:]+' && ! echo '$GW_ARP' | grep -q INCOMPLETE"
+      "echo \"\$GW_ARP\" | grep -qE 'lladdr [0-9a-f:]+' && ! echo \"\$GW_ARP\" | grep -q INCOMPLETE"
   else
     # NM doesn't expose IP4.GATEWAY (e.g. connection just created, DHCP not
     # yet completed, or interface inactive). Not a regression of the bug
