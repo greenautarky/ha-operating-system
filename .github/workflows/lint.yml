@@ -491,6 +491,15 @@ jobs:
       - name: device-test runner exits non-zero on a red run
         run: ./tests/gates/device_runner_exit/selftest.sh
 
+      # From BOSv1.5.0-rc2 the OS version is 16.3.1.10 — the first two-digit
+      # last field. Every helper here that orders OS versions or picks an image
+      # by its version is fed 16.3.1.9/16.3.1.10, 16.3.1.10/16.3.2 and
+      # 16.3.1.10/16.3.1.10 and must give the numeric order. The same fixture
+      # runs against a lexical, a float and the old `sort | tail -1` variant,
+      # and each must go red on the 16.3.1.9-vs-16.3.1.10 case.
+      - name: OS version order (16.3.1.10 above 16.3.1.9; lexical/float variants go red)
+        run: ./tests/gates/os_version_order/selftest.sh
+
       # The lockstep gate's three verdicts must stay apart: drift FAILS, a canary
       # store is its own outcome, and a release revision like z2m's `2.12.1-3` is
       # not a canary. Runs the real check-images.sh over scratch pin files and a

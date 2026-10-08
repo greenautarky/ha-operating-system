@@ -58,8 +58,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Find the latest image
-IMG_XZ="$(ls "${BUILD_DIR}/images/"bos_*.img.xz 2>/dev/null | sort | tail -n 1 || true)"
+# Find the latest image: highest OS version, then newest build timestamp.
+# Not `ls | sort | tail -1`: that is a lexical sort, which puts
+# bos_ihost-16.3.1.9_… AFTER bos_ihost-16.3.1.10_… (and a …_provisioning image
+# after the disk image of the same build), so the release would package an
+# older build whenever both sit in images/ — and ga-builder keeps several.
+# shellcheck source=lib/os-version.sh
+. "${SCRIPT_DIR}/lib/os-version.sh"
+IMG_XZ="$(newest_bos_image "${BUILD_DIR}/images/"bos_*.img.xz || true)"
 if [[ -z "$IMG_XZ" ]]; then
   echo "ERROR: No bos_*.img.xz found in ${BUILD_DIR}/images/" >&2
   exit 1
