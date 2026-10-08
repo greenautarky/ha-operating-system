@@ -257,8 +257,10 @@ run_test "OTA-13" "the production slot names the release it serves" \
 # The bundle a version-only dispatch would install must exist AND be the size
 # its own checksum file describes a real file to be. A 404 here is a fleet that
 # cannot update at all; both are silent until someone dispatches.
+# The status CODE is compared, not grepped: `grep -qi '200'` over the headers
+# matched alt-svc's `ma=2592000` and passed on a 404 (found 2026-10-08, rc2 on K31).
 run_test "OTA-14" "the production bundle is downloadable" \
-  "$OTA_CURL -fsS -I --max-time 30 '$OTA_BASE/haos_ihost-${VERSION_ID}.raucb' | grep -qi '200'"
+  "[ \"\$($OTA_CURL -s -o /dev/null -I -w '%{http_code}' --max-time 30 '$OTA_BASE/haos_ihost-${VERSION_ID}.raucb')\" = 200 ]"
 
 run_test "OTA-15" "the production bundle ships its checksum" \
   "$OTA_CURL -fsS --max-time 20 '$OTA_BASE/haos_ihost-${VERSION_ID}.raucb.sha256' | grep -qE '^[0-9a-f]{64}  haos_ihost'"
@@ -268,7 +270,7 @@ run_test "OTA-15" "the production bundle ships its checksum" \
 # check says so while it is cheap to fix, not during an incident.
 if [ -n "$DEV_RELEASE" ]; then
   run_test "OTA-16" "this device's own release ($DEV_RELEASE) is still staged" \
-    "$OTA_CURL -fsS -I --max-time 30 '$OTA_BASE/$DEV_RELEASE/haos_ihost-${VERSION_ID}.raucb' | grep -qi '200'"
+    "[ \"\$($OTA_CURL -s -o /dev/null -I -w '%{http_code}' --max-time 30 '$OTA_BASE/$DEV_RELEASE/haos_ihost-${VERSION_ID}.raucb')\" = 200 ]"
 else
   skip_test "OTA-16" "/etc/ga-release is empty — cannot ask for this device's slot"
 fi
