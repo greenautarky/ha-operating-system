@@ -14,6 +14,45 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased — the host takes control requests from ga_manager only out of the add-on's own data directory
 
+### Fixed — the iHost boot script spends an attempt on a kernel that fails to load
+
+`uboot-boot.ush`: when no slot's kernel could be loaded, the script reset both
+attempt counters to 3 on every boot, so they never counted down. It now
+stores the decremented counters and re-arms only once both slots are spent,
+the same fix upstream HAOS made for ODROID-N2 (b704298a, #4832). Host gate:
+`tests/gates/boot_slot_fallback` runs the live script's slot selection
+across consecutive boots (7 cases; red on the pre-fix script).
+
+### Security — Docker bridge-subnet firewall patch from upstream HAOS
+
+`buildroot-external/patches/docker-engine/` carries upstream HAOS's Docker
+engine patch "bridge: protect bridge subnet from direct external access in raw
+PREROUTING" (HAOS #4605, refreshed for Docker 29.8.2 in #5056), byte-identical
+to HAOS master. Docker drops packets addressed to a NAT bridge network's
+subnet unless they arrive on that bridge, on loopback or on a configured
+trusted interface. This is Docker-level hardening that complements the
+Supervisor's gateway rule.
+
+### Security — kernel 6.12.103 -> 6.12.112
+
+The iHost kernel moves to the 6.12.112 longterm stable release (kernel.org
+tarball, nine point releases of stable fixes). The GA kernel patches
+(0001..0005) and the HAOS ipv6 patch apply unchanged; `expected.env` declares
+6.12.112 (OSI kernel check).
+
+### Security — buildroot 2025.02.16 -> 2025.02.18 (HA fork, Docker 29.8.2)
+
+The buildroot submodule moves from `31f3962adb` (2025.02.16) to `de21723663`
+on home-assistant/buildroot `2025.02.x-haos`: buildroot 2025.02.18 plus
+Docker 29.8.2 and containerd 2.3.6, the same pin upstream HAOS uses. It is a
+fast-forward (271 commits). Package security updates in it include OpenSSL
+3.5.7 -> 3.5.8, glibc 2.41-143 -> 2.41-161, curl 8.21.0 -> 8.22.0, expat
+2.8.2 -> 2.8.4, wpa_supplicant 2.11 -> 2.12, Go 1.26.5 -> 1.26.8 (also the
+toolchain for netbird, telegraf and os-agent), Docker 29.7.2 -> 29.8.2,
+containerd 2.3.3 -> 2.3.6, and backported security fixes for OpenSSH 9.9p2,
+busybox, sqlite, util-linux and libgcrypt. `expected.env` declares OpenSSL
+3.5.8 (OSI-03).
+
 ### Changed — OTA downloads use the pinned mesh endpoint
 
 `ga-rauc-install` now downloads every bundle with

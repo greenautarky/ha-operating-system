@@ -543,6 +543,14 @@ jobs:
       - name: USB host lock reaches a device updated over the air (ADR-0029 D3)
         run: ./tests/gates/ota_usb_lock/selftest.sh
 
+      # The iHost boot script's slot fallback (upstream HAOS #4832): a kernel
+      # that fails to LOAD must still cost its slot an attempt, and the counters
+      # re-arm only once both slots are spent. Runs the slot-selection tail of
+      # the LIVE script across consecutive boots with U-Boot commands stubbed;
+      # the pre-fix shape (guard removed) must go red on that case only.
+      - name: boot script spends an attempt on a kernel that fails to load (#4832)
+        run: ./tests/gates/boot_slot_fallback/selftest.sh
+
       # ADR-0027 D9: one OTA key. The keyring audit normally runs only over a
       # real build on the builder, so no pull request ever saw it fire. This
       # drives the LIVE audit over minted keyrings: a second anchor, a duplicate
