@@ -14,6 +14,27 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased — the host takes control requests from ga_manager only out of the add-on's own data directory
 
+### Changed — the OS version moves to 16.3.1.10
+
+`buildroot-external/meta` `VERSION_SUFFIX` goes from `1.9` to `1.10`, so the
+image, the RAUC bundle and `/etc/os-release` read `16.3.1.10` (first build:
+BOSv1.5.0-rc2). Every 1.3.x and 1.4.x image shipped as `16.3.1.9`, so anything
+that compares OS versions saw all of them as the same release. Image and bundle
+names follow (`bos_ihost-16.3.1.10_prod_<ts>.img.xz`, `haos_ihost-16.3.1.10.raucb`),
+and so does the OTA slot (`releases/16.3.1.10/<ga_release>/`).
+
+### Fixed — "the newest image" is chosen by version, not by name
+
+`scripts/create-release.sh` picked the image to package with `ls | sort | tail -1`.
+A name sort puts `16.3.1.9` after `16.3.1.10`, and a build's `_provisioning`
+image after its disk image, so it could package the wrong file. It now uses
+`newest_bos_image` from the new `scripts/lib/os-version.sh` (numeric per field,
+then build timestamp). `ga_build.sh` renames only the `haos_*` image of the
+version in `meta`, not the first one `find` returns, and warns about any other.
+Host gate: `tests/gates/os_version_order` feeds 16.3.1.9/16.3.1.10,
+16.3.1.10/16.3.2 and 16.3.1.10/16.3.1.10 through each helper; a lexical, a float
+and the old `sort | tail -1` variant each fail it.
+
 ### Fixed — the iHost boot script spends an attempt on a kernel that fails to load
 
 `uboot-boot.ush`: when no slot's kernel could be loaded, the script reset both

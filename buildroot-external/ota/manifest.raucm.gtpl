@@ -6,7 +6,8 @@ version={{ env "ota_version" }}
 # The GA release this bundle's rootfs carries in /etc/ga-release. A device's
 # RAUC pre-install handler (/usr/lib/rauc/ga-release-floor) refuses a bundle
 # whose release is older than its own, or that has none. The HAOS version
-# above cannot order GA releases: it has been 16.3.1.9 since BOSv1.2.15.
+# above cannot order GA releases: it was 16.3.1.9 from BOSv1.2.15 to
+# BOSv1.5.0-rc1, and it does not move with every release.
 [meta.ga]
 release={{ env "ota_ga_release" }}
 {{- end }}

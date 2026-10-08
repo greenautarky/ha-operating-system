@@ -1722,11 +1722,30 @@ assert_prod_sbom() {
 # Discover the original image basename produced by buildroot (e.g., haos_ihost-16.3)
 # Returns the path without extension.
 get_original_image_basename() {
-  local img
-  # Find the .img.xz or .img file in the images directory
-  img="$(find "${OUT}/images" -maxdepth 1 -name 'haos_*.img.xz' -o -name 'haos_*.img' 2>/dev/null | head -n 1 || true)"
+  local img meta maj min suf ver stale
+  # The image THIS build produced is named after the OS version in meta
+  # (name.sh: <id>_<board>-<MAJOR>.<MINOR>[.<SUFFIX>]). Select it by that exact
+  # version. "The first haos_* that find returns" picked in directory order, and
+  # a haos_* left by an earlier build that died before this rename (another
+  # version — e.g. 16.3.1.9 next to 16.3.1.10) could be renamed and shipped
+  # under this build's timestamp.
+  meta="${BR2EXT_NETBIRD}/meta"
+  maj="$(sed -n 's/^VERSION_MAJOR="\(.*\)"$/\1/p' "$meta" 2>/dev/null)"
+  min="$(sed -n 's/^VERSION_MINOR="\(.*\)"$/\1/p' "$meta" 2>/dev/null)"
+  suf="$(sed -n 's/^VERSION_SUFFIX="\(.*\)"$/\1/p' "$meta" 2>/dev/null)"
+  if [[ -z "$maj" || -z "$min" ]]; then
+    echo "ERROR: cannot read VERSION_MAJOR/VERSION_MINOR from ${meta}" >&2
+    return 1
+  fi
+  ver="${maj}.${min}${suf:+.${suf}}"
+  img="$(find "${OUT}/images" -maxdepth 1 \( -name "haos_*-${ver}.img.xz" -o -name "haos_*-${ver}.img" \) 2>/dev/null | head -n 1 || true)"
+  stale="$(find "${OUT}/images" -maxdepth 1 \( -name 'haos_*.img.xz' -o -name 'haos_*.img' \) \
+             ! -name "haos_*-${ver}.img.xz" ! -name "haos_*-${ver}.img" -printf '%f ' 2>/dev/null || true)"
+  if [[ -n "$stale" ]]; then
+    echo "WARNING: ${OUT}/images holds haos_* images of another OS version (${stale% }) — ignored; this build is ${ver}" >&2
+  fi
   if [[ -z "$img" ]]; then
-    echo "ERROR: No haos_*.img or haos_*.img.xz found in ${OUT}/images" >&2
+    echo "ERROR: No haos_*-${ver}.img or .img.xz found in ${OUT}/images (meta says ${ver})" >&2
     return 1
   fi
   # Strip .img.xz or .img extension
