@@ -52,7 +52,7 @@ HASSIO_SITE_METHOD = local
 # run_build_tests.sh (XVER-*), gen_expected.sh and scan-cves.sh. A
 # `make HASSIO_VERSION_URL=…` override bypasses all of them but the build and
 # the baked file — do not use one for an image that ships.
-HASSIO_VERSION_URL ?= "https://raw.githubusercontent.com/greenautarky/haos-version/candidate/stable-1.4/"
+HASSIO_VERSION_URL ?= "https://raw.githubusercontent.com/greenautarky/haos-version/candidate/stable-1.5/"
 ifeq ($(BR2_PACKAGE_HASSIO_CHANNEL_STABLE),y)
 HASSIO_VERSION_CHANNEL = "stable"
 else ifeq ($(BR2_PACKAGE_HASSIO_CHANNEL_BETA),y)
