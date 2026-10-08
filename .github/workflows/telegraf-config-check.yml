@@ -1,0 +1,41 @@
+name: Telegraf config check
+
+# Every telegraf config the image ships must load in the telegraf version the
+# image builds. telegraf refuses the WHOLE file on a single unknown option or
+# plugin, so one stale line stops the service (no metrics at all).
+#
+# Runs scripts/telegraf-config-guard-ci.sh: official linux/amd64 release of
+# TELEGRAF_VERSION (sha256-pinned) + `telegraf config check` on
+# buildroot-external/package/telegraf/*.conf, after a fixture self-test that
+# proves the guard goes red on a removed option and an unknown plugin.
+#
+# Path-filtered: this is not a required check (see lint.yml for why a required
+# check must not carry a path filter).
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'buildroot-external/package/telegraf/**'
+      - 'scripts/telegraf-plugin-guard.sh'
+      - 'scripts/telegraf-config-guard-ci.sh'
+      - '.github/workflows/telegraf-config-check.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'buildroot-external/package/telegraf/**'
+      - 'scripts/telegraf-plugin-guard.sh'
+      - 'scripts/telegraf-config-guard-ci.sh'
+      - '.github/workflows/telegraf-config-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  config-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shipped telegraf configs load in the built telegraf version
+        run: bash scripts/telegraf-config-guard-ci.sh "$RUNNER_TEMP/telegraf-guard"
