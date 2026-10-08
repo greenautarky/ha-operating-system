@@ -99,7 +99,11 @@ Baked at build-time from a constant in `buildroot-external/`. Example:
 
 Same shape as the existing `fluent-bit.service`, but:
 - **No** `ConditionPathExists` — always starts
-- Reads `/etc/fluent-bit/fluent-bit-tier0.conf` (different config)
+- Reads `/etc/fluent-bit/fluent-bit-tier0-os.conf` (this repo), which `@INCLUDE`s
+  `/etc/fluent-bit/fluent-bit-tier0.conf` (ga-telemetry-config) and adds the
+  OS update units: `ga-rauc-install.service` at every priority, plus PID 1's
+  lines for `ga-rauc-install.service`/`.path` and `rauc.service` (2026-10-08).
+  The sketch below predates that and the component split.
 - Loki output: same endpoint, but labels include `tier=0`
 - Inputs limited to:
   - `journald` filtered to `_PRIORITY <= 4` AND specific units:

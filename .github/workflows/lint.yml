@@ -597,6 +597,22 @@ jobs:
       - name: OS update release floor through a real RAUC
         run: ./tests/gates/rauc_release_floor/rauc_e2e.sh
 
+      # Tier-0 (the only log stream on a device without consent) ships the OS
+      # update host path: ga-rauc-install.service at every priority and PID 1's
+      # lines for it, its .path watcher and rauc.service — and nothing else new.
+      # Runs the REAL fluent-bit (buildroot's version) with the LIVE entry config
+      # and the component config at its version.yaml pin over a fixture journal.
+      # The pre-change shape and an input without its UNIT= matches must go red
+      # on exactly their cases.
+      - name: Install systemd-journal-remote (fixture journal for the tier-0 gate)
+        run: |
+          set -euo pipefail
+          [ -x /usr/lib/systemd/systemd-journal-remote ] \
+            || timeout 300 sudo apt-get install -y -qq systemd-journal-remote
+          ls -l /usr/lib/systemd/systemd-journal-remote
+      - name: Tier-0 ships the OS update host path (real fluent-bit, fixture journal)
+        run: ./tests/gates/tier0_ota_journal/selftest.sh
+
       # ADR-0027 D9: one build mode. `dev` must be refused however it is asked
       # for; every real mode and a leftover `prod` (accepted, loud) must work.
       - name: Build mode (dev refused, real modes and deprecated prod still build)
