@@ -18,7 +18,7 @@ guard was never in effect. (An earlier instance of the same name, a
 `Requires=`, silently dropped ga-bootstrap.service; see SUP-11.)
 
 Second class, same silence: the start-rate limit keys belong in `[Unit]`.
-systemd 257 still accepts `StartLimitBurst=`, `StartLimitInterval=` and
+systemd 257 also accepts `StartLimitBurst=`, `StartLimitInterval=` and
 `StartLimitAction=` in `[Service]` for compatibility, but NOT
 `StartLimitIntervalSec=`: there it logs "Unknown key ... ignoring" (measured
 with systemd-analyze verify). Written in `[Service]`, the burst is then counted
