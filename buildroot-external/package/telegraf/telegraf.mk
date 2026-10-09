@@ -47,7 +47,8 @@ TELEGRAF_GO_ENV += GOPROXY=https://proxy.golang.org,direct
 #   - at build time, TELEGRAF_GA_PLUGIN_GUARD below checks the shipped configs
 #     against the binary just built.
 # A config read at runtime from /mnt/data/telegraf/override.conf is outside
-# both.
+# both; ga-telegraf-override-check reports it loudly at start (see
+# telegraf.service).
 TELEGRAF_GA_PLUGINS = \
 	inputs.cpu \
 	inputs.disk \
@@ -104,6 +105,10 @@ define TELEGRAF_INSTALL_INIT_SYSTEMD
 	# systemd expands plain $${VAR} in Exec* lines itself (see ga-telegraf-env).
 	$(INSTALL) -D -m 0755 $(TELEGRAF_PKGDIR)/ga-telegraf-env \
 		$(TARGET_DIR)/usr/libexec/ga-telegraf-env
+
+	# Start-time check of a runtime override config against this (slim) binary
+	$(INSTALL) -D -m 0755 $(TELEGRAF_PKGDIR)/ga-telegraf-override-check \
+		$(TARGET_DIR)/usr/libexec/ga-telegraf-override-check
 
 	# Install systemd service unit
 	$(INSTALL) -D -m 0644 $(TELEGRAF_PKGDIR)/telegraf.service \

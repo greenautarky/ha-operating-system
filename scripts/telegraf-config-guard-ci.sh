@@ -171,4 +171,25 @@ printf '%s\n' "$out" | grep -q 'exec check SKIPPED' && die "exec check was skipp
 n_ok=$(printf '%s\n' "$out" | grep -c 'config check OK: ')
 [ $rc -eq 0 ] || die "shipped telegraf configs are rejected by telegraf $VERSION (see above)"
 [ "$n_ok" -eq ${#confs[@]} ] || die "config check confirmed ${n_ok} of ${#confs[@]} configs"
+
+# --- 3. the start-time override check (the unit's ExecStartPre) --------------
+# The REAL script telegraf.service runs, against this release binary: silent
+# without an override, quiet on a loading one, and on a rejected one an err-
+# priority ("<3>") line naming the missing plugin -- while still exiting 0, so
+# it can never block the start.
+OCHK=$PKG/ga-telegraf-override-check
+[ -x "$OCHK" ] || die "$OCHK missing or not executable"
+grep -qxF 'ExecStartPre=-/usr/libexec/ga-telegraf-override-check' "$PKG/telegraf.service" \
+    || die "telegraf.service does not run ga-telegraf-override-check as a non-blocking ExecStartPre"
+ovr() { GA_TELEGRAF_OVERRIDE=$1 GA_TELEGRAF_BIN=$BIN TMPDIR=$WORK "$OCHK" 2>&1; }
+out=$(ovr "$WORK/no-such-override.conf"); rc=$?
+{ [ $rc -eq 0 ] && [ -z "$out" ]; } || die "override check: not silent without an override (rc=$rc): $out"
+out=$(ovr "$PKG/telegraf-debug.conf"); rc=$?
+{ [ $rc -eq 0 ] && ! printf '%s\n' "$out" | grep -q '^<3>' && printf '%s\n' "$out" | grep -q 'loads in this telegraf'; } \
+    || die "override check: flags telegraf-debug.conf, which loads (rc=$rc): $out"
+out=$(ovr "$FIX/must-fail/unknown-plugin.conf"); rc=$?
+{ [ $rc -eq 0 ] && printf '%s\n' "$out" | grep -q '^<3>.*REJECTED' \
+  && printf '%s\n' "$out" | grep -q '^<3>.*plugin inputs\.ga_no_such_plugin is not compiled'; } \
+    || { printf '%s\n' "$out" | sed 's/^/    /' >&2; die "override check: did not report inputs.ga_no_such_plugin at err priority (rc=$rc)"; }
+echo "telegraf-config-guard: override check OK -- silent without override, quiet on telegraf-debug.conf, err on an unknown plugin (exit 0 each)"
 echo "telegraf-config-guard: OK -- ${n_ok}/${#confs[@]} shipped configs load in telegraf $VERSION"
