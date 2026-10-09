@@ -776,7 +776,7 @@ fi
 PKGCOV_EXPECTED=0; PKGCOV_COVERED=0; PKGCOV_BROKEN=0
 PKGCOV_LIST_FILE=/dev/null
 check_package_coverage() {
-  local sbom="$1" sym comp mode note line n br cpe matches
+  local sbom="$1" sym comp mode note line n cpe matches
   PKGCOV_LIST_FILE="${OUTPUT_DIR}/package-coverage.jsonl"; : > "$PKGCOV_LIST_FILE"
   echo ""
   echo "  --- Per-package coverage: GA defconfig delta ---"
