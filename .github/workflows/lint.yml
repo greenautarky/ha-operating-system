@@ -339,6 +339,16 @@ jobs:
         # Red-proven by restoring the first-row rule: OSV-01 and OSV-02 fail.
         run: sh tests/ga_tests/openstick/selftest.sh
 
+      - name: GOTC-03 rejects a Go binary built with another toolchain than buildroot pins
+        # BOSv1.5.0-rc4 shipped netbird, os-agent and runc built with go1.26.5
+        # while buildroot pinned go1.26.8: buildroot does not recompile a package
+        # when host-go changes. Drives the LIVE scripts/lib/go-toolchain.sh over
+        # must-flag scans (the real rc4 target scan, a version-prefix look-alike,
+        # devel/missing versions, an empty scan) and must-pass scans; two
+        # weakened copies of the verdict (prefix compare, empty scan passes)
+        # must each be caught.
+        run: bash tests/ga_tests/build/go_toolchain/selftest.sh
+
       - name: every suite directory is registered or explicitly excluded
         run: sh tests/ga_tests/run_all.sh --selftest
 

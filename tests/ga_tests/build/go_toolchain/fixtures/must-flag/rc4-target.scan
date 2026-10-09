@@ -1,0 +1,10 @@
+usr/bin/containerd: go1.26.8
+usr/bin/containerd-shim-runc-v2: go1.26.8
+usr/bin/ctr: go1.26.8
+usr/bin/docker: go1.26.8
+usr/bin/docker-proxy: go1.26.8
+usr/bin/dockerd: go1.26.8
+usr/bin/netbird: go1.26.5
+usr/bin/os-agent: go1.26.5
+usr/bin/runc: go1.26.5
+usr/bin/telegraf: go1.26.8

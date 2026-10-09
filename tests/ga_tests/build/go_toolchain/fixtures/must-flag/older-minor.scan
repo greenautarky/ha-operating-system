@@ -1,0 +1,2 @@
+usr/bin/netbird: go1.26.8
+usr/bin/runc: go1.25.10

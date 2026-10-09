@@ -114,6 +114,11 @@ No device or emulator needed — checks the build output tree directly.
 - SLOT-07a/b: publishes to the **add-on-private** `/mnt/data/supervisor/addons/data/*_ga_manager/` and never to `/share` — the file is the input to a rollback decision, and `/share` is mapped rw by every add-on that declares `share:rw`, so a forged `rollback.possible: true` there would let an operator brick a device
 - SLOT-08: parses rauc output instead of eval'ing it
 
+### Go toolchain consistency (scripts/lib/go-toolchain.sh)
+- GOTC-01: buildroot's `GO_VERSION` is readable from `buildroot/package/go/go.mk` (the expected value comes from the source, never from the build output)
+- GOTC-02: the build's host-go reports that same version
+- GOTC-03: every Go binary in `target/` (scanned with `go version <dir>`) embeds exactly `go$(GO_VERSION)`; zero binaries scanned, or `usr/bin/netbird` not recognised, is a failure. Fixtures: `build/go_toolchain/selftest.sh` (CI, lint.yml)
+
 ## Category 2: Emulation (`emu`)
 Can run in QEMU or container without real hardware.
 Needs a booted system image but no physical iHost.

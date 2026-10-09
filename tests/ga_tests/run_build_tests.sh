@@ -4606,6 +4606,66 @@ grep -qE '^\s*wifi\.scan-rand-mac-address\s*=\s*no' "$_NM" 2>/dev/null \
   && _pass "MAC-02: scan-time MAC randomization disabled" \
   || _fail "MAC-02: NetworkManager.conf does not set wifi.scan-rand-mac-address=no"
 
+# =========================================================================
+# Go toolchain consistency (GOTC)
+# =========================================================================
+# Buildroot does not recompile a package when host-go changes. BOSv1.5.0-rc4
+# shipped netbird, os-agent and runc built with go1.26.5 next to six binaries
+# built with go1.26.8, because #710 moved buildroot to go1.26.8 and `update`
+# bakes reused the old build dirs. These checks compare the two sources that
+# claim the toolchain version: buildroot's GO_VERSION pin (source) and the Go
+# version embedded in every Go binary in target/ (artefact). The verdict logic
+# is scripts/lib/go-toolchain.sh, held to its fixtures by
+# tests/ga_tests/build/go_toolchain/selftest.sh.
+echo ""
+echo "--- Go toolchain consistency ---"
+_gotc_lib="${SRC:-$(cd "$(dirname "$0")/../.." && pwd)}/scripts/lib/go-toolchain.sh"
+if [[ ! -d "$TARGET" ]]; then
+  _skip "GOTC-01..03: Go toolchain consistency" "no target/ under $OUT"
+elif [[ ! -f "$_gotc_lib" ]]; then
+  _fail "GOTC-00: go-toolchain lib missing at $_gotc_lib — the check cannot run"
+else
+  # shellcheck source=../../scripts/lib/go-toolchain.sh
+  . "$_gotc_lib"
+  _gotc_br="${BUILDROOT_DIR:-${SRC:+${SRC}/buildroot}}"
+  _gotc_exp="$(ga_go_expected_version "$_gotc_br" 2>/dev/null || true)"
+  if [[ -n "$_gotc_exp" ]]; then
+    _pass "GOTC-01: buildroot pins GO_VERSION=${_gotc_exp} (${_gotc_br}/package/go/go.mk)"
+  else
+    _fail "GOTC-01: cannot read GO_VERSION from ${_gotc_br:-<no buildroot dir>}/package/go/go.mk"
+  fi
+
+  _gotc_go="${OUT}/host/bin/go"
+  _gotc_host="$(GOTOOLCHAIN=local "$_gotc_go" version 2>/dev/null | awk '{print $3}')"
+  if [[ -z "$_gotc_exp" ]]; then
+    _fail "GOTC-02: no expected Go version to compare host-go against"
+  elif [[ "$_gotc_host" == "go${_gotc_exp}" ]]; then
+    _pass "GOTC-02: host-go in this build is go${_gotc_exp}"
+  else
+    _fail "GOTC-02: host-go in this build is ${_gotc_host:-<missing: $_gotc_go>}, buildroot pins go${_gotc_exp}"
+  fi
+
+  if [[ -z "$_gotc_exp" || ! -x "$_gotc_go" ]]; then
+    _fail "GOTC-03: cannot scan target/ for Go binaries (no expected version or no host-go)"
+  else
+    _gotc_scan="$(ga_go_scan "$TARGET" "$_gotc_go")"
+    _gotc_off="$(printf '%s\n' "$_gotc_scan" | ga_go_toolchain_verdict "$_gotc_exp"; echo "rc=$?")"
+    _gotc_rc="${_gotc_off##*rc=}"
+    _gotc_off="${_gotc_off%rc=*}"
+    _gotc_n="$(printf '%s\n' "$_gotc_scan" | grep -c ': go' || true)"
+    if [[ -f "${TARGET}/usr/bin/netbird" ]] && ! grep -q '^usr/bin/netbird: ' <<<"$_gotc_scan"; then
+      _fail "GOTC-03: the scan did not recognise usr/bin/netbird as a Go binary — the reader is broken, not the image"
+    elif [[ "$_gotc_rc" == "0" ]]; then
+      _pass "GOTC-03: all ${_gotc_n} Go binaries in target/ embed go${_gotc_exp}"
+    elif [[ "$_gotc_rc" == "2" ]]; then
+      _fail "GOTC-03: zero Go binaries found in target/ — a scan over nothing is not a pass"
+    else
+      _fail "GOTC-03: Go binaries built with another toolchain than go${_gotc_exp} (rebuild them: ga_build.sh dircleans host-go packages on a toolchain change):"
+      printf '%s' "$_gotc_off" | sed 's/^/          /'
+    fi
+  fi
+fi
+
 echo ""
 total=$((pass + fail + skip))
 echo "=== Build tests: ${pass} passed, ${fail} failed, ${skip} skipped (${total} total) ==="
