@@ -13,6 +13,49 @@ case "$cmd" in
       *)        cut -d' ' -f1 "$(pick containers.txt)" ;;
     esac ;;
   exec)
+    # FAKE HOME ASSISTANT (GA_HEAT_LIVE set by the selftest for fixtures carrying a
+    # `fake-ha` marker): Core's state lives in a file the service calls CHANGE,
+    # modelling what ga_heating does with them — so a teardown can be proven to
+    # give the rooms back, not merely to have sent something.
+    if [ -n "${GA_HEAT_LIVE:-}" ]; then
+      all="$*"
+      [ -e "$GA_HEAT_LIVE" ] || cp "$(pick states.json)" "$GA_HEAT_LIVE"
+      field() { printf '%s' "$all" | sed -n "s/.*\"$1\":\"\{0,1\}\([^\",}]*\).*/\1/p" | head -1; }
+      upd() { jq "$@" "$GA_HEAT_LIVE" > "$GA_HEAT_LIVE.new" && mv "$GA_HEAT_LIVE.new" "$GA_HEAT_LIVE"; }
+      case "$all" in
+        *set_temperature*)
+          # A write straight to a valve is a hand on the radiator (ga-heating >= 0.11,
+          # ADR-0021): a room in `auto` goes manual (`heat`). With a `late-echo`
+          # marker the valve's report arrives once more AFTER the room was
+          # set back — the one-shot restore this suite had until 2026-10 lost to it.
+          v="$(field entity_id)"; t="$(field temperature)"
+          room="$(jq -r --arg v "$v" '[ .[] | select((.attributes.valves // []) | index($v)) | .entity_id ] | first // empty' "$GA_HEAT_LIVE")"
+          upd --arg v "$v" --argjson t "$t" 'map(if .entity_id == $v then .attributes.temperature = $t else . end)'
+          if [ -n "$room" ] && [ "$(jq -r --arg r "$room" '.[] | select(.entity_id == $r) | .state' "$GA_HEAT_LIVE")" = auto ]; then
+            upd --arg r "$room" 'map(if .entity_id == $r then .state = "heat" else . end)'
+            [ -e "$GA_HEAT_FIXTURE/late-echo" ] && echo "$room" >> "$GA_HEAT_LIVE.pending"
+          fi ;;
+        *set_hvac_mode*)
+          [ -e "$GA_HEAT_FIXTURE/hvac-refused" ] && exit 22     # curl -f on an HTTP 4xx/5xx
+          r="$(field entity_id)"; m="$(field hvac_mode)"
+          upd --arg r "$r" --arg m "$m" 'map(if .entity_id == $r then .state = $m else . end)'
+          if [ "$m" = auto ] && grep -qx "$r" "$GA_HEAT_LIVE.pending" 2>/dev/null; then
+            grep -vx "$r" "$GA_HEAT_LIVE.pending" > "$GA_HEAT_LIVE.p2"; mv "$GA_HEAT_LIVE.p2" "$GA_HEAT_LIVE.pending"
+            echo "$r" >> "$GA_HEAT_LIVE.armed"
+          fi ;;
+        */core/api/states/*)
+          ent="${all##*/core/api/states/}"; ent="${ent%% *}"
+          jq -c --arg e "$ent" '[ .[] | select(.entity_id == $e) ] | first // {}' "$GA_HEAT_LIVE" ;;
+        *)
+          # the late report lands: the room goes manual again, once
+          if [ -s "$GA_HEAT_LIVE.armed" ]; then
+            while read -r r; do upd --arg r "$r" 'map(if .entity_id == $r then .state = "heat" else . end)'; done < "$GA_HEAT_LIVE.armed"
+            : > "$GA_HEAT_LIVE.armed"
+          fi
+          cat "$GA_HEAT_LIVE" ;;
+      esac
+      exit 0
+    fi
     # Until HEAT-09 the suite's only exec was the /core/api/states fetch. It now
     # also WRITES a setpoint and reads ONE entity back, and those three calls
     # must be told apart or every fixture answers the full state list to a

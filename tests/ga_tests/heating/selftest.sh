@@ -44,10 +44,16 @@ run() {
   # HEAT-09 polls a valve for up to a minute on a real device. In here the
   # answer is a file and never changes, so one short try is the whole truth —
   # waiting longer would only make the selftest slower, not more honest.
+  # A fixture with a `fake-ha` marker gets a STATEFUL Core (the shim's
+  # GA_HEAT_LIVE file): service calls change what the next read returns, so the
+  # room-mode teardown is judged on where the rooms END, not on what was sent.
+  local live=""
+  [[ -e "$FIXTURES/$fx/fake-ha" ]] && { live="$GA_HEAT_TMP/live.$fx.json"; rm -f "$live" "$live".*; }
   OUT[$fx]="$(PATH="$FIXTURES/shim:$PATH" GA_HEAT_FIXTURE="$FIXTURES/$fx" \
               GA_HEAT_HA_DIR="$FIXTURES/base/ha" GA_HEAT_ADDON_DATA="$addon_data" \
               GA_HEAT_SETPOINT_STEP_S=0 GA_HEAT_SETPOINT_TRIES=1 \
-              sh "$SUITE" 2>&1)"
+              GA_HEAT_RESTORE_SETTLE_S=0 GA_HEAT_LIVE="$live" \
+              sh "${SUITE_OVERRIDE:-$SUITE}" 2>&1)"
   cp "$GA_HEAT_TMP/curl-args.log" "$GA_HEAT_TMP/curl-args.$fx.log"
 }
 
@@ -61,6 +67,7 @@ verdict() {
 
 expect() {
   local fixture="$1" id="$2" want="$3" got
+  run "$fixture"   # in THIS shell: verdict runs in a subshell, and a run cached there is lost
   got="$(verdict "$fixture" "$id")"
   ran=$((ran + 1))
   if [[ "$got" == "$want" ]]; then
@@ -168,6 +175,81 @@ expect_detail must-fail-setpoint-ignored "frame counter"
 # switched off.
 expect base HEAT-09 SKIP
 expect_detail base "nothing to write to"
+
+# HEAT-12 — every room given back ITS OWN pre-suite mode (Odoo #1195). Judged
+# twice: by the suite's verdict, and independently by where the fake Core's rooms
+# END — read through the same shim after the suite has exited, so a suite that
+# reports PASS over a room still on manual is caught here too.
+# final_modes <fixture> → "entity=state ..." of the fake Core's rooms after the run
+final_modes() {
+  PATH="$FIXTURES/shim:$PATH" GA_HEAT_FIXTURE="$FIXTURES/$1" GA_HEAT_LIVE="$GA_HEAT_TMP/live.$1.json" \
+    docker exec addon_x_ga_manager sh -c 'curl http://supervisor/core/api/states' \
+    | jq -r '[ .[] | select(.attributes.valves != null) | "\(.entity_id)=\(.state)" ] | join(" ")'
+}
+expect_final() {
+  local fixture="$1" want="$2" got
+  got="$(final_modes "$fixture")"
+  ran=$((ran + 1))
+  if [[ "$got" == "$want" ]]; then
+    echo "  ok    $fixture rooms end as: $got"
+  else
+    echo "  FAIL  $fixture rooms end as: $got (expected $want)"
+    printf '%s\n' "${OUT[$fixture]}" | sed 's/^/          | /'
+    fails=$((fails + 1))
+  fi
+}
+ROOMS_BEFORE="climate.wohnzimmer=auto climate.bad=heat"
+
+echo "== must-pass-room-modes-restored (valve write → room manual; late report re-manuals it once; one room was manual BEFORE) =="
+expect must-pass-room-modes-restored HEAT-09 PASS
+expect must-pass-room-modes-restored HEAT-12 PASS
+expect_detail must-pass-room-modes-restored "restore round 1: climate.wohnzimmer heat -> auto"
+expect_detail must-pass-room-modes-restored "restore round 2: climate.wohnzimmer heat -> auto"
+expect_final must-pass-room-modes-restored "$ROOMS_BEFORE"
+
+echo "== must-fail-room-mode-refused (Core refuses set_hvac_mode: the room stays manual) =="
+expect must-fail-room-mode-refused HEAT-12 FAIL
+expect_detail must-fail-room-mode-refused "climate.wohnzimmer(before=auto now=heat)"
+# the base device: nothing written, nothing to give back — and must not be flagged
+expect base HEAT-12 PASS
+
+# MUTATIONS of the LIVE room_modes.sh (rule 50/51: the specific guard must fire,
+# and a pattern that no longer matches is a FAILURE, never a skip). Each runs the
+# real test.sh next to a mutated copy of the library.
+mutate() {
+  local name="$1" from="$2" to="$3" want_detail="$4" want_final="$5" dir
+  dir="$GA_HEAT_TMP/mut-$name"; mkdir -p "$dir/heating"
+  ln -sfn "$HERE/../lib" "$dir/lib"
+  cp "$SUITE" "$dir/heating/test.sh"
+  cp "$HERE/room_modes.sh" "$dir/heating/room_modes.sh"
+  ran=$((ran + 1))
+  if ! grep -qF -- "$from" "$dir/heating/room_modes.sh"; then
+    echo "  FAIL  mutation $name: pattern not found in room_modes.sh — the mutation is stale, fix it"
+    fails=$((fails + 1)); return
+  fi
+  FROM="$from" TO="$to" perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/' "$dir/heating/room_modes.sh"
+  local key="must-pass-room-modes-restored"
+  unset "OUT[$key]"
+  SUITE_OVERRIDE="$dir/heating/test.sh" run "$key"
+  local v; v="$(verdict "$key" HEAT-12)"
+  local fin; fin="$(final_modes "$key")"
+  if [[ "$v" == FAIL ]] && printf '%s\n' "${OUT[$key]}" | grep -qF -- "$want_detail" && [[ "$fin" == "$want_final" ]]; then
+    echo "  ok    mutation $name → HEAT-12 FAIL ($want_detail), rooms end as: $fin"
+  else
+    echo "  FAIL  mutation $name not caught by HEAT-12: verdict=$v, rooms end as: $fin"
+    printf '%s\n' "${OUT[$key]}" | sed 's/^/          | /'
+    fails=$((fails + 1))
+  fi
+  unset "OUT[$key]"
+}
+command -v perl >/dev/null || { echo "FATAL: perl missing (mutations)"; exit 1; }
+echo "== mutations of room_modes.sh (each must turn HEAT-12 red) =="
+mutate no-restore 'hrm_set_mode "$_room" "$_target" ||' ': ||' \
+  "climate.wohnzimmer(before=auto now=heat)" "climate.wohnzimmer=heat climate.bad=heat"
+mutate hard-auto '_target="$_pre"' '_target=auto' \
+  "climate.bad(before=heat now=auto)" "climate.wohnzimmer=auto climate.bad=auto"
+mutate one-shot '[ "$_wrote" -eq 0 ] && break' 'break' \
+  "climate.wohnzimmer(before=auto now=heat)" "climate.wohnzimmer=heat climate.bad=heat"
 
 # Fail closed on zero: a harness that inspected nothing is a failure, not a pass.
 if (( ran == 0 )); then

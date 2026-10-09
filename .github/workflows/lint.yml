@@ -688,8 +688,9 @@ jobs:
       - name: Provisioning phase invariants (red + green on fixture device trees)
         run: ./tests/ga_tests/provisioning/selftest.sh
       # Heating suite (ADR-0021 contract v1: HEAT-03 source, HEAT-06 decision entity,
-      # HEAT-07 liveness row, HEAT-08 one MQTT client) — 12 fixture variants, red AND
-      # green, driven through the LIVE test.sh with docker/curl shims.
+      # HEAT-07 liveness row, HEAT-08 one MQTT client, HEAT-12 rooms given back their
+      # pre-suite mode) — fixture variants red AND green, plus mutations of
+      # room_modes.sh, driven through the LIVE test.sh with docker/curl shims.
       - name: "Heating suite selftest (fixtures: must-fail / must-pass / must-skip)"
         run: ./tests/ga_tests/heating/selftest.sh
 

@@ -104,6 +104,27 @@ if [ -n "$GM" ]; then
     || : > "$STATES"
 fi
 
+# --- every room's mode, BEFORE anything below writes (Odoo #1195) ------------
+# HEAT-09 writes a valve, which ga_heating rightly reads as a hand on the
+# radiator: the room goes manual for 3 h. The snapshot is what HEAT-12 gives
+# back at the end — each room its OWN previous mode, never a blanket `auto` —
+# and the EXIT/INT/TERM trap gives it back too when the suite dies half-way.
+# See room_modes.sh for why one restore right after the write was not enough.
+. "$SCRIPT_DIR/room_modes.sh"
+ROOM_SNAP="$TMP_DIR/ga-heat-room-modes.pre"
+ROOM_SNAP_OK=0
+rm -f "$ROOM_SNAP" "$ROOM_SNAP.done"
+if [ -n "$GM" ] && hrm_snapshot "$ROOM_SNAP"; then ROOM_SNAP_OK=1; fi
+heat_teardown() {
+  [ "$ROOM_SNAP_OK" -eq 1 ] && [ ! -e "$ROOM_SNAP.done" ] || return 0
+  : > "$ROOM_SNAP.done"
+  echo "  heating teardown (suite ended early): giving every room its pre-suite mode back"
+  hrm_restore "$ROOM_SNAP" | sed 's/^/        /'
+  hrm_assert "$ROOM_SNAP" 2>&1 | sed 's/^/        -> /'
+}
+trap 'heat_teardown' EXIT
+trap 'heat_teardown; exit 130' INT TERM
+
 # Every assertion below reads Core's state; without it the suite would be
 # asserting on an empty file. FAIL, not SKIP: a device whose Core cannot be
 # asked has no provable heating outcome, and hiding that is the failure mode
@@ -565,20 +586,10 @@ heat09() {
   }
 
   # ga-heating >= 0.11: a write straight to a valve is what a resident's hand on the
-  # device looks like, so the room goes manual for its cap (3 h). Remember the room's
-  # mode and give it back afterwards, exactly like the setpoint — otherwise every suite
-  # run leaves a room in manual (seen on a canary 2026-09-28: 09:50 → 12:50).
-  room=$(jq -r --arg v "$v" '[ .[] | select(.entity_id | startswith("climate."))
-               | select((.attributes.valves // []) | index($v)) | .entity_id ] | first // empty' "$STATES")
-  room_mode=""
-  [ -n "$room" ] && room_mode=$(jq -r --arg r "$room" '[ .[] | select(.entity_id == $r) | .state ] | first // empty' "$STATES")
-  set_room_mode() {
-    docker exec "$GM" sh -c \
-      "curl -fsS -m 20 -X POST -H \"Authorization: Bearer \$SUPERVISOR_TOKEN\" \
-            -H 'Content-Type: application/json' \
-            -d '{\"entity_id\":\"$room\",\"hvac_mode\":\"$1\"}' \
-            http://supervisor/core/api/services/climate/set_hvac_mode" >/dev/null 2>&1
-  }
+  # device looks like, so the room goes manual for its cap (3 h). The ROOM's mode is
+  # not given back here: one restore right after this write lost to the valve's late
+  # report (two rooms on `heat` for 3 h on a canary, 2026-10-08). HEAT-12 does it for
+  # every room, re-checked after a settle period, from the snapshot taken above.
 
   call "$want" || { echo "the service call itself failed for $v"; exit 1; }
 
@@ -598,7 +609,6 @@ heat09() {
 
   # Put it back whatever the outcome, and do not let the restore mask a failure.
   call "$before" >/dev/null 2>&1 || :
-  case "$room_mode" in auto|heat|off) set_room_mode "$room_mode" || : ;; esac
 
   if [ "$got" != "$want" ]; then
     echo "$v did not accept the setpoint: asked for $want, still reads ${got:-<unreadable>} after $((tries*step))s."
@@ -608,7 +618,7 @@ heat09() {
     echo "dropped as a replay): zigbee-roster-preserve.sh restore --bump-counter."
     exit 1
   fi
-  echo "$v accepted $want within $((i*step))s and was restored to $before${room:+ (room $room back to $room_mode)}"
+  echo "$v accepted $want within $((i*step))s and was restored to $before (its room: HEAT-12)"
 }
 
 # A valve with no setpoint at all is a device nothing has been asked of yet —
@@ -671,5 +681,32 @@ else
      echo "state=$_s value=$_v"'
 fi
 
-rm -f "$STATES" "$SET_COUNTS"
+# ---------------------------------------------------------------------------
+# HEAT-12 — every room is given back the mode it had before this suite (Odoo #1195)
+#
+# Measured on a staging canary, 2026-10-08: after the device suite two rooms stood
+# on `heat` (manual) for 3 h, and ga.heating_plan fell from 3/3 to 1/3 rooms until
+# the cap ran out. A suite that leaves a resident's room on manual is a defect of
+# its own, and an unasserted restore is a hope: this restores through ga_heating's
+# own service (climate.set_hvac_mode on the room), waits, re-reads Core, repeats
+# until a round needs no write, and then asserts on Core afresh — naming every
+# room that is not back. Its own mode, never a blanket `auto`: a room a resident
+# had put on manual before the suite stays manual.
+# ---------------------------------------------------------------------------
+H12_DESC="every room is back in its pre-suite mode (snapshot -> climate.set_hvac_mode -> re-read after ${HRM_SETTLE_S}s)"
+if [ -z "$GM" ]; then
+  skip_test "HEAT-12" "$H12_DESC" "ga_manager container absent — this suite wrote nothing"
+elif [ "$ROOM_SNAP_OK" -ne 1 ]; then
+  : > "$ROOM_SNAP.done"
+  show_verdict "HEAT-12" "$H12_DESC" 1 "no snapshot of the room modes was taken (Core unreadable at suite start) — nothing proves the rooms were given back"
+elif [ ! -s "$ROOM_SNAP" ]; then
+  : > "$ROOM_SNAP.done"
+  skip_test "HEAT-12" "$H12_DESC" "no room thermostat on this device"
+else
+  : > "$ROOM_SNAP.done"
+  run_test_show "HEAT-12" "$H12_DESC" 'hrm_restore "$ROOM_SNAP"; hrm_assert "$ROOM_SNAP"'
+fi
+
+ROOM_SNAP_OK=0   # given back (or nothing to give): the EXIT trap has nothing left to do
+rm -f "$STATES" "$SET_COUNTS" "$ROOM_SNAP" "$ROOM_SNAP.done"
 suite_end
