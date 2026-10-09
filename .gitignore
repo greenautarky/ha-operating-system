@@ -70,3 +70,5 @@ buildroot-external/rootfs-overlay/usr/share/ga/custom_components/ga_frontend_bun
 # ga-telemetry-config (Tier-2: usr/libexec/ga-boot-timing + etc/fluent-bit/fluent-bit-tier0.conf)
 buildroot-external/rootfs-overlay/usr/libexec/ga-boot-timing
 buildroot-external/rootfs-overlay/etc/fluent-bit/fluent-bit-tier0.conf
+# Private CVE allowlist — placed by the ops bake, never committed (scan-cves.sh)
+/.cve-allowlist.private

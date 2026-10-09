@@ -87,6 +87,15 @@ OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/scan-results}"
 # SBOM location — overridable so ga_build.sh can point at its own $OUT tree
 GA_SBOM="${GA_SBOM:-${REPO_ROOT}/ga_output/images/sbom-cyclonedx.json}"
 ALLOW_FILE="${ALLOW_FILE:-${REPO_ROOT}/.cve-allowlist}"
+# A SECOND, private allowlist (2026-10-09). An entry names a finding we ship
+# before its fix lands — exactly what must not sit in a public repository
+# (this one is public). The bake puts the file in place from the private ops
+# repository; it is untracked and git-ignored, so it never reaches a commit and
+# never makes the release provenance "dirty". Same format, same D1 rules.
+# Unset or absent = no private suppression, which is announced, not an error.
+# Deliberately no default path: an ad-hoc or CI run must not pick up a stray
+# private file it did not ask for.
+CVE_ALLOWLIST_PRIVATE="${CVE_ALLOWLIST_PRIVATE:-}"
 # Minimum share of SBOM components a scanner must actually evaluate before we
 # believe its verdict. Below this the result is treated as "not scanned".
 COVERAGE_MIN_PCT="${COVERAGE_MIN_PCT:-50}"
@@ -212,8 +221,31 @@ echo ""
 ALLOWED_CVES=()
 allow_expired=0
 allow_invalid=0
+ALLOW_PRIVATE_ACTIVE=0
+ALLOW_PRIVATE_STATE="not-configured"
 load_allowlist() {
-  [[ -f "$ALLOW_FILE" ]] || return 0
+  local before
+  load_allowlist_file "$ALLOW_FILE"
+  if [[ -n "$CVE_ALLOWLIST_PRIVATE" ]]; then
+    if [[ -f "$CVE_ALLOWLIST_PRIVATE" ]]; then
+      before=${#ALLOWED_CVES[@]}
+      load_allowlist_file "$CVE_ALLOWLIST_PRIVATE"
+      ALLOW_PRIVATE_ACTIVE=$(( ${#ALLOWED_CVES[@]} - before ))
+      ALLOW_PRIVATE_STATE="loaded"
+      echo "  Private allowlist: ${ALLOW_PRIVATE_ACTIVE} active entr(ies) from ${CVE_ALLOWLIST_PRIVATE}"
+    else
+      ALLOW_PRIVATE_STATE="absent"
+      echo "  NOTE: no private allowlist at ${CVE_ALLOWLIST_PRIVATE} — nothing is suppressed by it"
+    fi
+  fi
+  [[ ${#ALLOWED_CVES[@]} -gt 0 ]] && echo "  Allowlist: ${#ALLOWED_CVES[@]} active entr(ies) in total"
+  return 0
+}
+
+# load_allowlist_file <file>: append its valid, unexpired entries to ALLOWED_CVES.
+load_allowlist_file() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
   local today; today="$(date +%Y-%m-%d)"
   local latest; latest="$(date -d "+${ALLOW_MAX_DAYS} days" +%Y-%m-%d)"
   local cve owner expiry reason
@@ -241,8 +273,7 @@ load_allowlist() {
       continue
     fi
     ALLOWED_CVES+=("$cve")
-  done < "$ALLOW_FILE"
-  [[ ${#ALLOWED_CVES[@]} -gt 0 ]] && echo "  Allowlist: ${#ALLOWED_CVES[@]} active entr(ies) from ${ALLOW_FILE}"
+  done < "$file"
   return 0
 }
 
@@ -1079,6 +1110,8 @@ jq -n \
   --arg policy "$POLICY" \
   --argjson allow_expired "${allow_expired:-0}" \
   --argjson allow_invalid "${allow_invalid:-0}" \
+  --arg allow_private_state "$ALLOW_PRIVATE_STATE" \
+  --argjson allow_private_active "${ALLOW_PRIVATE_ACTIVE:-0}" \
   --slurpfile img_list "$IMG_LIST_FILE" \
   --argjson sbom_blocking "${SBOM_BLOCKING:-0}" \
   --argjson pkgcov_expected "${PKGCOV_EXPECTED:-0}" \
@@ -1100,6 +1133,7 @@ jq -n \
   --argjson rfs_list "${RFS_LIST:-[]}" \
   '{date:$date, severity:$severity, strict:$strict, policy:$policy, scan_broken:$broken,
     allowlist_expired:$allow_expired, allowlist_invalid:$allow_invalid,
+    allowlist_private:{state:$allow_private_state, active:$allow_private_active},
     os:{status:$sbom_status, components:$sbom_components, scanned:$sbom_scanned,
         coverage_pct:$sbom_coverage, findings:$sbom_findings, suppressed:$sbom_suppressed,
         tracked:$sbom_tracked, host_only:$sbom_hostonly, blocking:$sbom_blocking,
