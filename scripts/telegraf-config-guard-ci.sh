@@ -18,8 +18,12 @@
 #     each config without an error line.
 # Config parsing is the same Go code on every architecture, so the amd64
 # release binary of the same tag runs natively on a CI runner without qemu.
-# What this does NOT prove: that the armv7 artefact of a bake contains every
-# plugin (relevant only for a reduced-plugin build; master builds all plugins).
+# The image builds a reduced ("slim") telegraf: only TELEGRAF_GA_PLUGINS
+# (telegraf.mk) are compiled in, while the official release has every plugin.
+# So step 0 compares the configs' plugin set with that list, and the bake's
+# post-install hook (scripts/telegraf-plugin-guard-build.sh) checks the configs
+# against the armv7 binary it actually built. What THIS script does not prove:
+# that the bake's binary contains the list (that is the build hook's job).
 #
 # 1. Self-test on committed fixtures (package/telegraf/guard-fixtures/):
 #      must-fail/*.conf -- the guard must exit 1 AND report the SPECIFIC finding
@@ -45,6 +49,46 @@ die() { echo "telegraf-config-guard: FAIL: $*" >&2; exit 1; }
 
 VERSION=$(sed -n 's/^TELEGRAF_VERSION[[:space:]]*=[[:space:]]*//p' "$PKG/telegraf.mk" | head -1)
 [ -n "$VERSION" ] || die "cannot read TELEGRAF_VERSION from $PKG/telegraf.mk"
+
+# --- 0. configs vs the build's plugin list (slim build) ----------------------
+# telegraf.mk compiles in only TELEGRAF_GA_PLUGINS. A config naming a plugin
+# outside that list passes the official-binary check below (it has every
+# plugin) and fails only in the bake, hours later. Compare the two sources
+# here, before any download. The config side is parsed by the guard itself
+# (--list-required), never by a copy of its parser.
+TAGS=$(awk '
+    /^TELEGRAF_GA_PLUGINS[[:space:]]*=/ { on = 1; sub(/^[^=]*=/, "") }
+    on { cont = ($0 ~ /\\[[:space:]]*$/); gsub(/\\/, ""); n = split($0, w, /[[:space:]]+/)
+         for (i = 1; i <= n; i++) if (w[i] != "") print w[i]
+         if (!cont) on = 0 }' "$PKG/telegraf.mk" | sort -u)
+n_tags=$(printf '%s\n' "$TAGS" | grep -c .)
+[ "$n_tags" -gt 0 ] || die "parsed 0 plugins from TELEGRAF_GA_PLUGINS in $PKG/telegraf.mk"
+grep -qE '^TELEGRAF_TAGS[[:space:]]*\+=[[:space:]]*custom[[:space:]]+\$\(TELEGRAF_GA_PLUGINS\)' "$PKG/telegraf.mk" \
+    || die "telegraf.mk does not build with TELEGRAF_TAGS += custom \$(TELEGRAF_GA_PLUGINS) -- the list below would not be what is compiled"
+not_in_list() {  # CONF... -> plugins the configs name that the build does not compile in
+    local req
+    req=$("$GUARD" --list-required "$@") || die "guard --list-required failed on $*"
+    comm -23 <(printf '%s\n' "$req") <(printf '%s\n' "$TAGS")
+}
+slim_fails=("$FIX"/must-fail-slim/*.conf)
+[ -f "${slim_fails[0]}" ] || die "no must-fail-slim fixtures in $FIX"
+for f in "${slim_fails[@]}"; do
+    want=$(sed -n 's/^# expect-missing: *//p' "$f" | head -1)
+    [ -n "$want" ] || die "fixture $(basename "$f") has no '# expect-missing:' line"
+    not_in_list "$f" | grep -qxF "$want" \
+        || die "self-test: plugin-list check does not report $want for must-fail-slim/$(basename "$f")"
+    echo "telegraf-config-guard: plugin-list self-test red OK: $(basename "$f") -> $want not in TELEGRAF_GA_PLUGINS"
+done
+for f in "$FIX"/must-pass/*.conf; do
+    [ -z "$(not_in_list "$f")" ] || die "self-test: plugin-list check flags must-pass/$(basename "$f")"
+    echo "telegraf-config-guard: plugin-list self-test green OK: $(basename "$f")"
+done
+missing=$(not_in_list "$PKG"/*.conf)
+if [ -n "$missing" ]; then
+    printf 'telegraf-config-guard: MISSING %s -- named in a shipped config, not in TELEGRAF_GA_PLUGINS (telegraf.mk)\n' $missing >&2
+    die "shipped configs name plugins the slim build does not compile in"
+fi
+echo "telegraf-config-guard: plugin list OK -- every plugin the shipped configs name is in TELEGRAF_GA_PLUGINS (${n_tags} compiled in)"
 
 pins() {
     case $1 in

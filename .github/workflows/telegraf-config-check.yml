@@ -17,6 +17,7 @@ on:
     paths:
       - 'buildroot-external/package/telegraf/**'
       - 'scripts/telegraf-plugin-guard.sh'
+      - 'scripts/telegraf-plugin-guard-build.sh'
       - 'scripts/telegraf-config-guard-ci.sh'
       - '.github/workflows/telegraf-config-check.yml'
   pull_request:
@@ -24,6 +25,7 @@ on:
     paths:
       - 'buildroot-external/package/telegraf/**'
       - 'scripts/telegraf-plugin-guard.sh'
+      - 'scripts/telegraf-plugin-guard-build.sh'
       - 'scripts/telegraf-config-guard-ci.sh'
       - '.github/workflows/telegraf-config-check.yml'
   workflow_dispatch:
