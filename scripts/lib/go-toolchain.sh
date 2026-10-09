@@ -44,7 +44,7 @@ ga_go_expected_version() {
 #   exit 1  at least one binary embeds a different (or unreadable) version
 #   exit 2  nothing to judge: EXPECTED empty/malformed, or ZERO binaries scanned
 #           (a scan over nothing is a failure, not a pass)
-# The comparison is on the whole version token: go1.26.80 is NOT go1.26.8, and
+# The comparison uses the whole version string (go1.26.80 is NOT go1.26.8), and
 # a "devel" or missing version is an offender, not a pass.
 # The scanned count is written to the variable GA_GO_SCANNED for the caller.
 ga_go_toolchain_verdict() {
