@@ -300,6 +300,15 @@ jobs:
         # guessing 80 when nothing is readable fails the 3 refusal cases.
         run: sh tests/ga_tests/lib/ha_port_selftest.sh
 
+      - name: idle_perf sample window (IDLE-05 / IDLE-10b judged on a p90, not one sample)
+        # A periodic burst (the ga_manager health tick, ~one per 65 s) must not
+        # fail an idle device; a Supervisor that stays busy still must. Replays
+        # a burst trace through every 12-sample window, plus sustained-load,
+        # two-burst and no-sample cases, and checks the suite is wired to it.
+        # Red-proven: p90 -> max fails the burst trace; the pre-change suite
+        # fails the wiring checks.
+        run: sh tests/ga_tests/lib/sample_window_selftest.sh
+
       - name: CFG-32..34 judge the HTTP config Core RUNS, not the YAML it ignores
         # Core 2026.8 imports a YAML `http:` block once and then ignores it, so
         # the old YAML greps were green while Core refused every proxied request.
