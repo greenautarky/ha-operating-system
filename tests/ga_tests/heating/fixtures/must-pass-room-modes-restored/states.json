@@ -1,0 +1,15 @@
+[
+  {"entity_id": "climate.wohnzimmer", "state": "auto", "attributes": {
+    "hvac_modes": ["auto", "heat", "off"],
+    "temperature_source": "valve",
+    "valves": ["climate.0x0cae5ffffeab11e6", "climate.0x0cae5ffffeab11e7"],
+    "calibration": {}, "override": null}},
+  {"entity_id": "climate.bad", "state": "heat", "attributes": {
+    "hvac_modes": ["auto", "heat", "off"],
+    "temperature_source": "valve",
+    "valves": ["climate.0x0cae5ffffeab11e8"],
+    "calibration": {}, "override": null}},
+  {"entity_id": "climate.0x0cae5ffffeab11e6", "state": "heat", "attributes": {"hvac_modes": ["auto", "heat", "off"], "temperature": 20.0}},
+  {"entity_id": "climate.0x0cae5ffffeab11e7", "state": "heat", "attributes": {"hvac_modes": ["auto", "heat", "off"], "temperature": 20.0}},
+  {"entity_id": "climate.0x0cae5ffffeab11e8", "state": "heat", "attributes": {"hvac_modes": ["auto", "heat", "off"], "temperature": 22.0}}
+]

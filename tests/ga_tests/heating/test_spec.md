@@ -45,10 +45,31 @@ z2m / mosquitto / add-on container logs.
   read and write under paho's random ids, which a prefix alone misses); total
   connect count reported for coverage. SKIP when mosquitto or the engine is absent.
 
+- HEAT-12 every ga_heating room is back in the mode it had BEFORE the suite
+  (Odoo #1195). HEAT-09 writes a valve, which ga_heating (>= 0.11, ADR-0021)
+  reads as a hand on the radiator: the room goes `heat` (manual) for 3 h. The
+  suite snapshots every room's mode (`room_modes.sh`, entity state of each
+  climate.* room carrying `valves`) before any write; HEAT-12 restores each room
+  that differs through `climate.set_hvac_mode` on the room entity, waits
+  `GA_HEAT_RESTORE_SETTLE_S` (30 s), re-reads Core and repeats (up to
+  `GA_HEAT_RESTORE_ROUNDS` = 4) until a round needs no write — a battery valve's
+  late report can make the room manual again after a one-shot restore — then
+  asserts on a fresh read and names every room not back. The room's OWN mode,
+  never a blanket `auto`: a room a resident had on manual stays manual. Rooms
+  that did not change are not written (a press would end a running boost or
+  absence). An EXIT/INT/TERM trap runs the same restore when the suite dies
+  early. Known limit: `manual_until` cannot be set through the API, so a room
+  already manual before the suite may have its 3 h cap restarted.
+
 Every TRV-dependent test SKIPs with its reason on a device without a paired TRV.
 
 Fixture proof: `selftest.sh` runs the LIVE `test.sh` over `fixtures/` with a
 docker/curl shim (`fixtures/shim/`); `base/` is the finished device, every
 other directory holds only what differs. Overrides used: `GA_HEAT_HA_DIR`,
-`GA_HEAT_ADDON_DATA`, `GA_HEAT_TMP`. Not wired into CI yet (lint.yml
-`gate-selftest` is where it belongs, next to provisioning/selftest.sh).
+`GA_HEAT_ADDON_DATA`, `GA_HEAT_TMP`; fixtures with a `fake-ha` marker get a
+STATEFUL Core (`GA_HEAT_LIVE`: service calls change what the next read returns,
+a valve write turns an `auto` room manual, `late-echo` re-manuals it once after a
+restore, `hvac-refused` makes `set_hvac_mode` fail), and the selftest checks
+where the rooms END plus three mutations of `room_modes.sh` (no restore, hard
+`auto`, one-shot without re-check), each of which must turn HEAT-12 red. CI runs it on every PR (lint.yml, step
+"Heating suite selftest", next to provisioning/selftest.sh).
