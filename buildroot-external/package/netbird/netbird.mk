@@ -1,17 +1,18 @@
 ################################################################################
-# netbird (v0.71.4) — ARMv7 build for Buildroot with systemd service
+# netbird (v0.80.0) — ARMv7 build for Buildroot with systemd service
 ################################################################################
 
-# Pin the IMMUTABLE commit SHA of v0.71.4, not the mutable tag: a git checkout
+# Pin the IMMUTABLE commit SHA of v0.80.0, not the mutable tag: a git checkout
 # verifies the SHA against the fetched objects, so a moved/re-cut upstream tag
 # cannot swap the source under us (the git SHA is itself the content hash — no
 # .hash file needed for a git package). Update this SHA when bumping the version.
-# SHA of refs/tags/v0.71.4 (netbirdio/netbird), resolved 2026-07-27. [Vuln-11]
+# Commit SHA of refs/tags/v0.80.0^{} (netbirdio/netbird; annotated tag, peeled),
+# resolved 2026-10-09. [Vuln-11]
 # The upstream tag this SHA resolves to. Kept machine-readable so the
 # ga_build.sh pre-flight and the SRC-PIN-03 test can verify SHA-vs-tag
 # agreement WITHOUT network access. Bump both lines together.
-NETBIRD_UPSTREAM_TAG  = v0.71.4
-NETBIRD_VERSION       = 0358be23136da50e829ba99a83e54ef555071a7f
+NETBIRD_UPSTREAM_TAG  = v0.80.0
+NETBIRD_VERSION       = fca64287cf51a85552a41b022013abbfdb335452
 NETBIRD_SITE          = https://github.com/netbirdio/netbird.git
 NETBIRD_SITE_METHOD   = git
 
@@ -27,6 +28,11 @@ NETBIRD_GO_ENV       += GOARCH=arm
 NETBIRD_GO_ENV       += GOARM=7
 NETBIRD_GO_ENV       += CGO_ENABLED=0
 NETBIRD_GO_ENV       += GOPROXY=https://proxy.golang.org,direct
+# Build with buildroot's host-go and nothing else. Since v0.73 upstream go.mod
+# carries a `toolchain` line; with the default GOTOOLCHAIN=auto a host-go older
+# than that line would silently download another Go and embed it in the binary.
+# `local` turns that case into a build error instead (GOTC-03 checks the result).
+NETBIRD_GO_ENV       += GOTOOLCHAIN=local
 
 # Persist the Go module cache across builds.
 #
@@ -47,7 +53,7 @@ NETBIRD_GO_ENV       += GOMODCACHE=$(DL_DIR)/gomod
 
 # Small binary (CGO disabled => effectively static)
 # Embed version so "netbird version" shows the release tag, not "development"
-NETBIRD_LDFLAGS       = -s -w -X github.com/netbirdio/netbird/version.version=0.71.4
+NETBIRD_LDFLAGS       = -s -w -X github.com/netbirdio/netbird/version.version=0.80.0
 
 # --------------- Configure ----------------------
 # `go mod vendor` is the one step in this package that must reach the network.

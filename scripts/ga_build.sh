@@ -93,7 +93,7 @@ fi
 #   BR2EXT_IHOST     - Path to buildroot-ihost external tree (default: /build/buildroot-ihost)
 #   BR2EXT_NETBIRD   - Path to buildroot-external tree (default: /build/buildroot-external)
 #   OUT              - Output directory (default: /build/ga_output)
-#   NETBIRD_TAG      - NetBird version tag (default: v0.71.4)
+#   NETBIRD_TAG      - NetBird version tag (default: v0.80.0)
 #   GA_BUILD_TIMESTAMP - Override build timestamp (default: auto-generated)
 #   GA_SECRETS_DIR   - Read-only signing-material mount (default: /secrets)
 #   GA_PROVISIONING  - Set to "true" to create provisioning image (default: false)
@@ -141,7 +141,7 @@ OUT="${OUT:-/build/ga_output}"
 if [[ "$OUT" != /* ]]; then OUT="/build/${OUT}"; fi
 
 # ---- NetBird version (built via Buildroot golang-package) ----
-NETBIRD_TAG="${NETBIRD_TAG:-v0.71.4}"
+NETBIRD_TAG="${NETBIRD_TAG:-v0.80.0}"
 
 # ---- Trust anchor and signing material ----
 # One OTA root in the keyring, one signing certificate under it (ADR-0027 D9).
