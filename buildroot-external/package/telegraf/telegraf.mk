@@ -30,6 +30,45 @@ TELEGRAF_BUILD_TARGETS = ./cmd/telegraf
 TELEGRAF_GO_ENV += GOPROXY=https://proxy.golang.org,direct
 
 ################################################################################
+# Slim build: compile in ONLY the plugins the shipped configs use
+################################################################################
+#
+# telegraf's own custom-build mechanism: Go build tag `custom` plus one tag per
+# plugin (upstream docs/CUSTOMIZATION.md; every file in plugins/*/all/ carries
+# `//go:build !custom || <kind> || <kind>.<name>`). The full build is ~268 MB
+# stripped on armv7; this set is ~22 MB.
+#
+# The list = every [[inputs|outputs|...]] table and every data_format in the
+# configs this package installs (telegraf.conf, telegraf-debug.conf).
+# A config naming a plugin the binary lacks makes telegraf refuse the WHOLE
+# file (no metrics at all), so two checks hold this list against the configs:
+#   - at PR time, scripts/telegraf-config-guard-ci.sh compares the configs'
+#     plugin set with this list (no binary needed);
+#   - at build time, TELEGRAF_GA_PLUGIN_GUARD below checks the shipped configs
+#     against the binary just built.
+# A config read at runtime from /mnt/data/telegraf/override.conf is outside
+# both; ga-telegraf-override-check reports it loudly at start (see
+# telegraf.service).
+TELEGRAF_GA_PLUGINS = \
+	inputs.cpu \
+	inputs.disk \
+	inputs.docker \
+	inputs.exec \
+	inputs.file \
+	inputs.mem \
+	inputs.net \
+	inputs.ping \
+	inputs.processes \
+	inputs.swap \
+	inputs.system \
+	inputs.temp \
+	inputs.wireless \
+	outputs.influxdb \
+	parsers.influx
+
+TELEGRAF_TAGS += custom $(TELEGRAF_GA_PLUGINS)
+
+################################################################################
 # Install binary + default config
 ################################################################################
 
@@ -67,6 +106,10 @@ define TELEGRAF_INSTALL_INIT_SYSTEMD
 	$(INSTALL) -D -m 0755 $(TELEGRAF_PKGDIR)/ga-telegraf-env \
 		$(TARGET_DIR)/usr/libexec/ga-telegraf-env
 
+	# Start-time check of a runtime override config against this (slim) binary
+	$(INSTALL) -D -m 0755 $(TELEGRAF_PKGDIR)/ga-telegraf-override-check \
+		$(TARGET_DIR)/usr/libexec/ga-telegraf-override-check
+
 	# Install systemd service unit
 	$(INSTALL) -D -m 0644 $(TELEGRAF_PKGDIR)/telegraf.service \
 		$(TARGET_DIR)/etc/systemd/system/telegraf.service
@@ -76,6 +119,26 @@ define TELEGRAF_INSTALL_INIT_SYSTEMD
 	ln -sf ../telegraf.service \
 		$(TARGET_DIR)/etc/systemd/system/multi-user.target.wants/telegraf.service
 endef
+
+################################################################################
+# Build guard: every plugin the shipped configs name must be in the binary
+################################################################################
+#
+# Runs after install (configs + binary are the artefacts that ship). Self-tests
+# the guard on guard-fixtures/ first (each must-fail fixture must report its
+# SPECIFIC finding, each must-pass fixture must pass), then checks
+# $(TARGET_DIR)/etc/telegraf/*.conf against $(TARGET_DIR)/usr/bin/telegraf.
+# The static half (plugin package compiled into the binary) runs on any build
+# host. The exec half (`telegraf plugins` / `telegraf config check`) needs
+# qemu-user for the target arch on the build host; without it, it is skipped
+# with a WARNING and the static half still fails the build on a missing plugin.
+TELEGRAF_GA_QEMU_ARCH = $(if $(BR2_aarch64),aarch64,$(if $(BR2_arm),arm))
+
+define TELEGRAF_GA_PLUGIN_GUARD
+	$(BR2_EXTERNAL_HASSOS_PATH)/../scripts/telegraf-plugin-guard-build.sh \
+		$(TARGET_DIR) $(@D) $(STAGING_DIR) $(TELEGRAF_GA_QEMU_ARCH)
+endef
+TELEGRAF_POST_INSTALL_TARGET_HOOKS += TELEGRAF_GA_PLUGIN_GUARD
 
 ################################################################################
 

@@ -134,6 +134,15 @@ TG_ENV_SH="${TARGET}/usr/libexec/ga-telegraf-env"
   && _pass "CFG-26: ga-telegraf-env creates the buffer dir" \
   || _fail "CFG-26: ga-telegraf-env missing buffer-dir mkdir"
 
+# CFG-50: telegraf is a reduced build (TELEGRAF_GA_PLUGINS); a runtime
+# override.conf is checked against it at start and a reject is logged at err.
+# The check must ship executable and run as a NON-blocking ExecStartPre ("-").
+# Its behaviour is tested in scripts/telegraf-config-guard-ci.sh (section 3).
+[[ -x "${TARGET}/usr/libexec/ga-telegraf-override-check" ]] \
+  && grep -qxF 'ExecStartPre=-/usr/libexec/ga-telegraf-override-check' "${TARGET}/etc/systemd/system/telegraf.service" 2>/dev/null \
+  && _pass "CFG-50: telegraf.service runs ga-telegraf-override-check (non-blocking)" \
+  || _fail "CFG-50: ga-telegraf-override-check missing, not executable, or not a non-blocking ExecStartPre of telegraf.service"
+
 # CFG-27: tmpfiles.d declares the buffer dir (create-only, no destructive clean)
 TG_TMPFILES="${TARGET}/usr/lib/tmpfiles.d/ga-telegraf-buffer.conf"
 [[ -f "$TG_TMPFILES" ]] \

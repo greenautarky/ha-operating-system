@@ -1,0 +1,66 @@
+#!/bin/sh
+# ga-telegraf-override-check -- telegraf.service ExecStartPre: if a runtime
+# override config exists, check that THIS telegraf binary loads it, and say so
+# loudly (journal priority err) when it does not.
+#
+# Why: telegraf is built with only the plugins the shipped configs use
+# (TELEGRAF_GA_PLUGINS in telegraf.mk). The shipped configs are checked against
+# the binary at build time; /mnt/data/telegraf/override.conf is not -- whoever
+# writes it can name any plugin. telegraf refuses the WHOLE file on one plugin
+# it lacks (or one option it does not know): the unit restarts until its start
+# limit and the device sends no metrics at all, which looks like a quiet device.
+# telegraf's own error line does not say that the plugin was left out of this
+# build, nor what to do about it. This check does.
+#
+# Behaviour is unchanged: it never blocks or alters the start (always exit 0,
+# and the unit runs it as ExecStartPre=-), and it does nothing when no override
+# exists. It does not fall back to the default config: which config runs stays
+# the operator's choice.
+#
+# The check runs `telegraf config check` -- telegraf's own loader, so a plugin
+# list is never re-implemented here -- on a copy whose buffer_directory points
+# at a scratch dir (the disk buffer opens its WAL while loading; the live
+# buffer must not be touched).
+#
+# Test hooks: GA_TELEGRAF_OVERRIDE (path), GA_TELEGRAF_BIN (binary),
+# GA_TELEGRAF_EXEC_PREFIX (e.g. "qemu-arm -L <sysroot>", word-split).
+OVR=${GA_TELEGRAF_OVERRIDE:-/mnt/data/telegraf/override.conf}
+BIN=${GA_TELEGRAF_BIN:-/usr/bin/telegraf}
+TAG=ga-telegraf-override-check
+
+[ -f "$OVR" ] || exit 0
+
+err() { echo "<3>$TAG: $*"; }
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/ga-tg-ovr.XXXXXX") || { err "cannot create a scratch dir -- $OVR NOT checked"; exit 0; }
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/buffer"
+sed -E "s|^([[:space:]]*buffer_directory[[:space:]]*=).*|\1 \"$tmp/buffer\"|" "$OVR" > "$tmp/check.conf" \
+    || { err "cannot read $OVR -- NOT checked"; exit 0; }
+
+# shellcheck disable=SC2086  # the prefix is a test hook and is meant to split
+out=$(${GA_TELEGRAF_EXEC_PREFIX:-} "$BIN" config check --config "$tmp/check.conf" 2>&1); rc=$?
+
+if [ $rc -eq 0 ] && ! printf '%s\n' "$out" | grep -qE ' E! |^panic:'; then
+    echo "$TAG: $OVR loads in this telegraf -- telegraf runs it instead of /etc/telegraf/telegraf.conf"
+    exit 0
+fi
+
+if ! printf '%s\n' "$out" | grep -q 'Loading config'; then
+    err "could not run '$BIN config check' (rc=$rc) -- $OVR NOT checked: $(printf '%s' "$out" | head -c 300)"
+    exit 0
+fi
+
+err "$OVR is REJECTED by this telegraf (config check rc=$rc). telegraf refuses the WHOLE file: it will not start, and this device sends NO metrics until the file is fixed or removed (rm $OVR; systemctl restart telegraf)."
+printf '%s\n' "$out" | grep -E ' E! |^panic:' | sed "s|$tmp/check.conf|$OVR|g" | head -5 | while IFS= read -r l; do
+    err "  $l"
+done
+# "undefined but requested input: wireless" -> name the plugin and the cause
+printf '%s\n' "$out" | sed -n 's/.*undefined but requested \([a-z]*\): \([A-Za-z0-9_]*\).*/\1s.\2/p' | sort -u | while IFS= read -r p; do
+    err "plugin $p is not compiled into this telegraf -- the image builds only the plugins its shipped configs use; 'telegraf plugins' lists them"
+done
+# a data_format without its parser: telegraf does not name it, the config does
+if printf '%s\n' "$out" | grep -q 'parser not found'; then
+    err "a data_format parser this file names is not compiled into this telegraf (data_format lines: $(grep -E '^[[:space:]]*data_format' "$OVR" | tr -d ' \t' | sort -u | tr '\n' ' '))"
+fi
+exit 0
