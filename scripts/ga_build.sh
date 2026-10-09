@@ -2527,6 +2527,11 @@ assert_prod_sbom "$_sbom_rc"
 # `family="buildroot"`), and the empty report was shipped as release evidence.
 # A scan without coverage now exits 2 and fails the build — the same
 # fail-closed rule as the root password (#239).
+# The private allowlist (entries naming findings we ship stay out of this
+# public repository): the ops bake places it next to the tree, untracked and
+# git-ignored (.gitignore), so it never dirties the release provenance. Absent
+# = nothing suppressed by it; scan-cves.sh says so in the report.
+GA_CVE_ALLOWLIST_PRIVATE="${SCRIPT_DIR%/scripts}/.cve-allowlist.private"
 mkdir -p "${OUT}/images/reports"
 if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]]; then
   log_build_step "CVE scan (SBOM)"
@@ -2551,6 +2556,7 @@ if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]];
   # immediately followed by "CVE scan complete". `set +e` is the correct way
   # to survive a non-zero exit while keeping PIPESTATUS intact.
   set +e
+  CVE_ALLOWLIST_PRIVATE="${GA_CVE_ALLOWLIST_PRIVATE:-}" \
   GA_SBOM="${OUT}/images/sbom-cyclonedx.json" \
   OUTPUT_DIR="${OUT}/images/reports" \
     "${SCRIPT_DIR:-/build/scripts}/scan-cves.sh" --sbom --strict --package-coverage --severity CRITICAL,HIGH \
@@ -2587,6 +2593,7 @@ if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]];
   echo ""
   echo "Scanning the Go binaries of the root filesystem (CRITICAL,HIGH; D1)..."
   set +e
+  CVE_ALLOWLIST_PRIVATE="${GA_CVE_ALLOWLIST_PRIVATE:-}" \
   OUTPUT_DIR="${OUT}/images/reports/rootfs" \
     "${SCRIPT_DIR:-/build/scripts}/scan-cves.sh" --rootfs "${OUT}/target" --severity CRITICAL,HIGH \
       2>&1 | tee "$_rfs_report"
@@ -2622,6 +2629,7 @@ if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]];
     echo "Scanning the baked container images (CRITICAL,HIGH; fixable CRITICAL blocks)..."
     _img_out="${OUT}/images/reports/containers"
     set +e
+    CVE_ALLOWLIST_PRIVATE="${GA_CVE_ALLOWLIST_PRIVATE:-}" \
     OUTPUT_DIR="$_img_out" \
       "${SCRIPT_DIR:-/build/scripts}/scan-cves.sh" --image-tars "$_cve_images_dir" --severity CRITICAL,HIGH \
         2>&1 | tee "$_cve_scan_file"
