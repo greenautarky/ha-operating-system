@@ -4261,6 +4261,40 @@ else
   _skip "CVE-SCAN-07: PIPESTATUS integrity" "ga_build.sh not found (no source tree)"
 fi
 
+# CVE-SCAN-10/11: the OS gate's two 2026-10-09 extensions RAN on this build, read
+# from their own outcome (the summaries they wrote), not from the call site. A
+# step that was skipped and a step that found nothing look identical in a log.
+#   10  rootfs Go binary scan: >0 Go binaries evaluated, no expected one missing
+#   11  per-package coverage: checked, >0 GA-added packages, none broken
+_rfs_sum="${OUT}/images/reports/rootfs/summary.json"
+_os_sum="${OUT}/images/reports/summary.json"
+if command -v jq >/dev/null 2>&1 && [[ -f "$_rfs_sum" ]]; then
+  _rfs_n=$(jq -r '.rootfs.go_binaries // 0' "$_rfs_sum" 2>/dev/null || echo 0)
+  _rfs_miss=$(jq -r '(.rootfs.missing_expected // ["?"]) | join(",")' "$_rfs_sum" 2>/dev/null || echo "?")
+  if [[ "${_rfs_n:-0}" -gt 0 && -z "$_rfs_miss" ]]; then
+    _pass "CVE-SCAN-10: rootfs Go binary scan evaluated ${_rfs_n} Go binaries, every expected one among them"
+  else
+    _fail "CVE-SCAN-10: rootfs Go binary scan evaluated ${_rfs_n} Go binaries, missing expected: '${_rfs_miss}'"
+  fi
+elif [[ -d "${OUT}/images/reports" ]]; then
+  _fail "CVE-SCAN-10: no ${_rfs_sum} — the rootfs Go binary scan did not run on this build"
+else
+  _skip "CVE-SCAN-10: rootfs Go binary scan ran" "no build reports (not a bake output)"
+fi
+if command -v jq >/dev/null 2>&1 && [[ -f "$_os_sum" ]]; then
+  _pc=$(jq -r '.os.package_coverage | "\(.checked) \(.expected) \(.covered) \(.broken)"' "$_os_sum" 2>/dev/null || echo "false 0 0 1")
+  read -r _pc_on _pc_exp _pc_cov _pc_bad <<<"$_pc"
+  if [[ "$_pc_on" == "true" && "${_pc_exp:-0}" -gt 0 && "${_pc_bad:-1}" -eq 0 && "$_pc_cov" == "$_pc_exp" ]]; then
+    _pass "CVE-SCAN-11: per-package coverage checked — ${_pc_cov}/${_pc_exp} GA-added package symbols covered"
+  else
+    _fail "CVE-SCAN-11: per-package coverage not proven (checked=${_pc_on} covered=${_pc_cov}/${_pc_exp} broken=${_pc_bad})"
+  fi
+elif [[ -d "${OUT}/images/reports" ]]; then
+  _fail "CVE-SCAN-11: no ${_os_sum} — the OS SBOM scan did not write its summary on this build"
+else
+  _skip "CVE-SCAN-11: per-package coverage ran" "no build reports (not a bake output)"
+fi
+
 # =========================================================================
 # SBOM fail-closed: a prod release must carry a CycloneDX SBOM with real
 # coverage. Same fail-closed prod rule as ROOTPW-01 / CVE-SCAN. (#772)
