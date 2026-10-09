@@ -5,6 +5,7 @@
 # Run after boot stabilisation (~5 min uptime) for reliable results.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
+. "$SCRIPT_DIR/../lib/sample_window.sh"
 
 suite_start "Idle Performance"
 
@@ -50,12 +51,17 @@ LOAD5_X10=$(echo "$LOAD5" | awk '{printf "%d", $1 * 10}')
 run_test_show "IDLE-04" "5-min load average < 2.0 (got ${LOAD5})" \
   "[ \"$LOAD5_X10\" -lt 20 ]"
 
-# --- IDLE-05: Disk I/O wait ---
-# iowait is field 5 in /proc/stat cpu line
-iowait_pct() {
+# --- IDLE-05: Disk I/O wait, over a window ---
+# iowait is field 5 in /proc/stat cpu line. One 10-second sample used to decide
+# this, and it failed an idle device on BOSv1.5.0-rc5 while IDLE-03 passed.
+# Now: IDLE_WINDOW_N samples of IDLE_WINDOW_STEP seconds each (12 x 5 s = 60 s),
+# judged on the p90 — one burst sample in the window is tolerated, two are not.
+IDLE_WINDOW_N="${IDLE_WINDOW_N:-12}"
+IDLE_WINDOW_STEP="${IDLE_WINDOW_STEP:-5}"
+iowait_sample() {
   read_iow() { awk '/^cpu / {print $2+$3+$4+$5+$6+$7+$8, $6}' /proc/stat; }
   set -- $(read_iow); TOTAL1=$1; IOW1=$2
-  sleep 10
+  sleep "$IDLE_WINDOW_STEP"
   set -- $(read_iow); TOTAL2=$1; IOW2=$2
   DTOTAL=$((TOTAL2 - TOTAL1))
   DIOW=$((IOW2 - IOW1))
@@ -65,9 +71,12 @@ iowait_pct() {
     echo 0
   fi
 }
-IOWAIT=$(iowait_pct)
-run_test_show "IDLE-05" "I/O wait < 5% (got ${IOWAIT}%)" \
-  "[ \"$IOWAIT\" -lt 5 ]"
+echo "        -> Sampling I/O wait: ${IDLE_WINDOW_N} x ${IDLE_WINDOW_STEP}s..."
+IOWAIT_SAMPLES=$(sample_window "$IDLE_WINDOW_N" 0 iowait_sample)
+IOWAIT=$(window_p90 "$IOWAIT_SAMPLES")
+IOWAIT_SUMMARY=$(printf '%s\n' "$IOWAIT_SAMPLES" | window_summary)
+run_test_show "IDLE-05" "I/O wait p90 < 5% over ${IDLE_WINDOW_N} samples (${IOWAIT_SUMMARY})" \
+  "[ -n \"$IOWAIT\" ] && [ \"$IOWAIT\" -lt 5 ]"
 
 # --- IDLE-06: Swap usage ---
 SWAP_TOTAL_KB=$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo)
@@ -165,10 +174,22 @@ if command -v docker >/dev/null 2>&1; then
     run_test_show "IDLE-10a" "HA Core container CPU < 15% (got ${HA_CPU:-0}%)" \
       "[ \"${HA_CPU:-0}\" -lt 15 ]"
 
-    # Check supervisor container < 5%
-    SUP_CPU=$(echo "$DOCKER_STATS" | awk '/hassio_supervisor/ {gsub(/%/,"",$2); printf "%d", $2}')
-    run_test_show "IDLE-10b" "Supervisor container CPU < 5% (got ${SUP_CPU:-0}%)" \
-      "[ \"${SUP_CPU:-0}\" -lt 5 ]"
+    # Supervisor container < 5%, over a window. One `docker stats` sample used
+    # to decide this and failed idle devices (BOSv1.5.0-rc5/-rc6): the Supervisor answers
+    # ga_manager's health tick, a short burst about every 65 s. 12 samples
+    # (~5 s apart, `docker stats` itself takes ~2 s) judged on the p90 keep
+    # that burst from failing an idle device; a Supervisor that stays busy
+    # still fails. A container that is absent yields no samples -> FAIL, not 0.
+    sup_cpu_sample() {
+      docker stats --no-stream --format '{{.Name}} {{.CPUPerc}}' 2>/dev/null \
+        | awk '$1 == "hassio_supervisor" {gsub(/%/,"",$2); print $2}'
+    }
+    echo "        -> Sampling Supervisor CPU: ${IDLE_WINDOW_N} samples, 3s apart..."
+    SUP_SAMPLES=$(sample_window "$IDLE_WINDOW_N" 3 sup_cpu_sample)
+    SUP_CPU=$(window_p90 "$SUP_SAMPLES")
+    SUP_SUMMARY=$(printf '%s\n' "$SUP_SAMPLES" | window_summary)
+    run_test_show "IDLE-10b" "Supervisor container CPU p90 < 5% over ${IDLE_WINDOW_N} samples (${SUP_SUMMARY})" \
+      "[ -n \"$SUP_CPU\" ] && [ \"$SUP_CPU\" -lt 5 ]"
 
     # Show all container stats
     run_test_show "IDLE-10c" "Docker container summary" \
