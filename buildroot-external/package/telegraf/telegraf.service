@@ -19,6 +19,13 @@ Type=simple
 # header of ga-telegraf-env; guarded fleet-wide by build test CFG-48.
 ExecStartPre=/usr/libexec/ga-telegraf-env
 
+# If an override config exists, check it loads in THIS telegraf (a reduced
+# build: only the plugins the shipped configs use). Never blocks the start
+# ("-" prefix, always exit 0); on a reject it logs at err which plugin or
+# option is the cause and that the device will send no metrics. Silent without
+# an override. See the header of ga-telegraf-override-check.
+ExecStartPre=-/usr/libexec/ga-telegraf-override-check
+
 # Safe defaults (EnvironmentFile is read BEFORE ExecStartPre, so first boot needs these)
 Environment=GA_ENV=unknown DEVICE_UUID=unknown GATEWAY_IP=unknown DEVICE_LABEL=unknown GA_BUILD_TIMESTAMP=unknown
 
@@ -28,6 +35,7 @@ EnvironmentFile=-/mnt/data/telegraf/env
 # Use override config from data partition if present, otherwise rootfs default.
 # To switch to debug: cp /etc/telegraf/telegraf-debug.conf /mnt/data/telegraf/override.conf
 # To revert:          rm /mnt/data/telegraf/override.conf
+# An override may only use plugins compiled into this build (`telegraf plugins`).
 ExecStart=/bin/sh -c 'if [ -f /mnt/data/telegraf/override.conf ]; then exec /usr/bin/telegraf --config /mnt/data/telegraf/override.conf; else exec /usr/bin/telegraf --config /etc/telegraf/telegraf.conf; fi'
 
 Restart=always

@@ -10,6 +10,9 @@
 #
 #   telegraf-plugin-guard.sh --binary BIN --src TELEGRAF_SRC_DIR
 #                            [--qemu QEMU_USER_BIN --sysroot DIR] CONF...
+#   telegraf-plugin-guard.sh --list-required CONF...
+#       print the plugin set the CONFs name, one per line, and exit (no binary
+#       needed; used to compare the configs with the build's tag list)
 #
 # Two independent checks; the expected set is ALWAYS read from the CONF files
 # (the artefacts that ship), never from the tag list the binary was built with.
@@ -29,10 +32,11 @@
 #       1 = a plugin is missing / a config does not load; 2 = usage/coverage.
 set -u
 
-BIN='' SRC='' QEMU='' SYSROOT=''
+BIN='' SRC='' QEMU='' SYSROOT='' LIST_ONLY=0
 CONFS=()
 while [ $# -gt 0 ]; do
     case $1 in
+        --list-required) LIST_ONLY=1; shift;;
         --binary) BIN=$2; shift 2;;
         --src) SRC=$2; shift 2;;
         --qemu) QEMU=$2; shift 2;;
@@ -42,8 +46,10 @@ while [ $# -gt 0 ]; do
     esac
 done
 die2() { echo "telegraf-plugin-guard: FAIL: $*" >&2; exit 2; }
-[ -f "$BIN" ] || die2 "binary '$BIN' not found"
-[ -d "$SRC/plugins" ] || die2 "telegraf source '$SRC' has no plugins/ dir"
+if [ $LIST_ONLY -eq 0 ]; then
+    [ -f "$BIN" ] || die2 "binary '$BIN' not found"
+    [ -d "$SRC/plugins" ] || die2 "telegraf source '$SRC' has no plugins/ dir"
+fi
 [ ${#CONFS[@]} -gt 0 ] || die2 "no config files given"
 for c in "${CONFS[@]}"; do [ -f "$c" ] || die2 "config '$c' not found"; done
 
@@ -65,6 +71,7 @@ required=$(awk '
     }' "${CONFS[@]}" | sort -u)
 n_req=$(printf '%s\n' "$required" | grep -c .)
 [ "$n_req" -gt 0 ] || die2 "parsed 0 plugins from ${CONFS[*]} -- refusing to pass an empty check"
+if [ $LIST_ONLY -eq 1 ]; then printf '%s\n' "$required"; exit 0; fi
 echo "telegraf-plugin-guard: ${n_req} plugin(s) named in ${#CONFS[@]} config(s): $(printf '%s\n' "$required" | tr '\n' ' ')"
 
 fail=0
