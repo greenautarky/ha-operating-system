@@ -49,7 +49,7 @@ die()  { echo "${LOG_TAG}: ERROR: $*" >&2; exit 1; }
 # 1. Idempotency check — already registered?
 #    `netbird status` returns "Daemon status: NeedsLogin" when no `up`
 #    has run, and otherwise emits Management/Signal/NetBird IP lines.
-#    A simple "NeedsLogin" grep handles both 0.66 and 0.71 output.
+#    A simple "NeedsLogin" grep handles 0.66 through 0.80 output.
 status_out=$("$NB_BIN" --daemon-addr "$NB_SOCK" status 2>&1 || true)
 case "$status_out" in
     *NeedsLogin*)

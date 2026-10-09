@@ -14,6 +14,36 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased — the host takes control requests from ga_manager only out of the add-on's own data directory
 
+### Changed — NetBird client 0.71.4 → 0.80.0
+
+Update to upstream 0.80.0 (current stable; pinned by commit SHA of the peeled
+annotated tag). Brings upstream's security and reliability fixes from 0.72–0.80,
+among them several for signal/relay reconnects and for peer state that reports
+"connected" while the relay is down.
+
+- Build flags unchanged (`-s -w -trimpath`, CGO off, GOARM=7). Added
+  `GOTOOLCHAIN=local`: upstream go.mod carries a `toolchain` line since 0.73,
+  and the binary must be built by buildroot's host-go, never by a downloaded
+  one.
+- Management is NetBird Cloud, which already serves 0.80.0 peers; nothing to
+  change server-side.
+- `/mnt/data/netbird/config.json` is shared by both RAUC slots. 0.80.0 adds five
+  keys to it (`Name`, `RemoteJobsAllowed`, `SyncMessageVersion`,
+  `LocalMetricsEnabled`, `LocalMetricsAddress`) and drops `LazyConnectionEnabled`.
+  0.71.4 ignores the unknown keys (plain `encoding/json`) and reads the same
+  WireGuard key, management URL and interface. A rollback to the other slot
+  therefore keeps the peer identity. The round trip 0.71.4 → 0.80.0 → 0.71.4 →
+  0.80.0 was run twice: through each version's own `profilemanager.ReadConfig`,
+  and with the real armv7 daemons (`service run`) under qemu-user. 0.71.4 loads
+  the file 0.80.0 wrote and leaves it byte-identical.
+  `/var/lib/netbird` is tmpfs, so no other NetBird state crosses slots.
+- Remote debug-bundle jobs are opt-in since 0.78 and stay off: GA does not use
+  them.
+- The CLI flags used by `netbird.service`, `ga-netbird-register` and the device
+  tests (`service run --config --log-level --daemon-addr`,
+  `up --management-url --setup-key`, `status`) are unchanged, as are the
+  `NeedsLogin`, `Management:` and `NetBird IP:` status strings they parse.
+
 ### Fixed — every Go binary is rebuilt when buildroot's Go toolchain changes
 
 Buildroot does not recompile a package when host-go changes. #710 moved buildroot
