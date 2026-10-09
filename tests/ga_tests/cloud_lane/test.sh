@@ -26,6 +26,8 @@
 # which the MQTT transport never has. So no producer batch could enter the lane.
 # CL-03 is that check. On ga_manager < 0.240.1 it is skipped with that reason.
 #
+# Every synthetic batch_id starts with 5e27111e- (the ledger watcher keeps
+# those apart from producer receipts).
 # The synthetic row: table fact_device_count_summary, this device's own
 # core.uuid, timestamp 2000-01-01T00:00:00Z (a sentinel no real producer emits),
 # all counts 0. The table's unique key is (device_id, timestamp), so repeated
@@ -78,7 +80,10 @@ core = None
 for p in ("/homeassistant/.storage/core.uuid", "/config/.storage/core.uuid"):
     if os.path.exists(p):
         core = json.load(open(p))["data"]["uuid"]; break
-bid = str(uuid.uuid4())
+# Synthetic marker: the first UUID group is the fixed prefix 5e27111e, so the
+# cloud-side ledger watcher can tell this probe's receipt from a producer's and
+# never count it as the device's own data (it counts it as a lane canary).
+bid = "5e27111e" + str(uuid.uuid4())[8:]
 if core is None:
     print("000", bid); raise SystemExit(0)
 env = {"schema_version": 1, "source": "ga_lane_canary", "batch_id": bid,

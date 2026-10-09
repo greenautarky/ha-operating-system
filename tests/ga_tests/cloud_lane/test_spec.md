@@ -16,6 +16,8 @@ The synthetic row is in `fact_device_count_summary`:
 - `timestamp` is `2000-01-01T00:00:00Z`, a sentinel that no producer emits;
 - all counts are 0.
 
+Every synthetic `batch_id` starts with `5e27111e-`. The ledger watcher in the ops repository uses that prefix to keep these receipts apart from producer receipts: they count only as a lane canary, never as the device's data.
+
 The unique key (device_id, timestamp) keeps it to one row across runs. Each run adds one receipt to the cloud ingest ledger.
 
 The device suite does not check the cloud half (bridge to database). The ledger-freshness watcher in the ops repository checks it; it reads the same ledger these batches land in.
