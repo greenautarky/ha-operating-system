@@ -14,6 +14,25 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased — the host takes control requests from ga_manager only out of the add-on's own data directory
 
+### Fixed — every Go binary is rebuilt when buildroot's Go toolchain changes
+
+Buildroot does not recompile a package when host-go changes. #710 moved buildroot
+from go1.26.5 to go1.26.8, but the `update` bakes after it reused the build dirs
+of netbird, os-agent and runc, so BOSv1.5.0-rc4 shipped those three built with
+go1.26.5 next to seven built with go1.26.8. Every gate was green.
+
+- `ga_build.sh` records the Go version that built the Go packages
+  (`ga_output/.ga-go-toolchain`). On a reused tree (`update`, `partial`,
+  `kernel`), a mismatch with buildroot's `GO_VERSION`, or no record at all,
+  dircleans every enabled package that depends on host-go before the build. The
+  first bake after this change therefore rebuilds all of them once (about three
+  minutes on ga-builder).
+- New build tests GOTC-01..03: buildroot's `GO_VERSION` (source), the build's
+  host-go and the version embedded in every Go binary in `target/` must agree.
+  Red on the BOSv1.5.0-rc4 rootfs (netbird, os-agent, runc at go1.26.5), green
+  after the rebuild (10 of 10 at go1.26.8).
+- Fixtures: `tests/ga_tests/build/go_toolchain/selftest.sh`, run in CI.
+
 ### Fixed — GA units order against the Supervisor unit the image ships
 
 Nine directive lines in eight GA units named `hassio-supervisor.service`. The

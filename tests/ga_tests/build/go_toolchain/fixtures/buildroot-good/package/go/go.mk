@@ -1,0 +1,5 @@
+# go
+
+GO_VERSION = 1.26.8
+
+HOST_GO_ROOT = x

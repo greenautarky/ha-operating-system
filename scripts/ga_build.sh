@@ -126,6 +126,8 @@ declare -a MAKE_OVERRIDES=()
 # shellcheck source=lib/ga-build-args.sh
 . "${SCRIPT_DIR}/lib/ga-build-args.sh"
 ga_parse_build_args "$@" || exit 1
+# shellcheck source=lib/go-toolchain.sh
+. "${SCRIPT_DIR}/lib/go-toolchain.sh"
 echo "Building with MODE=$MODE (one build mode, ADR-0027 D9)"
 
 # ---- Paths inside container ----
@@ -2298,6 +2300,13 @@ if [[ "$MODE" == "full" || "$MODE" == "partial" || "$MODE" == "update" ]]; then
   fi
 fi
 
+# The Go version every Go package in this build must be compiled with — read
+# from buildroot's source pin, never from the build output.
+GO_EXPECTED="$(ga_go_expected_version "$BUILDROOT_DIR")" || {
+  echo "ERROR: cannot read GO_VERSION from ${BUILDROOT_DIR}/package/go/go.mk" >&2
+  exit 1
+}
+
 # 1) Configure
 if [[ "$MODE" == "full" ]]; then
   rm -rf "$OUT"
@@ -2305,14 +2314,22 @@ if [[ "$MODE" == "full" ]]; then
 
 elif [[ "$MODE" == "partial" ]]; then
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "$DEFCONFIG"
+  ga_go_rebuild_if_toolchain_changed "$OUT" "$BR2_EXTERNAL_PATH" "$GO_EXPECTED"
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" linux-dirclean hassio-dirclean
 
 elif [[ "$MODE" == "kernel" ]]; then
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "$DEFCONFIG"
+  ga_go_rebuild_if_toolchain_changed "$OUT" "$BR2_EXTERNAL_PATH" "$GO_EXPECTED"
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" linux-dirclean
 
 elif [[ "$MODE" == "update" ]]; then
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "$DEFCONFIG"
+  # Buildroot does not recompile a package when host-go changes. BOSv1.5.0-rc4
+  # shipped netbird, os-agent and runc built with go1.26.5 although #710 had
+  # moved buildroot to go1.26.8: their build dirs were simply reused. Dirclean
+  # every host-go package when the toolchain that built them is not the one
+  # buildroot pins now (scripts/lib/go-toolchain.sh; checked by GOTC-03).
+  ga_go_rebuild_if_toolchain_changed "$OUT" "$BR2_EXTERNAL_PATH" "$GO_EXPECTED"
   # Force rebuild of GA config packages so changed configs/services are picked up
   # (Buildroot doesn't track overlay/config file changes as package dependencies)
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" \
@@ -2390,6 +2407,8 @@ log_build_step "Configure ($MODE mode)" "completed"
 # 2) Build full system (including NetBird via Buildroot golang-package)
 log_build_step "Buildroot main build"
 make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "${MAKE_OVERRIDES[@]}" -j"$(nproc)" 2>&1 | tee -a "$BUILD_LOG"
+# Only a successful build may record which Go toolchain built the Go packages.
+ga_go_record_toolchain "$OUT" "$GO_EXPECTED"
 
 # 3) Inject build ID and regenerate final artifacts
 log_build_step "Write build ID"
