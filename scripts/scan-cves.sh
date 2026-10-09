@@ -9,12 +9,36 @@
 #   ./scripts/scan-cves.sh --strict           # OS (SBOM) findings over budget are fatal too
 #   ./scripts/scan-cves.sh --image-tars DIR   # scan saved image tarballs (the bake)
 #   ./scripts/scan-cves.sh --images --channel stable   # images of another channel
+#   ./scripts/scan-cves.sh --rootfs DIR       # Go binaries of a built root filesystem
+#   ./scripts/scan-cves.sh --sbom --strict --package-coverage   # + per-package coverage
 #
 # Exit codes (distinct on purpose — see COVERAGE below):
 #   0  clean, or findings within the policy
-#   1  OS: findings above the budget (fatal only with --strict)
-#      images: the policy blocks (see POLICY below)
+#   1  OS SBOM: the D1 policy blocks (fatal only with --strict)
+#      images / rootfs: the D1 policy blocks (see POLICY below)
 #   2  the scan itself is broken          (ALWAYS fatal, never suppressed)
+#
+# POLICY for the OS SBOM (D1, applied to the OS 2026-10-09):
+#   Only GATE-class findings (shipped userland, see docs/CVE-SCANNING-POSTURE.md)
+#   can block. Of those, a CRITICAL with a fixed upstream version blocks; HIGH,
+#   and CRITICAL without a fix, are reported. The fix comes from the finding's
+#   `ga:fixed-in` property (scripts/sbom-cve-annotate.py, read from NVD); a
+#   CRITICAL WITHOUT that property is treated as fixable — fail closed.
+#
+# ROOTFS (--rootfs DIR, 2026-10-09): the Go binaries Buildroot installs into the
+#   root filesystem (netbird, telegraf, os-agent, runc, docker, containerd …)
+#   carry no CPE, so the SBOM scan above cannot see them. They are scanned here
+#   by their Go build info (trivy rootfs; syft inventory; grype second opinion
+#   for a binary trivy skipped), under the same D1 policy and allowlist. A scan
+#   that evaluated no Go binary, or misses one of the expected binaries
+#   (ROOTFS_GO_EXPECTED, or --expect-go a,b,c), is BROKEN (exit 2).
+#
+# PACKAGE COVERAGE (--package-coverage, 2026-10-09): every package the GA
+#   defconfig adds on top of the upstream one must be classified in
+#   scripts/cve-package-coverage.conf, and a package classified `nvd` must have
+#   matched at least one NVD entry (`ga:nvd-matches`). A CPE that matches
+#   nothing looks exactly like a package without vulnerabilities, so an
+#   unmatched or unclassified package is a BROKEN scan (exit 2), not a clean one.
 #
 # POLICY (container images; decided 2026-09-29, "D1"):
 #   A CRITICAL finding that has a fix available BLOCKS (exit 1).
@@ -78,6 +102,19 @@ POLICY="d1"
 readonly ALLOW_MAX_DAYS=30
 # Saved image tarballs to scan instead of pulling from a registry (the bake).
 IMAGE_TARS=""
+# Root filesystem to scan for Go binaries (--rootfs), and the binaries that
+# MUST be among the evaluated ones. A constant, not derived from the tree that
+# is being scanned: an expectation read from the artefact goes green with it.
+ROOTFS=""
+ROOTFS_GO_EXPECTED="netbird telegraf os-agent runc dockerd containerd"
+# Per-package coverage of the GA defconfig delta (--package-coverage).
+PACKAGE_COVERAGE=false
+COVERAGE_CONF="${COVERAGE_CONF:-${SCRIPT_DIR}/cve-package-coverage.conf}"
+GA_DEFCONFIG="${GA_DEFCONFIG:-${REPO_ROOT}/buildroot-ihost/configs/ga_ihost_full_defconfig}"
+BASE_DEFCONFIG="${BASE_DEFCONFIG:-${REPO_ROOT}/buildroot-ihost/configs/ihost_full_defconfig}"
+# Symbols the delta parser MUST find — if it stops seeing these, it has lost
+# its subject, and an empty delta would otherwise pass as "nothing to cover".
+readonly COVERAGE_MUST_SEE="FLUENT_BIT OPENSSH NFTABLES NETBIRD TELEGRAF"
 # Which haos-version channel the pulled system images come from. Empty = the
 # channel the bake uses (read from the defconfig below), so the scheduled scan
 # looks at what the next image ships, not at a hard-coded channel.
@@ -92,6 +129,9 @@ while [[ $# -gt 0 ]]; do
     --images)   SCAN_SBOM=false;  shift ;;
     --image-tars) SCAN_SBOM=false; IMAGE_TARS="$2"; shift 2 ;;
     --sbom)     SCAN_IMAGES=false; shift ;;
+    --rootfs)   SCAN_SBOM=false; SCAN_IMAGES=false; ROOTFS="${2:-}"; shift 2 ;;
+    --expect-go) ROOTFS_GO_EXPECTED="${2//,/ }"; shift 2 ;;
+    --package-coverage) PACKAGE_COVERAGE=true; shift ;;
     --severity) SEVERITY="$2";    shift 2 ;;
     --strict)   STRICT=true;      shift ;;
     --no-strict) STRICT=false;    shift ;;
@@ -102,7 +142,7 @@ while [[ $# -gt 0 ]]; do
       case "$2" in stable|beta|dev) CHANNEL="$2" ;; *) echo "Unknown channel: $2 (stable|beta|dev)"; exit 2 ;; esac
       shift 2 ;;
     --help|-h)
-      sed -n '2,47p' "$0"
+      sed -n '2,76p' "$0"
       exit 0
       ;;
     # A usage error exits 2 ("the scan did not run"), never 1: callers read 1
@@ -113,7 +153,7 @@ done
 
 # #8 of the 2026-09-29 review: under the decided policy CRITICAL must be in the
 # severity set, or the policy would silently see nothing to block.
-if [[ "$POLICY" == "d1" && "$SCAN_IMAGES" == "true" && ",${SEVERITY}," != *",CRITICAL,"* ]]; then
+if [[ "$POLICY" == "d1" && ( "$SCAN_IMAGES" == "true" || -n "$ROOTFS" ) && ",${SEVERITY}," != *",CRITICAL,"* ]]; then
   echo "ERROR: --severity '${SEVERITY}' leaves out CRITICAL — the image policy could not see what it has to block"
   exit 2
 fi
@@ -130,6 +170,15 @@ if [[ "$HAVE_TRIVY" == "false" && "$SCAN_IMAGES" == "true" ]]; then
 fi
 # syft is what makes the image verdict checkable per Go binary (see GO BINARY
 # COVERAGE). Without it the coverage assertion cannot run — broken, not skipped.
+if [[ -n "$ROOTFS" ]]; then
+  if [[ ! -d "$ROOTFS" ]]; then
+    echo "ERROR: --rootfs '${ROOTFS}' is not a directory — nothing to scan is not clean"
+    exit 2
+  fi
+  for _t in trivy syft; do
+    command -v "$_t" &>/dev/null || { echo "ERROR: ${_t} not found — the rootfs Go binary scan cannot run (versions: Dockerfile)"; exit 2; }
+  done
+fi
 if [[ "$SCAN_IMAGES" == "true" ]] && ! command -v syft &>/dev/null; then
   echo "ERROR: syft not found — cannot inventory the Go binaries in the images, so"
   echo "       trivy's coverage of them cannot be asserted. Install the version pinned"
@@ -142,7 +191,7 @@ echo "=== GA OS CVE Scan ==="
 echo "  Date:     $(date -Iseconds)"
 echo "  Severity: ${SEVERITY}"
 echo "  Strict:   ${STRICT}"
-echo "  Policy:   ${POLICY} (images)"
+echo "  Policy:   ${POLICY} (images, rootfs; OS SBOM with --strict)"
 echo ""
 
 # -----------------------------------------------------------------------------
@@ -580,12 +629,229 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
 fi
 
 # -----------------------------------------------------------------------------
+# Root filesystem: the Go binaries (--rootfs DIR)
+#
+# The SBOM scan matches packages by CPE. Buildroot's Go packages carry none
+# (netbird, telegraf, os-agent) or one NVD rarely uses, so until 2026-10-09
+# their Go modules — where almost all of their CVEs live — were scanned by
+# nothing, and a finding in them could not fail any gate. This half reads the
+# binaries themselves: trivy
+# evaluates each one's embedded Go build info, syft inventories which files
+# ARE Go binaries, and the same union / second-opinion / blind rules as the
+# image scan apply (GO BINARY COVERAGE in the header).
+# -----------------------------------------------------------------------------
+RFS_STATUS="skipped"; RFS_BINARIES=0; RFS_BY_TRIVY=0; RFS_BY_GRYPE=0; RFS_BLIND=0
+RFS_FINDINGS=0; RFS_SUPPRESSED=0; RFS_BLOCKING=0; RFS_MISSING_EXPECTED=""
+RFS_LIST="[]"
+if [[ -n "$ROOTFS" ]]; then
+  echo "=== Scanning root filesystem Go binaries: ${ROOTFS} ==="
+  echo "  Expected Go binaries: ${ROOTFS_GO_EXPECTED}"
+  _rb="${OUTPUT_DIR}/rootfs"; _rr="${_rb}.trivy.json"; _ri="${_rb}.syft.json"
+  RFS_STATUS="ok"
+  if ! trivy rootfs --scanners vuln --pkg-types library --severity "$SEVERITY" --list-all-pkgs \
+         --format json --output "$_rr" "$ROOTFS" 2>"${_rb}.trivy.err" \
+       || ! jq -e 'has("Results") or has("ArtifactName")' "$_rr" >/dev/null 2>&1; then
+    echo "  ERROR: trivy could not scan ${ROOTFS} — NOT scanned, not clean"
+    echo "         cause: $(grep -E 'FATAL|ERROR|error' "${_rb}.trivy.err" 2>/dev/null | tail -n1 | cut -c1-240)"
+    RFS_STATUS="unscannable"; SCAN_BROKEN=true
+  elif ! syft scan "dir:${ROOTFS}" --override-default-catalogers go-module-binary-cataloger \
+           -o "syft-json=${_ri}" -q 2>"${_rb}.syft.err" \
+       || ! jq -e 'has("artifacts")' "$_ri" >/dev/null 2>&1; then
+    echo "  ERROR: could not inventory the Go binaries of ${ROOTFS} (syft) — trivy's coverage"
+    echo "         of them cannot be asserted, so the root filesystem is NOT scanned, not clean"
+    echo "         cause: $(tail -n1 "${_rb}.syft.err" 2>/dev/null | cut -c1-240)"
+    RFS_STATUS="unscannable"; SCAN_BROKEN=true
+  else
+    _go_all=(); _missed=(); _gap=(); _blind=(); _evaluated=()
+    mapfile -t _go_all < <(go_binary_inventory "$_ri")
+    _go_trivy=$(trivy_go_targets "$_rr")
+    for _x in ${_go_all[@]+"${_go_all[@]}"}; do
+      grep -qxF -- "$_x" <<<"$_go_trivy" || _missed+=("$_x")
+    done
+    while IFS= read -r _x; do
+      [[ -z "$_x" ]] && continue
+      _evaluated+=("$_x")
+      printf '%s\n' ${_go_all[@]+"${_go_all[@]}"} | grep -qxF -- "$_x" || _gap+=("$_x")
+    done <<<"$_go_trivy"
+    if [[ ${#_gap[@]} -gt 0 ]]; then
+      echo "  WARN: INVENTORY GAP — trivy evaluated Go binar(ies) syft did not list: ${_gap[*]}"
+    fi
+    RFS_BINARIES=$(( ${#_go_all[@]} + ${#_gap[@]} ))
+    RFS_BY_TRIVY=$(( ${#_go_all[@]} - ${#_missed[@]} + ${#_gap[@]} ))
+    _g_n=0; _g_s=0; _g_b=0
+    if [[ ${#_missed[@]} -gt 0 ]]; then
+      echo "  WARN: trivy did NOT evaluate ${#_missed[@]} of ${#_go_all[@]} Go binar(ies): ${_missed[*]}"
+      echo "        Second opinion (grype) for exactly those; the same policy applies."
+      if second_opinion "$_ri" "${_rb}.grype.json" "${_missed[@]}"; then
+        RFS_BY_GRYPE=${#_missed[@]}; _evaluated+=("${_missed[@]}")
+        read -r _g_n _g_s _g_b < <(grype_policy "${_rb}.grype.json") || true
+      else
+        _blind+=("${_missed[@]}")
+      fi
+    fi
+    RFS_BLIND=${#_blind[@]}
+    if [[ "$RFS_BLIND" -gt 0 ]]; then
+      echo "  ERROR: BLIND — ${RFS_BLIND} Go binar(ies) were evaluated by NO scanner:"
+      printf '           %s\n' "${_blind[@]}"
+      RFS_STATUS="blind"; SCAN_BROKEN=true
+    fi
+    # Coverage assertion: at least one Go binary, and every expected one.
+    if [[ "$RFS_BINARIES" -eq 0 ]]; then
+      echo "  ERROR: ZERO Go binaries found in ${ROOTFS} — a scan that evaluated nothing is not clean"
+      RFS_STATUS="no-coverage"; SCAN_BROKEN=true
+    fi
+    for _e in $ROOTFS_GO_EXPECTED; do
+      _hit=false
+      for _x in ${_evaluated[@]+"${_evaluated[@]}"}; do
+        [[ "$(basename "$_x")" == "$_e" ]] && { _hit=true; break; }
+      done
+      if [[ "$_hit" != "true" ]]; then RFS_MISSING_EXPECTED="${RFS_MISSING_EXPECTED:+${RFS_MISSING_EXPECTED} }${_e}"; fi
+    done
+    if [[ -n "$RFS_MISSING_EXPECTED" ]]; then
+      echo "  ERROR: expected Go binar(ies) NOT among the evaluated ones: ${RFS_MISSING_EXPECTED}"
+      echo "         Either the binary is gone from the image (then drop it from the expectation in"
+      echo "         the same change), or the scanner no longer sees it — both must be said, not skipped."
+      RFS_STATUS="no-coverage"; SCAN_BROKEN=true
+    fi
+    read -r _n _s < <(count_unsuppressed "$_rr") || true
+    _b=0
+    while IFS= read -r _id; do
+      [[ -z "$_id" ]] && continue
+      is_allowed "$_id" || _b=$((_b + 1))
+    done < <(jq -r '[.Results[]?.Vulnerabilities // []] | flatten | .[]
+                    | select(.Severity == "CRITICAL")
+                    | select(((.FixedVersion // "") != "") or (.Status == "fixed"))
+                    | .VulnerabilityID' "$_rr" 2>/dev/null | sort -u || true)
+    RFS_FINDINGS=$((_n + _g_n)); RFS_SUPPRESSED=$((_s + _g_s)); RFS_BLOCKING=$((_b + _g_b))
+    # One line per binary: what it carries, and what of it blocks under D1.
+    jq -r '.Results[]? | select(.Type == "gobinary")
+           | [.Target, ((.Packages // []) | length), ((.Vulnerabilities // []) | length),
+              ([(.Vulnerabilities // [])[] | select(.Severity == "CRITICAL")
+                | select(((.FixedVersion // "") != "") or (.Status == "fixed"))] | length)] | @tsv' "$_rr" 2>/dev/null \
+      | awk -F'\t' '{printf "    %-40s %4s modules  %3s %s  %s fixable CRITICAL\n", $1, $2, $3, "finding(s)", $4}' || true
+    if [[ "$RFS_FINDINGS" -gt 0 ]]; then
+      jq -r '[.Results[]? | .Target as $t | (.Vulnerabilities // [])[]
+              | [.Severity, .VulnerabilityID, .PkgName, (.InstalledVersion // "?"),
+                 (if ((.FixedVersion // "") != "") then .FixedVersion else "none published" end), $t] | @tsv]
+             | unique | .[]' "$_rr" 2>/dev/null \
+        | awk -F'\t' '{printf "    %-8s %-20s %s %s -> %s  (%s)\n", $1, $2, $3, $4, $5, $6}' || true
+    fi
+    [[ "$RFS_STATUS" == "ok" && "$RFS_FINDINGS" -gt 0 ]] && RFS_STATUS="findings"
+    [[ "$RFS_STATUS" == "ok" ]] && RFS_STATUS="clean"
+    RFS_LIST=$(jq -c '[.Results[]? | select(.Type == "gobinary") | {binary: .Target,
+                 modules: ((.Packages // []) | length), findings: ((.Vulnerabilities // []) | length)}]' "$_rr" 2>/dev/null || echo '[]')
+  fi
+  echo ""
+  echo "=== Rootfs Go binary scan: ${RFS_BINARIES} Go binar(ies), ${RFS_BY_TRIVY} evaluated by trivy, ${RFS_BY_GRYPE} by grype, ${RFS_BLIND} by neither ==="
+  echo "    ${RFS_FINDINGS} ${SEVERITY} finding(s)$([[ "$RFS_SUPPRESSED" -gt 0 ]] && echo ", ${RFS_SUPPRESSED} allowlisted"); policy ${POLICY}: ${RFS_BLOCKING} fixable CRITICAL not allowlisted"
+fi
+
+# -----------------------------------------------------------------------------
 # OS SBOM scanning
 #
 # The verdict is only believed if the scanner demonstrably evaluated the
 # components. `--list-all-pkgs` makes trivy report every package it considered;
 # comparing that against the SBOM component count is an exact coverage measure.
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Per-package coverage of the GA defconfig delta (--package-coverage).
+#
+# The SBOM scan reports a coverage PERCENTAGE. A percentage hides which package
+# is blind, and the packages GA adds itself are the ones nobody upstream
+# watches: measured 2026-07-28, netbird, telegraf and nftables carried no CPE at
+# all. So every BR2_PACKAGE_*=y the GA defconfig adds on top of the upstream
+# one must be classified in COVERAGE_CONF, by HOW it is covered:
+#   nvd       carries a CPE that matched >= 1 NVD entry (ga:nvd-matches)
+#   go        a Go binary, covered by the rootfs scan (--rootfs); its name must
+#             be one of ROOTFS_GO_EXPECTED
+#   upstream  NVD has no product for it (checked, dated, in the note); covered
+#             only by the upstream release/advisory watcher in the ops repo
+#   option    a sub-option of another package, not code of its own
+#   config    GA configuration files only, no upstream code
+# Anything else fails the scan as BROKEN: an unclassified new package, a
+# classified one that is missing from the SBOM, an `nvd` package that matched
+# nothing (a wrong CPE looks exactly like a clean package), a delta the parser
+# could not read, or a classification without a note where one is required.
+# -----------------------------------------------------------------------------
+PKGCOV_EXPECTED=0; PKGCOV_COVERED=0; PKGCOV_BROKEN=0
+PKGCOV_LIST_FILE=/dev/null
+check_package_coverage() {
+  local sbom="$1" sym comp mode note line n br cpe matches
+  PKGCOV_LIST_FILE="${OUTPUT_DIR}/package-coverage.jsonl"; : > "$PKGCOV_LIST_FILE"
+  echo ""
+  echo "  --- Per-package coverage: GA defconfig delta ---"
+  local bad=0
+  for f in "$COVERAGE_CONF" "$GA_DEFCONFIG" "$BASE_DEFCONFIG"; do
+    [[ -f "$f" ]] || { echo "  ERROR: ${f} not found — the package coverage cannot be asserted"; bad=1; }
+  done
+  if [[ "$bad" -ne 0 ]]; then PKGCOV_BROKEN=1; SCAN_BROKEN=true; return 0; fi
+  local delta=()
+  mapfile -t delta < <(comm -23 \
+      <(sed -nE 's/^BR2_PACKAGE_([A-Z0-9_]+)=y[[:space:]]*$/\1/p' "$GA_DEFCONFIG" | sort -u) \
+      <(sed -nE 's/^BR2_PACKAGE_([A-Z0-9_]+)=y[[:space:]]*$/\1/p' "$BASE_DEFCONFIG" | sort -u))
+  echo "  GA-added package symbols: ${#delta[@]} ($(basename "$GA_DEFCONFIG") minus $(basename "$BASE_DEFCONFIG"))"
+  local must
+  for must in $COVERAGE_MUST_SEE; do
+    if ! printf '%s\n' ${delta[@]+"${delta[@]}"} | grep -qxF -- "$must"; then
+      echo "  ERROR: the delta parser did not find BR2_PACKAGE_${must} — it has lost its subject"
+      PKGCOV_BROKEN=$((PKGCOV_BROKEN + 1))
+    fi
+  done
+  for sym in ${delta[@]+"${delta[@]}"}; do
+    PKGCOV_EXPECTED=$((PKGCOV_EXPECTED + 1))
+    line=$(awk -v s="$sym" '$1 !~ /^#/ && $1 == s {print; exit}' "$COVERAGE_CONF")
+    if [[ -z "$line" ]]; then
+      echo "    BLIND    ${sym}: not classified in $(basename "$COVERAGE_CONF") — say how this package is covered"
+      PKGCOV_BROKEN=$((PKGCOV_BROKEN + 1))
+      jq -cn --arg s "$sym" '{symbol:$s, state:"unclassified"}' >> "$PKGCOV_LIST_FILE"
+      continue
+    fi
+    read -r _ comp mode note <<<"$line"
+    local state="covered" why=""
+    case "$mode" in
+      nvd|go)
+        # The component must be in the SBOM as a SHIPPED package.
+        n=$(jq -r --arg c "$comp" '[.components[]? | select(.name == $c)
+               | select(((.properties // []) | map(select(.name=="BR_TYPE").value) | first) == "target")] | length' "$sbom" 2>/dev/null || echo 0)
+        if [[ "${n:-0}" -eq 0 ]]; then
+          state="blind"; why="no shipped component '${comp}' in the SBOM"
+        elif [[ "$mode" == "nvd" ]]; then
+          cpe=$(jq -r --arg c "$comp" '[.components[]? | select(.name == $c) | .cpe // empty] | first // empty' "$sbom" 2>/dev/null || true)
+          matches=$(jq -r --arg c "$comp" '[.components[]? | select(.name == $c)
+                      | (.properties // [])[] | select(.name == "ga:nvd-matches") | .value | tonumber] | max // empty' "$sbom" 2>/dev/null || true)
+          if [[ -z "$cpe" ]]; then state="blind"; why="no CPE — cve-check cannot match it"
+          elif [[ -z "$matches" ]]; then state="blind"; why="no ga:nvd-matches count — the SBOM was not annotated (sbom-cve-annotate.py)"
+          elif [[ "$matches" -lt 1 ]]; then state="blind"; why="CPE ${cpe} matched 0 NVD entries — wrong vendor/product, or NVD has none"
+          else why="CPE matched ${matches} NVD entr$([[ "$matches" -eq 1 ]] && echo y || echo ies)"; fi
+        else
+          if [[ " ${ROOTFS_GO_EXPECTED} " == *" ${comp} "* ]]; then why="Go binary, asserted by the rootfs scan"
+          else state="blind"; why="classified 'go' but '${comp}' is not an expected binary of the rootfs scan"; fi
+        fi ;;
+      upstream|option|config)
+        if [[ -z "${note// /}" ]]; then state="blind"; why="classified '${mode}' without a note saying why"
+        else why="${mode}: ${note}"; fi ;;
+      *) state="blind"; why="unknown coverage mode '${mode}'" ;;
+    esac
+    if [[ "$state" == "covered" ]]; then
+      PKGCOV_COVERED=$((PKGCOV_COVERED + 1)); echo "    covered  ${sym} (${comp}) — ${why}"
+    else
+      PKGCOV_BROKEN=$((PKGCOV_BROKEN + 1)); echo "    BLIND    ${sym} (${comp}) — ${why}"
+    fi
+    jq -cn --arg s "$sym" --arg c "$comp" --arg m "$mode" --arg st "$state" --arg w "$why" \
+       '{symbol:$s, component:$c, mode:$m, state:$st, detail:$w}' >> "$PKGCOV_LIST_FILE"
+  done
+  echo "  Package coverage: ${PKGCOV_COVERED}/${PKGCOV_EXPECTED} GA-added package symbol(s) covered"
+  if [[ "${#delta[@]}" -eq 0 ]]; then
+    echo "  ERROR: the GA defconfig delta is EMPTY — nothing was checked, which is not coverage"
+    PKGCOV_BROKEN=$((PKGCOV_BROKEN + 1))
+  fi
+  if [[ "$PKGCOV_BROKEN" -gt 0 ]]; then
+    echo "  ERROR: ${PKGCOV_BROKEN} GA-added package(s) or parser condition(s) without coverage — BROKEN, not clean"
+    SCAN_BROKEN=true
+  fi
+  return 0
+}
+
 SBOM_COMPONENTS=0; SBOM_SCANNED=0; SBOM_COVERAGE=0; SBOM_FINDINGS=0; SBOM_SUPPRESSED=0; SBOM_TRACKED=0; SBOM_HOSTONLY=0
 SBOM_STATUS="skipped"
 if [[ "$SCAN_SBOM" == "true" ]]; then
@@ -640,14 +906,28 @@ if [[ "$SCAN_SBOM" == "true" ]]; then
       #   EXCLUDE — the only affected components are host/build-time tools that
       #             are NOT installed on the device: no device attack surface.
       # ---------------------------------------------------------------------
-      SBOM_FINDINGS=0; SBOM_SUPPRESSED=0; SBOM_TRACKED=0; SBOM_HOSTONLY=0
+      # D1 inside GATE: a CRITICAL with a fixed upstream version BLOCKS; HIGH,
+      # and CRITICAL without a fix, are reported. Severity = the highest rating
+      # any source gave (NVD primary or CNA). The fix is the `ga:fixed-in`
+      # property sbom-cve-annotate.py wrote from the NVD entry; "?" (no
+      # property) is treated as fixable — a gate that cannot tell must not
+      # assume the harmless answer.
+      SBOM_FINDINGS=0; SBOM_SUPPRESSED=0; SBOM_TRACKED=0; SBOM_HOSTONLY=0; SBOM_BLOCKING=0
       TRACK_FILE="${OUTPUT_DIR}/os-tracked-cves.txt"; : > "$TRACK_FILE"
-      while IFS=' ' read -r _id _class; do
+      while IFS=' ' read -r _id _class _vsev _fix _pkgs; do
         [[ -z "$_id" ]] && continue
         case "$_class" in
           GATE)
             if is_allowed "$_id"; then SBOM_SUPPRESSED=$((SBOM_SUPPRESSED + 1))
-            else SBOM_FINDINGS=$((SBOM_FINDINGS + 1)); echo "    GATE     ${_id}"; fi ;;
+            else
+              SBOM_FINDINGS=$((SBOM_FINDINGS + 1))
+              if [[ "$_vsev" == "CRITICAL" && "$_fix" != "none" ]]; then
+                SBOM_BLOCKING=$((SBOM_BLOCKING + 1))
+                echo "    GATE     ${_id} ${_vsev} ${_pkgs} fixed-in ${_fix}$([[ "$_fix" == "?" ]] && echo ' (fix data missing: treated as fixable)') — BLOCKS (D1)"
+              else
+                echo "    GATE     ${_id} ${_vsev} ${_pkgs} fixed-in ${_fix} — reported"
+              fi
+            fi ;;
           TRACK)   SBOM_TRACKED=$((SBOM_TRACKED + 1)); printf '%s\n' "$_id" >> "$TRACK_FILE" ;;
           *)       SBOM_HOSTONLY=$((SBOM_HOSTONLY + 1)) ;;
         esac
@@ -662,23 +942,29 @@ if [[ "$SCAN_SBOM" == "true" ]]; then
                      | ([ $v.affects[]?.ref | ($m[.] // {n:"?",br:"?"}) ]) as $comps
                      | ($comps | map(select(.br == "target"))) as $ship
                      | ($ship | map(select(.n != "linux" and (.n | startswith("uboot") | not)))) as $userland
+                     | ([$v.ratings // [] | .[] | .severity // "" | ascii_downcase
+                         | {"critical":4,"high":3,"medium":2,"low":1}[.] // 0] | max // 0) as $rank
                      | { id:$v.id,
                          class:(if ($userland | length) > 0 then "GATE"
                                 elif ($ship | length) > 0 then "TRACK"
                                 elif (($comps | length) > 0) and ($comps | all(.br == "host")) then "EXCLUDE"
-                                else "GATE" end) } ]
-                 | unique_by(.id) | .[] | "\(.id) \(.class)"' "$GA_SBOM" 2>/dev/null || true)
+                                else "GATE" end),
+                         sev:({"4":"CRITICAL","3":"HIGH","2":"MEDIUM","1":"LOW"}[$rank|tostring] // "UNKNOWN"),
+                         fix:([$v.properties // [] | .[] | select(.name == "ga:fixed-in") | .value] | first // "?"),
+                         pkgs:(([$userland[].n] | unique | join(",")) | if . == "" then "-" else . end) } ]
+                 | unique_by(.id) | .[] | "\(.id) \(.class) \(.sev) \(.fix) \(.pkgs)"' "$GA_SBOM" 2>/dev/null || true)
       [[ "$SBOM_TRACKED"  -gt 0 ]] && echo "  TRACKED: ${SBOM_TRACKED} kernel/bootloader finding(s) -> ${TRACK_FILE} — version policy + periodic triage, not a per-build block (see docs/CVE-SCANNING-POSTURE.md)"
       [[ "$SBOM_HOSTONLY" -gt 0 ]] && echo "  EXCLUDED: ${SBOM_HOSTONLY} finding(s) affecting only host/build-time packages — not shipped on the device"
+      if [[ "$PACKAGE_COVERAGE" == "true" ]]; then check_package_coverage "$GA_SBOM"; fi
 
       if [[ "$SBOM_COVERAGE" -lt "$COVERAGE_MIN_PCT" ]]; then
         echo "  ERROR: only ${SBOM_COVERAGE}% of SBOM components carry a matchable CPE (minimum ${COVERAGE_MIN_PCT}%)"
         SBOM_STATUS="no-coverage"
         SCAN_BROKEN=true
       elif [[ "$SBOM_FINDINGS" -gt 0 ]]; then
-        echo "  FOUND: ${SBOM_FINDINGS} exploitable ${SEVERITY} vulnerabilities$([[ "$SBOM_SUPPRESSED" -gt 0 ]] && echo ", ${SBOM_SUPPRESSED} allowlisted")"
+        echo "  FOUND: ${SBOM_FINDINGS} exploitable ${SEVERITY} vulnerabilities in shipped userland$([[ "$SBOM_SUPPRESSED" -gt 0 ]] && echo ", ${SBOM_SUPPRESSED} allowlisted"); D1 blocking (CRITICAL with a fix): ${SBOM_BLOCKING}"
         SBOM_STATUS="findings"
-        EXIT_CODE=1
+        if [[ "$POLICY" == "d1" && "$SBOM_BLOCKING" -gt 0 ]]; then EXIT_CODE=1; fi
       else
         echo "  CLEAN: no unsuppressed exploitable ${SEVERITY} findings across ${SBOM_SCANNED} matched packages$([[ "$SBOM_SUPPRESSED" -gt 0 ]] && echo " (${SBOM_SUPPRESSED} allowlisted)")"
         SBOM_STATUS="clean"
@@ -794,11 +1080,35 @@ jq -n \
   --argjson allow_expired "${allow_expired:-0}" \
   --argjson allow_invalid "${allow_invalid:-0}" \
   --slurpfile img_list "$IMG_LIST_FILE" \
+  --argjson sbom_blocking "${SBOM_BLOCKING:-0}" \
+  --argjson pkgcov_expected "${PKGCOV_EXPECTED:-0}" \
+  --argjson pkgcov_covered "${PKGCOV_COVERED:-0}" \
+  --argjson pkgcov_broken "${PKGCOV_BROKEN:-0}" \
+  --argjson pkgcov_on "$([[ "$PACKAGE_COVERAGE" == "true" ]] && echo true || echo false)" \
+  --slurpfile pkgcov_list "$PKGCOV_LIST_FILE" \
+  --arg rfs_status "$RFS_STATUS" \
+  --arg rfs_dir "${ROOTFS:-}" \
+  --arg rfs_expected "$ROOTFS_GO_EXPECTED" \
+  --arg rfs_missing "${RFS_MISSING_EXPECTED:-}" \
+  --argjson rfs_bin "${RFS_BINARIES:-0}" \
+  --argjson rfs_trivy "${RFS_BY_TRIVY:-0}" \
+  --argjson rfs_grype "${RFS_BY_GRYPE:-0}" \
+  --argjson rfs_blind "${RFS_BLIND:-0}" \
+  --argjson rfs_findings "${RFS_FINDINGS:-0}" \
+  --argjson rfs_suppressed "${RFS_SUPPRESSED:-0}" \
+  --argjson rfs_blocking "${RFS_BLOCKING:-0}" \
+  --argjson rfs_list "${RFS_LIST:-[]}" \
   '{date:$date, severity:$severity, strict:$strict, policy:$policy, scan_broken:$broken,
     allowlist_expired:$allow_expired, allowlist_invalid:$allow_invalid,
     os:{status:$sbom_status, components:$sbom_components, scanned:$sbom_scanned,
         coverage_pct:$sbom_coverage, findings:$sbom_findings, suppressed:$sbom_suppressed,
-        tracked:$sbom_tracked, host_only:$sbom_hostonly},
+        tracked:$sbom_tracked, host_only:$sbom_hostonly, blocking:$sbom_blocking,
+        package_coverage:{checked:$pkgcov_on, expected:$pkgcov_expected, covered:$pkgcov_covered,
+                          broken:$pkgcov_broken, list:$pkgcov_list}},
+    rootfs:{status:$rfs_status, dir:$rfs_dir, go_binaries:$rfs_bin, by_trivy:$rfs_trivy,
+            by_grype:$rfs_grype, blind:$rfs_blind, expected:($rfs_expected | split(" ") | map(select(length > 0))),
+            missing_expected:($rfs_missing | split(" ") | map(select(length > 0))),
+            findings:$rfs_findings, suppressed:$rfs_suppressed, blocking:$rfs_blocking, list:$rfs_list},
     images:{source:$img_source, total:$img_total, clean:$img_clean, with_findings:$img_with,
             blind:$img_blind, unscannable:$img_unscannable, findings:$img_findings,
             suppressed:$img_suppressed, blocking:$img_blocking, blocked_images:$img_blocked,
@@ -817,6 +1127,14 @@ if [[ "$SCAN_BROKEN" == "true" ]]; then
   exit 2
 fi
 
+# Rootfs policy (D1): the same rule as the images. Whether the BUILD stops on
+# it is decided at the call site (ga_build.sh, scripts/cve-enforcement.conf).
+if [[ "$POLICY" == "d1" && "${RFS_BLOCKING:-0}" -gt 0 ]]; then
+  echo "  Result: POLICY BLOCK — ${RFS_BLOCKING} fixable CRITICAL finding(s) in the root filesystem's Go binaries (exit 1)"
+  echo "          Update the package, or add a time-boxed entry (reason, <= ${ALLOW_MAX_DAYS} days) to ${ALLOW_FILE}."
+  exit 1
+fi
+
 # Image policy (D1): a fixable CRITICAL that no valid allowlist entry covers
 # blocks, whatever --strict says — --strict governs the OS half only.
 if [[ "$POLICY" == "d1" && "${IMG_BLOCKING:-0}" -gt 0 ]]; then
@@ -827,7 +1145,7 @@ fi
 
 if [[ "$EXIT_CODE" -ne 0 ]]; then
   if [[ "$STRICT" == "true" ]]; then
-    echo "  Result: findings above budget, strict mode (exit 1)"
+    echo "  Result: POLICY BLOCK — ${SBOM_BLOCKING:-0} fixable CRITICAL finding(s) in shipped OS packages, strict mode (exit 1)"
     exit 1
   fi
   echo "  Result: findings above budget — reporting only (strict=false), exit 0"

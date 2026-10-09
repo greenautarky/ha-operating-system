@@ -1513,9 +1513,26 @@ enrich_sbom_with_cves() {
     fi
   fi
 
+  # --include-resolved: cve-check also records every NVD entry that matched a
+  # component's CPE but does not affect its version. sbom-cve-annotate.py turns
+  # those into a per-component match count (ga:nvd-matches — the per-package
+  # coverage measure scan-cves.sh --package-coverage asserts), adds the fixed
+  # upstream version to every exploitable finding (ga:fixed-in — what policy D1
+  # keys on), and drops the `resolved` entries again so the SBOM keeps its size.
+  # If the annotation fails, the SBOM stays un-annotated and the gate reports
+  # that as broken coverage — it is never read as clean.
+  nvd_args+=(--include-resolved)
+  local annotate="${SCRIPT_DIR:-/build/scripts}/sbom-cve-annotate.py"
+
   local enriched="${sbom}.enriched"
   if "${runner[@]}" -i "$sbom" "${nvd_args[@]}" -o "$enriched" 2>&1 | tail -20; then
     if [[ -s "$enriched" ]] && jq -e '.components' "$enriched" >/dev/null 2>&1; then
+      if [[ -f "$annotate" ]]; then
+        python3 "$annotate" "$enriched" "$nvd_path" \
+          || echo "WARN: sbom-cve-annotate.py failed — per-package coverage and D1 fix data are missing; the CVE gate will report the coverage as broken"
+      else
+        echo "WARN: ${annotate} not found — per-package coverage and D1 fix data are missing"
+      fi
       # Stamp the marker so a bare SBOM can never be mistaken for a scanned one.
       jq --arg ts "$(date -Iseconds)" \
          '.metadata.properties = ((.metadata.properties // [])
@@ -2455,6 +2472,40 @@ archive_build_configs
 log_build_step "Archive legal-info"
 archive_legal_info
 
+# ga_cve_enforcement — the ONE flag that decides whether an OS-level D1 policy
+# block stops the bake (scripts/cve-enforcement.conf). Prints report|block.
+# Anything else is an error: a flag the build cannot read must not silently
+# mean either value.
+ga_cve_enforcement() {
+  local conf="${SCRIPT_DIR:-/build/scripts}/cve-enforcement.conf" v
+  v="$(sed -nE 's/^OS_CVE_ENFORCEMENT=([a-z]+)[[:space:]]*$/\1/p' "$conf" 2>/dev/null | tail -n1)"
+  case "$v" in
+    report|block) echo "$v" ;;
+    *) echo "ERROR: ${conf}: OS_CVE_ENFORCEMENT is '${v}' (want report|block)" >&2; return 1 ;;
+  esac
+}
+
+# ga_cve_enforce <what> <rc> <report-file> — called when a scan exited 1 (the
+# D1 policy blocks). Stops the bake under `block`; under `report` prints a
+# banner nobody can mistake for a pass and appends it to the scan report.
+ga_cve_enforce() {
+  local what="$1" rc="$2" report="$3" mode
+  mode="$(ga_cve_enforcement)" || exit 1
+  if [[ "$mode" == "block" ]]; then
+    echo "ERROR: ${what}: a CRITICAL finding with a fix available (policy D1) — refusing to build the image"
+    echo "       Bump the package, or add a time-boxed entry (owner, reason, <= 30 days) to .cve-allowlist. See ${report}"
+    exit 1
+  fi
+  {
+    echo ""
+    echo "################################################################################"
+    echo "# D1 WOULD BLOCK — ${what}: a CRITICAL finding with a fix available (scan exit ${rc})."
+    echo "# NOT stopping the bake: scripts/cve-enforcement.conf says OS_CVE_ENFORCEMENT=report"
+    echo "# (BOSv1.5.0). Under 'block' this image would not have been built. See ${report}"
+    echo "################################################################################"
+  } | tee -a "$report"
+}
+
 # 10) Generate Software Bill of Materials (SBOM)
 log_build_step "Generate SBOM"
 # NO `|| true` on this pipeline — it would make `true` the last command and
@@ -2502,19 +2553,52 @@ if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]];
   set +e
   GA_SBOM="${OUT}/images/sbom-cyclonedx.json" \
   OUTPUT_DIR="${OUT}/images/reports" \
-    "${SCRIPT_DIR:-/build/scripts}/scan-cves.sh" --sbom --strict --severity CRITICAL,HIGH \
+    "${SCRIPT_DIR:-/build/scripts}/scan-cves.sh" --sbom --strict --package-coverage --severity CRITICAL,HIGH \
       2>&1 | tee "${OUT}/images/reports/cve-scan-sbom.txt"
   _cve_rc=${PIPESTATUS[0]}
   set -e
+  # Exit 1 = the D1 policy blocks: a CRITICAL with a fixed upstream version in
+  # a shipped userland package (GATE class). Until 2026-10-09 this branch was a
+  # plain "found vulnerabilities" echo, so a GATE finding never stopped a bake
+  # while docs/CVE-SCANNING-POSTURE.md called it fatal. Whether it stops the
+  # bake is now ONE declared flag (scripts/cve-enforcement.conf), not an
+  # accident of the call site. Exit 2 (broken) stops every bake, in every mode.
   if [[ "$_cve_rc" -eq 2 ]]; then
     # Broken scan — never report this as clean.
-    echo "ERROR: OS CVE scan produced no coverage — refusing to build the image"
+    echo "ERROR: OS CVE scan is BROKEN (no coverage, or a GA-added package without coverage) — refusing to build the image"
     echo "       An empty CVE report must not ship as release evidence. See KB #172."
     exit 1
   elif [[ "$_cve_rc" -eq 0 ]]; then
     echo "CVE scan complete — results in ${OUT}/images/reports/cve-scan-sbom.txt"
   else
-    echo "CVE scan found vulnerabilities — see ${OUT}/images/reports/cve-scan-sbom.txt"
+    ga_cve_enforce "OS SBOM" "$_cve_rc" "${OUT}/images/reports/cve-scan-sbom.txt"
+  fi
+
+  # 11a) Scan the Go binaries of the root filesystem.
+  #
+  # The SBOM scan above matches packages by CPE, and Buildroot's Go packages
+  # carry none NVD uses — so until 2026-10-09 the Go modules of netbird,
+  # telegraf, os-agent, runc, docker and containerd were scanned by nothing,
+  # so no finding in them could fail a gate. scan-cves.sh --rootfs reads every
+  # Go binary's build info, asserts
+  # the expected binaries were all evaluated (else exit 2, fatal), and applies
+  # D1. Whether a D1 block stops the bake: scripts/cve-enforcement.conf.
+  _rfs_report="${OUT}/images/reports/cve-scan-rootfs.txt"
+  echo ""
+  echo "Scanning the Go binaries of the root filesystem (CRITICAL,HIGH; D1)..."
+  set +e
+  OUTPUT_DIR="${OUT}/images/reports/rootfs" \
+    "${SCRIPT_DIR:-/build/scripts}/scan-cves.sh" --rootfs "${OUT}/target" --severity CRITICAL,HIGH \
+      2>&1 | tee "$_rfs_report"
+  _rfs_rc=${PIPESTATUS[0]}
+  set -e
+  if [[ "$_rfs_rc" -eq 0 ]]; then
+    echo "Rootfs Go binary scan complete — results in ${_rfs_report}"
+  elif [[ "$_rfs_rc" -eq 1 ]]; then
+    ga_cve_enforce "rootfs Go binaries" "$_rfs_rc" "$_rfs_report"
+  else
+    echo "ERROR: the rootfs Go binary scan is BROKEN (exit ${_rfs_rc}) — an unscanned root filesystem must not ship as scanned"
+    exit 1
   fi
 
   # 11b) Scan the container image tars baked into the data partition — every
