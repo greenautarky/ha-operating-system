@@ -66,6 +66,12 @@ grep -q 'buffer_strategy *= *"disk_write_through"' "$TG_CONF" 2>/dev/null \
   && _pass "CFG-20: telegraf disk buffer (buffer_strategy=disk_write_through)" \
   || _fail "CFG-20: telegraf disk buffer not enabled"
 
+# CFG-20b: the disk buffer does not fsync per metric (Odoo #1224) — the ACTIVE
+# setting, not a comment.
+grep -qE '^[[:space:]]*buffer_disk_sync[[:space:]]*=[[:space:]]*false' "$TG_CONF" 2>/dev/null \
+  && _pass "CFG-20b: telegraf disk buffer without per-metric fsync (buffer_disk_sync = false)" \
+  || _fail "CFG-20b: buffer_disk_sync = false missing — the disk buffer fsyncs on every metric"
+
 # CFG-21: buffer_directory is under /mnt/data (NOT /tmp = 15 MB zram)
 grep -qE 'buffer_directory *= *"/mnt/data/telegraf/buffer"' "$TG_CONF" 2>/dev/null \
   && _pass "CFG-21: buffer_directory under /mnt/data" \
