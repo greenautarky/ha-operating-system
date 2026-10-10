@@ -1,0 +1,4 @@
+[Service]
+Type=oneshot
+ExecStart=/bin/true
+LogLevelMax=notice

@@ -127,7 +127,7 @@ unpark() {
     _c="$1"
     rm -f "$PARK_DIR/$_c"
     $NMCLI connection modify "$_c" connection.autoconnect yes >/dev/null 2>&1
-    log info "unparked '$_c' — its cooldown expired, it may compete again"
+    log notice "unparked '$_c' — its cooldown expired, it may compete again"
 }
 
 # A reboot is a fresh start: let every rung try before we judge any of them.
@@ -174,7 +174,7 @@ main() {
     fi
 
     if [ "$_verdict" = "full" ]; then
-        [ "$_strikes" -gt 0 ] && log info "uplink '$_active' is healthy again after $_strikes strike(s)"
+        [ "$_strikes" -gt 0 ] && log notice "uplink '$_active' is healthy again after $_strikes strike(s)"
         echo 0 > "$STATE"
         write_status "${_active:-none}" "$_verdict" 0
         return 0
