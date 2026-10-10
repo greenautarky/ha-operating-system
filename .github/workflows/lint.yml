@@ -666,6 +666,13 @@ jobs:
       - name: NetBird setup key fail-closed (hook, preflight, NB-REG-05)
         run: ./tests/gates/netbird_setup_key/selftest.sh
 
+      # ADR-0045 telemetry profiles: the real fluent-bit over a fixture journal
+      # proves errors reach the centre in every profile and lte_saver drops only
+      # the routine (two mutants red); the apply logic follows the seam contract;
+      # the rendered telegraf config loads in the pinned telegraf.
+      - name: Telemetry profiles (errors in every profile, apply logic, telegraf render)
+        run: ./tests/gates/telemetry_profiles/selftest.sh
+
       # A pinned add-on that never made it into the image used to count as
       # "skipped" while the build suite still printed a pass line — and
       # sonoff_dongle_flasher had never once been checked, because the pin key

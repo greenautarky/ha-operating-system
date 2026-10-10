@@ -1,0 +1,282 @@
+#!/bin/sh
+# ga-telemetry-profile-apply — make the log/metric shippers follow the telemetry
+# profile ga_manager selected (normal | minimal | lte_saver). ADR-0045, Odoo #1227.
+#
+# SEAM (contract v2, ~/cve-work/TELEMETRY-PROFILES-SEAM-2026-10-10.md):
+#   request   <gm data dir>/ga-telemetry-profile.json          written by ga_manager
+#   read-back <gm data dir>/ga-telemetry-profile.applied.json  written HERE
+#   <gm data dir> = /mnt/data/supervisor/addons/data/99f1cad4_ga_manager, the
+#   ADR-0041 channel. Not /share: every share:rw add-on runs as host uid 0 and
+#   could otherwise choose this host's telemetry profile.
+#
+# WHAT A PROFILE CHANGES ON THE HOST
+#   normal, minimal  no drop-in at all: every shipper runs its base unit, byte
+#                    for byte what the image ships. (minimal differs only inside
+#                    ga_manager; without consent tier-1 and telegraf do not run
+#                    anyway, and tier-0 keeps its scope — ADR-0045 §4.)
+#   lte_saver        runtime drop-ins point the shippers at configs RENDERED here
+#                    from the live ones (never a copy that can drift):
+#                      tier-0   Flush 900, gzip to Loki, converge at ERROR+ only;
+#                               kernel/RAUC/OTA/auth/Supervisor scope unchanged
+#                      tier-1   Flush 900, error-only (PRIORITY 0-3, ERROR/CRITICAL)
+#                      telegraf every 30 min, essentials only (mem, disk, temp)
+#                    tier-1 and telegraf stay consent-gated: a unit that is not
+#                    running is not started here (try-restart).
+#
+# Drop-ins live in /run/systemd/system/<unit>.d/50-ga-profile.conf, so a reboot
+# returns to the base units until this runs again (ga-telemetry-profile.service
+# at boot, ordered before the shippers, and on every change via the .path).
+#
+# FAIL-SAFE AND LOUD
+#   no request file      -> normal, logged at notice (an older ga_manager)
+#   unreadable/invalid   -> normal, logged at err, valid:false in the read-back
+#   a rendered fluent-bit config that fluent-bit --dry-run rejects
+#                        -> that shipper keeps its base unit, logged at err
+#
+# Usage:
+#   ga-telemetry-profile-apply                         read the request, apply
+#   ga-telemetry-profile-apply render <profile> <dir>  render only (tests, CI)
+set -u
+
+GM_DATA_DIR="${GA_GM_DATA_DIR:-/mnt/data/supervisor/addons/data/99f1cad4_ga_manager}"
+REQ="$GM_DATA_DIR/ga-telemetry-profile.json"
+APPLIED="$GM_DATA_DIR/ga-telemetry-profile.applied.json"
+RUN_DIR="${GA_PROFILE_RUN_DIR:-/run/ga-telemetry}"
+DROPIN_ROOT="${GA_PROFILE_DROPIN_ROOT:-/run/systemd/system}"
+FB_T0_ENTRY="${GA_FB_T0_ENTRY:-/etc/fluent-bit/fluent-bit-tier0-os.conf}"
+FB_T1="${GA_FB_T1:-/etc/fluent-bit/fluent-bit.conf}"
+TG_CONF="${GA_TG_CONF:-/etc/telegraf/telegraf.conf}"
+PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
+FLUENT_BIT="${GA_FLUENT_BIT:-/usr/bin/fluent-bit}"
+SYSTEMCTL="${SYSTEMCTL:-systemctl}"
+JQ="${JQ:-jq}"
+
+LTE_FLUSH=900          # seconds; tier-0 and tier-1 batch for 15 min on LTE
+LTE_METRICS="1800s"    # telegraf interval and flush on LTE
+LTE_INPUTS="mem disk temp"
+
+# journald priority prefixes (SyslogLevelPrefix=yes is systemd's default)
+say()  { echo "<5>ga-telemetry-profile: $*"; }
+warn() { echo "<4>ga-telemetry-profile: $*"; }
+err()  { echo "<3>ga-telemetry-profile: $*"; }
+
+# --- rendering ---------------------------------------------------------------
+
+# expand_includes FILE — print FILE with every `@INCLUDE x` replaced by the
+# content of x (relative to FILE's directory). One level, like the shipped one.
+expand_includes() {
+    _d="$(dirname "$1")"
+    while IFS= read -r _l || [ -n "$_l" ]; do
+        case "$_l" in
+            @INCLUDE*)
+                _inc="${_l#@INCLUDE}"; _inc="$(echo "$_inc" | tr -d '[:space:]')"
+                case "$_inc" in /*) ;; *) _inc="$_d/$_inc" ;; esac
+                [ -f "$_inc" ] || { err "render: $1 includes $_inc, which does not exist"; return 1; }
+                cat "$_inc"; echo ;;
+            *) printf '%s\n' "$_l" ;;
+        esac
+    done < "$1"
+}
+
+# fb_batch SRC_DIR — stdin -> stdout: Flush=$LTE_FLUSH, Parsers_File made absolute
+# (the rendered file lives in /run), gzip on every loki OUTPUT that lacks it.
+fb_batch() {
+    awk -v flush="$LTE_FLUSH" -v dir="$1" '
+        function close_out() { if (inloki && !hasgz) print "    compress            gzip"; inloki = 0; hasgz = 0 }
+        /^[[:space:]]*\[/ { close_out(); sect = toupper($1) }
+        sect == "[SERVICE]" && tolower($1) == "flush" { print "    Flush               " flush; next }
+        sect == "[SERVICE]" && tolower($1) == "parsers_file" && $2 !~ /^\// { print "    Parsers_File        " dir "/" $2; next }
+        sect == "[OUTPUT]" && tolower($1) == "name" && tolower($2) == "loki" { inloki = 1 }
+        sect == "[OUTPUT]" && tolower($1) == "compress" { hasgz = 1 }
+        { print }
+        END { close_out() }
+    '
+}
+
+render_tier0() {  # $1 out file
+    expand_includes "$FB_T0_ENTRY" | fb_batch "$(dirname "$FB_T0_ENTRY")" > "$1.tmp" || return 1
+    cat >> "$1.tmp" <<'EOF'
+
+# --- lte_saver (rendered by ga-telemetry-profile-apply, ADR-0045) ----------
+# converge at ERROR/CRITICAL only. Every other tier-0 source keeps its scope:
+# kernel 0-3 and Supervisor ERROR were already error-only, and RAUC/OTA
+# lifecycle and failed logins are rare and required (CRA).
+[FILTER]
+    Name                grep
+    Match               tier0.converge
+    Regex               MESSAGE "level": *"(ERROR|CRITICAL)"
+EOF
+    mv -f "$1.tmp" "$1"
+}
+
+render_tier1() {  # $1 out file
+    expand_includes "$FB_T1" | fb_batch "$(dirname "$FB_T1")" > "$1.tmp" || return 1
+    cat >> "$1.tmp" <<'EOF'
+
+# --- lte_saver (rendered by ga-telemetry-profile-apply, ADR-0045) ----------
+# Error-only on every source, on top of the base filters (grep filters AND).
+[FILTER]
+    Name          grep
+    Match         ihost.systemd
+    Regex         PRIORITY [0-3]
+[FILTER]
+    Name          grep
+    Match         ihost.supervisor
+    Regex         log (ERROR|CRITICAL|error|critical)
+[FILTER]
+    Name          grep
+    Match         ihost.containers
+    Regex         MESSAGE "level": ?"(ERROR|CRITICAL)"
+EOF
+    mv -f "$1.tmp" "$1"
+}
+
+render_telegraf() {  # $1 out file
+    awk -v iv="$LTE_METRICS" -v keep=" $LTE_INPUTS " '
+        /^[[:space:]]*\[/ {
+            sect = $1; drop = 0
+            if (sect ~ /^\[\[inputs\./) {
+                n = sect; sub(/^\[\[inputs\./, "", n); sub(/\]\]$/, "", n)
+                drop = (index(keep, " " n " ") == 0)
+            }
+        }
+        drop { next }
+        sect == "[agent]" && $1 == "interval"       { print "  interval = \"" iv "\"        # lte_saver (ADR-0045)"; next }
+        sect == "[agent]" && $1 == "flush_interval" { print "  flush_interval = \"" iv "\"  # lte_saver (ADR-0045)"; next }
+        { print }
+    ' "$TG_CONF" > "$1.tmp" && mv -f "$1.tmp" "$1"
+}
+
+# render PROFILE DIR — writes DIR/tier0.conf DIR/tier1.conf DIR/telegraf.conf
+render() {
+    case "$1" in
+        lte_saver) ;;
+        normal|minimal) return 0 ;;
+        *) err "render: unknown profile '$1'"; return 1 ;;
+    esac
+    mkdir -p "$2" || return 1
+    render_tier0 "$2/tier0.conf" && render_tier1 "$2/tier1.conf" && render_telegraf "$2/telegraf.conf"
+}
+
+# --- the request ---------------------------------------------------------------
+
+PROFILE=normal; VALID=true; WHY=""
+read_request() {
+    if [ ! -e "$REQ" ] && [ ! -L "$REQ" ]; then
+        WHY="no request (ga_manager without telemetry profiles)"; say "$WHY — normal"; return
+    fi
+    if [ -L "$REQ" ] || [ ! -f "$REQ" ]; then
+        VALID=false; WHY="request is not a regular file"; err "$WHY — falling back to normal"; return
+    fi
+    _size="$(wc -c < "$REQ" 2>/dev/null || echo 99999)"
+    if [ "$_size" -gt 4096 ]; then
+        VALID=false; WHY="request is ${_size} bytes (max 4096)"; err "$WHY — falling back to normal"; return
+    fi
+    _p="$("$JQ" -r 'if (.schema == 1) and (.profile | type == "string") then .profile else "" end' "$REQ" 2>/dev/null)"
+    case "$_p" in
+        normal|minimal|lte_saver) PROFILE="$_p"; WHY="requested by ga_manager" ;;
+        *) VALID=false; WHY="request is not schema 1 with a known profile"
+           err "$WHY — falling back to normal" ;;
+    esac
+}
+
+# --- drop-ins --------------------------------------------------------------------
+
+dropin_body() {  # $1 unit $2 rendered dir -> the drop-in text for lte_saver
+    case "$1" in
+        fluent-bit-tier0.service)
+            printf '[Service]\nExecStart=\nExecStart=%s -c %s/tier0.conf\n' "$FLUENT_BIT" "$2" ;;
+        fluent-bit.service)
+            printf "[Service]\nExecStart=\nExecStart=/bin/sh -c 'if [ -f /mnt/data/fluent-bit/override.conf ]; then exec %s -c /mnt/data/fluent-bit/override.conf; else exec %s -c %s/tier1.conf; fi'\n" "$FLUENT_BIT" "$FLUENT_BIT" "$2" ;;
+        telegraf.service)
+            printf "[Service]\nExecStart=\nExecStart=/bin/sh -c 'if [ -f /mnt/data/telegraf/override.conf ]; then exec /usr/bin/telegraf --config /mnt/data/telegraf/override.conf; else exec /usr/bin/telegraf --config %s/telegraf.conf; fi'\n" "$2" ;;
+    esac
+}
+
+UNITS="fluent-bit-tier0.service fluent-bit.service telegraf.service"
+RELOAD=0; CHANGED=""; RESULT=""
+
+set_dropin() {  # $1 unit $2 wanted body ("" = none)
+    _f="$DROPIN_ROOT/$1.d/50-ga-profile.conf"
+    _have=""; [ -f "$_f" ] && _have="$(cat "$_f")"
+    [ "$_have" = "$2" ] && return 0
+    if [ -z "$2" ]; then
+        rm -f "$_f"; rmdir "$DROPIN_ROOT/$1.d" 2>/dev/null
+    else
+        if ! { mkdir -p "$DROPIN_ROOT/$1.d" && printf '%s\n' "$2" > "$_f.tmp" && mv -f "$_f.tmp" "$_f"; }; then
+            err "cannot write $_f"; return 1
+        fi
+    fi
+    RELOAD=1; CHANGED="$CHANGED $1"
+}
+
+dry_run_ok() {  # $1 rendered fluent-bit config
+    [ -x "$FLUENT_BIT" ] || return 0     # no binary to ask (tests without one)
+    "$FLUENT_BIT" --dry-run -c "$1" >/dev/null 2>&1
+}
+
+apply() {
+    read_request
+    _dir="$RUN_DIR/lte-saver"
+    _rendered=0
+    if [ "$PROFILE" = lte_saver ]; then
+        if render lte_saver "$_dir"; then _rendered=1
+        else err "rendering the lte_saver configs failed — every shipper keeps its base unit"; VALID=false; WHY="render failed"; fi
+    fi
+    T0_BODY=""
+    for _u in $UNITS; do
+        _body=""
+        if [ "$_rendered" = 1 ]; then
+            _body="$(dropin_body "$_u" "$_dir")"
+            _cfg=""
+            case "$_u" in
+                fluent-bit-tier0.service) _cfg="$_dir/tier0.conf" ;;
+                fluent-bit.service)       _cfg="$_dir/tier1.conf" ;;
+            esac
+            if [ -n "$_cfg" ] && ! dry_run_ok "$_cfg"; then
+                err "fluent-bit --dry-run rejects $_cfg — $_u keeps its base unit"
+                _body=""
+            fi
+        fi
+        [ "$_u" = fluent-bit-tier0.service ] && T0_BODY="$_body"
+        set_dropin "$_u" "$_body"
+    done
+    if [ "$RELOAD" = 1 ]; then
+        "$SYSTEMCTL" daemon-reload || err "daemon-reload failed"
+    fi
+    for _u in $UNITS; do
+        case " $CHANGED " in
+            *" $_u "*)
+                if "$SYSTEMCTL" is-active --quiet "$_u"; then
+                    if "$SYSTEMCTL" try-restart "$_u"; then _st=restarted
+                    else _st=restart-failed; err "try-restart $_u failed"; fi
+                else
+                    _st=not-running
+                fi ;;
+            *) _st=unchanged ;;
+        esac
+        RESULT="$RESULT\"$_u\":\"$_st\","
+    done
+    # What the always-on stream actually runs is the profile in effect.
+    _applied="$PROFILE"
+    [ "$PROFILE" = lte_saver ] && [ -z "$T0_BODY" ] && _applied=normal
+    say "requested=$PROFILE applied=$_applied valid=$VALID changed=[${CHANGED# }] ($WHY)"
+    publish_readback "$_applied"
+}
+
+publish_readback() {
+    if [ -L "$GM_DATA_DIR" ] || [ ! -d "$GM_DATA_DIR" ]; then
+        say "no ga_manager data directory at $GM_DATA_DIR — read-back not written"; return 0
+    fi
+    _now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '{"schema":1,"requested":"%s","applied":"%s","valid":%s,"applied_at":"%s","units":{%s}}\n' \
+        "$PROFILE" "$1" "$VALID" "$_now" "${RESULT%,}" \
+        | "$PUBLISH" "$APPLIED" 0644 || warn "could not publish $APPLIED"
+}
+
+case "${1:-}" in
+    render) [ $# -eq 3 ] || { echo "usage: $0 render <profile> <dir>" >&2; exit 2; }
+            render "$2" "$3" ;;
+    "")     apply ;;
+    *)      echo "usage: $0 [render <profile> <dir>]" >&2; exit 2 ;;
+esac
