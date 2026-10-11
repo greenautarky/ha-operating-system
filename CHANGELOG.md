@@ -14,6 +14,51 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased — the host takes control requests from ga_manager only out of the add-on's own data directory
 
+### Changed — far fewer SD card writes from the telemetry shippers (Odoo #1224–#1227)
+
+Measured on a bench device: the SD card took about 32 GB per day while idle,
+two thirds of it from per-line `fsync` calls of the always-on log shipper and the
+ext4 journal commits they forced.
+
+- **ga-telemetry-config 1.1.0** (#750, #762): the tier-0 cursor databases run with
+  `DB.Sync Off`, so there is no `fsync` per journal line. After a power cut a
+  cursor can restart an input from its head: duplicates, never loss. The tier-0
+  auth input keeps the security evidence and drops connection bookkeeping; the
+  record is slimmed to the fields Loki needs.
+- **Frequent timer units log at notice and above** (#751, `LogLevelMax=notice`).
+  The two messages that report a state change (an uplink unparked, an uplink
+  healthy again) were raised to notice so they stay.
+- **telegraf's disk buffer no longer syncs every metric** (#752,
+  `buffer_disk_sync = false`). Measured on telegraf 1.38.0: 1,984 → 4 `fsync`
+  calls in 120 s. The buffer still survives an outage and a reboot.
+- **Telemetry profiles** `normal` / `minimal` / `lte_saver` on the host side (#753).
+  The host applies a profile only when ga_manager requests one; without a request
+  it stays on `normal` and logs that at notice (ga_manager 0.239.0 sends none).
+- **ga_zigbee2mqtt 2.12.1-8** (#754): log level warning, console output only, so
+  full MQTT payloads are no longer written at info.
+- **ga_hmvapp_addon 2.6.0** (#763): levelled output (`log_level`, default
+  `warning`) instead of unconditional prints on every cycle.
+- Gates: each change carries a build test or gate that fails without it
+  (`fluent_bit_cursor_sync`, the timer LogLevelMax gate, CFG-20b, the
+  `telemetry_profiles` self-test).
+
+### Added — a declared hold for an add-on pin that is deliberately behind (#766)
+
+The bake refuses an add-on pin behind the newest published image
+(`GA_SOURCE_DRIFT_STRICT=1`). A deliberate older pin is now declared next to the
+pin, `"hold": {"reason": "…", "until": "YYYY-MM-DD"}`, instead of switching the
+check off for every add-on. A valid hold prints HOLD and is counted; a hold
+without a reason, with a malformed or past date, or ending more than 30 days
+ahead is invalid and the drift fails again. BOSv1.5.0 holds ga_manager at
+0.239.0 and ga_default_addon at 2.1.1, until 2026-10-25.
+Self-test `tests/gates/addon_pin_hold` (9 cases, wired into lint).
+
+### Fixed — every path the component sync writes into the overlay is git-ignored (#765)
+
+The bake refuses a dirty tree once the private CVE allowlist is placed (#742).
+Five synced paths (ga-bootstrap, and the ga_heating and greenautarky_telemetry
+components) were not ignored, so the first bake after #742 refused.
+
 ### Changed — NetBird client 0.71.4 → 0.80.0
 
 Update to upstream 0.80.0 (current stable; pinned by commit SHA of the peeled
