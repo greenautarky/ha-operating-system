@@ -334,12 +334,23 @@ fi
 # the pin, and failing on that would make the check noise again.
 # GA_SOURCE_DRIFT_STRICT=1 turns it fatal; ga_build.sh sets that, because
 # leading the pin is fine on a Tuesday afternoon and not in the build that
-# becomes an image. Set GA_SOURCE_DRIFT_STRICT=0 for a deliberate older pin.
+# becomes an image. A DELIBERATE older pin is declared in addon-images.json,
+# next to the pin it explains, not switched off by an environment variable:
+#     "hold": {"reason": "<why, who decided>", "until": "YYYY-MM-DD"}
+# A valid hold turns DRIFT into HOLD (counted, printed, not fatal). It is
+# INVALID - and the drift counts again - when the reason is empty, the date
+# is malformed, already past, or more than HOLD_MAX_DAYS (30) ahead: a hold
+# must end, or it becomes the permanent drift this check exists to find.
+# GA_TODAY overrides today's date for the selftest only.
 if [ -f "$ADDON_IMAGES_JSON" ] && command -v skopeo >/dev/null 2>&1; then
     echo ""
     echo "--- delivery drift (pinned vs newest tag actually published) ---"
     drift_seen=0
     drift_fatal=0
+    held_count=0
+    HOLD_MAX_DAYS=30
+    today="${GA_TODAY:-$(date -u +%F)}"
+    hold_limit="$(date -u -d "${today} +${HOLD_MAX_DAYS} days" +%F)"
     for key in $(jq -r '.addons | keys[]' "$ADDON_IMAGES_JSON"); do
         image=$(jq -r ".addons.\"${key}\".image" "$ADDON_IMAGES_JSON" | sed "s/{arch}/${ARCH}/")
         pinned=$(jq -r ".addons.\"${key}\".version // empty" "$ADDON_IMAGES_JSON")
@@ -385,6 +396,9 @@ if [ -f "$ADDON_IMAGES_JSON" ] && command -v skopeo >/dev/null 2>&1; then
         fi
         if [ "$newest" = "$pinned" ]; then
             printf "${GREEN}OK${NC}: %s pinned %s == newest published\n" "$key" "$pinned"
+            if [ -n "$(jq -r ".addons.\"${key}\".hold // empty" "$ADDON_IMAGES_JSON")" ]; then
+                printf "${YELLOW}NOTE${NC}: %s carries a hold but is not behind — remove the hold\n" "$key"
+            fi
         elif [ "$(printf '%s\n%s\n' "$pinned" "$newest" | sort -V | tail -1)" = "$pinned" ]; then
             # Pin ahead of anything published. check_image above already fails
             # if the pinned tag is missing outright, so this is the narrower
@@ -393,6 +407,23 @@ if [ -f "$ADDON_IMAGES_JSON" ] && command -v skopeo >/dev/null 2>&1; then
             printf "${YELLOW}NOTE${NC}: %s pinned %s is ahead of the newest listed tag %s\n" \
                 "$key" "$pinned" "$newest"
         else
+            hold_reason=$(jq -r ".addons.\"${key}\".hold.reason // empty" "$ADDON_IMAGES_JSON")
+            hold_until=$(jq -r ".addons.\"${key}\".hold.until // empty" "$ADDON_IMAGES_JSON")
+            hold_why=""
+            if [ -n "$hold_reason$hold_until" ]; then
+                if [ -z "$hold_reason" ]; then hold_why="hold has no reason"
+                elif ! [[ "$hold_until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then hold_why="hold until '${hold_until}' is not YYYY-MM-DD"
+                elif [[ "$hold_until" < "$today" ]]; then hold_why="hold expired on ${hold_until}"
+                elif [[ "$hold_until" > "$hold_limit" ]]; then hold_why="hold until ${hold_until} is more than ${HOLD_MAX_DAYS} days ahead"
+                fi
+                if [ -z "$hold_why" ]; then
+                    held_count=$((held_count + 1))
+                    printf "${YELLOW}HOLD${NC}: %s pinned %s, %s is published — held until %s: %s\n" \
+                        "$key" "$pinned" "$newest" "$hold_until" "$hold_reason"
+                    continue
+                fi
+                printf "${RED}HOLD INVALID${NC}: %s — %s; counted as drift\n" "$key" "$hold_why"
+            fi
             drift_seen=$((drift_seen + 1))
             printf "${YELLOW}DRIFT${NC}: %s pinned %s but %s is published — that image is not reachable by any device until the pin follows\n" \
                 "$key" "$pinned" "$newest"
@@ -415,6 +446,7 @@ echo "Passed:       ${pass_count}"
 echo "Failed:       $((fail_count + lockstep_count))  (missing from registry: ${fail_count}, out of lockstep: ${lockstep_count})"
 echo "Unverified:   ${auth_count} (private, no registry credentials)"
 echo "Pre-release:  ${prerelease_count} (store on a canary, pin on a release — deliberate, not drift)"
+echo "Held:         ${held_count:-0} (pin deliberately behind the newest published image — declared hold with reason and end date)"
 
 if [ "${drift_fatal:-0}" = "1" ]; then
     echo ""
