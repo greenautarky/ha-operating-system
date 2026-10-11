@@ -67,8 +67,14 @@ releases/
 # `./scripts/sync-components.sh`.
 buildroot-external/rootfs-overlay/usr/share/ga/custom_components/greenautarky_site/
 buildroot-external/rootfs-overlay/usr/share/ga/custom_components/ga_frontend_bundle/
+buildroot-external/rootfs-overlay/usr/share/ga/custom_components/ga_heating/
+buildroot-external/rootfs-overlay/usr/share/ga/custom_components/greenautarky_telemetry/
 # ga-telemetry-config (Tier-2: usr/libexec/ga-boot-timing + etc/fluent-bit/fluent-bit-tier0.conf)
 buildroot-external/rootfs-overlay/usr/libexec/ga-boot-timing
 buildroot-external/rootfs-overlay/etc/fluent-bit/fluent-bit-tier0.conf
+# ga-bootstrap (rootfs_overlays: usr/sbin/ga-bootstrap + its unit and the multi-user wants link)
+buildroot-external/rootfs-overlay/usr/sbin/ga-bootstrap
+buildroot-external/rootfs-overlay/etc/systemd/system/ga-bootstrap.service
+buildroot-external/rootfs-overlay/etc/systemd/system/multi-user.target.wants/ga-bootstrap.service
 # Private CVE allowlist — placed by the ops bake, never committed (scan-cves.sh)
 /.cve-allowlist.private
