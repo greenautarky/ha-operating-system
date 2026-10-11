@@ -1,0 +1,18 @@
+[Unit]
+# Applies the telemetry profile ga_manager selected (normal | minimal |
+# lte_saver) to the log and metric shippers: runtime drop-ins under
+# /run/systemd/system, so a reboot starts from the base units and this unit
+# re-applies the profile before the shippers start. Triggered again by
+# ga-telemetry-profile.path on every change of the request. ADR-0045.
+Description=Apply the telemetry profile to the log and metric shippers
+Documentation=https://github.com/greenautarky/ga-ihost-docs/blob/main/adr/ADR-0045-telemetry-profiles-and-storage-writes.md
+After=mnt-data.mount
+Before=fluent-bit-tier0.service fluent-bit.service telegraf.service
+
+[Service]
+Type=oneshot
+# No RemainAfterExit: the .path unit must be able to start it again.
+ExecStart=/usr/sbin/ga-telemetry-profile-apply
+
+[Install]
+WantedBy=multi-user.target
