@@ -25,6 +25,10 @@ fi
 run_test "BUF-01" "disk buffer enabled (buffer_strategy=disk_write_through)" \
   "grep -q 'buffer_strategy *= *\"disk_write_through\"' $TG_CONF"
 
+# BUF-01b: ... without an fsync per metric (Odoo #1224, SD-card wear)
+run_test "BUF-01b" "disk buffer without per-metric fsync (buffer_disk_sync = false)" \
+  "grep -qE '^[[:space:]]*buffer_disk_sync[[:space:]]*=[[:space:]]*false' $TG_CONF"
+
 # BUF-02: buffer directory exists + is on /mnt/data (writable, not zram /tmp)
 run_test "BUF-02" "buffer dir exists under /mnt/data" \
   "[ -d $BUF_DIR ]"

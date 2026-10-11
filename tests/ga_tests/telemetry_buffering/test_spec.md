@@ -10,6 +10,7 @@ ga_manager network-signal file-drop. See
 |---|---|
 | BUF-00 | metrics consent gate (suite N/A without consent) |
 | BUF-01 | `buffer_strategy=disk_write_through` in the active config |
+| BUF-01b | `buffer_disk_sync = false` in the active config — no fsync per buffered metric (Odoo #1224) |
 | BUF-02 | buffer dir under `/mnt/data` exists |
 | BUF-03 | telegraf loaded the ga-network `inputs.file` |
 | BUF-04 | telegraf loaded `inputs.temp` (cpu temperature) |
