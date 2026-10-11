@@ -11,3 +11,13 @@ ExecStart=/usr/libexec/ga-host-stats
 # Bounded: journal read is -p warning/-24h (a handful of lines), the rest
 # is /proc + docker inspect. Keep it from ever wedging the timer.
 TimeoutStartSec=30s
+
+# Runs every 2 min. At the default level every run put PID 1's "Starting",
+# "Finished"/"Deactivated" and the script's routine info lines into the
+# persistent journal on the SD card: systemd timer chatter was ~10 % of all
+# journal entries on a bench device (Odoo #1225). Capped at notice: warnings
+# and errors still reach the journal and tier-0/tier-1, and a failed run
+# still logs "Main process exited" (notice) and "Failed with result" (warning).
+# Not kept: the plain stdout/stderr text of a run — run the script by hand to
+# see it. Guarded by tests/gates/frequent_timer_loglevel.
+LogLevelMax=notice

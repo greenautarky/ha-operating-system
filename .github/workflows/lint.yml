@@ -407,6 +407,12 @@ jobs:
         # rule is removed.
         run: sh tests/ga_tests/uplink_ladder/test.sh
 
+      # A timer that fires every few minutes must not write its routine lines
+      # into the persistent journal (Odoo #1225): LogLevelMax=notice on its
+      # service, or a named exemption with a reason.
+      - name: Frequent timers capped at notice (journal volume)
+        run: ./tests/gates/frequent_timer_loglevel/selftest.sh
+
       # expected.env is the DECLARATION side of the os_integrity suite: the
       # release marker and the baked add-on pins the flashed device is held
       # against. It is generated repo-side and committed — and nothing checked

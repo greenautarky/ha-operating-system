@@ -10,3 +10,13 @@ Wants=NetworkManager.service
 [Service]
 Type=oneshot
 ExecStart=/usr/sbin/ga-uplink-ladder
+
+# Runs every 2 min. At the default level every run put PID 1's "Starting",
+# "Finished"/"Deactivated" and the script's routine info lines into the
+# persistent journal on the SD card: systemd timer chatter was ~10 % of all
+# journal entries on a bench device (Odoo #1225). Capped at notice: warnings
+# and errors (strikes, parking and failover are warning; recovery is notice) still reach the journal and tier-0/tier-1, and a failed run
+# still logs "Main process exited" (notice) and "Failed with result" (warning).
+# Not kept: the plain stdout/stderr text of a run — run the script by hand to
+# see it. Guarded by tests/gates/frequent_timer_loglevel.
+LogLevelMax=notice
