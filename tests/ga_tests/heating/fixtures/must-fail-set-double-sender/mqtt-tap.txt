@@ -1,0 +1,14 @@
+zigbee2mqtt/bridge/state {"state":"online"}
+zigbee2mqtt/0x0cae5ffffeab11e7/set {"occupied_heating_setpoint":20}
+zigbee2mqtt/0x0cae5ffffeab11e7 {"local_temperature":19.5,"occupied_heating_setpoint":20}
+zigbee2mqtt/0x0cae5ffffeab11e7/set {"occupied_heating_setpoint":20}
+zigbee2mqtt/0x0cae5ffffeab11e7 {"local_temperature":19.5,"occupied_heating_setpoint":20}
+zigbee2mqtt/0x0cae5ffffeab11e7/set {"occupied_heating_setpoint":20}
+zigbee2mqtt/0x0cae5ffffeab11e7 {"local_temperature":19.5,"occupied_heating_setpoint":20}
+zigbee2mqtt/0x0cae5ffffeab11e7/set {"occupied_heating_setpoint":20}
+zigbee2mqtt/0x0cae5ffffeab11e7 {"local_temperature":19.5,"occupied_heating_setpoint":20}
+zigbee2mqtt/0x0cae5ffffeab11e7/set {"occupied_heating_setpoint":20}
+zigbee2mqtt/0x0cae5ffffeab11e7 {"local_temperature":19.5,"occupied_heating_setpoint":20}
+zigbee2mqtt/0x0cae5ffffeab11e7/set {"occupied_heating_setpoint":20}
+zigbee2mqtt/0x0cae5ffffeab11e7 {"local_temperature":19.5,"occupied_heating_setpoint":20}
+zigbee2mqtt/0x0cae5ffffeab11e6/set {"occupied_heating_setpoint":21.5}

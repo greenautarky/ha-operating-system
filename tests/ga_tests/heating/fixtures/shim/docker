@@ -13,6 +13,14 @@ case "$cmd" in
       *)        cut -d' ' -f1 "$(pick containers.txt)" ;;
     esac ;;
   exec)
+    # HEAT-02's broker tap (Odoo #1232): mosquitto_sub inside ga_mosquitto. The
+    # credential arrives on stdin as a config file; it is consumed and dropped.
+    # mqtt-tap.txt is what the broker delivered in the window (`-v`: topic payload).
+    case "$*" in
+      *mosquitto_sub*)
+        cat > /dev/null
+        f="$(pick mqtt-tap.txt)"; [ -e "$f" ] && cat "$f"; exit 0 ;;
+    esac
     # FAKE HOME ASSISTANT (GA_HEAT_LIVE set by the selftest for fixtures carrying a
     # `fake-ha` marker): Core's state lives in a file the service calls CHANGE,
     # modelling what ga_heating does with them — so a teardown can be proven to

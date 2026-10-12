@@ -72,7 +72,7 @@ ADDON_DATA="${GA_HEAT_ADDON_DATA:-/mnt/data/supervisor/addons/data}"   # <repo>_
 TMP_DIR="${GA_HEAT_TMP:-/tmp}"
 STATES="$TMP_DIR/ga-heat-states.json"  # climate.* + number.* + sensor.hm_* only, a few KB
 SET_COUNTS="$TMP_DIR/ga-heat-set-counts.txt"
-SET_WINDOW="10m"
+SET_WINDOW="10m"                       # HEAT-05/08: log windows (add-on + broker logs)
 SET_MAX_PER_VALVE=2
 ENGINE_SLUG="ga_hmvapp_addon"          # the decision engine, >= 2.0.0 speaks contract v1
 ENGINE_MIN_UP_MIN=15                   # HEAT-06: younger than this = no cycle has necessarily run
@@ -215,42 +215,74 @@ fi
 
 # =========================================================================
 # HEAT-02 — one sender on the valves: <= 2 messages per valve on
-#           zigbee2mqtt/<ieee>/set within the last 10 minutes
+#           zigbee2mqtt/<ieee>/set, counted ON THE BROKER for SET_TAP_S seconds
 # =========================================================================
 # Red proof: K31 rc22, 2026-09-03 — 22 per valve in 8 min from
 # ga_hmvapp_addon 1.7.1 (a "state request" to /set every ~20 s), with
-# ga_heating driving the same valves.
+# ga_heating driving the same valves. At that rate a 120 s window holds ~6.
 #
-# COUNT THE PUBLISH TOPIC, NOT THE LINE. zigbee2mqtt announces every entity by
-# MQTT discovery, and each discovery payload carries
-# `"command_topic":"zigbee2mqtt/<ieee>/set"` — so a bare search for that string
-# also counts announcements, which are not commands to a valve. That never
-# showed on a settled device (discovery is republished only after a restart or a
-# network re-form) and reported exactly 22 per valve on the FRESH rc23 flash,
-# 2026-09-03, while HEAT-05 saw zero add-on publishes in the same window. The
-# discriminator is the log's own shape: z2m writes `topic 'zigbee2mqtt/…/set'`
-# for a publish and puts the payload after `payload '{…}'`.
+# WHY THE BROKER AND NOT THE z2m LOG (Odoo #1232). Until 2026-10 this counted
+# `topic 'zigbee2mqtt/<ieee>/set'` lines in the z2m container log. Those are
+# INFO lines; ga_zigbee2mqtt 2.12.1-8 (BOSv1.5.0-rc7) logs at warning — a
+# deliberate SD-write decision that stays — so the grep read zero lines and the
+# test PASSED with "0 messages" on K31 on 2026-10-11 without having looked at
+# anything (rule 9). A /set message is an MQTT publish; the broker sees every
+# one of them whatever any client logs. So the suite subscribes, as z2m's own
+# MQTT user (the one client that must be able to read /set), for a fixed window.
+#
+# FAIL CLOSED: the tap must DELIVER something. It also subscribes to the
+# retained zigbee2mqtt/bridge/state, which the broker hands over immediately on
+# a working subscription — so "0 messages" means the tap is blind (credential,
+# ACL, broker), never "no sender". No credential, no broker = FAIL, not SKIP:
+# on a device with paired valves both must exist.
+#
+# The credential is read from z2m's configuration.yaml on the host into shell
+# variables and handed to mosquitto_sub as a config FILE on stdin (never on a
+# command line, so never in the process table), and is never printed.
+Z2M_CFG="${GA_HEAT_Z2M_CFG:-$HA_DIR/zigbee2mqtt/configuration.yaml}"
+SET_TAP_S="${GA_HEAT_SET_TAP_S:-120}"
+SET_TAP="$TMP_DIR/ga-heat-set-tap.txt"
+z2m_mqtt_cred() {
+  [ -r "$Z2M_CFG" ] || return 1
+  # the mqtt: block only; values may be quoted
+  _mu=$(awk '/^mqtt:/{m=1;next} /^[^ #]/{m=0} m && $1=="user:"{sub(/^[^:]*:[ ]*/,"");gsub(/^["\047]|["\047]$/,"");print;exit}' "$Z2M_CFG")
+  _mp=$(awk '/^mqtt:/{m=1;next} /^[^ #]/{m=0} m && $1=="password:"{sub(/^[^:]*:[ ]*/,"");gsub(/^["\047]|["\047]$/,"");print;exit}' "$Z2M_CFG")
+  [ -n "$_mu" ] && [ -n "$_mp" ]
+}
 heat02() {
-  _z2m=$(ctr_of ga_zigbee2mqtt)
-  docker logs --since "$SET_WINDOW" "$_z2m" 2>&1 \
-    | grep -oE "topic 'zigbee2mqtt/0x[0-9a-f]+/set'" \
-    | grep -oE "zigbee2mqtt/0x[0-9a-f]+/set" | sort | uniq -c > "$SET_COUNTS" 2>/dev/null
-  if [ ! -s "$SET_COUNTS" ]; then
-    echo "0 messages on any zigbee2mqtt/<ieee>/set in the last $SET_WINDOW"; return 0
+  _mq=$(ctr_of ga_mosquitto)
+  [ -n "$_mq" ] || { echo "ga_mosquitto container absent — the /set traffic cannot be inspected"; return 1; }
+  z2m_mqtt_cred || { echo "no z2m MQTT credential readable in $Z2M_CFG — the /set traffic cannot be inspected"; return 1; }
+  # -W ends the subscription after SET_TAP_S (exit 27 = timeout, expected).
+  printf -- '-u %s\n-P %s\n' "$_mu" "$_mp" \
+    | docker exec -i "$_mq" sh -c 'umask 077; d=$(mktemp -d) || exit 1; cat > "$d/mosquitto_sub";
+        XDG_CONFIG_HOME="$d" mosquitto_sub -h 127.0.0.1 -v -W "$1" \
+          -t zigbee2mqtt/bridge/state -t "zigbee2mqtt/+" -t "zigbee2mqtt/+/set" 2>&1; rm -rf "$d"' \
+        sh "$SET_TAP_S" > "$SET_TAP" 2>/dev/null || :
+  unset _mu _mp
+  _seen=$(grep -c '^zigbee2mqtt/' "$SET_TAP" 2>/dev/null); _seen=${_seen:-0}
+  _states=$(grep -cE '^zigbee2mqtt/0x[0-9a-f]+ ' "$SET_TAP" 2>/dev/null); _states=${_states:-0}
+  if [ "$_seen" -eq 0 ]; then
+    echo "tap delivered 0 messages in ${SET_TAP_S}s — not even the retained bridge/state: nothing was inspected ($(head -c 120 "$SET_TAP" 2>/dev/null | tr '\n' ' '))"
+    return 1
   fi
-  _worst=0; _summary=""
+  grep -oE '^zigbee2mqtt/0x[0-9a-f]+/set ' "$SET_TAP" | sort | uniq -c > "$SET_COUNTS"
+  _worst=0; _summary=""; _sets=0
   while read -r _n _topic; do
     _ieee=${_topic#zigbee2mqtt/}; _ieee=${_ieee%/set}
-    _summary="$_summary $_ieee=$_n"
+    _summary="$_summary $_ieee=$_n"; _sets=$((_sets+_n))
     [ "$_n" -gt "$_worst" ] && _worst=$_n
   done < "$SET_COUNTS"
-  echo "/set per valve in $SET_WINDOW:$_summary (max allowed $SET_MAX_PER_VALVE)"
+  echo "broker tap ${SET_TAP_S}s: $_seen messages inspected ($_states device states), $_sets /set:${_summary:- none} (max $SET_MAX_PER_VALVE per valve)"
   [ "$_worst" -le "$SET_MAX_PER_VALVE" ]
 }
+H02_DESC="one sender per valve (<= $SET_MAX_PER_VALVE messages on zigbee2mqtt/<ieee>/set per valve, broker tap ${SET_TAP_S}s)"
 if [ -z "$(ctr_of ga_zigbee2mqtt)" ]; then
-  skip_test "HEAT-02" "one sender per valve (<= $SET_MAX_PER_VALVE /set per valve per $SET_WINDOW)" "ga_zigbee2mqtt container absent — no valve traffic to inspect"
+  skip_test "HEAT-02" "$H02_DESC" "ga_zigbee2mqtt container absent — no valve traffic to inspect"
+elif [ "$TRV_COUNT" -eq 0 ]; then
+  skip_test "HEAT-02" "$H02_DESC" "no TRV paired"
 else
-  run_test_show "HEAT-02" "one sender per valve (<= $SET_MAX_PER_VALVE messages on zigbee2mqtt/<ieee>/set per valve in $SET_WINDOW)" 'heat02'
+  run_test_show "HEAT-02" "$H02_DESC" 'heat02'
 fi
 
 # =========================================================================
@@ -708,5 +740,5 @@ else
 fi
 
 ROOM_SNAP_OK=0   # given back (or nothing to give): the EXIT trap has nothing left to do
-rm -f "$STATES" "$SET_COUNTS" "$ROOM_SNAP" "$ROOM_SNAP.done"
+rm -f "$STATES" "$SET_COUNTS" "$SET_TAP" "$ROOM_SNAP" "$ROOM_SNAP.done"
 suite_end

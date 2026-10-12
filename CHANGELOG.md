@@ -34,6 +34,16 @@ ga-tools outage, and a long ga-tools outage would reboot the whole fleet. `GA_ME
 `/mnt/data` override) enables the stage. Optional `GA_MESH_FALLBACK_PEER` / `GA_MESH_FALLBACK_PORTS` give the
 cross-check peer: when it answers over `wt0`, the device never reboots (`fallback_alive`).
 
+### Fixed — HEAT-02 counts `/set` on the broker and fails when it inspected nothing (Odoo #1232)
+
+HEAT-02 ("one sender per valve") counted `zigbee2mqtt/<ieee>/set` lines in the z2m container log. Those are info
+lines, and ga_zigbee2mqtt 2.12.1-8 logs at warning (kept: it is an SD-write decision), so on BOSv1.5.0-rc7 the test
+passed with "0 messages" without looking at anything. It now subscribes on the broker as z2m's own MQTT user for 120 s
+and counts `/set` per valve there. It fails when the subscription delivered nothing (it also subscribes to the
+retained `zigbee2mqtt/bridge/state`, so a working subscription always delivers at least that message) and when no z2m
+credential is readable. The selftest has three new must-fail fixtures: a second sender, a broker that refuses the
+subscription, and a missing credential. The old test passed all three.
+
 ## BOSv1.5.0 — released 2026-10-12 (HAOS 16.3.1.10)
 
 The first release for the stable channel since V1.2 (BOSv1.4.0 was released as an image on 2026-10-07 but never
