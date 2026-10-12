@@ -14,6 +14,18 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased (BOSv1.5.1) — the device keeps its mesh path to ga-tools alive (Odoo #1263)
 
+### Security — libglib2 and xz (Odoo #1206, #1207)
+
+- **libglib2 2.82.5**: upstream fixes for CVE-2025-13601, CVE-2025-14512 and CVE-2026-58010 to CVE-2026-58016
+  carried as nine patches in `buildroot-external/patches/libglib2/` (upstream fixed them in 2.84.1 to 2.88.1 and
+  main; the buildroot submodule pins 2.82.5). The CVEs are declared in `buildroot-external/external.mk` so the SBOM
+  shows them as resolved. CVE-2025-4056 is Windows-only code and not built.
+- **xz 5.6.4**: the two upstream v5.6 branch commits for GHSA-5qpq-xqfv-j9pg (fixed in 5.8.4) as patches in
+  `buildroot-external/patches/xz/`. xz stays: it is the only compression library systemd is built with.
+- **Build**: `scripts/lib/pkg-inputs.sh` dircleans libglib2 and xz (and fluent-bit, for its configure options) on a reused output tree when our
+  patches or fluent-bit's configure options for them changed; buildroot tracks neither, so an `update` bake would
+  have kept the old binaries.
+
 ### Added — `ga-mesh-watchdog`: probe, then down/up, restart, at most one reboot per 24 h
 
 Every 2 min the device probes ga-tools over `wt0` (fleet port and MQTT port; the address comes from

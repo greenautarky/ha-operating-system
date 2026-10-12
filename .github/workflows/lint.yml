@@ -370,6 +370,14 @@ jobs:
         # must each be caught.
         run: bash tests/ga_tests/build/go_toolchain/selftest.sh
 
+      - name: pkg-inputs rebuilds a package when our patches or configure options for it change
+        # Buildroot looks at neither BR2_GLOBAL_PATCH_DIR nor <PKG>_CONF_OPTS once
+        # a package has its stamps, so on a reused (`update`) output tree the
+        # libglib2/xz CVE patches and the minimal fluent-bit switches would be
+        # skipped by a green bake. Drives the LIVE scripts/lib/pkg-inputs.sh with
+        # `make` stubbed; a names-only fingerprint (mutant) must be caught.
+        run: bash tests/ga_tests/build/pkg_inputs/selftest.sh
+
       - name: every suite directory is registered or explicitly excluded
         run: sh tests/ga_tests/run_all.sh --selftest
 

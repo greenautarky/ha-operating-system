@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Thomas Taube <Thomastaube@gmx.de>
+Date: Mon, 12 Oct 2026 16:46:17 +0200
+Subject: [PATCH] gkeyfile: Fix a one-byte heap under-read with
+ g_key_file_get_locale_string_list()
+
+Fixes CVE-2026-58014. Backport of upstream commit 94ecb5b44 (glib 2.88.1, glib#3930) to 2.82.5.
+
+CVE: CVE-2026-58014
+---
+ glib/gkeyfile.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/glib/gkeyfile.c b/glib/gkeyfile.c
+index 637ac9c..bae4053 100644
+--- a/glib/gkeyfile.c
++++ b/glib/gkeyfile.c
+@@ -2410,7 +2410,7 @@ g_key_file_get_locale_string_list (GKeyFile     *key_file,
+     }
+ 
+   len = strlen (value);
+-  if (value[len - 1] == key_file->list_separator)
++  if (len > 0 && value[len - 1] == key_file->list_separator)
+     value[len - 1] = '\0';
+ 
+   list_separator[0] = key_file->list_separator;
