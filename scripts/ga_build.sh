@@ -128,6 +128,8 @@ declare -a MAKE_OVERRIDES=()
 ga_parse_build_args "$@" || exit 1
 # shellcheck source=lib/go-toolchain.sh
 . "${SCRIPT_DIR}/lib/go-toolchain.sh"
+# shellcheck source=lib/pkg-inputs.sh
+. "${SCRIPT_DIR}/lib/pkg-inputs.sh"
 echo "Building with MODE=$MODE (one build mode, ADR-0027 D9)"
 
 # ---- Paths inside container ----
@@ -2332,11 +2334,13 @@ if [[ "$MODE" == "full" ]]; then
 elif [[ "$MODE" == "partial" ]]; then
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "$DEFCONFIG"
   ga_go_rebuild_if_toolchain_changed "$OUT" "$BR2_EXTERNAL_PATH" "$GO_EXPECTED"
+  ga_pkg_inputs_rebuild_if_changed "$OUT" "$BR2_EXTERNAL_PATH" "${BR2EXT_NETBIRD}/patches" || exit 1
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" linux-dirclean hassio-dirclean
 
 elif [[ "$MODE" == "kernel" ]]; then
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "$DEFCONFIG"
   ga_go_rebuild_if_toolchain_changed "$OUT" "$BR2_EXTERNAL_PATH" "$GO_EXPECTED"
+  ga_pkg_inputs_rebuild_if_changed "$OUT" "$BR2_EXTERNAL_PATH" "${BR2EXT_NETBIRD}/patches" || exit 1
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" linux-dirclean
 
 elif [[ "$MODE" == "update" ]]; then
@@ -2347,6 +2351,10 @@ elif [[ "$MODE" == "update" ]]; then
   # every host-go package when the toolchain that built them is not the one
   # buildroot pins now (scripts/lib/go-toolchain.sh; checked by GOTC-03).
   ga_go_rebuild_if_toolchain_changed "$OUT" "$BR2_EXTERNAL_PATH" "$GO_EXPECTED"
+  # Same for the patches and configure options WE carry for buildroot packages
+  # (libglib2, xz: buildroot-external/patches/; fluent-bit: its plugin switches).
+  # Buildroot tracks neither (scripts/lib/pkg-inputs.sh).
+  ga_pkg_inputs_rebuild_if_changed "$OUT" "$BR2_EXTERNAL_PATH" "${BR2EXT_NETBIRD}/patches" || exit 1
   # Force rebuild of GA config packages so changed configs/services are picked up
   # (Buildroot doesn't track overlay/config file changes as package dependencies)
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" \
@@ -2426,6 +2434,7 @@ log_build_step "Buildroot main build"
 make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "${MAKE_OVERRIDES[@]}" -j"$(nproc)" 2>&1 | tee -a "$BUILD_LOG"
 # Only a successful build may record which Go toolchain built the Go packages.
 ga_go_record_toolchain "$OUT" "$GO_EXPECTED"
+ga_pkg_inputs_record "$OUT" "$BR2_EXTERNAL_PATH" "${BR2EXT_NETBIRD}/patches"
 
 # 3) Inject build ID and regenerate final artifacts
 log_build_step "Write build ID"
