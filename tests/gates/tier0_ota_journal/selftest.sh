@@ -32,6 +32,8 @@
 #       D1 an unrelated unit at INFO, D2/D3 ga-resolve-ota (excluded on purpose),
 #       D4 a near-name OTA unit (ga-rauc-slots) at INFO,
 #       D5 a tier-1-only unit (network.service) at WARNING.
+#     mesh watchdog (Odoo #1263): M1/M2 ga-mesh-watchdog.service at WARNING/ERR
+#       must ship once; M3 its healthy tick at INFO must drop.
 #
 # RED PROOF (part of this test)
 #   Two mutants run over the same journal and MUST fail on the named cases:
@@ -39,6 +41,8 @@
 #               -> S1-S7 missing (S8 still ships; D* still dropped)
 #     no-UNIT   the OS input without its UNIT= matches
 #               -> exactly S4, S5, S7 missing (the PID 1 lines)
+#     no-mesh-prio  the mesh input without its PRIORITY grep FILTER
+#               -> exactly M3 shipped (the routine tick leaks)
 #
 # Exit 0 = live config green AND both mutants red on exactly their cases.
 # Exit 1 = a verdict failed. Exit 2 = could not check (never green).
@@ -138,8 +142,12 @@ rec D2 _SYSTEMD_UNIT=ga-resolve-ota.service PRIORITY=6 SYSLOG_IDENTIFIER=ga-reso
 rec D3 _SYSTEMD_UNIT=init.scope UNIT=ga-resolve-ota.service PRIORITY=6 SYSLOG_IDENTIFIER=systemd _PID=1
 rec D4 _SYSTEMD_UNIT=ga-rauc-slots.service PRIORITY=6 SYSLOG_IDENTIFIER=ga-rauc-slots _PID=5100
 rec D5 _SYSTEMD_UNIT=network.service PRIORITY=4 SYSLOG_IDENTIFIER=network _PID=200
-SHIP="S1 S2 S3 S4 S5 S6 S7 S8"
-DROP="D1 D2 D3 D4 D5"
+# mesh path watchdog: actions/RECOVERED (warning, err) ship, the healthy tick does not
+rec M1 _SYSTEMD_UNIT=ga-mesh-watchdog.service PRIORITY=4 SYSLOG_IDENTIFIER=ga-mesh-watchdog _PID=6000
+rec M2 _SYSTEMD_UNIT=ga-mesh-watchdog.service PRIORITY=3 SYSLOG_IDENTIFIER=ga-mesh-watchdog _PID=6000
+rec M3 _SYSTEMD_UNIT=ga-mesh-watchdog.service PRIORITY=6 SYSLOG_IDENTIFIER=ga-mesh-watchdog _PID=6000
+SHIP="S1 S2 S3 S4 S5 S6 S7 S8 M1 M2"
+DROP="D1 D2 D3 D4 D5 M3"
 
 mkdir -p "$W/journal"
 "$JR" --output="$W/journal/fixture.journal" "$W/fixture.export" >"$W/jr.log" 2>&1 \
@@ -263,10 +271,17 @@ mutant() {
 }
 
 if [ "$ENTRY_NAME" != "fluent-bit-tier0.conf" ]; then
-  mutant "S1 S2 S3 S4 S5 S6 S7" master fluent-bit-tier0.conf
+  mutant "S1 S2 S3 S4 S5 S6 S7 M1 M2" master fluent-bit-tier0.conf
   grep -v '^[[:space:]]*Systemd_Filter[[:space:]]\{1,\}UNIT=' "$W/etc/$ENTRY_NAME" > "$W/etc/no-unit.conf"
   mutant "S4 S5 S7" no-unit no-unit.conf
   rm -f "$W/etc/no-unit.conf"
+  # the mesh input without its PRIORITY grep: the every-2-min info tick leaks
+  awk 'function out() { if (b != "" && b !~ /tier0\.mesh/) printf "%s", b; b = ""; f = 0 }
+       /^\[/ { out(); if ($0 ~ /^\[FILTER\]/) { f = 1; b = $0 "\n"; next } }
+       f { b = b $0 "\n"; next } { print } END { out() }' \
+    "$W/etc/$ENTRY_NAME" > "$W/etc/no-mesh-prio.conf"
+  mutant "M3" no-mesh-prio no-mesh-prio.conf
+  rm -f "$W/etc/no-mesh-prio.conf"
 else
   echo "RED: the unit still loads fluent-bit-tier0.conf alone — the OS update units are not shipped"
   rc=1

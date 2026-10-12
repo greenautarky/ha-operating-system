@@ -12,6 +12,20 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (BOSv1.5.1) — the device keeps its mesh path to ga-tools alive (Odoo #1263)
+
+### Added — `ga-mesh-watchdog`: probe, then down/up, restart, at most one reboot per 24 h
+
+Every 2 min the device probes ga-tools over `wt0` (fleet port and MQTT port; the address comes from
+`ga-services.conf`). Any answer, including "connection refused", counts as a working tunnel. After three dead
+ticks it escalates one step at a time: `netbird down/up`, then `systemctl restart netbird` after 10 min, then one
+reboot once the path has been dead for 2 h, at most one per 24 h (ledger in `/mnt/data/netbird`). It does
+**nothing** while the NetBird management or signal endpoint is unreachable, because an established tunnel can
+survive a cloud outage and a restart would throw it away. It also holds during an OS install and while a
+reboot or shutdown is already queued. Each action, and "RECOVERED by <step>", is logged at warning and shipped
+by tier-0 (`fluent-bit-tier0-os.conf`, PRIORITY 0-4 only). The verdict is published to
+`/share/ga-mesh-watchdog.json`, using the schema-v1 keys of #568 plus the ladder fields.
+
 ## BOSv1.5.0 — released 2026-10-12 (HAOS 16.3.1.10)
 
 The first release for the stable channel since V1.2 (BOSv1.4.0 was released as an image on 2026-10-07 but never
