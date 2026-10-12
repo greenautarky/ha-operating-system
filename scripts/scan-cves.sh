@@ -28,10 +28,14 @@
 # ROOTFS (--rootfs DIR, 2026-10-09): the Go binaries Buildroot installs into the
 #   root filesystem (netbird, telegraf, os-agent, runc, docker, containerd …)
 #   carry no CPE, so the SBOM scan above cannot see them. They are scanned here
-#   by their Go build info (trivy rootfs; syft inventory; grype second opinion
-#   for a binary trivy skipped), under the same D1 policy and allowlist. A scan
-#   that evaluated no Go binary, or misses one of the expected binaries
-#   (ROOTFS_GO_EXPECTED, or --expect-go a,b,c), is BROKEN (exit 2).
+#   by their Go build info (trivy rootfs; syft inventory; grype as the second
+#   opinion on EVERY Go binary, Odoo #1231), under the same D1 policy and
+#   allowlist. The two scanners rate the same Go stdlib advisory differently, so
+#   their verdicts are merged per finding: higher severity wins, a fix from
+#   either counts, and every disagreement is printed and counted. A scan that
+#   evaluated no Go binary, misses one of the expected binaries
+#   (ROOTFS_GO_EXPECTED, or --expect-go a,b,c), or has no grype run to compare
+#   against, is BROKEN (exit 2).
 #
 # PACKAGE COVERAGE (--package-coverage, 2026-10-09): every package the GA
 #   defconfig adds on top of the upstream one must be classified in
@@ -391,6 +395,48 @@ grype_policy() {
   printf '%s %s %s\n' "$n" "$s" "${#blk[@]}"
 }
 
+# rootfs_merge <trivy-json> <grype-json>: the two scanners' verdicts on the SAME
+# binaries, merged (rootfs second opinion, Odoo #1231). Two findings are one when
+# their id sets intersect (a GHSA/GO id and its related CVE id name one defect).
+# The effective severity of a matched pair is the HIGHER of the two and it is
+# fixable when EITHER scanner has a fix: a scanner that rates a defect lower must
+# not be able to outvote the one that rates it higher. Prints one JSON object:
+#   findings   distinct findings in SEVERITY, allowlisted ones excluded
+#   suppressed distinct allowlisted findings
+#   blocking   distinct effective-CRITICAL findings with a fix, not allowlisted
+#   disagree   [{id, kind: grype-only|trivy-only|severity, trivy, grype}]
+rootfs_merge() {
+  local allowed sevs
+  allowed=$(printf '%s\n' ${ALLOWED_CVES[@]+"${ALLOWED_CVES[@]}"} | jq -R . | jq -sc .)
+  sevs=$(printf '%s' "$SEVERITY" | jq -R 'split(",")')
+  jq -n --slurpfile t "$1" --slurpfile g "$2" --argjson allowed "$allowed" --argjson sevs "$sevs" '
+    def rank: {"CRITICAL":4,"HIGH":3,"MEDIUM":2,"LOW":1}[.] // 0;
+    ($t[0] | [.Results[]? | (.Vulnerabilities // [])[]
+              | {id:.VulnerabilityID, ids:[.VulnerabilityID], sev:(.Severity // "" | ascii_upcase),
+                 fixed:(((.FixedVersion // "") != "") or (.Status == "fixed"))}]) as $tv
+    | ($g[0] | [.matches[]?
+              | {id:.vulnerability.id, ids:([.vulnerability.id] + [.relatedVulnerabilities[]?.id] | unique),
+                 sev:(.vulnerability.severity // "" | ascii_upcase), fixed:(.vulnerability.fix.state == "fixed")}]) as $gv
+    # a scanner not filtering by severity must not widen the policy set
+    | ($tv | map(select(.sev as $s | $sevs | index($s)))) as $tv
+    | ($gv | map(select(.sev as $s | $sevs | index($s)))) as $gv
+    | ($tv | map(. as $x | {t:$x, g:([$gv[] | select(.ids as $i | $x.ids | any(. as $y | $i | index($y)))])})) as $tm
+    | ($gv | map(. as $x | {g:$x, t:([$tv[] | select(.ids as $i | $x.ids | any(. as $y | $i | index($y)))])})) as $gm
+    | ( [ $tm[] | {key:.t.id, ids:(.t.ids + [.g[].ids[]] | unique),
+                   sev:([.t.sev] + [.g[].sev] | max_by(rank)), fixed:(.t.fixed or ([.g[].fixed] | any)),
+                   tsev:.t.sev, gsev:(if (.g|length)>0 then ([.g[].sev] | max_by(rank)) else null end)} ]
+        + [ $gm[] | select((.t | length) == 0)
+            | {key:.g.id, ids:.g.ids, sev:.g.sev, fixed:.g.fixed, tsev:null, gsev:.g.sev} ] ) as $m
+    | ($m | map(. + {allowed:(.ids | any(. as $i | $allowed | index($i)))})) as $items
+    | ($items | map(select(.allowed | not)) | unique_by(.key)) as $live
+    | {findings:($live | length),
+       suppressed:($items | map(select(.allowed)) | unique_by(.key) | length),
+       blocking:($live | map(select(.sev == "CRITICAL" and .fixed)) | length),
+       disagree:($live | map(select((.tsev == null) or (.gsev == null) or (.tsev != .gsev))
+                 | {id:.key, kind:(if .tsev == null then "grype-only" elif .gsev == null then "trivy-only" else "severity" end),
+                    trivy:.tsev, grype:.gsev}))}'
+}
+
 # scan_one_image <label> <syft-source> <trivy target args...>
 scan_one_image() {
   local label="$1" syft_src="$2"; shift 2
@@ -672,7 +718,7 @@ fi
 # image scan apply (GO BINARY COVERAGE in the header).
 # -----------------------------------------------------------------------------
 RFS_STATUS="skipped"; RFS_BINARIES=0; RFS_BY_TRIVY=0; RFS_BY_GRYPE=0; RFS_BLIND=0
-RFS_FINDINGS=0; RFS_SUPPRESSED=0; RFS_BLOCKING=0; RFS_MISSING_EXPECTED=""
+RFS_FINDINGS=0; RFS_SUPPRESSED=0; RFS_BLOCKING=0; RFS_DISAGREE=0; RFS_MISSING_EXPECTED=""
 RFS_LIST="[]"
 if [[ -n "$ROOTFS" ]]; then
   echo "=== Scanning root filesystem Go binaries: ${ROOTFS} ==="
@@ -709,15 +755,27 @@ if [[ -n "$ROOTFS" ]]; then
     fi
     RFS_BINARIES=$(( ${#_go_all[@]} + ${#_gap[@]} ))
     RFS_BY_TRIVY=$(( ${#_go_all[@]} - ${#_missed[@]} + ${#_gap[@]} ))
-    _g_n=0; _g_s=0; _g_b=0
     if [[ ${#_missed[@]} -gt 0 ]]; then
       echo "  WARN: trivy did NOT evaluate ${#_missed[@]} of ${#_go_all[@]} Go binar(ies): ${_missed[*]}"
-      echo "        Second opinion (grype) for exactly those; the same policy applies."
-      if second_opinion "$_ri" "${_rb}.grype.json" "${_missed[@]}"; then
-        RFS_BY_GRYPE=${#_missed[@]}; _evaluated+=("${_missed[@]}")
-        read -r _g_n _g_s _g_b < <(grype_policy "${_rb}.grype.json") || true
+    fi
+    # grype is the second opinion on EVERY inventoried binary, not only on the
+    # ones trivy skipped: the two rate the same Go stdlib advisory differently
+    # (trivy MEDIUM/LOW where grype says Critical), and a verdict from one of
+    # them alone cannot show that. If it cannot run, the scan is BROKEN: a
+    # missing second opinion is not a clean one.
+    _mg=""
+    if [[ ${#_go_all[@]} -gt 0 ]]; then
+      if second_opinion "$_ri" "${_rb}.grype.json" "${_go_all[@]}"; then
+        RFS_BY_GRYPE=${#_go_all[@]}; _evaluated+=("${_missed[@]+"${_missed[@]}"}")
+        _mg="$(rootfs_merge "$_rr" "${_rb}.grype.json")" || _mg=""
+        if [[ -z "$_mg" ]]; then
+          echo "  ERROR: could not merge the trivy and grype verdicts on the root filesystem"
+          RFS_STATUS="no-second-opinion"; SCAN_BROKEN=true
+        fi
       else
-        _blind+=("${_missed[@]}")
+        echo "  ERROR: no second opinion (grype) on the root filesystem's Go binaries - trivy alone is not a verdict"
+        _blind+=("${_missed[@]+"${_missed[@]}"}")
+        RFS_STATUS="no-second-opinion"; SCAN_BROKEN=true
       fi
     fi
     RFS_BLIND=${#_blind[@]}
@@ -744,16 +802,28 @@ if [[ -n "$ROOTFS" ]]; then
       echo "         the same change), or the scanner no longer sees it — both must be said, not skipped."
       RFS_STATUS="no-coverage"; SCAN_BROKEN=true
     fi
-    read -r _n _s < <(count_unsuppressed "$_rr") || true
-    _b=0
-    while IFS= read -r _id; do
-      [[ -z "$_id" ]] && continue
-      is_allowed "$_id" || _b=$((_b + 1))
-    done < <(jq -r '[.Results[]?.Vulnerabilities // []] | flatten | .[]
-                    | select(.Severity == "CRITICAL")
-                    | select(((.FixedVersion // "") != "") or (.Status == "fixed"))
-                    | .VulnerabilityID' "$_rr" 2>/dev/null | sort -u || true)
-    RFS_FINDINGS=$((_n + _g_n)); RFS_SUPPRESSED=$((_s + _g_s)); RFS_BLOCKING=$((_b + _g_b))
+    if [[ -n "${_mg:-}" ]]; then
+      # Both scanners' verdicts, merged (higher severity wins, fix from either).
+      RFS_FINDINGS="$(jq .findings <<<"$_mg")"; RFS_SUPPRESSED="$(jq .suppressed <<<"$_mg")"
+      RFS_BLOCKING="$(jq .blocking <<<"$_mg")"
+      RFS_DISAGREE="$(jq '.disagree | length' <<<"$_mg")"
+      if [[ "$RFS_DISAGREE" -gt 0 ]]; then
+        echo "  DISAGREEMENT between trivy and grype on ${RFS_DISAGREE} finding(s) (the higher severity counts):"
+        jq -r '.disagree[] | "    \(.kind)\t\(.id)\ttrivy=\(.trivy // "-")\tgrype=\(.grype // "-")"' <<<"$_mg"
+      fi
+    else
+      # No second opinion (the scan is already BROKEN above): trivy's own count.
+      read -r _n _s < <(count_unsuppressed "$_rr") || true
+      _b=0
+      while IFS= read -r _id; do
+        [[ -z "$_id" ]] && continue
+        is_allowed "$_id" || _b=$((_b + 1))
+      done < <(jq -r '[.Results[]?.Vulnerabilities // []] | flatten | .[]
+                      | select(.Severity == "CRITICAL")
+                      | select(((.FixedVersion // "") != "") or (.Status == "fixed"))
+                      | .VulnerabilityID' "$_rr" 2>/dev/null | sort -u || true)
+      RFS_FINDINGS=$_n; RFS_SUPPRESSED=$_s; RFS_BLOCKING=$_b
+    fi
     # One line per binary: what it carries, and what of it blocks under D1.
     jq -r '.Results[]? | select(.Type == "gobinary")
            | [.Target, ((.Packages // []) | length), ((.Vulnerabilities // []) | length),
@@ -1130,6 +1200,7 @@ jq -n \
   --argjson rfs_findings "${RFS_FINDINGS:-0}" \
   --argjson rfs_suppressed "${RFS_SUPPRESSED:-0}" \
   --argjson rfs_blocking "${RFS_BLOCKING:-0}" \
+  --argjson rfs_disagree "${RFS_DISAGREE:-0}" \
   --argjson rfs_list "${RFS_LIST:-[]}" \
   '{date:$date, severity:$severity, strict:$strict, policy:$policy, scan_broken:$broken,
     allowlist_expired:$allow_expired, allowlist_invalid:$allow_invalid,
@@ -1142,7 +1213,7 @@ jq -n \
     rootfs:{status:$rfs_status, dir:$rfs_dir, go_binaries:$rfs_bin, by_trivy:$rfs_trivy,
             by_grype:$rfs_grype, blind:$rfs_blind, expected:($rfs_expected | split(" ") | map(select(length > 0))),
             missing_expected:($rfs_missing | split(" ") | map(select(length > 0))),
-            findings:$rfs_findings, suppressed:$rfs_suppressed, blocking:$rfs_blocking, list:$rfs_list},
+            findings:$rfs_findings, suppressed:$rfs_suppressed, blocking:$rfs_blocking, disagreements:$rfs_disagree, list:$rfs_list},
     images:{source:$img_source, total:$img_total, clean:$img_clean, with_findings:$img_with,
             blind:$img_blind, unscannable:$img_unscannable, findings:$img_findings,
             suppressed:$img_suppressed, blocking:$img_blocking, blocked_images:$img_blocked,
