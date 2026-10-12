@@ -231,8 +231,25 @@ echo "part B — apply logic (live script, systemctl stubbed):"
 B="$W/b"; mkdir -p "$B/gm" "$B/run" "$B/dropins" "$B/stage" "$B/bin"
 cat > "$B/bin/systemctl" <<'EOF'
 #!/bin/sh
+# Stub with a fake /proc: a restart starts a NEW main process that runs what the
+# unit's drop-in names (the base config without one) — unless FROZEN=1, which
+# models a restart that does not take. --no-block only queues (no effect here).
 echo "$*" >> "$SYSTEMCTL_LOG"
-case "$1" in is-active) case " $ACTIVE " in *" $3 "*) exit 0 ;; *) exit 3 ;; esac ;; esac
+nb=0; [ "$1" = --no-block ] && { nb=1; shift; }
+pidf() { echo "$GA_PROFILE_PROC/units/$1"; }
+spawn() {  # $1 unit -> new pid running the drop-in's config
+  d="$GA_PROFILE_DROPIN_ROOT/$1.d/50-ga-profile.conf"
+  if [ -f "$d" ]; then cfg="$(grep -oE "[^ ']*/lte-saver/[a-z0-9]+[.]conf" "$d" | tail -1)"; else cfg="/etc/base/$1.conf"; fi
+  n=$(( $(cat "$GA_PROFILE_PROC/next" 2>/dev/null || echo 100) + 1 )); echo "$n" > "$GA_PROFILE_PROC/next"
+  mkdir -p "$GA_PROFILE_PROC/$n" "$GA_PROFILE_PROC/units"
+  printf '/usr/bin/x\000-c\000%s\000' "$cfg" > "$GA_PROFILE_PROC/$n/cmdline"; echo "$n" > "$(pidf "$1")"
+}
+case "$1" in
+  is-active)   case " $ACTIVE " in *" $3 "*) exit 0 ;; *) exit 3 ;; esac ;;
+  show)        if [ -f "$(pidf "$5")" ]; then cat "$(pidf "$5")"; else echo 0; fi ;;
+  try-restart) case " $ACTIVE " in *" $2 "*) [ "$nb" = 0 ] && [ "${FROZEN:-0}" != 1 ] && spawn "$2" ;; esac ;;
+  _spawn)      spawn "$2" ;;
+esac
 exit 0
 EOF
 cat > "$B/bin/publish" <<'EOF'
@@ -240,18 +257,31 @@ cat > "$B/bin/publish" <<'EOF'
 cat > "$1.tmp" && mv -f "$1.tmp" "$1"
 EOF
 chmod +x "$B/bin/systemctl" "$B/bin/publish"
-apply() {  # apply ACTIVE_UNITS — runs the live script once; output in $B/out
-  : > "$B/sysctl"
-  ACTIVE="$1" SYSTEMCTL_LOG="$B/sysctl" SYSTEMCTL="$B/bin/systemctl" GA_SHARE_PUBLISH="$B/bin/publish" \
-  GA_GM_DATA_DIR="$B/gm" GA_PROFILE_RUN_DIR="$B/run" GA_PROFILE_DROPIN_ROOT="$B/dropins" \
+export GA_PROFILE_PROC="$B/proc" GA_PROFILE_DROPIN_ROOT="$B/dropins" GA_PROFILE_VERIFY_S=1
+mkdir -p "$B/proc"
+apply() {  # apply ACTIVE_UNITS [script args] — runs the live script once; output in $B/out
+  : > "$B/sysctl"; _a="$1"; shift
+  for _u in fluent-bit-tier0.service fluent-bit.service telegraf.service; do  # systemd's view: stopped = no process,
+    case " $_a " in                                                          # started = runs what its drop-in names
+      *" $_u "*) [ -f "$B/proc/units/$_u" ] || SYSTEMCTL_LOG=/dev/null "$B/bin/systemctl" _spawn "$_u" ;;
+      *) rm -f "$B/proc/units/$_u" ;;
+    esac
+  done
+  ACTIVE="$_a" SYSTEMCTL_LOG="$B/sysctl" SYSTEMCTL="$B/bin/systemctl" GA_SHARE_PUBLISH="$B/bin/publish" \
+  GA_GM_DATA_DIR="$B/gm" GA_PROFILE_RUN_DIR="$B/run" \
   GA_FB_T0_ENTRY="$ETC/$ENTRY" GA_FB_T1="$ETC/fluent-bit.conf" GA_TG_CONF="$TG_CONF" GA_FLUENT_BIT=/nonexistent \
-    sh "$APPLY" > "$B/out" 2>&1
+    sh "$APPLY" "$@" > "$B/out" 2>&1
 }
+boot_units() {  # the shippers come up as systemd starts them: each runs what its drop-in names
+  for _u in "$@"; do SYSTEMCTL_LOG=/dev/null "$B/bin/systemctl" _spawn "$_u"; done
+}
+runs() { tr '\000' ' ' < "$B/proc/$(cat "$B/proc/units/$1")/cmdline"; }
 req() { printf '{"schema":1,"profile":"%s","source":"auto","active_path":"%s","consent_tier1":true,"reason":"t","since":"2026-10-10T00:00:00Z"}\n' "$1" "$2" > "$B/gm/ga-telemetry-profile.json"; }
 dropins() { find "$B/dropins" -name 50-ga-profile.conf | sed "s|$B/dropins/||; s|.d/50-ga-profile.conf||" | LC_ALL=C sort | tr '\n' ' '; }
 rb() { jq -r "$1" "$B/gm/ga-telemetry-profile.applied.json" 2>/dev/null; }
 chk() { if eval "$2"; then ok "$1"; else bad "$1 — $(tr '\n' ' ' < "$B/out" | cut -c1-200)"; fi; }
 ALL="fluent-bit-tier0.service fluent-bit.service telegraf.service"
+boot_units fluent-bit-tier0.service fluent-bit.service telegraf.service
 
 apply "$ALL"
 chk "no request: no drop-in, read-back normal/valid" '[ -z "$(dropins)" ] && [ "$(rb .applied)" = normal ] && [ "$(rb .valid)" = true ] && grep -q "^<5>.*no request" "$B/out"'
@@ -276,6 +306,40 @@ chk "schema 2: refused" '[ "$(rb .valid)" = false ] && [ -z "$(dropins)" ]'
 rm -f "$B/gm/ga-telemetry-profile.json"; req lte_saver lte; mv "$B/gm/ga-telemetry-profile.json" "$B/real.json"; ln -s "$B/real.json" "$B/gm/ga-telemetry-profile.json"; apply "$ALL"
 chk "symlinked request: refused, base units" '[ "$(rb .valid)" = false ] && [ -z "$(dropins)" ]'
 rm -f "$B/gm/ga-telemetry-profile.json"
+
+# 2026-10-12, canary: the runtime switch deadlocked; a re-run then found the drop-ins
+# on disk and read back lte_saver while the old processes ran on.
+req normal lan; apply "$ALL"
+req lte_saver lte; apply "$ALL" --boot
+chk "--boot: restarts only ever --no-block (ordered Before= the shippers)" '[ "$(grep -c try-restart "$B/sysctl")" = 3 ] && [ "$(grep -c -- "--no-block try-restart" "$B/sysctl")" = 3 ]'
+chk "--boot: the processes still run the base config (restart only queued)" 'runs fluent-bit-tier0.service | grep -q /etc/base/'
+FROZEN=1 apply "$ALL"   # the interrupted run: drop-ins on disk, the restarts did not take
+chk "a restart that did not take is reported stale, never restarted" '[ "$(rb ".units[\"fluent-bit-tier0.service\"]")" = stale ] && [ "$(rb .applied)" = normal ]'
+apply "$ALL"
+chk "drop-ins already on disk, process stale -> restarted, not unchanged" '[ "$(rb ".units[\"fluent-bit-tier0.service\"]")" = restarted ] && [ "$(rb ".units[\"telegraf.service\"]")" = restarted ]'
+chk "...and every shipper now RUNS the lte-saver config" 'runs fluent-bit-tier0.service | grep -q /lte-saver/tier0.conf && runs fluent-bit.service | grep -q /lte-saver/tier1.conf && runs telegraf.service | grep -q /lte-saver/telegraf.conf'
+chk "...read-back applied=lte_saver" '[ "$(rb .applied)" = lte_saver ]'
+req normal lan; FROZEN=1 apply "$ALL"
+chk "a restart that does not take: stale + err, applied names what RUNS" '[ "$(rb ".units[\"fluent-bit-tier0.service\"]")" = stale ] && grep -q "^<3>.*does not run" "$B/out" && [ "$(rb .applied)" = lte_saver ]'
+apply "$ALL"
+chk "the next run heals it: restarted, applied=normal" '[ "$(rb .applied)" = normal ] && runs fluent-bit-tier0.service | grep -q /etc/base/'
+
+# --- units: the .path must start a unit NOT ordered before a shipper, and a unit
+# that IS ordered before one must run the script with --boot.
+U="$ROOT/buildroot-ihost/rootfs-overlay/etc/systemd/system"
+PU="$(sed -n 's/^Unit=//p' "$U/ga-telemetry-profile.path")"
+[ -f "$U/$PU" ] || die2 "the .path names $PU, which does not exist"
+if grep -qE '^Before=.*(fluent-bit|telegraf)' "$U/$PU"; then
+  bad "the .path starts $PU, which is ordered Before= a shipper (deadlock on a runtime switch)"
+else ok "the .path starts $PU, not ordered before the shippers"; fi
+n=0
+for f in "$U"/*.service; do
+  grep -q 'ga-telemetry-profile-apply' "$f" || continue; n=$((n + 1))
+  if grep -qE '^Before=.*(fluent-bit|telegraf)' "$f" && ! grep -qE '^ExecStart=.*ga-telemetry-profile-apply --boot$' "$f"; then
+    bad "$(basename "$f") is ordered Before= a shipper but does not run --boot"
+  fi
+done
+if [ "$n" -ge 2 ]; then ok "units ordered before a shipper run --boot ($n units run the script)"; else bad "expected >= 2 units running the script, found $n"; fi
 
 # --- PART C: telegraf -------------------------------------------------------------
 echo "part C — the rendered telegraf config in telegraf $TG_VERSION:"

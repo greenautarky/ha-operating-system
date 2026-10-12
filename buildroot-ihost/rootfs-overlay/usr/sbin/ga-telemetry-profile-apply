@@ -24,8 +24,25 @@
 #                    running is not started here (try-restart).
 #
 # Drop-ins live in /run/systemd/system/<unit>.d/50-ga-profile.conf, so a reboot
-# returns to the base units until this runs again (ga-telemetry-profile.service
-# at boot, ordered before the shippers, and on every change via the .path).
+# returns to the base units until this runs again: at boot by
+# ga-telemetry-profile.service (`--boot`, ordered BEFORE the shippers), and on
+# every change by ga-telemetry-profile-runtime.service via the .path (NOT
+# ordered against the shippers).
+#
+# WHY TWO UNITS (2026-10-12, canary): a oneshot ordered Before= a shipper that
+# calls a blocking `systemctl try-restart <shipper>` deadlocks — the restart's
+# start job waits for the oneshot, the oneshot waits for the restart, and a
+# oneshot has no start timeout. tier-0 stayed down for 8 minutes. So:
+#   --boot   never blocks on a restart (--no-block; the shippers are not up yet
+#            at boot, so there is normally nothing to restart)
+#   default  (runtime) restarts BLOCKING and then checks the outcome.
+#
+# THE READ-BACK NAMES WHAT RUNS, NOT WHAT IS ON DISK. A unit needs a restart
+# when its drop-in changed OR when its running process (MainPID cmdline) does
+# not run what the drop-in says — a drop-in written by an interrupted run must
+# not read back as "unchanged". `applied` is derived from tier-0's running
+# process; a shipper that still runs the wrong config after its restart is
+# reported "stale" and logged at err.
 #
 # FAIL-SAFE AND LOUD
 #   no request file      -> normal, logged at notice (an older ga_manager)
@@ -34,7 +51,8 @@
 #                        -> that shipper keeps its base unit, logged at err
 #
 # Usage:
-#   ga-telemetry-profile-apply                         read the request, apply
+#   ga-telemetry-profile-apply                         read the request, apply (runtime)
+#   ga-telemetry-profile-apply --boot                  same, never blocking on a restart
 #   ga-telemetry-profile-apply render <profile> <dir>  render only (tests, CI)
 set -u
 
@@ -49,6 +67,9 @@ TG_CONF="${GA_TG_CONF:-/etc/telegraf/telegraf.conf}"
 PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
 FLUENT_BIT="${GA_FLUENT_BIT:-/usr/bin/fluent-bit}"
 SYSTEMCTL="${SYSTEMCTL:-systemctl}"
+PROC="${GA_PROFILE_PROC:-/proc}"
+VERIFY_S="${GA_PROFILE_VERIFY_S:-15}"   # how long a restarted shipper may take to run the new config
+MODE=runtime
 JQ="${JQ:-jq}"
 
 LTE_FLUSH=900          # seconds; tier-0 and tier-1 batch for 15 min on LTE
@@ -210,6 +231,40 @@ set_dropin() {  # $1 unit $2 wanted body ("" = none)
     RELOAD=1; CHANGED="$CHANGED $1"
 }
 
+# --- what runs ---------------------------------------------------------------------
+
+_key() { printf 'WANT_%s' "$1" | tr -c 'A-Za-z0-9_' '_'; }
+set_want()  { eval "$(_key "$1")=\$2"; }
+want_of()   { eval "printf '%s' \"\${$(_key "$1"):-}\""; }
+
+running_cmd() {  # $1 unit -> the running main process's command line ("" = none)
+    _pid="$("$SYSTEMCTL" show -p MainPID --value "$1" 2>/dev/null)"
+    case "$_pid" in ''|0|*[!0-9]*) return 0 ;; esac
+    tr '\000' ' ' < "$PROC/$_pid/cmdline" 2>/dev/null
+}
+
+runs_wanted() {  # $1 unit $2 wanted drop-in body ("" = base unit)
+    _cmd="$(running_cmd "$1")"
+    [ -n "$_cmd" ] || return 1
+    if [ -n "$2" ]; then
+        case "$_cmd" in
+            *"$RUN_DIR/lte-saver/"*|*/mnt/data/fluent-bit/override.conf*|*/mnt/data/telegraf/override.conf*) return 0 ;;
+        esac
+        return 1
+    fi
+    case "$_cmd" in *"$RUN_DIR/lte-saver/"*) return 1 ;; esac
+    return 0
+}
+
+wait_runs_wanted() {  # $1 unit $2 body — up to VERIFY_S seconds
+    _i=0
+    while [ "$_i" -le "$VERIFY_S" ]; do
+        runs_wanted "$1" "$2" && return 0
+        sleep 1; _i=$((_i + 1))
+    done
+    return 1
+}
+
 dry_run_ok() {  # $1 rendered fluent-bit config
     [ -x "$FLUENT_BIT" ] || return 0     # no binary to ask (tests without one)
     "$FLUENT_BIT" --dry-run -c "$1" >/dev/null 2>&1
@@ -239,27 +294,47 @@ apply() {
             fi
         fi
         [ "$_u" = fluent-bit-tier0.service ] && T0_BODY="$_body"
+        set_want "$_u" "$_body"
         set_dropin "$_u" "$_body"
     done
     if [ "$RELOAD" = 1 ]; then
         "$SYSTEMCTL" daemon-reload || err "daemon-reload failed"
     fi
     for _u in $UNITS; do
-        case " $CHANGED " in
-            *" $_u "*)
-                if "$SYSTEMCTL" is-active --quiet "$_u"; then
-                    if "$SYSTEMCTL" try-restart "$_u"; then _st=restarted
-                    else _st=restart-failed; err "try-restart $_u failed"; fi
-                else
-                    _st=not-running
-                fi ;;
-            *) _st=unchanged ;;
-        esac
+        _body="$(want_of "$_u")"
+        if ! "$SYSTEMCTL" is-active --quiet "$_u"; then
+            _st=not-running
+        else
+            _need=0
+            case " $CHANGED " in *" $_u "*) _need=1 ;; esac
+            if [ "$_need" = 0 ] && ! runs_wanted "$_u" "$_body"; then
+                _need=1; warn "$_u runs a config its drop-in does not name — restarting it"
+            fi
+            if [ "$_need" = 0 ]; then
+                _st=unchanged
+            elif [ "$MODE" = boot ]; then
+                if "$SYSTEMCTL" --no-block try-restart "$_u"; then _st=restart-queued
+                else _st=restart-failed; err "try-restart $_u failed"; fi
+            elif ! "$SYSTEMCTL" try-restart "$_u"; then
+                _st=restart-failed; err "try-restart $_u failed"
+            elif wait_runs_wanted "$_u" "$_body"; then
+                _st=restarted
+            else
+                _st=stale; err "$_u was restarted but does not run the config its drop-in names: $(running_cmd "$_u")"
+            fi
+        fi
         RESULT="$RESULT\"$_u\":\"$_st\","
     done
-    # What the always-on stream actually runs is the profile in effect.
+    # What the always-on stream actually RUNS is the profile in effect.
     _applied="$PROFILE"
     [ "$PROFILE" = lte_saver ] && [ -z "$T0_BODY" ] && _applied=normal
+    if [ "$MODE" != boot ] && "$SYSTEMCTL" is-active --quiet fluent-bit-tier0.service; then
+        case "$(running_cmd fluent-bit-tier0.service)" in
+            *"$RUN_DIR/lte-saver/tier0.conf"*) _applied=lte_saver ;;
+            *) [ "$_applied" = lte_saver ] && _applied=normal ;;
+        esac
+        [ "$_applied" = "$PROFILE" ] || err "tier-0 runs $_applied while $PROFILE was requested"
+    fi
     say "requested=$PROFILE applied=$_applied valid=$VALID changed=[${CHANGED# }] ($WHY)"
     publish_readback "$_applied"
 }
@@ -275,8 +350,9 @@ publish_readback() {
 }
 
 case "${1:-}" in
+    --boot) MODE=boot; apply ;;
     render) [ $# -eq 3 ] || { echo "usage: $0 render <profile> <dir>" >&2; exit 2; }
             render "$2" "$3" ;;
     "")     apply ;;
-    *)      echo "usage: $0 [render <profile> <dir>]" >&2; exit 2 ;;
+    *)      echo "usage: $0 [--boot | render <profile> <dir>]" >&2; exit 2 ;;
 esac

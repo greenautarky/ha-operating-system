@@ -5,8 +5,11 @@
 #   TPR-02  ga-telemetry-profile.path is active (re-applies on every gm decision)
 #   TPR-03  the read-back in ga_manager's data dir is valid and names a known profile
 #   TPR-04  the drop-ins match the applied profile (none for normal/minimal,
-#           three for lte_saver, tier-0 then runs the rendered config)
+#           three for lte_saver) AND tier-0's RUNNING process (MainPID cmdline,
+#           not the unit's ExecStart) runs the config the profile names
 #   TPR-05  the request, when present, is a regular file (never a symlink)
+#   TPR-06  the .path starts the runtime unit, which is not ordered before the
+#           shippers (a runtime switch from an ordered unit deadlocks, 2026-10-12)
 #
 # The data-path half (errors reach Loki in every profile) is proven off-device
 # by tests/gates/telemetry_profiles with the real fluent-bit.
@@ -30,10 +33,13 @@ if [ -d "$GM_DIR" ]; then
     "jq -e '.schema == 1 and (.applied | IN(\"normal\",\"minimal\",\"lte_saver\"))' $RB >/dev/null"
   APPLIED="$(jq -r .applied "$RB" 2>/dev/null)"
   n="$(ls $DROP/fluent-bit-tier0.service.d/50-ga-profile.conf $DROP/fluent-bit.service.d/50-ga-profile.conf $DROP/telegraf.service.d/50-ga-profile.conf 2>/dev/null | wc -l)"
+  T0PID="$(systemctl show -p MainPID --value fluent-bit-tier0.service 2>/dev/null)"
+  T0CMD="$(tr '\000' ' ' < "/proc/${T0PID:-0}/cmdline" 2>/dev/null)"
   case "$APPLIED" in
-    lte_saver) run_test "TPR-04" "lte_saver: 3 drop-ins, tier-0 runs the rendered config ($n)" \
-                 "[ $n -eq 3 ] && systemctl show -p ExecStart fluent-bit-tier0.service | grep -q /run/ga-telemetry/lte-saver/tier0.conf" ;;
-    *)         run_test "TPR-04" "$APPLIED: no profile drop-in ($n)" "[ $n -eq 0 ]" ;;
+    lte_saver) run_test "TPR-04" "lte_saver: 3 drop-ins, tier-0 RUNS the rendered config ($n; $T0CMD)" \
+                 "[ $n -eq 3 ] && echo '$T0CMD' | grep -q /run/ga-telemetry/lte-saver/tier0.conf" ;;
+    *)         run_test "TPR-04" "$APPLIED: no profile drop-in, tier-0 runs its base config ($n; $T0CMD)" \
+                 "[ $n -eq 0 ] && [ -n '$T0CMD' ] && ! echo '$T0CMD' | grep -q /run/ga-telemetry/lte-saver/" ;;
   esac
 else
   warn_test "TPR-03" "no ga_manager data directory yet — read-back N/A" "true"
@@ -43,5 +49,8 @@ if [ -e "$REQ" ] || [ -L "$REQ" ]; then
 else
   warn_test "TPR-05" "no request (ga_manager without telemetry profiles) — base units expected" "true"
 fi
+
+run_test "TPR-06" "the .path starts the runtime unit, not ordered before the shippers" \
+  "systemctl show -p Triggers --value ga-telemetry-profile.path | grep -qw ga-telemetry-profile-runtime.service && ! systemctl show -p Before --value ga-telemetry-profile-runtime.service | grep -qE 'fluent-bit|telegraf'"
 
 suite_end
