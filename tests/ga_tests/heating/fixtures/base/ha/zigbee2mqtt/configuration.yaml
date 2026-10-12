@@ -1,0 +1,14 @@
+# fixture: z2m configuration.yaml as ga_manager's converge writes it (fake credential)
+version: 5
+homeassistant:
+  enabled: true
+mqtt:
+  server: mqtt://99f1cad4-ga-mosquitto:1883
+  user: fixture_z2m
+  password: 'fixture-not-a-secret'
+serial:
+  port: /dev/ttyS4
+  adapter: ember
+advanced:
+  log_level: warning
+  channel: 15

@@ -12,8 +12,13 @@ z2m / mosquitto / add-on container logs.
 
 - HEAT-01 a live ga_heating room entity per area holding a z2m TRV (registry
   join: `unique_id ga_heating_<area_id>`, not a guessed slug).
-- HEAT-02 <= 2 messages per valve on `zigbee2mqtt/<ieee>/set` in 10 min.
+- HEAT-02 <= 2 messages per valve on `zigbee2mqtt/<ieee>/set`, counted on the
+  BROKER (mosquitto_sub as z2m's MQTT user, 120 s, `GA_HEAT_SET_TAP_S`).
   Red on K31 rc22 (2026-09-03): hmvapp 1.7.1 sent 22 per valve in 8 min.
+  FAILS when the tap delivered nothing (not even the retained
+  `zigbee2mqtt/bridge/state`) or no z2m credential is readable — never a
+  PASS over zero inspected messages. Until 2026-10 it grepped z2m's INFO log,
+  which z2m 2.12.1-8 at warning no longer writes (Odoo #1232).
 - HEAT-03 rooms with a dedicated sensor carry
   `calibration{offset,written_at,source}` per valve (ga_heating 0.4.0 shape,
   confirmed on K31 2026-09-03; `source` is `hmvapp`/`default`/null and says

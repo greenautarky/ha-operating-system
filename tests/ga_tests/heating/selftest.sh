@@ -47,10 +47,15 @@ run() {
   # A fixture with a `fake-ha` marker gets a STATEFUL Core (the shim's
   # GA_HEAT_LIVE file): service calls change what the next read returns, so the
   # room-mode teardown is judged on where the rooms END, not on what was sent.
+  # HEAT-02 reads z2m's MQTT credential from configuration.yaml; a fixture may
+  # carry its own (must-fail-set-no-cred), else base/'s.
+  local z2m_cfg="$FIXTURES/base/ha/zigbee2mqtt/configuration.yaml"
+  [[ -e "$FIXTURES/$fx/ha/zigbee2mqtt/configuration.yaml" ]] && z2m_cfg="$FIXTURES/$fx/ha/zigbee2mqtt/configuration.yaml"
   local live=""
   [[ -e "$FIXTURES/$fx/fake-ha" ]] && { live="$GA_HEAT_TMP/live.$fx.json"; rm -f "$live" "$live".*; }
   OUT[$fx]="$(PATH="$FIXTURES/shim:$PATH" GA_HEAT_FIXTURE="$FIXTURES/$fx" \
               GA_HEAT_HA_DIR="$FIXTURES/base/ha" GA_HEAT_ADDON_DATA="$addon_data" \
+              GA_HEAT_Z2M_CFG="$z2m_cfg" \
               GA_HEAT_SETPOINT_STEP_S=0 GA_HEAT_SETPOINT_TRIES=1 \
               GA_HEAT_RESTORE_SETTLE_S=0 GA_HEAT_LIVE="$live" \
               sh "${SUITE_OVERRIDE:-$SUITE}" 2>&1)"
@@ -104,6 +109,21 @@ if grep -qF "\"room\"='wohnzimmer'" "$GA_HEAT_TMP/curl-args.base.log" && ! grep 
 else
   echo "  FAIL  base/HEAT-07 query scope wrong:"; sed 's/^/          | /' "$GA_HEAT_TMP/curl-args.base.log"; fails=$((fails + 1))
 fi
+
+# HEAT-02 — one sender per valve, counted on the BROKER (Odoo #1232). The z2m
+# container log in every fixture here is EMPTY — exactly what z2m 2.12.1-8 at
+# warning level leaves behind — so each verdict below is proof that HEAT-02 no
+# longer depends on z2m's log level. The old log grep PASSED all four.
+expect_detail base "6 messages inspected (4 device states), 1 /set: 0x0cae5ffffeab11e6=1"
+echo "== must-fail-set-double-sender (two senders: 6 /set on one valve in the window) =="
+expect must-fail-set-double-sender HEAT-02 FAIL
+expect_detail must-fail-set-double-sender "0x0cae5ffffeab11e7=6"
+echo "== must-fail-set-tap-blind (broker refuses the tap: 0 messages = nothing inspected) =="
+expect must-fail-set-tap-blind HEAT-02 FAIL
+expect_detail must-fail-set-tap-blind "tap delivered 0 messages"
+echo "== must-fail-set-no-cred (no z2m MQTT credential: cannot inspect = FAIL, not PASS) =="
+expect must-fail-set-no-cred HEAT-02 FAIL
+expect_detail must-fail-set-no-cred "no z2m MQTT credential readable"
 
 echo "== must-fail-calibration-no-source (ga_heating < 0.4.0 shape: entry without source) =="
 expect must-fail-calibration-no-source HEAT-03 FAIL

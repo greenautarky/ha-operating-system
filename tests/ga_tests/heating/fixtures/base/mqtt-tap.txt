@@ -1,0 +1,6 @@
+zigbee2mqtt/bridge/state {"state":"online"}
+zigbee2mqtt/0x0cae5ffffeab11e6 {"battery":97,"local_temperature":20.5,"occupied_heating_setpoint":21,"system_mode":"heat"}
+zigbee2mqtt/0x0cae5ffffeab11e7 {"battery":88,"local_temperature":19.5,"occupied_heating_setpoint":20,"system_mode":"heat"}
+zigbee2mqtt/0x0cae5ffffeab11e6/set {"occupied_heating_setpoint":21.5}
+zigbee2mqtt/0x0cae5ffffeab11e6 {"battery":97,"local_temperature":20.5,"occupied_heating_setpoint":21.5,"system_mode":"heat"}
+zigbee2mqtt/0x0cae5ffffeab11e8 {"battery":91,"local_temperature":18.0,"occupied_heating_setpoint":18,"system_mode":"heat"}
