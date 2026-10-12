@@ -1,0 +1,9 @@
+# sha256 checksum from https://go.dev/dl/ (GA carry of Go 1.26.9; see GA_GO_VERSION_FLOOR in ../../external.mk)
+sha256  9735d7dcdb65b35d3fa577f04064737c03b89cf1a2b71e6e69fe2f3c6f9fd4ca  go1.26.9.src.tar.gz
+sha256  dea88a548986e02d02f6f24f7ea8a886cd5d6e583419247955a140cd84a74d77  go1.26.9.linux-386.tar.gz
+sha256  42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d  go1.26.9.linux-amd64.tar.gz
+sha256  4a97373d49fcacdcf3694fea368a500b00ee3e963974f3e7514132717632f052  go1.26.9.linux-arm64.tar.gz
+sha256  4e7427224d6200800b8c8b9b05b2cb1868df0fb950f57843cf51b1060d91a0c8  go1.26.9.linux-armv6l.tar.gz
+sha256  a21a65001146ca0c6c022c690d5418f8298c5513a81fb5eed42f6cdb29f40063  go1.26.9.linux-ppc64le.tar.gz
+sha256  4cea4b77caedc8869a4f1f9301ec42b526e09020f72235d019acacd2c4441550  go1.26.9.linux-s390x.tar.gz
+sha256  911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad  LICENSE

@@ -4687,18 +4687,19 @@ echo ""
 echo "--- Go toolchain consistency ---"
 _gotc_lib="${SRC:-$(cd "$(dirname "$0")/../.." && pwd)}/scripts/lib/go-toolchain.sh"
 if [[ ! -d "$TARGET" ]]; then
-  _skip "GOTC-01..03: Go toolchain consistency" "no target/ under $OUT"
+  _skip "GOTC-01..04: Go toolchain consistency" "no target/ under $OUT"
 elif [[ ! -f "$_gotc_lib" ]]; then
   _fail "GOTC-00: go-toolchain lib missing at $_gotc_lib — the check cannot run"
 else
   # shellcheck source=../../scripts/lib/go-toolchain.sh
   . "$_gotc_lib"
   _gotc_br="${BUILDROOT_DIR:-${SRC:+${SRC}/buildroot}}"
-  _gotc_exp="$(ga_go_expected_version "$_gotc_br" 2>/dev/null || true)"
+  _gotc_ext="${BR2EXT_NETBIRD:-${SRC:-$(cd "$(dirname "$0")/../.." && pwd)}/buildroot-external}"
+  _gotc_exp="$(ga_go_expected_version "$_gotc_br" "$_gotc_ext" 2>/dev/null || true)"
   if [[ -n "$_gotc_exp" ]]; then
-    _pass "GOTC-01: buildroot pins GO_VERSION=${_gotc_exp} (${_gotc_br}/package/go/go.mk)"
+    _pass "GOTC-01: the build's Go version is ${_gotc_exp} (GO_VERSION in ${_gotc_br}/package/go/go.mk, raised to GA_GO_VERSION_FLOOR in ${_gotc_ext}/go-floor.mk)"
   else
-    _fail "GOTC-01: cannot read GO_VERSION from ${_gotc_br:-<no buildroot dir>}/package/go/go.mk"
+    _fail "GOTC-01: cannot read GO_VERSION from ${_gotc_br:-<no buildroot dir>}/package/go/go.mk or GA_GO_VERSION_FLOOR from ${_gotc_ext}/go-floor.mk"
   fi
 
   _gotc_go="${OUT}/host/bin/go"
@@ -4727,6 +4728,29 @@ else
       _fail "GOTC-03: zero Go binaries found in target/ — a scan over nothing is not a pass"
     else
       _fail "GOTC-03: Go binaries built with another toolchain than go${_gotc_exp} (rebuild them: ga_build.sh dircleans host-go packages on a toolchain change):"
+      printf '%s' "$_gotc_off" | sed 's/^/          /'
+    fi
+  fi
+
+  # GOTC-04: a pinned MINIMUM, independent of GOTC-03. GOTC-03 only proves the
+  # binaries match buildroot's pin, so a consistent-but-old toolchain (every
+  # binary on go1.26.8) passes it. GO-2026-6604/6612 are fixed in go1.26.9; the
+  # floor lives in buildroot-external/go-floor.mk and is itself held to >= 1.26.9
+  # by tests/ga_tests/build/go_toolchain/inputs_check.sh.
+  _gotc_floor="$(ga_go_floor_version "$_gotc_ext" 2>/dev/null || true)"
+  if [[ -z "$_gotc_floor" || ! -x "$_gotc_go" ]]; then
+    _fail "GOTC-04: cannot scan target/ against the Go floor (floor '${_gotc_floor:-<unreadable: ${_gotc_ext}/go-floor.mk>}', host-go ${_gotc_go})"
+  else
+    _gotc_scan="${_gotc_scan:-$(ga_go_scan "$TARGET" "$_gotc_go")}"
+    _gotc_off="$(printf '%s\n' "$_gotc_scan" | ga_go_floor_verdict "$_gotc_floor"; echo "rc=$?")"
+    _gotc_rc="${_gotc_off##*rc=}"
+    _gotc_off="${_gotc_off%rc=*}"
+    if [[ "$_gotc_rc" == "0" ]]; then
+      _pass "GOTC-04: every one of $(printf '%s\n' "$_gotc_scan" | grep -c ': go' || true) Go binaries in target/ embeds go >= ${_gotc_floor}"
+    elif [[ "$_gotc_rc" == "2" ]]; then
+      _fail "GOTC-04: zero Go binaries found in target/ - a scan over nothing is not a pass"
+    else
+      _fail "GOTC-04: Go binaries older than go${_gotc_floor} (GO-2026-6604 / GO-2026-6612 are fixed in go1.26.9):"
       printf '%s' "$_gotc_off" | sed 's/^/          /'
     fi
   fi

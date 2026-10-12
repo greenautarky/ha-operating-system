@@ -1,0 +1,9 @@
+usr/bin/containerd: go1.26.9
+usr/bin/containerd-shim-runc-v2: go1.26.9
+usr/bin/ctr: go1.26.9
+usr/bin/dockerd: go1.26.9
+usr/bin/netbird: go1.26.9
+usr/bin/runc: go1.26.9
+usr/bin/telegraf: go1.26.9
+usr/bin/os-agent: go1.26.9
+usr/lib/with: colon/x: go1.26.9

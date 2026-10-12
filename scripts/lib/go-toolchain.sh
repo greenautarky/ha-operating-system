@@ -24,16 +24,77 @@
 #   Fixtures: tests/ga_tests/build/go_toolchain/selftest.sh (run in CI, lint.yml)
 #   drives the LIVE verdict function over must-flag / must-pass scan outputs.
 
-# ga_go_expected_version BUILDROOT_DIR — prints buildroot's pinned GO_VERSION
-# (e.g. 1.26.8) from package/go/go.mk. The expected value comes from the SOURCE,
-# never from the build output it is compared with. Exit 1, nothing printed,
-# when the file or the assignment is missing or malformed.
+# ga_go_floor_version EXTERNAL_DIR — prints GA_GO_VERSION_FLOOR from
+# EXTERNAL_DIR/go-floor.mk (the GA carry that lifts buildroot's Go to a fixed
+# release; see that file). Exit 1, nothing printed, when the file or the
+# assignment is missing or malformed.
+ga_go_floor_version() {
+  local _mk="${1:-}/go-floor.mk" _v
+  [[ -f "$_mk" ]] || return 1
+  _v="$(sed -n -E 's/^GA_GO_VERSION_FLOOR[[:space:]]*=[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$/\1/p' "$_mk" | head -n 1)"
+  [[ -n "$_v" ]] || return 1
+  printf '%s\n' "$_v"
+}
+
+# ga_go_expected_version BUILDROOT_DIR [EXTERNAL_DIR] — prints the Go version
+# the build uses: GO_VERSION from package/go/go.mk, raised to GA_GO_VERSION_FLOOR
+# (EXTERNAL_DIR/go-floor.mk) when that is higher. The same rule as go-floor.mk
+# (highest wins, sort -V), so a submodule bump past the floor is followed, never
+# downgraded. The expected value comes from the SOURCE, never from the build
+# output it is compared with. Exit 1, nothing printed, when go.mk or its
+# assignment is missing or malformed, or when EXTERNAL_DIR is given, has a
+# go-floor.mk, and that file's floor is malformed.
 ga_go_expected_version() {
-  local _mk="${1:-}/package/go/go.mk" _v
+  local _mk="${1:-}/package/go/go.mk" _v _f
   [[ -f "$_mk" ]] || return 1
   _v="$(sed -n -E 's/^GO_VERSION[[:space:]]*=[[:space:]]*([0-9]+\.[0-9]+(\.[0-9]+)?)[[:space:]]*$/\1/p' "$_mk" | head -n 1)"
   [[ -n "$_v" ]] || return 1
+  if [[ -n "${2:-}" && -f "${2}/go-floor.mk" ]]; then
+    _f="$(ga_go_floor_version "$2")" || return 1
+    _v="$(printf '%s\n%s\n' "$_v" "$_f" | sort -V | tail -n 1)"
+  fi
   printf '%s\n' "$_v"
+}
+
+# ga_go_floor_verdict FLOOR — reads `go version <dir>` output on stdin (lines
+# "PATH: goX.Y.Z[ suffix]") and fails every binary OLDER than FLOOR (X.Y.Z).
+# Unlike ga_go_toolchain_verdict (all binaries on ONE version), this holds the
+# build to a pinned minimum, so a toolchain that is consistent but old is red.
+#   stdout: one line per offender, "PATH: goA.B.C (below floor goX.Y.Z)"
+#   exit 0  every scanned binary embeds a Go version >= FLOOR
+#   exit 1  at least one binary is older, "devel", or unreadable
+#   exit 2  nothing to judge: FLOOR empty/malformed, or ZERO binaries scanned
+# The scanned count is written to the variable GA_GO_SCANNED for the caller.
+ga_go_floor_verdict() {
+  local _floor="${1:-}" _line _path _ver _bad=0 _low
+  GA_GO_SCANNED=0
+  [[ "$_floor" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 2
+  while IFS= read -r _line || [[ -n "$_line" ]]; do
+    [[ -n "${_line//[[:space:]]/}" ]] || continue
+    _path="${_line%: *}"
+    _ver="${_line##*: }"
+    if [[ "$_path" == "$_line" ]]; then
+      printf '%s (unparseable scan line; floor go%s)\n' "$_line" "$_floor"
+      _bad=1
+      continue
+    fi
+    GA_GO_SCANNED=$((GA_GO_SCANNED + 1))
+    _ver="${_ver%% *}"
+    if [[ ! "$_ver" =~ ^go[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+      printf '%s: %s (not a release version; floor go%s)\n' "$_path" "${_ver:-<none>}" "$_floor"
+      _bad=1
+      continue
+    fi
+    # go1.26 (no patch) is the .0 release: compare it as 1.26.0.
+    [[ "${_ver#go}" =~ ^[0-9]+\.[0-9]+$ ]] && _ver="${_ver}.0"
+    _low="$(printf '%s\n%s\n' "${_ver#go}" "$_floor" | sort -V | head -n 1)"
+    if [[ "$_low" != "$_floor" ]]; then
+      printf '%s: %s (below floor go%s)\n' "$_path" "$_ver" "$_floor"
+      _bad=1
+    fi
+  done
+  (( GA_GO_SCANNED > 0 )) || return 2
+  return "$_bad"
 }
 
 # ga_go_toolchain_verdict EXPECTED — reads `go version <dir>` output on stdin
