@@ -1,0 +1,11 @@
+__libc_start_main
+Systemd (Journal) reader
+Tail files
+Kernel Log Buffer
+Exec Input
+grep events by specified field values
+modify record
+modify records by applying rules
+Loki
+Build Flags = FLB_HAVE_SYS_WAIT_H FLB_HAVE_IN_STORAGE_BACKLOG FLB_HAVE_PARSER
+Fluentd in-forward

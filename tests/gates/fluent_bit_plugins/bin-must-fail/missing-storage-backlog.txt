@@ -1,0 +1,9 @@
+__libc_start_main
+Systemd (Journal) reader
+Tail files
+Kernel Log Buffer
+Exec Input
+grep events by specified field values
+modify record
+modify records by applying rules
+Loki
