@@ -43,6 +43,9 @@ cat > "$W/bin/curl" <<STUB
 for a in "\$@"; do url="\$a"; done
 echo "\$url" >> "$W/curl.log"
 case "\$url" in
+  http://203.0.113.50:*)
+    [ "\$(cat "$W/fallback" 2>/dev/null)" = ok ] && exit 0
+    echo "curl: (28) Connection timed out" >&2; exit 28 ;;
   http://127.0.0.1:*)
     case "\$(cat "$W/mesh")" in
       ok) exit 0 ;;
@@ -90,7 +93,11 @@ exec /bin/date "\$@"
 STUB
 chmod +x "$W"/bin/*
 
-printf 'GA_SERVICES_IP=127.0.0.1\nGA_FLEET_PORT=8090\n' > "$W/ga-services.conf"
+# The fixture conf mirrors the baked default: no GA_MESH_WD_REBOOT line at all
+# (the script must default to OFF), enable_reboot / with_fallback add lines.
+base_conf() { printf 'GA_SERVICES_IP=127.0.0.1\nGA_FLEET_PORT=8090\n' > "$W/ga-services.conf"; }
+enable_reboot() { echo 'GA_MESH_WD_REBOOT=1' >> "$W/ga-services.conf"; }
+with_fallback() { echo 'GA_MESH_FALLBACK_PEER=203.0.113.50' >> "$W/ga-services.conf"; echo "$1" > "$W/fallback"; }
 NB_UP='{"daemonStatus":"Connected","management":{"url":"https://mgmt.example:443","connected":true},"signal":{"url":"https://signal.example:443","connected":true}}'
 
 T0=1790000000
@@ -98,6 +105,7 @@ reset_all() {
   rm -f "$W"/actions.log "$W"/curl.log "$W"/state/* "$W"/share/* "$W"/ota_state "$W"/sys_state "$W"/jobs "$W"/rauc_op "$W"/systemctl_rc "$W"/out.all "$W"/nm "$W"/wifi_last "$W"/ledger
   echo "$T0" > "$W/now"; echo ok > "$W/mesh"; echo up > "$W/cloud"; echo wt0 > "$W/route_dev"
   printf '%s' "$NB_UP" > "$W/nb_json"
+  base_conf; rm -f "$W/fallback"
   mkdir -p "$W/sysnet/wt0"
 }
 at()   { echo $(( T0 + $1 )) > "$W/now"; }          # at SECONDS-since-T0
@@ -173,15 +181,15 @@ run_test "MWD-14" "ga-wifi-watchdog reloaded the radio 5 min before: the mesh la
 ticks 1200 1440
 run_test "MWD-15" "…and acts once the wifi quiet period is over (fresh streak of 3)" \
   "[ \"\$(actions)\" = 'netbird down|netbird up|' ]"
-reset_all; echo dead > "$W/mesh"; echo $((T0 - 3600)) > "$W/ledger"; ticks 0 9000
+reset_all; enable_reboot; echo dead > "$W/mesh"; echo $((T0 - 3600)) > "$W/ledger"; ticks 0 9000
 run_test "MWD-16" "ga-wifi-watchdog rebooted 1 h ago (shared ledger): the mesh ladder does NOT reboot" \
   "[ \"\$(grep -c reboot '$W/actions.log')\" = 0 ] && [ \"\$(st verdict)\" = reboot_capped ] && [ \"\$(grep -c . '$W/ledger')\" = 1 ]"
-reset_all; echo dead > "$W/mesh"; echo wifi-stub > "$W/ledger"; chmod 444 "$W/ledger"; ticks 0 9000; chmod 644 "$W/ledger"
+reset_all; enable_reboot; echo dead > "$W/mesh"; echo wifi-stub > "$W/ledger"; chmod 444 "$W/ledger"; ticks 0 9000; chmod 644 "$W/ledger"
 run_test "MWD-17" "shared ledger not writable: no reboot (the limit could not hold), error logged" \
   "[ \"\$(grep -c reboot '$W/actions.log')\" = 0 ] && grep -q '^<3>ga-mesh-watchdog: cannot write the shared reboot ledger' '$W/out.all'"
 
-# ═════════════════════════════════════════════ MUST-ACT: the ladder
-reset_all; echo dead > "$W/mesh"
+# ═════════════════════════════════════════════ MUST-ACT: the ladder (reboot ENABLED)
+reset_all; enable_reboot; echo dead > "$W/mesh"
 ticks 0 120
 run_test "MWD-20" "two dead ticks: counted, no action yet" \
   "[ -z \"\$(actions)\" ] && [ \"\$(st consecutive_dead)\" = 2 ] && [ \"\$(st verdict)\" = dead ]"
@@ -235,7 +243,7 @@ at 1080; tick
 run_test "MWD-41" "…reported once: the next healthy tick is quiet" \
   "! grep -q '^<[0-4]>' '$W/out'"
 
-reset_all; echo dead > "$W/mesh"; ticks 0 7320
+reset_all; enable_reboot; echo dead > "$W/mesh"; ticks 0 7320
 echo ok > "$W/mesh"; at 7500; tick
 run_test "MWD-42" "back after the reboot (state on /mnt/data): 'RECOVERED by reboot'" \
   "grep -q '^<4>ga-mesh-watchdog: RECOVERED by reboot' '$W/out'"
@@ -248,5 +256,25 @@ run_test "MWD-50" "wt0 absent and the client silent, cloud up: dead, and step 1 
 reset_all; echo dead > "$W/mesh"; echo 1 > "$W/systemctl_rc"; ticks 0 3600
 run_test "MWD-51" "a failed restart is logged at error and NOT retried every tick" \
   "grep -q '^<3>ga-mesh-watchdog: action restart FAILED' '$W/out.all' && [ \"\$(grep -c 'systemctl restart' '$W/actions.log')\" = 1 ]"
+
+# ═════════════════════════════════════════════ reboot stage OFF by default (BOSv1.5.1)
+reset_all; echo dead > "$W/mesh"; ticks 0 86400 600
+run_test "MWD-60" "DEFAULT (no GA_MESH_WD_REBOOT): a day dead -> down/up + restart only, NEVER a reboot" \
+  "[ \"\$(grep -c 'systemctl reboot' '$W/actions.log')\" = 0 ] && grep -q 'systemctl restart netbird' '$W/actions.log' \
+   && [ ! -s '$W/ledger' ]"
+reset_all; echo dead > "$W/mesh"; ticks 0 9000
+run_test "MWD-61" "…and the state says reboot_disabled, warned once" \
+  "[ \"\$(st verdict)\" = reboot_disabled ] && [ \"\$(grep -c '^<4>ga-mesh-watchdog: reboot_disabled' '$W/out.all')\" = 1 ]"
+reset_all; echo 'GA_MESH_WD_REBOOT=0' >> "$W/ga-services.conf"; echo dead > "$W/mesh"; ticks 0 9000
+run_test "MWD-62" "explicit GA_MESH_WD_REBOOT=0: no reboot" \
+  "[ \"\$(grep -c 'systemctl reboot' '$W/actions.log')\" = 0 ] && [ \"\$(st verdict)\" = reboot_disabled ]"
+reset_all; enable_reboot; with_fallback ok; echo dead > "$W/mesh"; ticks 0 9000
+run_test "MWD-63" "enabled, but the fallback peer answers over wt0 (ga-tools down, tunnel fine): no reboot" \
+  "[ \"\$(grep -c 'systemctl reboot' '$W/actions.log')\" = 0 ] && [ \"\$(st verdict)\" = fallback_alive ]"
+reset_all; enable_reboot; with_fallback dead; echo dead > "$W/mesh"; ticks 0 9000
+run_test "MWD-64" "enabled, fallback peer silent too: the one reboot happens" \
+  "[ \"\$(grep -c 'systemctl reboot' '$W/actions.log')\" = 1 ]"
+grep -q '^GA_MESH_WD_REBOOT=0$' "$ROOT/buildroot-external/rootfs-overlay/etc/ga-services.conf"
+run_test "MWD-65" "the baked ga-services.conf ships the reboot stage OFF" "[ $? = 0 ]"
 
 suite_end

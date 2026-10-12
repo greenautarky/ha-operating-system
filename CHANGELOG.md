@@ -26,6 +26,14 @@ reboot or shutdown is already queued. Each action, and "RECOVERED by <step>", is
 by tier-0 (`fluent-bit-tier0-os.conf`, PRIORITY 0-4 only). The verdict is published to
 `/share/ga-mesh-watchdog.json`, using the schema-v1 keys of #568 plus the ladder fields.
 
+### Changed — the mesh watchdog's reboot stage is OFF by default
+
+`GA_MESH_WD_REBOOT=0` in `ga-services.conf`: the ladder stops after the netbird restart and reports
+`reboot_disabled`. Without a second mesh peer the device cannot tell its own broken tunnel from a
+ga-tools outage, and a long ga-tools outage would reboot the whole fleet. `GA_MESH_WD_REBOOT=1` (in the
+`/mnt/data` override) enables the stage. Optional `GA_MESH_FALLBACK_PEER` / `GA_MESH_FALLBACK_PORTS` give the
+cross-check peer: when it answers over `wt0`, the device never reboots (`fallback_alive`).
+
 ## BOSv1.5.0 — released 2026-10-12 (HAOS 16.3.1.10)
 
 The first release for the stable channel since V1.2 (BOSv1.4.0 was released as an image on 2026-10-07 but never

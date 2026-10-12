@@ -47,7 +47,9 @@
 #        reboot  : systemctl reboot                  (after $COOLDOWN_RESTART_S,
 #                  only once the path has been dead $REBOOT_MIN_DEAD_S in all,
 #                  and only if the SHARED reboot ledger (ga-wifi-watchdog's)
-#                  holds fewer than $REBOOT_MAX_24H reboots of anyone in 24 h)
+#                  holds fewer than $REBOOT_MAX_24H reboots of anyone in 24 h).
+#                  The reboot stage is OFF unless GA_MESH_WD_REBOOT=1, and never
+#                  runs while GA_MESH_FALLBACK_PEER answers over the mesh.
 #      After the ladder (or with the reboot budget spent) the watchdog waits
 #      $LADDER_RESET_S before it may start again at downup. Worst case is
 #      bounded: one downup + one restart per $LADDER_RESET_S, one reboot per
@@ -182,7 +184,7 @@ publish() {
     # outage / unknown); the finer verdict travels next to it.
     case "$1" in
         alive|dead|unknown) _gm="$1" ;;
-        reboot_capped) _gm=dead ;;
+        reboot_capped|reboot_disabled|fallback_alive) _gm=dead ;;
         *) _gm=outage ;;   # cloud_down, wan_down, held: not acting, on purpose
     esac
     _json="$(printf '{"schema_version":1,"ts":%s,"state":"%s","verdict":"%s","detail":"%s",' "$NOW" "$_gm" "$1" "$_d"
@@ -228,6 +230,14 @@ ADDR="${GA_SERVICES_IP:-}"
 PORTS="${GA_MESH_PROBE_PORTS:-${GA_FLEET_PORT:-8090} 1884}"
 [ -n "$ADDR" ] || bail_unknown "GA_SERVICES_IP is not set in ga-services.conf"
 probe_target="${MESH_IFACE}:$(echo "$PORTS" | tr ' ' ',')"
+# Reboot stage: OFF unless explicitly enabled (BOSv1.5.1, Odoo #1263). Without
+# a second mesh peer the device cannot tell "my tunnel is broken" from
+# "ga-tools is down", and a long ga-tools outage would reboot the whole fleet.
+# GA_MESH_FALLBACK_PEER (+ _PORTS) is that second peer: when set and it
+# answers over the mesh, the tunnel works and the device never reboots.
+WD_REBOOT="${GA_MESH_WD_REBOOT:-0}"
+FALLBACK_PEER="${GA_MESH_FALLBACK_PEER:-}"
+FALLBACK_PORTS="${GA_MESH_FALLBACK_PORTS:-22}"
 
 mesh_alive=0
 dead_why=""
@@ -252,6 +262,23 @@ else
     done
     [ "$mesh_alive" = 1 ] || dead_why="nothing answered over $MESH_IFACE on $PORTS"
 fi
+
+# fallback_alive -> 0 if the second mesh peer answers over the mesh
+fallback_alive() {
+    [ -n "$FALLBACK_PEER" ] || return 1
+    _rd="$(ip route get "$FALLBACK_PEER" 2>/dev/null \
+        | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')"
+    [ "$_rd" = "$MESH_IFACE" ] || return 1
+    for _p in $FALLBACK_PORTS; do
+        _e="$(curl -sS -o /dev/null --connect-timeout "$PROBE_TIMEOUT_S" --max-time "$PROBE_TIMEOUT_S" \
+            "http://${FALLBACK_PEER}:${_p}/" 2>&1 >/dev/null)"
+        case $? in
+            0|22|52|56) return 0 ;;
+            7) case "$_e" in *[Rr]efused*) return 0 ;; esac ;;
+        esac
+    done
+    return 1
+}
 
 # what the client claims (informational, and the source of the cloud URLs)
 nb_json="$(netbird --daemon-addr "$NB_SOCK" status --json 2>/dev/null || true)"
@@ -390,6 +417,14 @@ case "$stage" in
             log "dead: $detail — next step (reboot) at the earliest in $(( COOLDOWN_RESTART_S - since ))s"
         elif [ "$dead_for" -lt "$REBOOT_MIN_DEAD_S" ]; then
             log "dead: $detail — a reboot needs ${REBOOT_MIN_DEAD_S}s dead, $(( REBOOT_MIN_DEAD_S - dead_for ))s to go"
+        elif [ "$WD_REBOOT" != 1 ]; then
+            hold_log reboot_disabled "reboot_disabled: $detail — down/up and a restart did not bring it back; the reboot stage is OFF (GA_MESH_WD_REBOOT=$WD_REBOOT); holding, the ladder restarts after ${LADDER_RESET_S}s"
+            publish reboot_disabled "$detail; reboot stage disabled"
+            exit 0
+        elif fallback_alive; then
+            hold_log fallback_alive "fallback_alive: $detail — but the fallback mesh peer answers over $MESH_IFACE, so the tunnel works and ga-tools is the problem; never rebooting for that"
+            publish fallback_alive "$detail; fallback peer answers — ga-tools down, not the tunnel"
+            exit 0
         elif [ "$(count "$reboots")" -ge "$REBOOT_MAX_24H" ]; then
             hold_log reboot_capped "reboot_capped: $detail — the shared reboot ledger ($REBOOT_LEDGER, also ga-wifi-watchdog's) has $(count "$reboots") reboot(s) in 24 h (limit $REBOOT_MAX_24H); holding, the ladder restarts after ${LADDER_RESET_S}s"
             publish reboot_capped "$detail; reboot limit reached"
