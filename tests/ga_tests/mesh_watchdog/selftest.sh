@@ -81,7 +81,7 @@ echo "s \"\$(cat "$W/rauc_op" 2>/dev/null || echo idle)\""
 STUB
 cat > "$W/bin/ip" <<STUB
 #!/bin/sh
-echo "127.0.0.1 dev \$(cat "$W/route_dev") src 100.64.0.2 uid 0"
+echo "127.0.0.1 dev \$(cat "$W/route_dev") src 203.0.113.10 uid 0"
 STUB
 cat > "$W/bin/date" <<STUB
 #!/bin/sh

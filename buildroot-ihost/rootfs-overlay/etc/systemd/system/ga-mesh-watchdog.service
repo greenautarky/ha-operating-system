@@ -15,3 +15,6 @@ TimeoutStartSec=120
 # unit, so actions and RECOVERED lines reach Loki and the healthy tick does not.
 SyslogIdentifier=ga-mesh-watchdog
 SyslogFacility=daemon
+# A 2-min timer: keep the healthy info tick out of the journal (volume gate);
+# actions, holds and RECOVERED are <4>/<3> and pass.
+LogLevelMax=notice
