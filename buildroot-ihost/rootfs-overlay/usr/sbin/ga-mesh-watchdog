@@ -1,0 +1,414 @@
+#!/bin/sh
+# ga-mesh-watchdog — keep the device -> ga-tools mesh path alive, and bring it
+# back by the cheapest step that works, without ever fighting the NetBird cloud,
+# an OS update or a reboot someone else asked for.
+#
+# WHY. Everything a field device does for the fleet (fleet-manager jobs,
+# identity delivery, OTA over the mesh, MQTT telemetry) rides on ONE path:
+# the NetBird tunnel to ga-tools. netbird.service has Restart=on-failure, which
+# catches a client that CRASHES. Nothing catches a client that stays up and
+# carries nothing, a client stuck reconnecting while the cloud is fine, or a
+# wt0 that vanished. A device in any of those states is invisible to the fleet
+# and comes back only on a reboot nobody schedules. (Research and the decision:
+# Odoo #1263, NETBIRD-SETTINGS-RESEARCH-2026-10-12 §1.10/§1.11. Earlier design
+# this builds on: PR #568, which restarted only a client that claimed to be up.)
+#
+# WHAT, every tick (ga-mesh-watchdog.timer, 2 min):
+#
+#   1. PROBE THE SUBJECT. TCP to ga-tools' service ports over wt0 (address
+#      and fleet port from ga-services.conf, the same file every other GA unit
+#      reads — no address is written down here). Any answer, including
+#      "connection refused", proves packets crossed the tunnel: the mesh is
+#      alive, whatever a service on ga-tools is doing. OK -> counters reset,
+#      one info line, and if an action had been taken: "RECOVERED by <step>".
+#
+#   2. IS THE NETBIRD CLOUD REACHABLE AT ALL? Management and signal, probed
+#      directly (URLs from the client's own status, defaults otherwise). If
+#      either is unreachable: DO NOTHING. An established tunnel keeps passing
+#      traffic through a cloud outage, but a `down/up`, a restart or a reboot
+#      needs management to come back — so acting then throws away a tunnel
+#      that might still have worked, and cannot build a new one. The dead
+#      streak is reset, so escalation always rides on fresh evidence taken
+#      while the cloud was up. While the path is healthy the same probe runs
+#      once an hour and is published, so a device on which it cannot succeed
+#      (and the watchdog could never act) shows up before it matters.
+#
+#   2a. LAYERS BELOW. NetworkManager connectivity not "full" (link down, no
+#      internet): hold — that is ga-wifi-watchdog's and the carrier's domain.
+#
+#   3. GUARDS. An OS install in progress (ga-rauc-install activating, or RAUC
+#      reporting an operation), a shutdown/reboot already queued, or a
+#      ga-wifi-watchdog action in the last $WIFI_QUIET_S: hold.
+#
+#   4. ESCALATE after $DEAD_TICKS consecutive dead ticks, one step at a time,
+#      each with its own cooldown, never repeating a step inside it:
+#        downup  : netbird down && netbird up      (keeps the daemon)
+#        restart : systemctl restart netbird        (after $COOLDOWN_DOWNUP_S)
+#        reboot  : systemctl reboot                  (after $COOLDOWN_RESTART_S,
+#                  only once the path has been dead $REBOOT_MIN_DEAD_S in all,
+#                  and only if the SHARED reboot ledger (ga-wifi-watchdog's)
+#                  holds fewer than $REBOOT_MAX_24H reboots of anyone in 24 h)
+#      After the ladder (or with the reboot budget spent) the watchdog waits
+#      $LADDER_RESET_S before it may start again at downup. Worst case is
+#      bounded: one downup + one restart per $LADDER_RESET_S, one reboot per
+#      24 h. Never a loop.
+#
+# LOGGING. Every action and every RECOVERED line is a warning (<4>), every
+# failed action an error (<3>) — systemd's stdout priority prefix on the
+# daemon facility (no `logger` on this image), shipped by tier-0
+# (fluent-bit-tier0-os.conf, PRIORITY 0-4). The every-2-min healthy tick stays
+# at info and is not shipped. A hold (cloud down, OTA, shutdown) warns once,
+# on the transition into it, not every tick.
+#
+# FAIL CLOSED. An input that cannot be read (no jq, no ga-services.conf, a
+# route to ga-tools that does not use wt0) is `unknown`: one line, no action,
+# streak reset.
+#
+# Every command is looked up on PATH and every path is overridable so
+# tests/ga_tests/mesh_watchdog/selftest.sh runs THIS script with stub curl /
+# netbird / systemctl / ip / date / busctl and a movable clock.
+set -u
+
+TAG="ga-mesh-watchdog"
+
+# ---- inputs ----
+CONF_OVERRIDE="${GA_MESH_CONF_OVERRIDE:-/mnt/data/ga-services.conf}"
+CONF_DEFAULT="${GA_MESH_CONF_DEFAULT:-/etc/ga-services.conf}"
+MESH_IFACE="${GA_MESH_IFACE:-wt0}"
+SYS_NET="${GA_MESH_SYS_NET:-/sys/class/net}"
+NB_SOCK="${GA_MESH_NB_SOCK:-unix:///var/run/netbird.sock}"
+MGMT_URL_DEFAULT="${GA_MESH_MGMT_URL:-https://api.netbird.io:443}"
+SIGNAL_URL_DEFAULT="${GA_MESH_SIGNAL_URL:-https://signal.netbird.io:443}"
+OTA_UNIT="${GA_MESH_OTA_UNIT:-ga-rauc-install.service}"
+# ga-wifi-watchdog's last action ("<action> <epoch>") and its reboot ledger
+# (one epoch per line). The ledger is SHARED: this watchdog reads it and writes
+# its own reboot into it, so the two can never add up to more reboots than
+# either allows on its own.
+WIFI_LAST_ACTION="${GA_MESH_WIFI_LAST_ACTION:-/run/ga-wifi-watchdog.last_action}"
+REBOOT_LEDGER="${GA_MESH_REBOOT_LEDGER:-/mnt/data/.ga-wifi-recover-reboots}"
+
+# ---- outputs ----
+STATE_DIR="${GA_MESH_STATE_DIR:-/mnt/data/netbird}"
+STATE_FILE="${GA_MESH_STATE_FILE:-$STATE_DIR/ga-mesh-watchdog.state}"
+SHARE_FILE="${GA_MESH_SHARE_FILE:-/mnt/data/supervisor/share/ga-mesh-watchdog.json}"
+PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
+
+# ---- tunables (seconds) ----
+DEAD_TICKS="${GA_MESH_DEAD_TICKS:-3}"                     # 3 x 2 min
+COOLDOWN_DOWNUP_S="${GA_MESH_COOLDOWN_DOWNUP_S:-600}"      # downup -> restart
+COOLDOWN_RESTART_S="${GA_MESH_COOLDOWN_RESTART_S:-1800}"   # restart -> reboot
+REBOOT_MIN_DEAD_S="${GA_MESH_REBOOT_MIN_DEAD_S:-7200}"     # dead this long before a reboot
+REBOOT_MAX_24H="${GA_MESH_REBOOT_MAX_24H:-1}"
+LADDER_RESET_S="${GA_MESH_LADDER_RESET_S:-21600}"          # after the ladder, wait 6 h
+WIFI_QUIET_S="${GA_MESH_WIFI_QUIET_S:-900}"                # after a wifi-watchdog action, stay out 15 min
+PROBE_TIMEOUT_S="${GA_MESH_PROBE_TIMEOUT_S:-5}"
+# While the path is healthy the cloud probe runs once an hour, so a device on
+# which the probe itself cannot succeed (and the watchdog could therefore never
+# act) is visible BEFORE the day the path dies — not on it.
+CLOUD_RECHECK_S="${GA_MESH_CLOUD_RECHECK_S:-3600}"
+UNIT="${GA_MESH_RESTART_UNIT:-netbird}"
+
+NOW="$(date +%s 2>/dev/null || echo 0)"
+case "$NOW" in ''|*[!0-9]*) NOW=0 ;; esac
+
+log()  { echo "$TAG: $*"; }
+logw() { echo "<4>$TAG: $*"; }
+loge() { echo "<3>$TAG: $*"; }
+
+num() { case "${1:-}" in ''|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
+
+# ---------------------------------------------------------------- prior state
+read_state() {
+    [ -r "$STATE_FILE" ] || return 0
+    sed -n "s/^$1=//p" "$STATE_FILE" 2>/dev/null | tail -1 | tr -d '"'
+}
+consecutive="$(num "$(read_state CONSECUTIVE_DEAD)")"
+first_dead="$(num "$(read_state FIRST_DEAD_TS)")"
+stage="$(num "$(read_state STAGE)")"            # 0 none, 1 downup, 2 restart, 3 reboot
+last_action="$(read_state LAST_ACTION)"
+last_action_ts="$(num "$(read_state LAST_ACTION_TS)")"
+last_state="$(read_state LAST_STATE)"
+cloud_ts="$(num "$(read_state CLOUD_TS)")"
+cloud_prev="$(read_state CLOUD)"
+reboots_raw="$(cat "$REBOOT_LEDGER" 2>/dev/null | tr '\n' ' ')"
+restarts_raw="$(read_state RESTARTS)"
+[ -n "$last_action" ] || last_action=none
+
+# 24 h ledgers, pruned
+prune() {   # space-separated epochs -> those inside 24 h
+    _out=""
+    for _ts in $1; do
+        case "$_ts" in ''|*[!0-9]*) continue ;; esac
+        [ $(( NOW - _ts )) -lt 86400 ] && _out="${_out:+$_out }$_ts"
+    done
+    echo "$_out"
+}
+count() { set -- $1; echo $#; }
+reboots="$(prune "${reboots_raw:-}")"
+restarts="$(prune "${restarts_raw:-}")"   # every downup/restart, for /share
+
+# values the publisher interpolates; JSON null until measured
+cloud=null
+claims=null
+probe_target=""
+
+# ---------------------------------------------------------------- publishing
+save_state() {
+    mkdir -p "$STATE_DIR" 2>/dev/null || true
+    {
+        printf 'CONSECUTIVE_DEAD=%s\n' "$consecutive"
+        printf 'FIRST_DEAD_TS=%s\n' "$first_dead"
+        printf 'STAGE=%s\n' "$stage"
+        printf 'LAST_ACTION=%s\n' "$last_action"
+        printf 'LAST_ACTION_TS=%s\n' "$last_action_ts"
+        printf 'LAST_STATE=%s\n' "$1"
+        printf 'CLOUD_TS=%s\n' "$cloud_ts"
+        printf 'CLOUD=%s\n' "$cloud"
+        printf 'RESTARTS="%s"\n' "$restarts"
+    } > "${STATE_FILE}.tmp" 2>/dev/null \
+        && mv -f "${STATE_FILE}.tmp" "$STATE_FILE" 2>/dev/null \
+        || loge "could not persist $STATE_FILE — the reboot limit is NOT durable this tick"
+}
+
+# publish STATE DETAIL — the state file plus the /share copy ga_manager reads.
+# Keys of PR #568's schema v1 are kept (ga_manager#286 / fleet-manager#252 read
+# them); the ladder adds fields, it does not rename any.
+publish() {
+    save_state "$1"
+    _d="$(printf '%s' "$2" | tr '"\\' "''")"
+    _last_restart=0
+    for _ts in $restarts; do _last_restart="$_ts"; done
+    # `state` stays in the vocabulary ga_manager#286 validates (alive / dead /
+    # outage / unknown); the finer verdict travels next to it.
+    case "$1" in
+        alive|dead|unknown) _gm="$1" ;;
+        reboot_capped) _gm=dead ;;
+        *) _gm=outage ;;   # cloud_down, wan_down, held: not acting, on purpose
+    esac
+    _json="$(printf '{"schema_version":1,"ts":%s,"state":"%s","verdict":"%s","detail":"%s",' "$NOW" "$_gm" "$1" "$_d"
+             printf '"consecutive_dead":%s,"dead_ticks_to_restart":%s,' "$consecutive" "$DEAD_TICKS"
+             printf '"restarts_24h":%s,"last_restart_ts":%s,"restart_cooldown_s":%s,' \
+                 "$(count "$restarts")" "$_last_restart" "$COOLDOWN_DOWNUP_S"
+             printf '"wan_up":%s,"client_claims_connected":%s,"cloud_reachable":%s,' \
+                 "$( [ "$cloud" = true ] && echo true || echo null)" "$claims" "$cloud"
+             printf '"stage":%s,"last_action":"%s","last_action_ts":%s,"reboots_24h":%s,' \
+                 "$stage" "$last_action" "$last_action_ts" "$(count "$reboots")"
+             printf '"mesh_iface":"%s","probe":"%s","unit":"%s"}\n' "$MESH_IFACE" "$probe_target" "$UNIT")"
+    if [ -x "$PUBLISH" ]; then
+        printf '%s' "$_json" | "$PUBLISH" "$SHARE_FILE" 2>/dev/null \
+            || log "could not publish $SHARE_FILE"
+    fi
+}
+
+# warn on the transition into a hold, info while it lasts
+hold_log() {   # STATE MESSAGE
+    if [ "$last_state" = "$1" ]; then log "$2"; else logw "$2"; fi
+}
+
+bail_unknown() {
+    consecutive=0; first_dead=0
+    hold_log unknown "unknown: $1 — no action (fail closed)"
+    publish unknown "$1"
+    exit 0
+}
+
+command -v jq >/dev/null 2>&1 || bail_unknown "jq not available"
+
+# ------------------------------------------------------- 1. probe the subject
+if [ -f "$CONF_OVERRIDE" ]; then
+    # shellcheck source=/dev/null
+    . "$CONF_OVERRIDE"
+elif [ -f "$CONF_DEFAULT" ]; then
+    # shellcheck source=/dev/null
+    . "$CONF_DEFAULT"
+else
+    bail_unknown "no ga-services.conf — the ga-tools address is unknown"
+fi
+ADDR="${GA_SERVICES_IP:-}"
+PORTS="${GA_MESH_PROBE_PORTS:-${GA_FLEET_PORT:-8090} 1884}"
+[ -n "$ADDR" ] || bail_unknown "GA_SERVICES_IP is not set in ga-services.conf"
+probe_target="${MESH_IFACE}:$(echo "$PORTS" | tr ' ' ',')"
+
+mesh_alive=0
+dead_why=""
+route_dev="$(ip route get "$ADDR" 2>/dev/null \
+    | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')"
+if [ ! -e "$SYS_NET/$MESH_IFACE" ]; then
+    # No tunnel interface at all: the client is not carrying a mesh. Dead, not
+    # unknown — this is one of the states a restart exists for.
+    dead_why="$MESH_IFACE is absent"
+elif [ "$route_dev" != "$MESH_IFACE" ]; then
+    bail_unknown "ga-tools routes via '${route_dev:-nothing}', not $MESH_IFACE — a probe would not test the mesh"
+else
+    for p in $PORTS; do
+        err="$(curl -sS -o /dev/null --connect-timeout "$PROBE_TIMEOUT_S" --max-time "$PROBE_TIMEOUT_S" \
+            "http://${ADDR}:${p}/" 2>&1 >/dev/null)"
+        rc=$?
+        case "$rc" in
+            0|22|52|56) mesh_alive=1 ;;
+            7) case "$err" in *[Rr]efused*) mesh_alive=1 ;; esac ;;
+        esac
+        [ "$mesh_alive" = 1 ] && break
+    done
+    [ "$mesh_alive" = 1 ] || dead_why="nothing answered over $MESH_IFACE on $PORTS"
+fi
+
+# what the client claims (informational, and the source of the cloud URLs)
+nb_json="$(netbird --daemon-addr "$NB_SOCK" status --json 2>/dev/null || true)"
+mgmt_url="$MGMT_URL_DEFAULT"; signal_url="$SIGNAL_URL_DEFAULT"
+if [ -n "$nb_json" ]; then
+    _m="$(printf '%s' "$nb_json" | jq -r '.management.url // empty' 2>/dev/null || true)"
+    _s="$(printf '%s' "$nb_json" | jq -r '.signal.url // empty' 2>/dev/null || true)"
+    case "$_m" in https://*|http://*) mgmt_url="$_m" ;; esac
+    case "$_s" in https://*|http://*) signal_url="$_s" ;; esac
+    claims="$(printf '%s' "$nb_json" | jq -r 'if .daemonStatus == "Connected" and .management.connected == true then "true" else "false" end' 2>/dev/null || echo null)"
+    case "$claims" in true|false) ;; *) claims=null ;; esac
+fi
+
+reachable() {   # URL -> 0 if anything at that https endpoint answered
+    curl -sS -o /dev/null -I --connect-timeout "$PROBE_TIMEOUT_S" --max-time "$PROBE_TIMEOUT_S" "$1" >/dev/null 2>&1
+    case $? in 0|22|52|56) return 0 ;; *) return 1 ;; esac
+}
+host_of() { echo "$1" | sed -e 's#^[a-z]*://##' -e 's#/.*##'; }
+cloud_probe() { cloud_ts="$NOW"; if reachable "$mgmt_url" && reachable "$signal_url"; then cloud=true; else cloud=false; fi; }
+
+if [ "$mesh_alive" = 1 ]; then
+    case "$cloud_prev" in true|false) cloud="$cloud_prev" ;; esac
+    if [ $(( NOW - cloud_ts )) -ge "$CLOUD_RECHECK_S" ]; then
+        cloud_probe
+        if [ "$cloud" = false ] && [ "$cloud_prev" != false ]; then
+            logw "the mesh path works but the NetBird cloud probe fails (management $(host_of "$mgmt_url") / signal $(host_of "$signal_url")) — if the path died now this watchdog would hold, not act"
+        fi
+    fi
+    if [ "$stage" -gt 0 ]; then
+        logw "RECOVERED by $last_action — ga-tools answers over $MESH_IFACE again ($(( NOW - last_action_ts ))s after the $last_action, $(( NOW - first_dead ))s after the first dead tick)"
+    else
+        log "alive: ga-tools answered over $MESH_IFACE"
+    fi
+    consecutive=0; first_dead=0; stage=0
+    publish alive "ga-tools answered over $MESH_IFACE"
+    exit 0
+fi
+
+# --------------------------------------- 2a. the layers below are not ours
+# Link and internet are ga-wifi-watchdog's and the carrier's domain, and
+# ga-connectivity-recorder already records them (wan rung = NetworkManager
+# connectivity). Without full connectivity a mesh action cannot help.
+command -v nmcli >/dev/null 2>&1 || bail_unknown "nmcli not available — internet connectivity is unmeasured"
+nm_conn="$(nmcli -t -f CONNECTIVITY general status 2>/dev/null | head -1)"
+if [ "$nm_conn" != full ]; then
+    consecutive=0; first_dead=0
+    hold_log wan_down "wan_down: $dead_why, and NetworkManager connectivity is '${nm_conn:-unknown}', not full — the link/WAN layer, not the mesh; no action"
+    publish wan_down "$dead_why; NetworkManager connectivity ${nm_conn:-unknown}"
+    exit 0
+fi
+
+# ------------------------------------------- 2b. is the NetBird cloud reachable
+cloud_probe
+if [ "$cloud" = false ]; then
+    consecutive=0; first_dead=0
+    hold_log cloud_down "cloud_down: $dead_why, and the NetBird cloud is unreachable (management $(host_of "$mgmt_url") / signal $(host_of "$signal_url")) — no action: a restart now would discard a tunnel that may still work and could not build a new one"
+    publish cloud_down "$dead_why; NetBird management/signal unreachable — holding"
+    exit 0
+fi
+
+# --------------------------------------------------------------- 3. guards
+guard=""
+if [ "$(systemctl is-active "$OTA_UNIT" 2>/dev/null)" = activating ]; then
+    guard="an OS install is running ($OTA_UNIT activating)"
+else
+    _op="$(busctl get-property de.pengutronix.rauc / de.pengutronix.rauc.Installer Operation 2>/dev/null | awk '{print $2}' | tr -d '"')"
+    [ -n "$_op" ] && [ "$_op" != idle ] && guard="RAUC reports operation '$_op'"
+fi
+if [ -z "$guard" ] && [ -r "$WIFI_LAST_ACTION" ]; then
+    read -r _wa _wts < "$WIFI_LAST_ACTION" 2>/dev/null || true
+    _wts="$(num "${_wts:-}")"
+    case "${_wa:-}" in
+        none|"") ;;
+        *) [ $(( NOW - _wts )) -lt "$WIFI_QUIET_S" ] && guard="ga-wifi-watchdog acted ($_wa) $(( NOW - _wts ))s ago — its recovery gets ${WIFI_QUIET_S}s" ;;
+    esac
+fi
+if [ -z "$guard" ]; then
+    _sys="$(systemctl is-system-running 2>/dev/null)"
+    if [ "$_sys" = stopping ]; then
+        guard="the system is shutting down"
+    elif systemctl list-jobs --no-legend 2>/dev/null | grep -qE '(reboot|poweroff|halt|kexec)\.target'; then
+        guard="a reboot/poweroff is already queued"
+    fi
+fi
+if [ -n "$guard" ]; then
+    hold_log held "held: $dead_why, but $guard — no action"
+    publish held "$dead_why; $guard"
+    exit 0
+fi
+
+# ------------------------------------------------------------- 4. escalate
+consecutive=$(( consecutive + 1 ))
+[ "$first_dead" -gt 0 ] || first_dead="$NOW"
+dead_for=$(( NOW - first_dead ))
+since=$(( NOW - last_action_ts ))
+detail="$dead_why while the NetBird cloud is reachable (tick $consecutive, dead ${dead_for}s)"
+
+if [ "$consecutive" -lt "$DEAD_TICKS" ]; then
+    logw "dead: $detail — acting at tick $DEAD_TICKS"
+    publish dead "$detail"
+    exit 0
+fi
+
+# a finished (or capped) ladder may start again only after LADDER_RESET_S
+if [ "$stage" -ge 2 ] && [ "$since" -ge "$LADDER_RESET_S" ]; then
+    stage=0
+fi
+
+act() {   # STEP REASON CMD... — the action, logged with its reason, then recorded
+    _step="$1"; _why="$2"; shift 2
+    logw "action $_step: $_why"
+    if "$@" >/dev/null 2>&1; then
+        logw "action $_step done"
+    else
+        loge "action $_step FAILED (exit $?) — moving on; the next step comes after its cooldown"
+    fi
+}
+
+case "$stage" in
+    0)
+        stage=1; last_action=downup; last_action_ts="$NOW"; restarts="${restarts:+$restarts }$NOW"
+        save_state dead
+        act downup "$detail" sh -c 'netbird --daemon-addr "$1" down; netbird --daemon-addr "$1" up' _ "$NB_SOCK"
+        ;;
+    1)
+        if [ "$since" -ge "$COOLDOWN_DOWNUP_S" ]; then
+            stage=2; last_action=restart; last_action_ts="$NOW"; restarts="${restarts:+$restarts }$NOW"
+            save_state dead
+            act restart "$detail; the downup ${since}s ago did not bring it back" systemctl restart "$UNIT"
+        else
+            log "dead: $detail — next step (restart) in $(( COOLDOWN_DOWNUP_S - since ))s"
+        fi
+        ;;
+    2)
+        if [ "$since" -lt "$COOLDOWN_RESTART_S" ]; then
+            log "dead: $detail — next step (reboot) at the earliest in $(( COOLDOWN_RESTART_S - since ))s"
+        elif [ "$dead_for" -lt "$REBOOT_MIN_DEAD_S" ]; then
+            log "dead: $detail — a reboot needs ${REBOOT_MIN_DEAD_S}s dead, $(( REBOOT_MIN_DEAD_S - dead_for ))s to go"
+        elif [ "$(count "$reboots")" -ge "$REBOOT_MAX_24H" ]; then
+            hold_log reboot_capped "reboot_capped: $detail — the shared reboot ledger ($REBOOT_LEDGER, also ga-wifi-watchdog's) has $(count "$reboots") reboot(s) in 24 h (limit $REBOOT_MAX_24H); holding, the ladder restarts after ${LADDER_RESET_S}s"
+            publish reboot_capped "$detail; reboot limit reached"
+            exit 0
+        else
+            stage=3; last_action=reboot; last_action_ts="$NOW"; reboots="${reboots:+$reboots }$NOW"
+            save_state dead      # durable BEFORE the reboot, or the limit is not
+            printf '%s\n' "$NOW" >> "$REBOOT_LEDGER" 2>/dev/null \
+                || { loge "cannot write the shared reboot ledger $REBOOT_LEDGER — NOT rebooting (the limit would not hold)"; publish dead "$detail; reboot ledger not writable"; exit 0; }
+            publish dead "$detail — rebooting"
+            sync 2>/dev/null || true
+            act reboot "$detail; down/up and a restart did not bring it back" systemctl reboot
+            exit 0
+        fi
+        ;;
+    *)
+        log "dead: $detail — ladder done ($last_action ${since}s ago); it may restart in $(( LADDER_RESET_S - since ))s"
+        ;;
+esac
+
+publish dead "$detail"
+exit 0

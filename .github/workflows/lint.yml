@@ -340,6 +340,18 @@ jobs:
         # static checks fail against the pre-fix test.sh.
         run: sh tests/ga_tests/dns_config/selftest.sh
 
+      - name: Mesh path watchdog ladder (Odoo #1263 — acts only with the NetBird cloud up, never during an OTA)
+        # Drives the LIVE ga-mesh-watchdog with stub curl / netbird / systemctl /
+        # ip / busctl / date and a movable clock. Must-not-act: a path that
+        # answers (also "connection refused"), a dead path while the NetBird
+        # cloud is unreachable, an OS install or a queued reboot, a route not
+        # via wt0. Must-act: downup -> restart -> reboot in that order, each
+        # after its cooldown, at most one reboot per 24 h, no loop; every action
+        # and "RECOVERED by <step>" at warning. Red-proven: 29/31 fail with no
+        # script; mutants (no cloud gate, no OTA guard, no reboot cap, no
+        # cooldown, refused=dead, RECOVERED at info) each go red on their cases.
+        run: sh tests/ga_tests/mesh_watchdog/selftest.sh
+
       - name: OS-04 counts any row of the WiFi scan
         # The pre-fix check read only the first SSID, and the strongest BSS
         # (first row) can be a hidden network with an empty SSID. Drives the

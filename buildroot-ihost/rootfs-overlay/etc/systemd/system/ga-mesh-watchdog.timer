@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodic mesh-path watchdog (device -> ga-tools)
+
+[Timer]
+# A fresh boot is where a premature "dead" would be wrong: give the client time.
+OnBootSec=4min
+# 2 min: three dead ticks (the first action) is a six-minute statement.
+OnUnitActiveSec=2min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

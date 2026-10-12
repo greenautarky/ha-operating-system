@@ -1,0 +1,17 @@
+[Unit]
+Description=Keep the mesh path to ga-tools alive (probe, then down/up, restart, at most one reboot per 24 h)
+After=netbird.service network-online.target
+# Nothing to watch on an image without the mesh client.
+ConditionPathExists=/usr/bin/netbird
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-mesh-watchdog
+Nice=10
+# Two probes x 5 s, two cloud probes x 5 s, plus a `netbird down/up`.
+TimeoutStartSec=120
+# The script marks its own lines with systemd's priority prefix (<3> err,
+# <4> warning); tier-0 (fluent-bit-tier0-os.conf) ships PRIORITY 0-4 of this
+# unit, so actions and RECOVERED lines reach Loki and the healthy tick does not.
+SyslogIdentifier=ga-mesh-watchdog
+SyslogFacility=daemon
