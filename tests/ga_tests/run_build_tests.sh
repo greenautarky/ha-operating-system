@@ -204,6 +204,23 @@ grep -q 'DEVICE_LABEL' "$FB_SVC" 2>/dev/null \
   && _pass "CFG-11: fluent-bit.service has DEVICE_LABEL" \
   || _fail "CFG-11: fluent-bit.service missing DEVICE_LABEL"
 
+# FB-PLUG-01: the fluent-bit binary in the image is the MINIMAL build: it has
+# every plugin in FLUENT_BIT_GA_PLUGINS (buildroot-external/.../fluent-bit-config.mk)
+# and neither Forward plugin. The Forward output has an upstream advisory with no
+# patched version, so its code must not ship; a missing plugin makes fluent-bit
+# refuse the whole config. Reads the installed binary, not the build log. The
+# expected list comes from the .mk, never from the binary.
+_fbp_guard="${SRC:-$(cd "$(dirname "$0")/../.." && pwd)}/scripts/fluent-bit-plugin-guard.sh"
+if [[ ! -x "$_fbp_guard" ]]; then
+  _fail "FB-PLUG-01: plugin guard missing at $_fbp_guard -- the check cannot run"
+elif [[ ! -f "${TARGET}/usr/bin/fluent-bit" ]]; then
+  _fail "FB-PLUG-01: ${TARGET}/usr/bin/fluent-bit missing"
+elif _fbp_out="$("$_fbp_guard" --binary "${TARGET}/usr/bin/fluent-bit" 2>&1)"; then
+  _pass "FB-PLUG-01: fluent-bit has exactly the GA plugin set, no Forward plugin ($(printf '%s' "$_fbp_out" | head -1))"
+else
+  _fail "FB-PLUG-01: fluent-bit plugin set is wrong: $(printf '%s' "$_fbp_out" | tr '\n' ' ')"
+fi
+
 # Phase 7 scaffold — network-details config ships to the rootfs (NOT
 # wired into the main fluent-bit.conf yet — that's the activation step
 # when concrete LTE dongle backends ship in Phase 3.x).

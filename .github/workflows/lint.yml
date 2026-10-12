@@ -694,6 +694,15 @@ jobs:
       - name: Journald cursor DBs do not fsync per line (all shipped fluent-bit configs)
         run: ./tests/gates/fluent_bit_cursor_sync/selftest.sh
 
+      # fluent-bit is built with only the plugins the shipped configs use (the
+      # Forward output has an upstream advisory with no patched version). A
+      # config naming a plugin that is not built makes fluent-bit refuse the
+      # whole config. Every shipped config, including the ga-telemetry-config
+      # component at its pin, against FLUENT_BIT_GA_PLUGINS; mutants of the list
+      # (plugin removed, Forward added) must turn the live configs red.
+      - name: Every plugin the shipped fluent-bit configs name is built, the Forward plugins are not
+        run: ./tests/gates/fluent_bit_plugins/selftest.sh
+
       # ADR-0027 D9: one build mode. `dev` must be refused however it is asked
       # for; every real mode and a leftover `prod` (accepted, loud) must work.
       - name: Build mode (dev refused, real modes and deprecated prod still build)

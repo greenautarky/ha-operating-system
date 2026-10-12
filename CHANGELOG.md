@@ -26,6 +26,17 @@ Earlier release history (pre-2026-05-27) is in the git log + the
   patches or fluent-bit's configure options for them changed; buildroot tracks neither, so an `update` bake would
   have kept the old binaries.
 
+### Security — fluent-bit built without the Forward plugins (Odoo #1205)
+
+- **fluent-bit 3.2.10** is built with only the plugins the shipped configs use (`FLUENT_BIT_GA_PLUGINS` in
+  `fluent-bit-config.mk`: inputs systemd, tail, kmsg, exec and the storage backlog; filters grep,
+  record_modifier, modify; output loki), so the Forward output of GHSA-jrp8-r9hx-gf73 / CVE-2026-61674, which has
+  no patched upstream version, is not in the image. `libfluent-bit.so` (3.6 MB, nothing links it) is no longer
+  installed. The `modify` filter is in the list because tier-0 (ga-telemetry-config) uses it.
+- **Guard**: `scripts/fluent-bit-plugin-guard.sh` runs at build time on the installed binary (build test
+  FB-PLUG-01) and in CI over every shipped config including ga-telemetry-config at its pin
+  (`tests/gates/fluent_bit_plugins`): a plugin that is named but not built, or a Forward plugin, fails.
+
 ### Added — `ga-mesh-watchdog`: probe, then down/up, restart, at most one reboot per 24 h
 
 Every 2 min the device probes ga-tools over `wt0` (fleet port and MQTT port; the address comes from
