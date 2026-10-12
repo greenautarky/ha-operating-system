@@ -2321,7 +2321,7 @@ fi
 
 # The Go version every Go package in this build must be compiled with — read
 # from buildroot's source pin, never from the build output.
-GO_EXPECTED="$(ga_go_expected_version "$BUILDROOT_DIR")" || {
+GO_EXPECTED="$(ga_go_expected_version "$BUILDROOT_DIR" "$BR2EXT_NETBIRD")" || {
   echo "ERROR: cannot read GO_VERSION from ${BUILDROOT_DIR}/package/go/go.mk" >&2
   exit 1
 }

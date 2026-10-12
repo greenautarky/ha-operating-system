@@ -1,0 +1,1 @@
+GA_GO_VERSION_FLOOR = $(X)

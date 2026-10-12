@@ -14,6 +14,17 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased (BOSv1.5.1) — the device keeps its mesh path to ga-tools alive (Odoo #1263)
 
+### Security — Go 1.26.9 for the rootfs Go binaries (Odoo #1231)
+
+- The buildroot submodule pins Go 1.26.8; GO-2026-6604 and GO-2026-6612 (Go stdlib) are fixed in Go 1.26.9
+  (https://vuln.go.dev/ID/GO-2026-6604.json, https://vuln.go.dev/ID/GO-2026-6612.json). `buildroot-external/go-floor.mk`
+  raises Go to the floor `GA_GO_VERSION_FLOOR` (1.26.9) for `ga_ihost_full_defconfig`, loaded before `package/*/*.mk` through
+  `buildroot-ihost/local.mk`; tarball hashes are in `buildroot-external/patches/go-src` and `go-bin`. It is a floor: a
+  submodule that moves past it is followed, never downgraded.
+- **Build**: the GOTC guard (`scripts/lib/go-toolchain.sh`) expects the raised version, so `update` bakes dirclean every Go
+  package once. New GOTC-04 fails a Go binary older than the floor; `tests/ga_tests/build/go_toolchain/inputs_check.sh`
+  (lint.yml) asks buildroot which host-go version the config resolves to.
+
 ### Security — libglib2 and xz (Odoo #1206, #1207)
 
 - **libglib2 2.82.5**: upstream fixes for CVE-2025-13601, CVE-2025-14512 and CVE-2026-58010 to CVE-2026-58016
