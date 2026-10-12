@@ -12,7 +12,13 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
-## Unreleased — the host takes control requests from ga_manager only out of the add-on's own data directory
+## BOSv1.5.0 — released 2026-10-12 (HAOS 16.3.1.10)
+
+The first release for the stable channel since V1.2 (BOSv1.4.0 was released as an image on 2026-10-07 but never
+promoted to stable). It contains every section below headed "BOSv1.5.0 —"; they accumulated as "Unreleased". Proven on
+BOSv1.5.0-rc7: clean flash on the staging canary, OTA on two production canaries (2026-10-11).
+
+## BOSv1.5.0 — the host takes control requests from ga_manager only out of the add-on's own data directory
 
 ### Changed — far fewer SD card writes from the telemetry shippers (Odoo #1224–#1227)
 
@@ -342,7 +348,7 @@ followed). A label that is not a GA release is not written and the unit fails.
   nothing waits in `/share`, and Bluetooth, the LTE verdict and the converged
   marker are where this host reads them.
 - `RAUC-05`, `CFG-49i/j` (build asserts) and `ETHF-06` follow the new path.
-## Unreleased — the SSH certificate plane and the USB host lock hold on devices updated over the air
+## BOSv1.5.0 — the SSH certificate plane and the USB host lock hold on devices updated over the air
 
 A device that reaches a BOSv1.4.0+ image by an OTA update keeps two files its
 first image wrote: the overlay `/root/.ssh/authorized_keys` (seeded only when
@@ -407,7 +413,7 @@ partition, so a fallback slot boots with the lock as well.
 
 ---
 
-## Unreleased — OS updates refuse a bundle older than the running GA release
+## BOSv1.5.0 — OS updates refuse a bundle older than the running GA release
 
 ### Added — a release floor for every OS install, enforced on the device
 
@@ -459,7 +465,7 @@ build gate RFLOOR-01/02 over fixture outputs; the `ga-rauc-install` label.
 installs abort before a slot is written, a handler-less system installs a
 release-carrying bundle, and a real RAUC loads the live `system.conf`.
 
-## Unreleased — ADR-0019 step 2: the SSH certificate plane (BOSv1.4.0+ only)
+## BOSv1.5.0 — ADR-0019 step 2: the SSH certificate plane (BOSv1.4.0+ only)
 
 ### Added — a BOSv1.4.0+ image trusts an offline user CA instead of a shared key
 
@@ -508,7 +514,7 @@ hook, both ways, through the live build gate) and
 accept/refuse asserted by the reason sshd logs). Device: `SSH-D-19..26`.
 
 ---
-## Unreleased — Core 2026.8.2 from the GA armv7 build (planned BOSv1.3.0-rc53)
+## BOSv1.5.0 — Core 2026.8.2 from the GA armv7 build (planned BOSv1.3.0-rc53)
 
 ### Changed — Core moves from the frozen upstream armv7 image to the GA armv7 build
 
@@ -536,7 +542,7 @@ follows the channel). No fleet device polls dev; `beta.json` is unchanged.
 Switching this line back to beta is a separate change once 2026.x is proven
 and promoted.
 
-## Unreleased — rides in the next rc after rc29
+## BOSv1.5.0 — rides in the next rc after rc29
 
 ### Fixed — a cut-off weekly digest no longer reaches the team as if complete
 

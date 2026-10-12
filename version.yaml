@@ -13,7 +13,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.5.0-rc7  # marker baked into /etc/ga-release at build. BOSv1.5.0-rc7 = rc6 + SD write reduction and telemetry profiles (Odoo #1224-#1227): (1) ga-telemetry-config 1.1.0 - tier-0 cursor DBs without per-line fsync (DB.Sync Off), tier-0 auth keeps security evidence only, slim record; (2) frequent timer units log at notice and above (LogLevelMax); (3) telegraf disk buffer without an fsync per metric (buffer_disk_sync=false); (4) telemetry profiles normal/minimal/lte_saver on the host side (stays normal without a request); (5) ga_zigbee2mqtt 2.12.1-8 (warning, console only); (6) ga_hmvapp_addon 2.6.0 (levelled output). ga_manager stays 0.239.0. PREVIOUS BOSv1.5.0-rc6 = rc5 + Go toolchain rebuild, NetBird 0.80.0, slim telegraf.
+gaos_release: BOSv1.5.0  # marker baked into /etc/ga-release at build. BOSv1.5.0 = RELEASE (2026-10-12): the content of BOSv1.5.0-rc7 (proven on K31 clean flash, K6 and K10 OTA on 2026-10-11), plus this marker and the CHANGELOG. ga_manager 0.239.0 and ga_default_addon 2.1.1 held (declared holds). PREVIOUS BOSv1.5.0-rc7 = rc6 + SD write reduction and telemetry profiles.
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
