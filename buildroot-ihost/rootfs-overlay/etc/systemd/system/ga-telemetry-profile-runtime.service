@@ -1,0 +1,18 @@
+[Unit]
+# Applies a CHANGED telemetry profile while the shippers run; started by
+# ga-telemetry-profile.path on every change of ga_manager's request. ADR-0045.
+#
+# Deliberately NOT ordered against the shippers (no Before=/After= on them):
+# it restarts them BLOCKING and then reads back what their main processes run.
+# Ordered Before= them, that restart would wait for this unit to finish while
+# this unit waits for the restart — a deadlock that kept tier-0 down for 8 min
+# on a canary on 2026-10-12. ga-telemetry-profile.service (boot) is the ordered one.
+Description=Re-apply a changed telemetry profile to the running shippers
+Documentation=https://github.com/greenautarky/ga-ihost-docs/blob/main/adr/ADR-0045-telemetry-profiles-and-storage-writes.md
+After=mnt-data.mount ga-telemetry-profile.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-telemetry-profile-apply
+# Backstop: three restarts plus their read-back fit well inside this.
+TimeoutStartSec=120

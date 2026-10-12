@@ -44,6 +44,17 @@ retained `zigbee2mqtt/bridge/state`, so a working subscription always delivers a
 credential is readable. The selftest has three new must-fail fixtures: a second sender, a broker that refuses the
 subscription, and a missing credential. The old test passed all three.
 
+### Fixed — a runtime telemetry-profile switch no longer deadlocks the log and metric shippers (Odoo #1227)
+
+On BOSv1.5.0 every runtime change of the telemetry profile hung: `ga-telemetry-profile.service`, a oneshot ordered
+before the shippers, ran a blocking `systemctl try-restart` on them; the restart waited for the oneshot and the oneshot
+for the restart, with no start timeout. tier-0 stayed down until the oneshot was killed. A re-run then read back the new
+profile while the old processes kept running, because the drop-ins were already on disk. Reproduced twice on a canary.
+Now the boot unit (ordered, `--boot`) only queues restarts, and the `.path` starts a separate
+`ga-telemetry-profile-runtime.service` that is not ordered against the shippers, restarts them and reads back what
+each main process actually runs (`stale` + an error when it does not). Device test TPR-04 reads the running process
+instead of the unit file; TPR-06 checks which unit the `.path` starts.
+
 ## BOSv1.5.0 — released 2026-10-12 (HAOS 16.3.1.10)
 
 The first release for the stable channel since V1.2 (BOSv1.4.0 was released as an image on 2026-10-07 but never
