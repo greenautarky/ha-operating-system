@@ -306,4 +306,38 @@ reset_all; _LIB_SAVE="$GA_SERVICES_CONF_LIB"; export GA_SERVICES_CONF_LIB="$W/no
 run_test "MWD-77" "the shared loader missing: unknown + error-level (blind, but loudly), no action" \
   "[ \"\$(st verdict)\" = unknown ] && [ -z \"\$(actions)\" ] && grep -q '^<3>ga-mesh-watchdog: unknown: cannot load' '$W/out.all'"
 
+# ═════════════════════════════════════════════ MESH-04 (the device suite's own check)
+# MESH-04 runs ON the device; its command is extracted from the LIVE test.sh
+# (MESH04_CMD) and run against a stub systemctl that answers like systemd does
+# for an OnBootSec/OnUnitActiveSec timer: NextElapseUSecRealtime is ALWAYS empty
+# (only OnCalendar sets it), NextElapseUSecMonotonic carries the time (humanised, as on K31: "2h 37.127221s"). The old
+# check asked for Realtime and could not pass on any device (K31 BOSv1.5.1-rc1/rc3).
+# If the extraction finds nothing, that is a FAILURE, never a skip.
+DEVTEST="$SCRIPT_DIR/test.sh"
+M4="$(sed -n "s/^MESH04_CMD='\(.*\)'\$/\1/p" "$DEVTEST")"
+run_test "MWD-80" "MESH-04's command is found in the live device test.sh (extraction must not silently find nothing)" "[ -n '$(printf '%s' "$M4" | head -c1)' ]"
+mkdir -p "$W/m4bin"
+cat > "$W/m4bin/systemctl" <<STUB
+#!/bin/sh
+case "\$*" in
+  *NextElapseUSecRealtime*) cat "$W/m4_realtime" 2>/dev/null ;;
+  *NextElapseUSecMonotonic*) cat "$W/m4_mono" 2>/dev/null ;;
+esac
+STUB
+chmod +x "$W/m4bin/systemctl"
+m4() { # <realtime> <monotonic> <cmd> -> rc
+  printf '%s' "$1" > "$W/m4_realtime"; printf '%s' "$2" > "$W/m4_mono"
+  PATH="$W/m4bin:$PATH" sh -c "$3" >/dev/null 2>&1
+}
+M4_OLD='systemctl show -p NextElapseUSecRealtime --value ga-mesh-watchdog.timer 2>/dev/null | grep -qv "^$" && systemctl show -p NextElapseUSecRealtime --value ga-mesh-watchdog.timer'
+# green: a healthy OnBootSec/OnUnitActiveSec timer (realtime empty, monotonic set)
+run_test "MWD-81" "MESH-04 PASSES on a healthy monotonic timer (realtime empty, monotonic set)" "m4 '' '2h 37.127221s' '$M4'"
+# the same state is exactly what the OLD check failed on - red proof of the defect
+run_test "MWD-82" "the OLD realtime check FAILS on that same healthy timer (the defect this fixes)" "! m4 '' '2h 37.127221s' '$M4_OLD'"
+# red: nothing scheduled
+run_test "MWD-83" "MESH-04 FAILS when no next elapse is scheduled (monotonic 0)" "! m4 '' 0 '$M4'"
+run_test "MWD-84" "MESH-04 FAILS when the property is empty / the unit is unknown" "! m4 '' '' '$M4'"
+run_test "MWD-85" "MESH-04 FAILS on n/a and infinity (nothing will elapse)" "! m4 '' 'n/a' '$M4' && ! m4 '' infinity '$M4'"
+run_test "MWD-86" "MESH-04 does not take a realtime value as proof (realtime set, monotonic empty)" "! m4 'Tue 2026-10-13 10:00:00 CEST' '' '$M4'"
+
 suite_end

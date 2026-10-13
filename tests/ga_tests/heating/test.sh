@@ -95,14 +95,30 @@ status_of() { docker ps --format '{{.Names}} {{.Status}}' 2>/dev/null | grep "^$
 # calibration numbers, the engine's sensor.hm_* decisions) so the file stays
 # small on the 15 MB /tmp zram.
 # ---------------------------------------------------------------------------
-: > "$STATES"
-GM="$(ctr_of ga_manager)"
-if [ -n "$GM" ]; then
+# fetch_states <outfile> — one /api/states read through gm, reduced to the three
+# families. Returns non-zero (and leaves <outfile> empty) when gm is absent, the
+# call fails or the answer is not a JSON list.
+fetch_states() {
+  : > "$1"
+  [ -n "${GM:-}" ] || return 1
   docker exec "$GM" sh -c \
     'curl -fsS -m 20 -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/api/states' 2>/dev/null \
-    | jq -c '[ .[] | select(.entity_id | startswith("climate.") or startswith("number.") or startswith("sensor.hm_")) ]' > "$STATES" 2>/dev/null \
-    || : > "$STATES"
-fi
+    | jq -c '[ .[] | select(.entity_id | startswith("climate.") or startswith("number.") or startswith("sensor.hm_")) ]' > "$1" 2>/dev/null \
+    || { : > "$1"; return 1; }
+  [ -s "$1" ]
+}
+# refresh_states - re-read Core's view into $STATES, keeping the old snapshot
+# only when the new read succeeded. A decision is valid for 120 s
+# (MIN_VALIDITY_S) and HEAT-02's broker tap alone holds the suite for 120 s, so
+# a snapshot from the top of the run is already expired by HEAT-06 by
+# construction (K31 BOSv1.5.1-rc1/rc3, 2026-10-13). Anything that judges a
+# time-limited value must read it NOW.
+refresh_states() {
+  fetch_states "$STATES.new" || { rm -f "$STATES.new"; return 1; }
+  mv "$STATES.new" "$STATES"
+}
+GM="$(ctr_of ga_manager)"
+fetch_states "$STATES" || : > "$STATES"
 
 # --- every room's mode, BEFORE anything below writes (Odoo #1195) ------------
 # HEAT-09 writes a valve, which ga_heating rightly reads as a hand on the
@@ -172,11 +188,19 @@ area_of_room() {
     .data.entities[] | select(.platform == "ga_heating" and .entity_id == $e) | .unique_id | ltrimstr("ga_heating_")' \
     "$ENTITY_REG" 2>/dev/null | head -1
 }
-# room entities whose temperature comes from a DEDICATED sensor (never "valve").
+# room entities that own a DEDICATED sensor: room_sensor non-null (ga_heating
+# >= 0.11), or - on an older component that has no room_sensor attribute - a
+# temperature_source that is itself a sensor.*. NOT "anything but valve":
+# temperature_source: house_average has no room sensor, so hmvapp publishes no
+# decision for it and ga_heating never calibrates it (ADR-0021 section 3) - the
+# suite must not demand one (K31 BOSv1.5.1-rc1/rc3: Kueche + Schlafzimmer).
 rooms_with_sensor() {
   for _rws in $(room_entities); do
+    _rsws=$(attr_of "$_rws" room_sensor)
     _srcws=$(attr_of "$_rws" temperature_source)
-    [ -n "$_srcws" ] && [ "$_srcws" != "valve" ] && echo "$_rws"
+    if [ -n "$_rsws" ]; then echo "$_rws"
+    else case "$_srcws" in sensor.*) echo "$_rws" ;; esac
+    fi
   done
 }
 state_of()  { jq -r --arg e "$1" '.[] | select(.entity_id == $e) | .state' "$STATES" 2>/dev/null | head -1; }
@@ -423,6 +447,7 @@ engine_too_young() {
   return 1
 }
 heat06() {
+  refresh_states || { echo "could not re-read Core's states right before the check - a stale snapshot would expire every 120 s decision"; return 1; }
   _now=$(date -u +%Y-%m-%dT%H:%M:%S)
   _fail=""; _ok=0; _n=0
   for _room in $(rooms_with_sensor); do

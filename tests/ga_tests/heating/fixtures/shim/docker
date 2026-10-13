@@ -19,6 +19,7 @@ case "$cmd" in
     case "$*" in
       *mosquitto_sub*)
         cat > /dev/null
+        : > "${GA_HEAT_TMP:-/tmp}/tapped"      # time passed: 120 s in the real suite
         f="$(pick mqtt-tap.txt)"; [ -e "$f" ] && cat "$f"; exit 0 ;;
     esac
     # FAKE HOME ASSISTANT (GA_HEAT_LIVE set by the selftest for fixtures carrying a
@@ -86,6 +87,14 @@ case "$cmd" in
             "$(pick states.json)" 2>/dev/null || echo '{}'
         fi ;;
       *)
+        # TIME. A fixture with states-stale.json models the snapshot the suite took
+        # at its start: that file answers until HEAT-02's broker tap has run (the
+        # tap is the 120 s that expire a 120 s decision); every read AFTER it gets
+        # states.json. refetch-empty: the re-read after the tap returns nothing.
+        if [ -e "$GA_HEAT_FIXTURE/states-stale.json" ]; then
+          if [ ! -e "${GA_HEAT_TMP:-/tmp}/tapped" ]; then cat "$GA_HEAT_FIXTURE/states-stale.json"; exit 0; fi
+          [ -e "$GA_HEAT_FIXTURE/refetch-empty" ] && exit 22
+        fi
         cat "$(pick states.json)" ;;
     esac ;;
   logs)
