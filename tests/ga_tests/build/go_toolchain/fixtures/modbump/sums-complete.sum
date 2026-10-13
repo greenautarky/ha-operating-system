@@ -1,0 +1,4 @@
+example.test/a v1.2.0 h1:9RXGWBmq33eMescI1S9VRDW6mfcVUx9FcyZjEOoi3ck=
+example.test/a v1.2.0/go.mod h1:6V2hEG5Dvfd4sOyMwe6230CqltwdNwZ9NlBAGNYjUUE=
+example.test/b v1.5.0 h1:oJaREBp5bO4w9XuII6vhRHzZCCmxnOZbPcZyGkjk7jM=
+example.test/b v1.5.0/go.mod h1:2VWs173XwhoNngIiL7B4k0t3IJIAdbO3wgkbKGIc4fk=

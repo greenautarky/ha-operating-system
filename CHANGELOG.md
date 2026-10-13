@@ -47,6 +47,15 @@ Earlier release history (pre-2026-05-27) is in the git log + the
   the live verdict, the stamp/rebuild trigger, and the GOTC block of `run_build_tests.sh` itself over a stub `go`
   (`tests/ga_tests/build/go_toolchain/selftest.sh`, CI).
 
+### Fixed — the Go module floor hook no longer aborts the bake on the transitive requirements of the floor set
+
+- Cause: lifting x/crypto to 0.57.0 and x/text to 0.42.0 pulls x/sys 0.48.0, x/sync 0.23.0 (and x/term, x/tools, x/telemetry in some packages); `go-modfloor.sum` pinned only the four floor modules.
+  Buildroot's Go has no `go.env`, so `GOSUMDB` is empty and `go` stopped with `verifying go.mod: missing GOSUMDB` in the containerd hook (BOSv1.5.1-rc3 bake).
+- Fix: `go-modfloor.sum` now pins the complete module set the bump needs (module and go.mod hash of every transitive requirement, taken from sum.golang.org-verified runs on the real package sources of netbird, telegraf, os-agent, containerd, docker-engine and docker-cli).
+  `scripts/go-modbump.sh` no longer depends on the environment's checksum database (`GOSUMDB=off`, `GOENV=off`) and, after the bump, fails with the module name if any `go.sum` line is neither upstream's nor pinned (no trust on first use).
+  `scripts/go-modfloor-discover.sh` lists the pins a new package version needs.
+- Gate: `tests/ga_tests/build/go_toolchain/hook_selftest.sh` (MH-1..4 over a local module universe with a transitive requirement; three mutants of the live hook).
+
 ### Fixed — ga-sign-ssh-cert.sh mirrors certificate validity in UTC
 
 - The fleet-manager ledger mirror posted the validity window exactly as `ssh-keygen -L` prints it: local time, no offset.
