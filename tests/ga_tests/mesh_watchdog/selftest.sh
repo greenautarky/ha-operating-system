@@ -20,6 +20,8 @@
 #                 of the path is "RECOVERED by <step>" at warning.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
+# The shared ga-services.conf loader the scripts under test source (device path: /usr/libexec).
+export GA_SERVICES_CONF_LIB="${GA_SERVICES_CONF_LIB:-$SCRIPT_DIR/../../../buildroot-external/rootfs-overlay/usr/libexec/ga-services-conf.sh}"
 
 suite_start "ga-mesh-watchdog ladder (live script, stub commands)"
 
@@ -105,13 +107,13 @@ reset_all() {
   rm -f "$W"/actions.log "$W"/curl.log "$W"/state/* "$W"/share/* "$W"/ota_state "$W"/sys_state "$W"/jobs "$W"/rauc_op "$W"/systemctl_rc "$W"/out.all "$W"/nm "$W"/wifi_last "$W"/ledger
   echo "$T0" > "$W/now"; echo ok > "$W/mesh"; echo up > "$W/cloud"; echo wt0 > "$W/route_dev"
   printf '%s' "$NB_UP" > "$W/nb_json"
-  base_conf; rm -f "$W/fallback"
+  base_conf; rm -f "$W/fallback" "$W/override.conf"; unset OVR DFL
   mkdir -p "$W/sysnet/wt0"
 }
 at()   { echo $(( T0 + $1 )) > "$W/now"; }          # at SECONDS-since-T0
 tick() {
   PATH="$W/bin:/usr/bin:/bin" \
-  GA_MESH_CONF_OVERRIDE="$W/ga-services.conf" GA_MESH_CONF_DEFAULT="$W/ga-services.conf" \
+  GA_MESH_CONF_OVERRIDE="${OVR:-$W/ga-services.conf}" GA_MESH_CONF_DEFAULT="${DFL:-$W/ga-services.conf}" \
   GA_MESH_SYS_NET="$W/sysnet" GA_MESH_STATE_DIR="$W/state" GA_MESH_STATE_FILE="$W/state/wd.state" \
   GA_MESH_SHARE_FILE="$W/share/ga-mesh-watchdog.json" GA_SHARE_PUBLISH="$PUB" GA_SHARE_STAGE_DIR="$W/stage" \
   GA_MESH_WIFI_LAST_ACTION="$W/wifi_last" GA_MESH_REBOOT_LEDGER="$W/ledger" \
@@ -276,5 +278,32 @@ run_test "MWD-64" "enabled, fallback peer silent too: the one reboot happens" \
   "[ \"\$(grep -c 'systemctl reboot' '$W/actions.log')\" = 1 ]"
 grep -q '^GA_MESH_WD_REBOOT=0$' "$ROOT/buildroot-external/rootfs-overlay/etc/ga-services.conf"
 run_test "MWD-65" "the baked ga-services.conf ships the reboot stage OFF" "[ $? = 0 ]"
+
+# ═════════════════════════════════════════════ ga-services.conf layering (BOSv1.5.1)
+# The override is layered ON TOP of the baked default. It used to be read INSTEAD
+# of it, so the partial override the staging seed writes (fleet values only) hid
+# GA_SERVICES_IP and the watchdog sat at "unknown" on every such device.
+# Here DFL = the baked default (full), OVR = the /mnt/data override (separate file).
+DFL_REAL() { DFL="$W/baked.conf"; OVR="$W/override.conf"; printf 'GA_SERVICES_IP=127.0.0.1\nGA_FLEET_PORT=8090\n' > "$DFL"; }
+reset_all; DFL_REAL; printf 'GA_FLEET_HOST=fleet.example\nGA_FLEET_PORT=8091\nGA_FLEET_ENV=staging\n' > "$OVR"; ticks 0 3600
+run_test "MWD-70" "PARTIAL override (fleet values only): the baked GA_SERVICES_IP still applies -> measured, alive (not unknown)" \
+  "[ \"\$(st verdict)\" = alive ] && [ -z \"\$(actions)\" ]"
+run_test "MWD-71" "…and a key the override DOES set wins (GA_FLEET_PORT=8091 probed, not the baked 8090)" \
+  "grep -q 'http://127.0.0.1:8091/' '$W/curl.log' && ! grep -q 'http://127.0.0.1:8090/' '$W/curl.log'"
+reset_all; DFL_REAL; rm -f "$OVR"; ticks 0 3600
+run_test "MWD-72" "NO override file: the baked default alone is enough -> alive" "[ \"\$(st verdict)\" = alive ]"
+reset_all; DFL_REAL; printf 'GA_SERVICES_IP=127.0.0.1\nGA_FLEET_PORT=8092\n' > "$OVR"; ticks 0 3600
+run_test "MWD-73" "FULL override: its values win -> alive, probes the override port" \
+  "[ \"\$(st verdict)\" = alive ] && grep -q 'http://127.0.0.1:8092/' '$W/curl.log'"
+reset_all; DFL="$W/baked.conf"; OVR="$W/override.conf"; printf 'GA_FLEET_PORT=8090\n' > "$DFL"; printf 'GA_FLEET_HOST=x\n' > "$OVR"; ticks 0 120
+run_test "MWD-74" "GA_SERVICES_IP set in NEITHER file: unknown, no action, and LOUD — an error-level line on EVERY tick (not once)" \
+  "[ \"\$(st verdict)\" = unknown ] && [ -z \"\$(actions)\" ] && [ \"\$(grep -c '^<3>ga-mesh-watchdog: unknown: GA_SERVICES_IP is set in neither' '$W/out.all')\" = 2 ]"
+run_test "MWD-75" "…and the published detail names the missing address" "[ \"\$(st detail)\" != '' ] && st detail | grep -q GA_SERVICES_IP"
+reset_all; DFL="$W/nonexistent-a"; OVR="$W/nonexistent-b"; ticks 0 120
+run_test "MWD-76" "NO config file at all: unknown + error-level on every tick, no action" \
+  "[ \"\$(st verdict)\" = unknown ] && [ -z \"\$(actions)\" ] && [ \"\$(grep -c '^<3>ga-mesh-watchdog: unknown:' '$W/out.all')\" = 2 ]"
+reset_all; _LIB_SAVE="$GA_SERVICES_CONF_LIB"; export GA_SERVICES_CONF_LIB="$W/no-such-lib.sh"; ticks 0 120; export GA_SERVICES_CONF_LIB="$_LIB_SAVE"
+run_test "MWD-77" "the shared loader missing: unknown + error-level (blind, but loudly), no action" \
+  "[ \"\$(st verdict)\" = unknown ] && [ -z \"\$(actions)\" ] && grep -q '^<3>ga-mesh-watchdog: unknown: cannot load' '$W/out.all'"
 
 suite_end

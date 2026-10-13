@@ -340,6 +340,13 @@ jobs:
         # static checks fail against the pre-fix test.sh.
         run: sh tests/ga_tests/dns_config/selftest.sh
 
+      - name: ga-services.conf layering (override on top of the default, one shared loader)
+        # Drives the LIVE ga-services-conf.sh with a partial / full / absent
+        # override and sweeps the overlay for hand-rolled readers. Red-proven:
+        # an override-replaces-default loader fails LAY-01/03; a hand-sourced
+        # `. "$CONF_OVERRIDE"` in a consumer fails LAY-11.
+        run: sh tests/ga_tests/services_config/layering.sh
+
       - name: Mesh path watchdog ladder (Odoo #1263 — acts only with the NetBird cloud up, never during an OTA)
         # Drives the LIVE ga-mesh-watchdog with stub curl / netbird / systemctl /
         # ip / busctl / date and a movable clock. Must-not-act: a path that
