@@ -120,6 +120,7 @@ No device or emulator needed — checks the build output tree directly.
 - GOTC-03: every Go binary in `target/` (scanned with `go version <dir>`) embeds exactly `go$(GO_VERSION)`; zero binaries scanned, or `usr/bin/netbird` not recognised, is a failure. Fixtures: `build/go_toolchain/selftest.sh` (CI, lint.yml)
 - GOTC-04: no Go binary in `target/` embeds a Go older than `GA_GO_VERSION_FLOOR` (`buildroot-external/go-floor.mk`)
 - GOTC-05: no Go binary in `target/` (scanned with `go version -m <dir>`) embeds a vendored `golang.org/x/{net,crypto,text,mod}` below its floor in `buildroot-external/go-modfloor.mk` (the same lines `scripts/go-modbump.sh` applies at build time); a scan that reads zero floored module entries is a failure (broken reader). Fixtures: `build/go_toolchain/selftest.sh` (must-flag/must-pass `.mods` scans, mutants, stamp/rebuild trigger); inputs (pinned minimum floors, hash pins, hook coverage of every enabled Go package): `build/go_toolchain/inputs_check.sh`
+- GOTC hook (MH-1..4): the live `scripts/go-modbump.sh` run with the real `go` over a local module universe (`build/go_toolchain/fixtures/modbump`): complete pins pass with an empty `GOSUMDB` (buildroot has no `go.env`), a transitive requirement missing from `go-modfloor.sum` fails naming the module, a download differing from its pin is refused; three mutants of the hook must be caught. Runner: `build/go_toolchain/hook_selftest.sh` (needs `go` on PATH; fails, never skips)
 
 ## Category 2: Emulation (`emu`)
 Can run in QEMU or container without real hardware.

@@ -380,6 +380,14 @@ jobs:
         # live GOTC block of run_build_tests.sh over a stub `go`.
         run: bash tests/ga_tests/build/go_toolchain/selftest.sh
 
+      - name: go-modbump hook - a transitive requirement of the module floors that go-modfloor.sum does not pin fails the hook, naming the module
+        # BOSv1.5.1-rc3: the containerd hook died with "verifying go.mod: missing
+        # GOSUMDB" (x/crypto 0.57.0 -> x/sys 0.48.0 was not pinned; buildroot's Go has
+        # no go.env). Drives the LIVE scripts/go-modbump.sh with the real `go` over a
+        # file:// module universe: complete pins green, missing transitive pin red
+        # (named), tampered download refused, three mutants of the hook caught.
+        run: bash tests/ga_tests/build/go_toolchain/hook_selftest.sh
+
       - name: Go toolchain inputs - the rootfs Go packages are built with Go >= 1.26.9 (Odoo #1231) and carry the vendored-module floors hook
         # GO-2026-6604 / GO-2026-6612 are fixed in Go 1.26.9; the buildroot
         # submodule pins 1.26.8. buildroot-external/go-floor.mk (loaded through
