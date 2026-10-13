@@ -14,13 +14,12 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased (BOSv1.5.1) — the device keeps its mesh path to ga-tools alive (Odoo #1263)
 
-### Fixed — runc gets the go-modbump hook (GOTC-05 failed the BOSv1.5.1-rc3 bake on usr/bin/runc)
+### Changed — runc: reasoned, time-boxed GOTC-05 exemption instead of the x/net bump (BOSv1.5.1-rc3 bake failed building runc 1.4.3)
 
-- Cause: #792 exempted runc from the vendored-module floors on the claim that it links none of them. The real cgo build with the `seccomp` tag links
-  `golang.org/x/net/bpf` (via `libcontainer/seccomp/patchbpf`), and runc 1.4.3 vendors x/net 0.43.0 (floor 0.60.0). GOTC-05 caught it: `usr/bin/runc: golang.org/x/net v0.43.0 (below floor v0.60.0)`.
-- Fix: `RUNC_GA_MODBUMP` hook in `buildroot-external/go-modfloor.mk` like the other six Go packages; the runc exemption is removed from GOTC-IN-09;
-  `go-modfloor.sum` pins the two extra go.mod hashes runc's bump needs (x/crypto 0.41.0, x/text 0.28.0, from `scripts/go-modfloor-discover.sh` on the runc 1.4.3 source).
-  New modfloor fixtures: `runc-bake-rc3` (must flag) and `runc-after-hook` (must pass).
+- Cause: #796 hooked runc into go-modbump; the bake then failed compiling runc 1.4.3 (`libcontainer/specconv/spec_linux.go: unknown field IsDefault in struct literal of type config.Device`) - the x/net bump moved a second module to a version runc 1.4.3 does not build against.
+- Evidence (Go 1.26.9, tags `cgo static_build seccomp`, runc 1.4.3 sources): `go list -deps` reaches exactly one package of golang.org/x/net, `golang.org/x/net/bpf` (no http2/html/idna/dnsmessage from the module); `govulncheck` in source and binary mode lists all 15 x/net advisories (incl. GO-2026-6612) as module-level only, none called. Details in the PR body.
+- Fix: the `RUNC_GA_MODBUMP` hook and its two go.sum pins are removed again; `buildroot-external/go-modfloor.exempt` carries ONE exemption (usr/bin/runc, golang.org/x/net v0.43.0, 15 advisory ids, reason, expires 2026-11-30). GOTC-05 honours it only for that binary, that module and exactly that version, and goes red after the expiry date (even if runc no longer needs it) or when runc's x/net version changes. GOTC-IN-10 pins the entry, the version and the latest expiry in `inputs_check.sh`, so editing the file alone cannot extend it; GOTC-IN-09 fails if runc ever has a hook AND an exemption.
+- Tests: exemption fixtures (honoured before expiry and on the expiry day, red after, red on any other version, other binary, other path, other module), four mutants of the exemption logic, and three seam cases through the live GOTC block.
 
 ### Fixed — ga-services.conf: the /mnt/data override layers on the baked default in every reader; the mesh watchdog is no longer blind
 

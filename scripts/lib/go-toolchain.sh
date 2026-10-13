@@ -157,23 +157,54 @@ ga_go_modfloor_list() {
   printf '%s\n' "$_out"
 }
 
+# ga_go_modfloor_exempt_list EXTERNAL_DIR — prints the pinned module-floor
+# exemptions from EXTERNAL_DIR/go-modfloor.exempt, comments and blank lines
+# stripped. A missing file prints nothing and succeeds: no exemptions is the
+# strict direction. Line format (6 fields, `|` separated):
+#   BINARY-PATH|MODULE|PINNED-VERSION|ADVISORY-IDS|EXPIRES(YYYY-MM-DD)|REASON
+ga_go_modfloor_exempt_list() {
+  local _f="${1:-}/go-modfloor.exempt"
+  [[ -f "$_f" ]] || return 0
+  grep -vE '^[[:space:]]*(#|$)' "$_f" || true
+}
+
 # ga_go_modfloor_verdict FLOORS — reads `go version -m <dir>` output on stdin and
 # fails every Go binary that embeds a floored module BELOW its floor. FLOORS is
 # the text ga_go_modfloor_list prints ("module version" per line). The module
 # name is matched whole (golang.org/x/net is not golang.org/x/network), and a
 # `=>` replace line overrides the module it follows (the replacement is what
 # is linked).
+# Optional 2nd arg EXEMPTS (ga_go_modfloor_exempt_list output) and 3rd arg TODAY
+# (YYYY-MM-DD, default `date +%F`). An exemption lets exactly ONE binary embed
+# exactly ONE module at exactly the pinned version below its floor, until its
+# expiry date. It is void - and itself reported - when:
+#   * TODAY is after the expiry date (reported even if the binary no longer
+#     embeds the module: a stale exemption must be removed, not carried), or
+#   * the binary embeds the module at any other version (a bump forces a re-look).
+# Malformed exemption lines are rc 2, never ignored.
 #   stdout: one line per offender, "PATH: MODULE VERSION (below floor VERSION)"
 #   exit 0  every scanned binary is at or above every floor it embeds
 #   exit 1  at least one binary embeds a floored module below its floor
 #   exit 2  nothing to judge: no/malformed FLOORS, or ZERO binaries scanned
 # Variables for the caller: GA_GO_SCANNED (binaries), GA_GO_MODS_SEEN (floored
 # module entries read - zero over a real image means the reader, not the image,
-# is broken).
+# is broken; GA_GO_EXEMPTED: below-floor entries allowed by a pinned exemption).
 ga_go_modfloor_verdict() {
-  local _floors="${1:-}" _line _cur="" _bad=0 _kind _mod _ver _f _fm _fv _low _last_mod="" _flagged
-  local -A _floor=()
-  GA_GO_SCANNED=0 GA_GO_MODS_SEEN=0
+  local _floors="${1:-}" _exempts="${2:-}" _today="${3:-}" _line _cur="" _bad=0 _kind _mod _ver _f _fm _fv _low _last_mod="" _flagged
+  local _xp _xm _xv _xa _xe _xr _xrest _key
+  local -A _floor=() _xver=() _xexp=() _xadv=() _xwhy=()
+  GA_GO_SCANNED=0 GA_GO_MODS_SEEN=0 GA_GO_EXEMPTED=0
+  [[ -n "$_today" ]] || _today="$(date +%F)"
+  [[ "$_today" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || return 2
+  while IFS= read -r _f || [[ -n "$_f" ]]; do
+    [[ -n "$_f" ]] || continue
+    IFS='|' read -r _xp _xm _xv _xa _xe _xr _xrest <<<"$_f"
+    [[ -n "$_xp" && "$_xm" =~ ^[A-Za-z0-9._/-]+$ && "$_xv" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ \
+       && "$_xa" =~ ^GO-[0-9]{4}-[0-9]+(,GO-[0-9]{4}-[0-9]+)*$ && "$_xe" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ \
+       && -n "$_xr" && -z "$_xrest" ]] || return 2
+    _key="$_xp|$_xm"
+    _xver["$_key"]="$_xv" _xexp["$_key"]="$_xe" _xadv["$_key"]="$_xa" _xwhy["$_key"]="$_xr"
+  done <<<"$_exempts"
   while IFS= read -r _f || [[ -n "$_f" ]]; do
     [[ -n "$_f" ]] || continue
     _fm="${_f% *}" _fv="${_f#* }"
@@ -205,7 +236,23 @@ ga_go_modfloor_verdict() {
     _fv="${_floor[$_mod]}"
     _low="$(printf '%s\n%s\n' "${_ver#v}" "${_fv#v}" | sort -V | head -n 1)"
     if [[ ! "$_ver" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || ( "${_ver#v}" != "${_fv#v}" && "$_low" != "${_fv#v}" ) ]]; then
-      printf '%s: %s %s (below floor %s)\n' "$_cur" "$_mod" "${_ver:-<none>}" "$_fv"
+      _key="$_cur|$_mod"
+      if [[ -n "${_xver[$_key]+x}" && ! "${_xexp[$_key]}" < "$_today" && "$_ver" == "${_xver[$_key]}" ]]; then
+        GA_GO_EXEMPTED=$((GA_GO_EXEMPTED + 1))      # pinned, unexpired: allowed, and counted
+        continue
+      fi
+      if [[ -n "${_xver[$_key]+x}" && ! "${_xexp[$_key]}" < "$_today" ]]; then
+        printf '%s: %s %s (below floor %s; exemption pins %s - the version changed, re-evaluate)\n' "$_cur" "$_mod" "${_ver:-<none>}" "$_fv" "${_xver[$_key]}"
+      else
+        printf '%s: %s %s (below floor %s)\n' "$_cur" "$_mod" "${_ver:-<none>}" "$_fv"
+      fi
+      _bad=1
+    fi
+  done
+  # an expired exemption fails the gate whether or not the binary still needs it
+  for _key in "${!_xexp[@]}"; do
+    if [[ "${_xexp[$_key]}" < "$_today" ]]; then
+      printf '%s: exemption for %s EXPIRED %s (%s) - remove it or re-decide\n' "${_key%%|*}" "${_key#*|}" "${_xexp[$_key]}" "${_xadv[$_key]}"
       _bad=1
     fi
   done

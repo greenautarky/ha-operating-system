@@ -33,7 +33,7 @@ echo "=== Go toolchain consistency: verdict fixtures ==="
 [ -f "$LIB" ] || { echo "  FAIL  GOTC-FX-00: live lib not found at $LIB"; exit 1; }
 # shellcheck source=../../../../scripts/lib/go-toolchain.sh
 . "$LIB"
-for f in ga_go_expected_version ga_go_toolchain_verdict ga_go_scan ga_go_floor_version ga_go_floor_verdict ga_go_modfloor_list ga_go_modfloor_verdict ga_go_scan_mods ga_go_stamp_id ga_go_rebuild_if_toolchain_changed; do
+for f in ga_go_expected_version ga_go_toolchain_verdict ga_go_scan ga_go_floor_version ga_go_floor_verdict ga_go_modfloor_list ga_go_modfloor_exempt_list ga_go_modfloor_verdict ga_go_scan_mods ga_go_stamp_id ga_go_rebuild_if_toolchain_changed; do
   declare -F "$f" >/dev/null || { echo "  FAIL  GOTC-FX-00: $f not defined by the live lib"; exit 1; }
 done
 _pass "GOTC-FX-00: live verdict functions found in scripts/lib/go-toolchain.sh"
@@ -269,6 +269,92 @@ _mmutant() {  # $1 label, $2 sed expression applied to the live lib; judged by t
 }
 
 
+# --- GOTC-05 exemptions: pinned, expiring, never wider than written -------------
+# BOSv1.5.1-rc3: runc 1.4.3 links only golang.org/x/net/bpf from x/net and does not
+# compile against a bumped x/net, so the floor has ONE reasoned, time-boxed exemption
+# (buildroot-external/go-modfloor.exempt). XEX is a PINNED copy here, like MFLOORS:
+# the verdict is held to it, not to the live file (inputs_check.sh GOTC-IN-10 holds
+# the live file to its own pinned constants).
+XEX='usr/bin/runc|golang.org/x/net|v0.43.0|GO-2026-6612,GO-2026-6617|2026-11-30|runc links only x/net/bpf; module-level advisories only'
+_xjudge() {  # $1 fn, $2 file, $3 today, $4 exemptions -> "rc offenders"
+  local out rc
+  out="$("$1" "$MFLOORS" "$4" "$3" < "$2")"; rc=$?
+  printf '%s %s\n' "$rc" "$(printf '%s' "$out" | grep -c . || true)"
+}
+# name|today|want   (must-pass dir => want "0 0"; must-flag dir => pinned verdict)
+XCASES=(
+  "must-pass/runc-pinned|2026-10-13|0 0"
+  "must-pass/runc-pinned|2026-11-30|0 0"
+  "must-pass/runc-pinned-beside-clean-binary|2026-10-13|0 0"
+  "must-pass/runc-bumped-to-floor|2026-10-13|0 0"
+  "must-flag/runc-pinned|2026-12-01|1 2"
+  "must-flag/runc-bumped-to-floor|2026-12-01|1 1"
+  "must-flag/runc-other-version|2026-10-13|1 1"
+  "must-flag/runc-downgraded|2026-10-13|1 1"
+  "must-flag/other-binary-same-version|2026-10-13|1 1"
+  "must-flag/runc-pinned-plus-other-bad|2026-10-13|1 1"
+  "must-flag/runc-other-path|2026-10-13|1 1"
+  "must-flag/runc-other-module-below|2026-10-13|1 1"
+)
+_xall() {  # $1 fn, $2 report? -> number of mismatches
+  local fn="$1" report="${2:-}" bad=0 c name today want dir f got
+  for c in "${XCASES[@]}"; do
+    IFS='|' read -r name today want <<<"$c"
+    dir="${name%%/*}"; name="${name#*/}"
+    f="$FX/modfloor/exempt/$dir/$name.mods"
+    # the expiry cases reuse a must-pass scan: resolve whichever dir holds the file
+    [ -f "$f" ] || f="$FX/modfloor/exempt/must-pass/$name.mods"
+    got="$(_xjudge "$fn" "$f" "$today" "$XEX")"
+    if [ "$got" = "$want" ]; then [ -n "$report" ] && _pass "GOTC-FX-XM: $name @ $today -> '$got'"
+    else [ -n "$report" ] && _fail "GOTC-FX-XM: $name @ $today: got '$got', want '$want'"; bad=$((bad+1)); fi
+  done
+  return "$bad"
+}
+_nxf=$(ls "$FX"/modfloor/exempt/must-flag/*.mods 2>/dev/null | wc -l)
+_nxp=$(ls "$FX"/modfloor/exempt/must-pass/*.mods 2>/dev/null | wc -l)
+[ "$_nxf" -ge 6 ] && [ "$_nxp" -ge 3 ] && _pass "GOTC-FX-XM-01: $_nxf must-flag + $_nxp must-pass exemption fixtures present" || _fail "GOTC-FX-XM-01: exemption fixture sets incomplete (must-flag $_nxf, must-pass $_nxp)"
+_xall ga_go_modfloor_verdict report
+# no exemptions given: the same scan the exemption honours is a plain offender
+_g="$(_xjudge ga_go_modfloor_verdict "$FX/modfloor/exempt/must-pass/runc-pinned.mods" 2026-10-13 "")"
+[ "$_g" = "1 1" ] && _pass "GOTC-FX-XM-N: without the exemption the pinned runc scan is flagged (red proof for the exemption)" || _fail "GOTC-FX-XM-N: got '$_g', want '1 1'"
+# the exemption is counted, not silent
+ga_go_modfloor_verdict "$MFLOORS" "$XEX" 2026-10-13 < "$FX/modfloor/exempt/must-pass/runc-pinned.mods" >/dev/null
+[ "${GA_GO_EXEMPTED:-}" = 1 ] && _pass "GOTC-FX-XM-C: the exempted entry is counted (GA_GO_EXEMPTED=1)" || _fail "GOTC-FX-XM-C: GA_GO_EXEMPTED='${GA_GO_EXEMPTED:-}', want 1"
+# malformed exemptions are refused (rc 2), never ignored
+for bad_x in 'usr/bin/runc|golang.org/x/net|v0.43.0|GO-2026-6612|2026-11-30' \
+             'usr/bin/runc|golang.org/x/net|0.43.0|GO-2026-6612|2026-11-30|why' \
+             'usr/bin/runc|golang.org/x/net|v0.43.0|CVE-2026-1|2026-11-30|why' \
+             'usr/bin/runc|golang.org/x/net|v0.43.0|GO-2026-6612|30.11.2026|why' \
+             'usr/bin/runc|golang.org/x/net|v0.43.0|GO-2026-6612|2026-11-30|' \
+             'usr/bin/runc|golang.org/x/net|v0.43.0|GO-2026-6612|2026-11-30|why|extra'; do
+  ga_go_modfloor_verdict "$MFLOORS" "$bad_x" 2026-10-13 < "$FX/modfloor/exempt/must-pass/runc-pinned.mods" >/dev/null; rc=$?
+  [ "$rc" = 2 ] && _pass "GOTC-FX-XM-E: malformed exemption refused (rc 2): ${bad_x:0:60}" || _fail "GOTC-FX-XM-E: '$bad_x' gave rc $rc, want 2"
+done
+ga_go_modfloor_verdict "$MFLOORS" "$XEX" 30.11.2026 < "$FX/modfloor/exempt/must-pass/runc-pinned.mods" >/dev/null; rc=$?
+[ "$rc" = 2 ] && _pass "GOTC-FX-XM-E: malformed TODAY refused (rc 2)" || _fail "GOTC-FX-XM-E: malformed TODAY gave rc $rc, want 2"
+# the exempt-list reader: comments stripped, a missing file is "no exemptions"
+_xl="$(ga_go_modfloor_exempt_list "$REPO_ROOT/buildroot-external")"
+[ "$(grep -c . <<<"$_xl")" = 1 ] && [[ "$_xl" == usr/bin/runc\|golang.org/x/net\|* ]] && _pass "GOTC-FX-XM-L: the live go-modfloor.exempt yields one runc entry (comments stripped)" || _fail "GOTC-FX-XM-L: live exempt list read as '$_xl'"
+[ -z "$(ga_go_modfloor_exempt_list "$FX/modfloor/ext-missing")" ] && _pass "GOTC-FX-XM-L: a missing exempt file means no exemptions" || _fail "GOTC-FX-XM-L: missing file yielded entries"
+# the LIVE exemption entry parses under the LIVE verdict (a malformed live file is rc 2 = red in GOTC-05)
+ga_go_modfloor_verdict "$MFLOORS" "$_xl" 2026-10-13 < "$FX/modfloor/exempt/must-pass/runc-pinned.mods" >/dev/null; rc=$?
+[ "$rc" = 0 ] && _pass "GOTC-FX-XM-LIVE: the live exemption entry exempts the runc 1.4.3 scan before expiry" || _fail "GOTC-FX-XM-LIVE: live entry gave rc $rc on the runc scan, want 0"
+
+_xmutant() {  # $1 label, $2 sed expression applied to the live lib; judged by the exemption fixtures
+  local m="$XW/xm.sh"
+  sed "$2" "$LIB" > "$m"
+  if cmp -s "$m" "$LIB"; then _fail "GOTC-FX-XX: mutant '$1' did not apply - the live lib changed shape; update the mutant"; return; fi
+  # shellcheck source=/dev/null
+  if ( . "$m"; _xall ga_go_modfloor_verdict ); then _fail "GOTC-FX-XX: mutant '$1' passes every exemption fixture - the fixtures do not guard it"
+  else _pass "GOTC-FX-XX: mutant '$1' caught by the exemption fixtures"; fi
+}
+XW="$(mktemp -d)"
+_xmutant "expiry ignored"          's/! "\${_xexp\[\$_key\]}" < "\$_today" && //'
+_xmutant "version pin ignored"     's/ && "\$_ver" == "\${_xver\[\$_key\]}"//'
+_xmutant "path ignored (any binary)" 's/_key="\$_cur|\$_mod"/_key="usr\/bin\/runc|$_mod"/'
+_xmutant "expired entry not reported" 's/if \[\[ "\${_xexp\[\$_key\]}" < "\$_today" \]\]; then/if false; then/'
+rm -rf "$XW"
+
 # --- the module floors reach a REUSED output tree (ga_go_stamp_id) --------------
 # Buildroot runs a POST_PATCH hook once per package build dir. Without the floors
 # in the recorded stamp, an `update` bake would keep the old netbird/telegraf/
@@ -355,6 +441,20 @@ GOSTUB
     && _pass "GOTC-FX-SEAM-2: block over the rc2-shaped image: GOTC-05 fails and names the offenders" || _fail "GOTC-FX-SEAM-2: rc2-shaped image -> '$(_g5 "$o")'"
   o="$(_blk "$FX/modfloor/must-pass/binary-without-floored-modules.mods")"
   [[ "$(_g5 "$o")" == *"FAIL"*"reader is broken"* ]] && _pass "GOTC-FX-SEAM-3: an image with zero floored entries fails closed (reader broken)" || _fail "GOTC-FX-SEAM-3: zero floored entries -> '$(_g5 "$o")'"
+  # exemption through the real block: expiry rewritten in the COPY (the live date must not make this suite flaky)
+  XF="$BW/repo/buildroot-external/go-modfloor.exempt"; XFL="$FX/modfloor/exempt/must-pass/runc-pinned.mods"
+  sed -i 's/|2026-11-30|/|2099-01-01|/' "$XF"
+  o="$(_blk "$XFL")"
+  { [[ "$(_g5 "$o")" == *"PASS"*"GOTC-05"* ]] && grep -q '1 below-floor entries allowed by a pinned' <<<"$o"; } \
+    && _pass "GOTC-FX-SEAM-4: block: runc at the pinned x/net under an unexpired exemption passes, and says it was exempted" || _fail "GOTC-FX-SEAM-4: pinned runc -> '$(_g5 "$o")'"
+  sed -i 's/|2099-01-01|/|2020-01-01|/' "$XF"
+  o="$(_blk "$XFL")"
+  { [[ "$(_g5 "$o")" == *"FAIL"*"GOTC-05"* ]] && grep -q 'exemption for golang.org/x/net EXPIRED 2020-01-01' <<<"$o"; } \
+    && _pass "GOTC-FX-SEAM-5: block: the same runc after the expiry date fails and names the expired exemption" || _fail "GOTC-FX-SEAM-5: expired -> '$(_g5 "$o")'"
+  rm -f "$XF"
+  o="$(_blk "$XFL")"
+  { [[ "$(_g5 "$o")" == *"FAIL"*"GOTC-05"* ]] && grep -q 'usr/bin/runc: golang.org/x/net v0.43.0 (below floor v0.60.0)' <<<"$o"; } \
+    && _pass "GOTC-FX-SEAM-6: block: without an exemption file the same runc fails (strict by default)" || _fail "GOTC-FX-SEAM-6: no exemption file -> '$(_g5 "$o")'"
   rm -rf "$BW"
 fi
 
