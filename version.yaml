@@ -13,7 +13,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.5.1-rc1  # marker. rc1 = BOSv1.5.0 + profile deadlock fix (#776), mesh watchdog reboot-off (#772/#773), HEAT-02 broker count (#774), glib/xz patches (#778), fluent-bit minimal (#780), pins gm 0.252.0 / default_addon 2.1.5 / mosquitto 7.2.5, Go CVE allowlist exit.
+gaos_release: BOSv1.5.1-rc2  # marker. rc2 = rc1 + Go 1.26.9 floor for the rootfs Go packages (#787). rc1 = BOSv1.5.0 + profile deadlock fix (#776), mesh watchdog reboot-off (#772/#773), HEAT-02 broker count (#774), glib/xz patches (#778), fluent-bit minimal (#780), pins gm 0.252.0 / default_addon 2.1.5 / mosquitto 7.2.5, Go CVE allowlist exit.
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
