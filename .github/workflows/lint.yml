@@ -632,6 +632,12 @@ jobs:
       - name: ssh cert-plane dry run against a real sshd (ADR-0019 step 2)
         run: SSHD=/usr/sbin/sshd ./tests/gates/ssh_cert_plane/sshd_dryrun.sh -v
 
+      # The fleet-manager mirror of an issued certificate carries UTC validity
+      # (ssh-keygen -L prints local time without an offset). Live sign script,
+      # fixture -L output in CEST/CET/UTC, recording curl.
+      - name: ssh cert mirror posts validity in UTC
+        run: ./tests/gates/ssh_cert_plane/mirror_utc.sh
+
       # ADR-0029 D3 on the OTA path: the live rauc-hook restores the device's
       # own cmdline.txt on an update, so the USB host lock has to come from the
       # boot script the update replaces. Starts from a pre-lock /mnt/boot, runs
