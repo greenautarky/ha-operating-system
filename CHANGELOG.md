@@ -14,6 +14,14 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased (BOSv1.5.1) — the device keeps its mesh path to ga-tools alive (Odoo #1263)
 
+### Fixed - device suite: HEAT-06/07 and MESH-04 were red by construction on every device (BOSv1.5.1-rc1/rc3 on K31, 2026-10-13)
+
+- Test-only change (`tests/ga_tests/heating`, `tests/ga_tests/mesh_watchdog`); no heating behaviour, add-on or UI touched.
+- HEAT-06: the suite judged a `sensor.hm_*` snapshot taken at the start of the run. HEAT-02's 120 s broker tap (#774) runs in between and a decision is valid for 120 s, so the check expired by construction. HEAT-06 now re-reads Core's states immediately before judging and fails closed when the re-read fails.
+- `rooms_with_sensor()` (HEAT-03/06/07): counts rooms with a non-null `room_sensor` (or, on an older component, a `sensor.*` temperature_source), not "anything but valve". `house_average` rooms have no decision by ADR-0021 section 3 and were demanded one.
+- MESH-04: read `NextElapseUSecMonotonic`; the timer is OnBootSec/OnUnitActiveSec, so `NextElapseUSecRealtime` is always empty.
+- Selftests: fixtures stale-snapshot (must-pass, plus a fail-closed refetch fixture), house_average (must-pass), sensor room without decision (must-fail), two mutations of the live test.sh, and MWD-80..86 (MESH-04 command extracted from the live test.sh, red/green/old-check-red).
+
 ### Changed — runc: reasoned, time-boxed GOTC-05 exemption instead of the x/net bump (BOSv1.5.1-rc3 bake failed building runc 1.4.3)
 
 - Cause: #796 hooked runc into go-modbump; the bake then failed compiling runc 1.4.3 (`libcontainer/specconv/spec_linux.go: unknown field IsDefault in struct literal of type config.Device`) - the x/net bump moved a second module to a version runc 1.4.3 does not build against.

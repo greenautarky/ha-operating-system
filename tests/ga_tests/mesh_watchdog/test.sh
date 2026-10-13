@@ -26,8 +26,14 @@ run_test "MESH-02" "ga-mesh-watchdog.service is present" \
 run_test "MESH-03" "ga-mesh-watchdog.timer is ACTIVE (not merely enabled)" \
   "[ \"\$(systemctl is-active ga-mesh-watchdog.timer 2>/dev/null)\" = active ]"
 
-run_test_show "MESH-04" "…and it has a next elapse scheduled" \
-  "systemctl show -p NextElapseUSecRealtime --value ga-mesh-watchdog.timer 2>/dev/null | grep -qv '^$' && systemctl show -p NextElapseUSecRealtime --value ga-mesh-watchdog.timer"
+# The timer is OnBootSec/OnUnitActiveSec = MONOTONIC. NextElapseUSecRealtime is
+# only ever set for OnCalendar timers, so on this unit it is ALWAYS empty and
+# the old check could not pass on any device (systemd prints the monotonic value
+# humanised, e.g. "2h 37.127221s" on K31, so it is not tested for digits) (K31 BOSv1.5.1-rc1/rc3,
+# 2026-10-13). selftest.sh extracts this very line (MESH04_CMD) and runs it
+# against a stub systemctl - keep it on ONE line, single-quoted.
+MESH04_CMD='n=$(systemctl show -p NextElapseUSecMonotonic --value ga-mesh-watchdog.timer 2>/dev/null); echo "next elapse (monotonic)=${n:-empty}"; case "$n" in ""|0|n/a|infinity) false ;; *) true ;; esac'
+run_test_show "MESH-04" "…and it has a next elapse scheduled" "$MESH04_CMD"
 
 # The timer's first run is OnBootSec=4min; give a freshly booted device that
 # long before demanding a file, then assert for real either way.

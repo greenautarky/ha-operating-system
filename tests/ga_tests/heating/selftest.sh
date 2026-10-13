@@ -41,6 +41,7 @@ run() {
   local addon_data="$FIXTURES/base/addons-data"
   [[ -d "$FIXTURES/$fx/addons-data" ]] && addon_data="$FIXTURES/$fx/addons-data"
   : > "$GA_HEAT_TMP/curl-args.log"
+  rm -f "$GA_HEAT_TMP/tapped"   # the shim's clock: set when HEAT-02's broker tap has run
   # HEAT-09 polls a valve for up to a minute on a real device. In here the
   # answer is a file and never changes, so one short try is the whole truth —
   # waiting longer would only make the selftest slower, not more honest.
@@ -134,6 +135,23 @@ echo "== must-fail-decision-expired (valid_until in the past) =="
 expect must-fail-decision-expired HEAT-06 FAIL
 expect_detail must-fail-decision-expired "valid_until=2020-01-01T00:00:00 <= now="
 expect must-fail-decision-expired HEAT-03 PASS
+
+echo "== must-pass-stale-snapshot-refreshed (snapshot taken before HEAT-02's 120 s tap holds EXPIRED decisions; Core's live state is fine) =="
+# The suite's start-of-run snapshot is 120 s old by HEAT-06. The old logic judged
+# that snapshot and failed every device with TRVs (K31 BOSv1.5.1-rc1/rc3).
+expect must-pass-stale-snapshot-refreshed HEAT-06 PASS
+echo "== must-fail-refetch-empty (the re-read before HEAT-06 returns nothing: fail closed, do not fall back to the stale snapshot) =="
+expect must-fail-refetch-empty HEAT-06 FAIL
+expect_detail must-fail-refetch-empty "could not re-read Core's states right before the check"
+
+echo "== must-pass-house-average-room (temperature_source: house_average, room_sensor null: no decision exists by ADR-0021 s3) =="
+expect must-pass-house-average-room HEAT-06 PASS
+expect must-pass-house-average-room HEAT-03 PASS
+expect must-pass-house-average-room HEAT-07 PASS
+expect_detail must-pass-house-average-room "2/2 valves hold sensor.hm_<ieee>_desired_offset"
+echo "== must-fail-sensor-room-no-decision (room WITH a room_sensor, valve without a decision: still red) =="
+expect must-fail-sensor-room-no-decision HEAT-06 FAIL
+expect_detail must-fail-sensor-room-no-decision "sensor.hm_0x0cae5ffffeab11e9_desired_offset absent"
 
 echo "== must-fail-decision-contract2 =="
 expect must-fail-decision-contract2 HEAT-06 FAIL
@@ -270,6 +288,38 @@ mutate hard-auto '_target="$_pre"' '_target=auto' \
   "climate.bad(before=heat now=auto)" "climate.wohnzimmer=auto climate.bad=auto"
 mutate one-shot '[ "$_wrote" -eq 0 ] && break' 'break' \
   "climate.wohnzimmer(before=auto now=heat)" "climate.wohnzimmer=heat climate.bad=heat"
+
+# MUTATIONS of the LIVE test.sh itself (same discipline: the pattern must still be
+# found, and the SPECIFIC check must go red).
+# mutate_suite <name> <from> <to> <fixture> <id> <want-verdict> <want-detail>
+mutate_suite() {
+  local name="$1" from="$2" to="$3" fx="$4" id="$5" want="$6" detail="$7" dir
+  dir="$GA_HEAT_TMP/mutsuite-$name"; mkdir -p "$dir/heating"
+  ln -sfn "$HERE/../lib" "$dir/lib"
+  cp "$SUITE" "$dir/heating/test.sh"; cp "$HERE/room_modes.sh" "$dir/heating/room_modes.sh"
+  ran=$((ran + 1))
+  if ! grep -qF -- "$from" "$dir/heating/test.sh"; then
+    echo "  FAIL  suite mutation $name: pattern not found in test.sh - the mutation is stale, fix it"
+    fails=$((fails + 1)); return
+  fi
+  FROM="$from" TO="$to" perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/' "$dir/heating/test.sh"
+  unset "OUT[$fx]"
+  SUITE_OVERRIDE="$dir/heating/test.sh" run "$fx"
+  local v; v="$(verdict "$fx" "$id")"
+  if [[ "$v" == "$want" ]] && printf '%s\n' "${OUT[$fx]}" | grep -qF -- "$detail"; then
+    echo "  ok    suite mutation $name -> $fx/$id $v ($detail)"
+  else
+    echo "  FAIL  suite mutation $name not caught: $fx/$id verdict=$v (want $want / $detail)"
+    printf '%s\n' "${OUT[$fx]}" | sed 's/^/          | /'
+    fails=$((fails + 1))
+  fi
+  unset "OUT[$fx]"
+}
+echo "== mutations of test.sh (each must turn the specific check red/green as stated) =="
+mutate_suite no-refresh 'refresh_states || {' ': || {' \
+  must-pass-stale-snapshot-refreshed HEAT-06 FAIL "valid_until=2020-01-01T00:00:00 <= now="
+mutate_suite sensor-selector-old 'if [ -n "$_rsws" ]; then echo "$_rws"' 'if [ -n "$_srcws" ] && [ "$_srcws" != valve ]; then echo "$_rws"' \
+  must-pass-house-average-room HEAT-06 FAIL "sensor.hm_0x0cae5ffffeab11e9_desired_offset absent"
 
 # Fail closed on zero: a harness that inspected nothing is a failure, not a pass.
 if (( ran == 0 )); then
