@@ -1,0 +1,5 @@
+usr/bin/runc: go1.26.9
+	path	github.com/opencontainers/runc
+	mod	github.com/opencontainers/runc	(devel)	
+	dep	golang.org/x/net	v0.43.0	h1:AAAA=
+	dep	golang.org/x/sys	v0.38.0	h1:AAAA=

@@ -191,6 +191,7 @@ done
 MFLOORS=$'golang.org/x/net v0.60.0\ngolang.org/x/crypto v0.57.0\ngolang.org/x/text v0.42.0\ngolang.org/x/mod v0.41.0'
 declare -A MFLAG=(
   [rc2-shaped]="1 10"
+  [runc-bake-rc3]="1 1"
   [net-one-below]="1 1"
   [crypto-only-below]="1 1"
   [text-below]="1 1"

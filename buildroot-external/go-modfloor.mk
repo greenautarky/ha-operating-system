@@ -30,13 +30,6 @@ GA_GO_MODFLOOR += golang.org/x/crypto@v0.57.0
 GA_GO_MODFLOOR += golang.org/x/text@v0.42.0
 GA_GO_MODFLOOR += golang.org/x/mod@v0.41.0
 
-# runc is deliberately NOT hooked: it links none of x/net, x/crypto, x/text, x/mod
-# (go list -deps for runc 1.4.3 reaches only x/sys; measured 2026-10-13) and its
-# build needs cgo + libseccomp, so a go.mod bump would change a binary it cannot
-# improve. GOTC-05 still reads the runc binary: the day a runc bump links one of
-# them, the gate goes red and the hook is added (inputs_check.sh GOTC-IN-09 pins
-# this exemption list).
-#
 # Packages that vendor those modules. -modfile is the module file the package
 # builds with (docker-cli keeps vendor.mod, not go.mod).
 GA_GO_MODBUMP_SCRIPT = $(BR2_EXTERNAL_HASSOS_PATH)/../scripts/go-modbump.sh
@@ -64,6 +57,9 @@ endef
 define DOCKER_ENGINE_GA_MODBUMP
 	$(call GA_GO_MODBUMP_RUN)
 endef
+define RUNC_GA_MODBUMP
+	$(call GA_GO_MODBUMP_RUN)
+endef
 define DOCKER_CLI_GA_MODBUMP
 	$(call GA_GO_MODBUMP_RUN,vendor.mod)
 endef
@@ -74,3 +70,4 @@ OS_AGENT_POST_PATCH_HOOKS      += OS_AGENT_GA_MODBUMP
 CONTAINERD_POST_PATCH_HOOKS    += CONTAINERD_GA_MODBUMP
 DOCKER_ENGINE_POST_PATCH_HOOKS += DOCKER_ENGINE_GA_MODBUMP
 DOCKER_CLI_POST_PATCH_HOOKS    += DOCKER_CLI_GA_MODBUMP
+RUNC_POST_PATCH_HOOKS          += RUNC_GA_MODBUMP
