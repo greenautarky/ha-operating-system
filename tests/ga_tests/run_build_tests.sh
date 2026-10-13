@@ -4763,23 +4763,26 @@ else
   # lines scripts/go-modbump.sh applies at build time) and are themselves held
   # to pinned minimums by tests/ga_tests/build/go_toolchain/inputs_check.sh.
   _gotc_mfl="$(ga_go_modfloor_list "$_gotc_ext" 2>/dev/null || true)"
+  # pinned, expiring exemptions (go-modfloor.exempt): see ga_go_modfloor_verdict
+  _gotc_xmp="$(ga_go_modfloor_exempt_list "$_gotc_ext" 2>/dev/null || true)"
   if [[ -z "$_gotc_mfl" || ! -x "$_gotc_go" ]]; then
     _fail "GOTC-05: cannot scan target/ against the module floors (floors '${_gotc_mfl:+read}${_gotc_mfl:-<unreadable: ${_gotc_ext}/go-modfloor.mk>}', host-go ${_gotc_go})"
   else
     _gotc_mods="$(ga_go_scan_mods "$TARGET" "$_gotc_go")"
     # the counters are set inside the pipeline's subshell: read them there
-    _gotc_off="$(printf '%s\n' "$_gotc_mods" | { ga_go_modfloor_verdict "$_gotc_mfl"; _r=$?; echo "meta=${GA_GO_MODS_SEEN}/${GA_GO_SCANNED}/rc=${_r}"; })"
+    _gotc_off="$(printf '%s\n' "$_gotc_mods" | { ga_go_modfloor_verdict "$_gotc_mfl" "$_gotc_xmp"; _r=$?; echo "meta=${GA_GO_MODS_SEEN}/${GA_GO_SCANNED}/${GA_GO_EXEMPTED}/rc=${_r}"; })"
     _gotc_meta="${_gotc_off##*meta=}"
     _gotc_off="${_gotc_off%meta=*}"
     _gotc_rc="${_gotc_meta##*/rc=}"
     GA_GO_MODS_SEEN="${_gotc_meta%%/*}"
     GA_GO_SCANNED="${_gotc_meta#*/}"; GA_GO_SCANNED="${GA_GO_SCANNED%%/*}"
+    _gotc_nex="${_gotc_meta%/rc=*}"; _gotc_nex="${_gotc_nex##*/}"
     if [[ "$_gotc_rc" == "2" ]]; then
       _fail "GOTC-05: zero Go binaries found in target/ - a scan over nothing is not a pass"
     elif [[ "${GA_GO_MODS_SEEN:-0}" -eq 0 ]]; then
       _fail "GOTC-05: the scan read no golang.org/x/{net,crypto,text,mod} entry from any binary - the reader is broken, not the image"
     elif [[ "$_gotc_rc" == "0" ]]; then
-      _pass "GOTC-05: ${GA_GO_MODS_SEEN} vendored x/{net,crypto,text,mod} entries in ${GA_GO_SCANNED} Go binaries are all at or above their floors"
+      _pass "GOTC-05: ${GA_GO_MODS_SEEN} vendored x/{net,crypto,text,mod} entries in ${GA_GO_SCANNED} Go binaries are all at or above their floors (${_gotc_nex} below-floor entries allowed by a pinned, unexpired go-modfloor.exempt entry)"
     else
       _fail "GOTC-05: Go binaries embed a vendored module below its floor (go-modfloor.mk; rebuild: ga_build.sh dircleans Go packages when the floors change):"
       printf '%s' "$_gotc_off" | sed 's/^/          /'
