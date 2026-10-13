@@ -118,6 +118,8 @@ No device or emulator needed — checks the build output tree directly.
 - GOTC-01: buildroot's `GO_VERSION` is readable from `buildroot/package/go/go.mk` (the expected value comes from the source, never from the build output)
 - GOTC-02: the build's host-go reports that same version
 - GOTC-03: every Go binary in `target/` (scanned with `go version <dir>`) embeds exactly `go$(GO_VERSION)`; zero binaries scanned, or `usr/bin/netbird` not recognised, is a failure. Fixtures: `build/go_toolchain/selftest.sh` (CI, lint.yml)
+- GOTC-04: no Go binary in `target/` embeds a Go older than `GA_GO_VERSION_FLOOR` (`buildroot-external/go-floor.mk`)
+- GOTC-05: no Go binary in `target/` (scanned with `go version -m <dir>`) embeds a vendored `golang.org/x/{net,crypto,text,mod}` below its floor in `buildroot-external/go-modfloor.mk` (the same lines `scripts/go-modbump.sh` applies at build time); a scan that reads zero floored module entries is a failure (broken reader). Fixtures: `build/go_toolchain/selftest.sh` (must-flag/must-pass `.mods` scans, mutants, stamp/rebuild trigger); inputs (pinned minimum floors, hash pins, hook coverage of every enabled Go package): `build/go_toolchain/inputs_check.sh`
 
 ## Category 2: Emulation (`emu`)
 Can run in QEMU or container without real hardware.

@@ -4687,7 +4687,7 @@ echo ""
 echo "--- Go toolchain consistency ---"
 _gotc_lib="${SRC:-$(cd "$(dirname "$0")/../.." && pwd)}/scripts/lib/go-toolchain.sh"
 if [[ ! -d "$TARGET" ]]; then
-  _skip "GOTC-01..04: Go toolchain consistency" "no target/ under $OUT"
+  _skip "GOTC-01..05: Go toolchain consistency" "no target/ under $OUT"
 elif [[ ! -f "$_gotc_lib" ]]; then
   _fail "GOTC-00: go-toolchain lib missing at $_gotc_lib — the check cannot run"
 else
@@ -4751,6 +4751,37 @@ else
       _fail "GOTC-04: zero Go binaries found in target/ - a scan over nothing is not a pass"
     else
       _fail "GOTC-04: Go binaries older than go${_gotc_floor} (GO-2026-6604 / GO-2026-6612 are fixed in go1.26.9):"
+      printf '%s' "$_gotc_off" | sed 's/^/          /'
+    fi
+  fi
+
+  # GOTC-05: the vendored golang.org/x/* modules inside every Go binary. The Go
+  # toolchain floor (GOTC-04) says nothing about them: BOSv1.5.1-rc2 had
+  # x/net 0.55-0.59 (GO-2026-6612, Critical, fixed 0.60.0) and x/crypto 0.48
+  # (GHSA-rm3j-f69w-wqmq, Critical) in containerd, docker, netbird and telegraf
+  # on go1.26.9. The floors are buildroot-external/go-modfloor.mk (the same
+  # lines scripts/go-modbump.sh applies at build time) and are themselves held
+  # to pinned minimums by tests/ga_tests/build/go_toolchain/inputs_check.sh.
+  _gotc_mfl="$(ga_go_modfloor_list "$_gotc_ext" 2>/dev/null || true)"
+  if [[ -z "$_gotc_mfl" || ! -x "$_gotc_go" ]]; then
+    _fail "GOTC-05: cannot scan target/ against the module floors (floors '${_gotc_mfl:+read}${_gotc_mfl:-<unreadable: ${_gotc_ext}/go-modfloor.mk>}', host-go ${_gotc_go})"
+  else
+    _gotc_mods="$(ga_go_scan_mods "$TARGET" "$_gotc_go")"
+    # the counters are set inside the pipeline's subshell: read them there
+    _gotc_off="$(printf '%s\n' "$_gotc_mods" | { ga_go_modfloor_verdict "$_gotc_mfl"; _r=$?; echo "meta=${GA_GO_MODS_SEEN}/${GA_GO_SCANNED}/rc=${_r}"; })"
+    _gotc_meta="${_gotc_off##*meta=}"
+    _gotc_off="${_gotc_off%meta=*}"
+    _gotc_rc="${_gotc_meta##*/rc=}"
+    GA_GO_MODS_SEEN="${_gotc_meta%%/*}"
+    GA_GO_SCANNED="${_gotc_meta#*/}"; GA_GO_SCANNED="${GA_GO_SCANNED%%/*}"
+    if [[ "$_gotc_rc" == "2" ]]; then
+      _fail "GOTC-05: zero Go binaries found in target/ - a scan over nothing is not a pass"
+    elif [[ "${GA_GO_MODS_SEEN:-0}" -eq 0 ]]; then
+      _fail "GOTC-05: the scan read no golang.org/x/{net,crypto,text,mod} entry from any binary - the reader is broken, not the image"
+    elif [[ "$_gotc_rc" == "0" ]]; then
+      _pass "GOTC-05: ${GA_GO_MODS_SEEN} vendored x/{net,crypto,text,mod} entries in ${GA_GO_SCANNED} Go binaries are all at or above their floors"
+    else
+      _fail "GOTC-05: Go binaries embed a vendored module below its floor (go-modfloor.mk; rebuild: ga_build.sh dircleans Go packages when the floors change):"
       printf '%s' "$_gotc_off" | sed 's/^/          /'
     fi
   fi

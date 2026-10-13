@@ -1,0 +1,5 @@
+usr/bin/a: go1.26.9
+	path	x
+	mod	x	(devel)	
+	dep	golang.org/x/net	v0.60.0	h1:AAAA=
+	dep	golang.org/x/crypto	v0.48.0	h1:AAAA=

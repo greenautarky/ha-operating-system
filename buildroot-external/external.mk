@@ -1,5 +1,9 @@
 include $(sort $(wildcard $(BR2_EXTERNAL_HASSOS_PATH)/package/*/*.mk))
 
+# Module floors for the vendored golang.org/x/* in the rootfs Go binaries.
+# Hooks only (read at recipe time), so it can follow the package includes.
+include $(BR2_EXTERNAL_HASSOS_PATH)/go-modfloor.mk
+
 # CPE identifiers for upstream Buildroot packages that ship without one.
 #
 # Without a CPE, Buildroot's cve-check cannot match a package against NVD at

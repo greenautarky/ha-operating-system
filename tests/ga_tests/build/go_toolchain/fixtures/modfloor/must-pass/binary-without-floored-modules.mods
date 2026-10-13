@@ -1,0 +1,4 @@
+usr/bin/a: go1.26.9
+	path	x
+	mod	x	(devel)	
+	dep	github.com/spf13/cobra	v1.8.0	h1:AAAA=

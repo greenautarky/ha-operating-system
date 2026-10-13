@@ -145,6 +145,83 @@ ga_go_scan() {
   GOTOOLCHAIN=local "$_go" version "$_t" 2>/dev/null | sed "s#^${_t%/}/##"
 }
 
+# ga_go_modfloor_list EXTERNAL_DIR — prints the module floors from
+# EXTERNAL_DIR/go-modfloor.mk, one "module version" pair per line (the same
+# GA_GO_MODFLOOR lines scripts/go-modbump.sh lifts the vendored modules to).
+# Exit 1, nothing printed, when the file is missing or holds no floor line.
+ga_go_modfloor_list() {
+  local _mk="${1:-}/go-modfloor.mk" _out
+  [[ -f "$_mk" ]] || return 1
+  _out="$(sed -n -E 's/^GA_GO_MODFLOOR[[:space:]]*\+?=[[:space:]]*([^[:space:]@]+)@(v[0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$/\1 \2/p' "$_mk")"
+  [[ -n "$_out" ]] || return 1
+  printf '%s\n' "$_out"
+}
+
+# ga_go_modfloor_verdict FLOORS — reads `go version -m <dir>` output on stdin and
+# fails every Go binary that embeds a floored module BELOW its floor. FLOORS is
+# the text ga_go_modfloor_list prints ("module version" per line). The module
+# name is matched whole (golang.org/x/net is not golang.org/x/network), and a
+# `=>` replace line overrides the module it follows (the replacement is what
+# is linked).
+#   stdout: one line per offender, "PATH: MODULE VERSION (below floor VERSION)"
+#   exit 0  every scanned binary is at or above every floor it embeds
+#   exit 1  at least one binary embeds a floored module below its floor
+#   exit 2  nothing to judge: no/malformed FLOORS, or ZERO binaries scanned
+# Variables for the caller: GA_GO_SCANNED (binaries), GA_GO_MODS_SEEN (floored
+# module entries read - zero over a real image means the reader, not the image,
+# is broken).
+ga_go_modfloor_verdict() {
+  local _floors="${1:-}" _line _cur="" _bad=0 _kind _mod _ver _f _fm _fv _low _last_mod="" _flagged
+  local -A _floor=()
+  GA_GO_SCANNED=0 GA_GO_MODS_SEEN=0
+  while IFS= read -r _f || [[ -n "$_f" ]]; do
+    [[ -n "$_f" ]] || continue
+    _fm="${_f% *}" _fv="${_f#* }"
+    [[ "$_fm" != "$_f" && "$_fm" =~ ^[A-Za-z0-9._/-]+$ && "$_fv" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 2
+    _floor["$_fm"]="$_fv"
+  done <<<"$_floors"
+  (( ${#_floor[@]} > 0 )) || return 2
+  while IFS= read -r _line || [[ -n "$_line" ]]; do
+    if [[ "$_line" =~ ^[^[:space:]].*:\ go ]]; then          # "PATH: goX.Y.Z" header
+      _cur="${_line%: *}"; _last_mod=""; GA_GO_SCANNED=$((GA_GO_SCANNED + 1)); continue
+    fi
+    [[ "$_line" =~ ^[[:space:]] && -n "$_cur" ]] || continue
+    # tab is IFS-whitespace: the leading tab is dropped, fields are kind/module/version/sum
+    IFS=$'\t' read -r _kind _mod _ver _ <<<"$_line"
+    case "$_kind" in
+      dep|mod) _last_mod="$_mod" ;;
+      '=>')    # replace line: what is LINKED is this module/version, not the one above
+        [[ -n "$_last_mod" && -n "${_floor[$_last_mod]+x}" ]] || continue
+        GA_GO_MODS_SEEN=$((GA_GO_MODS_SEEN + 1))
+        if [[ "$_mod" != "$_last_mod" ]]; then
+          printf '%s: %s replaced by %s %s (cannot be judged against floor %s)\n' "$_cur" "$_last_mod" "$_mod" "${_ver:-<none>}" "${_floor[$_last_mod]}"
+          _bad=1; continue
+        fi
+        _mod="$_last_mod" ;;
+      *) continue ;;
+    esac
+    [[ -n "${_mod:-}" && -n "${_floor[$_mod]+x}" ]] || continue
+    [[ "$_kind" == '=>' ]] || GA_GO_MODS_SEEN=$((GA_GO_MODS_SEEN + 1))
+    _fv="${_floor[$_mod]}"
+    _low="$(printf '%s\n%s\n' "${_ver#v}" "${_fv#v}" | sort -V | head -n 1)"
+    if [[ ! "$_ver" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || ( "${_ver#v}" != "${_fv#v}" && "$_low" != "${_fv#v}" ) ]]; then
+      printf '%s: %s %s (below floor %s)\n' "$_cur" "$_mod" "${_ver:-<none>}" "$_fv"
+      _bad=1
+    fi
+  done
+  (( GA_GO_SCANNED > 0 )) || return 2
+  return "$_bad"
+}
+
+# ga_go_scan_mods TARGET_DIR GO_BIN — prints `go version -m` for every Go binary
+# under TARGET_DIR (paths relative to TARGET_DIR). Exit 1 when GO_BIN is not
+# executable - the caller must fail, not skip.
+ga_go_scan_mods() {
+  local _t="${1:-}" _go="${2:-}"
+  [[ -d "$_t" && -x "$_go" ]] || return 1
+  GOTOOLCHAIN=local "$_go" version -m "$_t" 2>/dev/null | sed "s#^${_t%/}/##"
+}
+
 # ga_go_packages OUT BR2_EXTERNAL_PATH — prints the enabled TARGET packages
 # that depend on host-go (every golang-package, plus anything else that builds
 # with the host Go toolchain), one per line, lowercase buildroot names.
@@ -177,7 +254,7 @@ ga_go_rebuild_if_toolchain_changed() {
   _stamp="$(ga_go_stamp_file "$_out")"
   _rec="$(cat "$_stamp" 2>/dev/null || true)"
   if [[ "$_rec" == "$_exp" ]]; then
-    echo "go-toolchain: Go packages in this tree were built with go${_exp} (= buildroot GO_VERSION) — no rebuild needed"
+    echo "go-toolchain: Go packages in this tree were built with the current Go inputs (${_exp}: toolchain + module floors) — no rebuild needed"
     return 0
   fi
   _pkgs="$(ga_go_packages "$_out" "$_ext")" || {
@@ -188,12 +265,29 @@ ga_go_rebuild_if_toolchain_changed() {
     echo "go-toolchain: no enabled package depends on host-go — nothing to rebuild"
     return 0
   fi
-  echo "WARNING: go-toolchain: Go packages in this tree were built with ${_rec:+go}${_rec:-<unrecorded toolchain>}, buildroot now pins go${_exp}."
+  echo "WARNING: go-toolchain: Go packages in this tree were built from Go inputs ${_rec:-<unrecorded>}, the current ones are ${_exp} (toolchain version + vendored-module floors)."
   echo "WARNING: go-toolchain: dircleaning every host-go package so it is recompiled: ${_pkgs//$'\n'/ }"
   rm -f "$_stamp"
   for _p in $_pkgs; do
     make O="$_out" BR2_EXTERNAL="$_ext" "${_p}-dirclean" || return 1
   done
+}
+
+# ga_go_stamp_id EXPECTED EXTERNAL_DIR [BUMP_SCRIPT] — the value ga_build.sh
+# records (and compares) for the Go packages in an output tree: the Go version
+# plus a hash of everything else that decides what is compiled into them - the
+# vendored-module floors (go-modfloor.mk), their pinned hashes (go-modfloor.sum)
+# and the script that applies them (scripts/go-modbump.sh). Buildroot applies a
+# POST_PATCH hook once per package build dir, so on a reused tree a changed floor
+# would otherwise never reach netbird/telegraf/docker/containerd. Exit 1 when
+# any input is missing: refusing beats recording a stamp that hides a change.
+ga_go_stamp_id() {
+  local _v="${1:-}" _ext="${2:-}" _bump="${3:-}" _h
+  [[ -n "$_v" ]] || return 1
+  [[ -n "$_bump" ]] || _bump="$(dirname "${BASH_SOURCE[0]}")/../go-modbump.sh"
+  [[ -f "$_ext/go-modfloor.mk" && -f "$_ext/go-modfloor.sum" && -f "$_bump" ]] || return 1
+  _h="$(cat "$_ext/go-modfloor.mk" "$_ext/go-modfloor.sum" "$_bump" | sha256sum | cut -c1-12)" || return 1
+  printf '%s+modfloor.%s\n' "$_v" "$_h"
 }
 
 # ga_go_record_toolchain OUT EXPECTED — call only after the main build succeeded.
