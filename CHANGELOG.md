@@ -14,6 +14,14 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased (BOSv1.5.1) — the device keeps its mesh path to ga-tools alive (Odoo #1263)
 
+### Added - SBOM: Go module components (Odoo #1272, part 1)
+
+- Build/SBOM only; nothing on the device changes.
+- `images/sbom-cyclonedx.json` (CycloneDX 1.6) listed the ~198 Buildroot packages and no Go module. `generate_sbom` now reads the build info of every Go binary in `target/` (`ga_go_scan_mods`, the same reader GOTC-05 uses; new `scripts/go-sbom-merge.py` only parses its output) and adds one component per module, `purl` `pkg:golang/<module>@<version>`, a `ga:go-binary` property naming the binary, and a `dependsOn` edge from the Buildroot package that installed the binary (`build/packages-file-list.txt`). A binary no package owns attaches to the root component and is named in the log. Runs before cve-check.
+- Fails loudly: Go binaries but zero modules extracted, no Go binaries at all, or no host `go` makes `generate_sbom` return 1, which `assert_prod_sbom` turns into a failed bake (no silent package-only SBOM).
+- Tests: `tests/ga_tests/build/go_sbom/selftest.sh` (lint.yml) - recorded buildinfo fixtures, must-fail fixtures, seam over a stub `go`, generate_sbom wiring, four mutants.
+
+
 ### Fixed - device suite: HEAT-06/07 and MESH-04 were red by construction on every device (BOSv1.5.1-rc1/rc3 on K31, 2026-10-13)
 
 - Test-only change (`tests/ga_tests/heating`, `tests/ga_tests/mesh_watchdog`); no heating behaviour, add-on or UI touched.

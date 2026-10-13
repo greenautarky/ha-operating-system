@@ -380,6 +380,16 @@ jobs:
         # live GOTC block of run_build_tests.sh over a stub `go`.
         run: bash tests/ga_tests/build/go_toolchain/selftest.sh
 
+      - name: SBOM carries a pkg:golang component per module embedded in every Go binary, and fails loudly on Go binaries with zero modules (Odoo #1272)
+        # Buildroot's CycloneDX lists the Go packages, not the modules compiled
+        # into them. Drives the LIVE scripts/go-sbom-merge.py and
+        # ga_go_sbom_augment (reader = ga_go_scan_mods, the one GOTC-05 uses) over
+        # recorded `go version -m` fixtures: purls, dependsOn edges, shared
+        # modules counted once, replace lines, idempotence; must-fail: Go
+        # binaries with zero modules (rc 1), no Go binaries (rc 2), no host go
+        # (rc 2); wiring in generate_sbom; four mutants of the merger caught.
+        run: bash tests/ga_tests/build/go_sbom/selftest.sh
+
       - name: go-modbump hook - a transitive requirement of the module floors that go-modfloor.sum does not pin fails the hook, naming the module
         # BOSv1.5.1-rc3: the containerd hook died with "verifying go.mod: missing
         # GOSUMDB" (x/crypto 0.57.0 -> x/sys 0.48.0 was not pinned; buildroot's Go has

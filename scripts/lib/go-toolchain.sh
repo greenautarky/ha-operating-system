@@ -269,6 +269,27 @@ ga_go_scan_mods() {
   GOTOOLCHAIN=local "$_go" version -m "$_t" 2>/dev/null | sed "s#^${_t%/}/##"
 }
 
+# ga_go_sbom_augment SBOM TARGET_DIR GO_BIN FILE_LIST MERGE_PY - adds a CycloneDX
+# component (purl pkg:golang/<module>@<version>) for every module embedded in
+# every Go binary under TARGET_DIR, and a dependsOn from the shipping package
+# (FILE_LIST = buildroot's packages-file-list.txt). It READS through
+# ga_go_scan_mods, the reader GOTC-05 uses; MERGE_PY only parses that text.
+# rc 0 merged; rc 1 Go binaries but ZERO modules extracted; rc 2 nothing to
+# read (no go, no binaries, unreadable input). Never skips.
+ga_go_sbom_augment() {
+  local _sbom="${1:-}" _t="${2:-}" _go="${3:-}" _fl="${4:-}" _py="${5:-}" _mods _rc
+  [[ -s "$_sbom" && -f "$_fl" && -f "$_py" ]] || { echo "GO-SBOM ERROR: missing input (sbom '$_sbom', file list '$_fl', merger '$_py')" >&2; return 2; }
+  _mods="$(mktemp)" || return 2
+  if ! ga_go_scan_mods "$_t" "$_go" > "$_mods"; then
+    echo "GO-SBOM ERROR: cannot scan ${_t} (go '${_go}' not executable or target missing)" >&2
+    rm -f "$_mods"; return 2
+  fi
+  python3 "$_py" "$_sbom" --mods "$_mods" --file-list "$_fl"
+  _rc=$?
+  rm -f "$_mods"
+  return "$_rc"
+}
+
 # ga_go_packages OUT BR2_EXTERNAL_PATH — prints the enabled TARGET packages
 # that depend on host-go (every golang-package, plus anything else that builds
 # with the host Go toolchain), one per line, lowercase buildroot names.

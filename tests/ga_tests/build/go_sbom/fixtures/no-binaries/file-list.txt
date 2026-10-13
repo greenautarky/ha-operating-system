@@ -1,0 +1,4 @@
+netbird,./usr/bin/netbird
+netbird,./etc/netbird/x.conf
+runc,./usr/bin/runc
+busybox,./bin/busybox
