@@ -14,6 +14,14 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased (BOSv1.5.1) — the device keeps its mesh path to ga-tools alive (Odoo #1263)
 
+### Fixed — runc gets the go-modbump hook (GOTC-05 failed the BOSv1.5.1-rc3 bake on usr/bin/runc)
+
+- Cause: #792 exempted runc from the vendored-module floors on the claim that it links none of them. The real cgo build with the `seccomp` tag links
+  `golang.org/x/net/bpf` (via `libcontainer/seccomp/patchbpf`), and runc 1.4.3 vendors x/net 0.43.0 (floor 0.60.0). GOTC-05 caught it: `usr/bin/runc: golang.org/x/net v0.43.0 (below floor v0.60.0)`.
+- Fix: `RUNC_GA_MODBUMP` hook in `buildroot-external/go-modfloor.mk` like the other six Go packages; the runc exemption is removed from GOTC-IN-09;
+  `go-modfloor.sum` pins the two extra go.mod hashes runc's bump needs (x/crypto 0.41.0, x/text 0.28.0, from `scripts/go-modfloor-discover.sh` on the runc 1.4.3 source).
+  New modfloor fixtures: `runc-bake-rc3` (must flag) and `runc-after-hook` (must pass).
+
 ### Fixed — ga-services.conf: the /mnt/data override layers on the baked default in every reader; the mesh watchdog is no longer blind
 
 - Cause: `ga-mesh-watchdog` read `/mnt/data/ga-services.conf` INSTEAD of `/etc/ga-services.conf`. The staging seed writes a partial override

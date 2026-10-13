@@ -152,7 +152,6 @@ else
       u="$(printf '%s' "$p" | tr 'a-z-' 'A-Z_')"
       dp="$(sed -n "s/^${u}_DOWNLOAD_POST_PROCESS=//p" <<<"$pv")"
       [ "$dp" = "go" ] || continue
-      [ "$p" = "runc" ] && continue      # PINNED exemption: links no floored module (see go-modfloor.mk); GOTC-05 still reads its binary
       ngo=$((ngo+1))
       hk="$(sed -n "s/^${u}_POST_PATCH_HOOKS=//p" <<<"$pv")"
       case " $hk " in *" ${u}_GA_MODBUMP "*) ;; *) missing="$missing $p";; esac
