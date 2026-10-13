@@ -133,13 +133,26 @@ printf '%s' "$serial" > "$SERIAL_STATE"
 printf '%s\tserial=%s\tid=%s\tprincipals=%s\tvalidity=%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$serial" "$KEYID" "$PRINCIPALS_CSV" "$VALIDITY" >> "$LEDGER"
 
+# local time without offset (as `ssh-keygen -L` prints it) -> UTC ISO-8601 'Z'.
+# Parse in the local zone FIRST (epoch), then format in UTC: `date -u -d` would
+# read the input as UTC and change nothing.
+to_utc() {
+  local e; e=$(date -d "$1" +%s) && [[ -n "$e" ]] || return 1
+  date -u -d "@$e" +%Y-%m-%dT%H:%M:%SZ
+}
+
 # Mirror the issuance to the fleet-manager ledger when configured. The LOCAL
 # ledger above is written first and unconditionally; a failed mirror is loud
 # but does not undo a certificate that is already signed.
 if [[ -n "${GA_FLEET_URL:-}" && -n "${GA_FLEET_TOKEN:-}" ]]; then
   ca_fp=$(ssh-keygen -L -f "$OUT" | awk '/Signing CA/{print $4}')
-  from_t=$(ssh-keygen -L -f "$OUT" | awk '/Valid:/{print $3}')
-  to_t=$(ssh-keygen -L -f "$OUT" | awk '/Valid:/{print $5}')
+  # `ssh-keygen -L` prints the validity window in the signer's LOCAL time with
+  # no offset. The ledger stores UTC, so convert here (same TZ as ssh-keygen's
+  # own, because it is the same environment) and post an explicit 'Z'.
+  from_t=$(to_utc "$(ssh-keygen -L -f "$OUT" | awk '/Valid:/{print $3}')") \
+    || die "could not convert the certificate's valid-from time to UTC"
+  to_t=$(to_utc "$(ssh-keygen -L -f "$OUT" | awk '/Valid:/{print $5}')") \
+    || die "could not convert the certificate's valid-to time to UTC"
   for p_label in "$LABEL" "${also_labels[@]}"; do
     if curl -fsS --max-time 10 -X POST "${GA_FLEET_URL%/}/api/ssh-certificates" \
          -H "Authorization: Bearer ${GA_FLEET_TOKEN}" -H 'Content-Type: application/json' \

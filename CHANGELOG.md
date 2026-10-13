@@ -14,6 +14,12 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased (BOSv1.5.1) — the device keeps its mesh path to ga-tools alive (Odoo #1263)
 
+### Fixed — ga-sign-ssh-cert.sh mirrors certificate validity in UTC
+
+- The fleet-manager ledger mirror posted the validity window exactly as `ssh-keygen -L` prints it: local time, no offset.
+  The script now converts both instants to UTC ISO-8601 with a trailing `Z` before posting. Operator tooling only; no image change.
+  Gate: `tests/gates/ssh_cert_plane/mirror_utc.sh` (fixture output in CEST, CET and UTC; red before the fix).
+
 ### Security — Go 1.26.9 for the rootfs Go binaries (Odoo #1231)
 
 - The buildroot submodule pins Go 1.26.8; GO-2026-6604 and GO-2026-6612 (Go stdlib) are fixed in Go 1.26.9
