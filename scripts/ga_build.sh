@@ -1604,6 +1604,19 @@ generate_sbom() {
         if command -v jq &>/dev/null; then
           jq . "$cyclonedx" > "${cyclonedx}.tmp" 2>/dev/null && mv "${cyclonedx}.tmp" "$cyclonedx"
         fi
+        # Go modules: buildroot lists the Go packages, not the ~100s of modules
+        # compiled into their binaries (Odoo #1272). Read them from the binaries
+        # (build info, same reader as GOTC-05). Fails the build, loudly, when Go
+        # binaries exist and zero modules come out - no silent fall-back to a
+        # package-only SBOM. Runs BEFORE cve-check so the components exist when
+        # the SBOM is enriched.
+        if ! ga_go_sbom_augment "$cyclonedx" "${OUT}/target" "${OUT}/host/bin/go" \
+              "${OUT}/build/packages-file-list.txt" "${SCRIPT_DIR:-/build/scripts}/go-sbom-merge.py"; then
+          echo "ERROR: Go module extraction for the SBOM failed (see GO-SBOM ERROR above) - Odoo #1272"
+          export MAKEFLAGS="$saved_makeflags"
+          rm -f "$show_info_json" "$sbom_err"
+          return 1
+        fi
         enrich_sbom_with_cves "$cyclonedx"
       else
         echo "WARN: CycloneDX generator failed (see ${sbom_err}):"

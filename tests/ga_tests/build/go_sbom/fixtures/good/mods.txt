@@ -1,0 +1,18 @@
+usr/bin/netbird: go1.26.9
+	path	github.com/netbirdio/netbird/client
+	mod	github.com/netbirdio/netbird	v0.80.0	
+	dep	golang.org/x/net	v0.61.0	h1:AAAA=
+	dep	github.com/BurntSushi/toml	v1.4.0	h1:BBBB=
+	dep	github.com/docker/docker	v28.0.0+incompatible	h1:CCCC=
+	dep	github.com/pion/old	v1.0.0	h1:DDDD=
+	=>	github.com/netbirdio/pion-old	v1.0.1-nb	h1:EEEE=
+	build	-buildmode=exe
+usr/bin/runc: go1.26.9
+	path	github.com/opencontainers/runc
+	mod	github.com/opencontainers/runc	(devel)	
+	dep	golang.org/x/net	v0.61.0	h1:AAAA=
+	dep	golang.org/x/sys	v0.48.0	h1:FFFF=
+usr/bin/stray-tool: go1.26.9
+	path	x
+	mod	x	(devel)	
+	dep	golang.org/x/sys	v0.48.0	h1:FFFF=

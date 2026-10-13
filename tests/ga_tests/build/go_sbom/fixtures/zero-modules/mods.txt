@@ -1,0 +1,5 @@
+usr/bin/netbird: go1.26.9
+	path	github.com/netbirdio/netbird/client
+	build	-buildmode=exe
+usr/bin/runc: go1.26.9
+	path	github.com/opencontainers/runc

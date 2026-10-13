@@ -1,0 +1,1 @@
+warning: not a go binary
