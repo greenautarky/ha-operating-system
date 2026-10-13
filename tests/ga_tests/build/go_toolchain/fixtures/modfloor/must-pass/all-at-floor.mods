@@ -1,0 +1,7 @@
+usr/bin/netbird: go1.26.9
+	path	github.com/netbirdio/netbird
+	mod	github.com/netbirdio/netbird	(devel)	
+	dep	golang.org/x/net	v0.60.0	h1:AAAA=
+	dep	golang.org/x/crypto	v0.57.0	h1:AAAA=
+	dep	golang.org/x/text	v0.42.0	h1:AAAA=
+	dep	golang.org/x/mod	v0.41.0	h1:AAAA=

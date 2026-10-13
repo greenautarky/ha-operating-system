@@ -1,0 +1,25 @@
+usr/bin/netbird: go1.26.9
+	path	github.com/netbirdio/netbird
+	mod	github.com/netbirdio/netbird	(devel)	
+	dep	golang.org/x/net	v0.58.0	h1:AAAA=
+	dep	golang.org/x/crypto	v0.55.0	h1:AAAA=
+	dep	golang.org/x/text	v0.38.0	h1:AAAA=
+usr/bin/dockerd: go1.26.9
+	path	github.com/moby/moby/v2/cmd/dockerd
+	mod	github.com/moby/moby/v2/cmd/dockerd	(devel)	
+	dep	golang.org/x/net	v0.59.0	h1:AAAA=
+	dep	golang.org/x/text	v0.38.0	h1:AAAA=
+usr/bin/containerd: go1.26.9
+	path	github.com/containerd/containerd/v2/cmd/containerd
+	mod	github.com/containerd/containerd/v2/cmd/containerd	(devel)	
+	dep	golang.org/x/net	v0.55.0	h1:AAAA=
+	dep	golang.org/x/mod	v0.36.0	h1:AAAA=
+usr/bin/telegraf: go1.26.9
+	path	github.com/influxdata/telegraf/cmd/telegraf
+	mod	github.com/influxdata/telegraf/cmd/telegraf	(devel)	
+	dep	golang.org/x/net	v0.51.0	h1:AAAA=
+	dep	golang.org/x/crypto	v0.48.0	h1:AAAA=
+usr/bin/os-agent: go1.26.9
+	path	github.com/home-assistant/os-agent
+	mod	github.com/home-assistant/os-agent	(devel)	
+	dep	golang.org/x/text	v0.14.0	h1:AAAA=

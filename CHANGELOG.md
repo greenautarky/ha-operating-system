@@ -28,6 +28,25 @@ Earlier release history (pre-2026-05-27) is in the git log + the
   fails if any script hand-sources the conf again); `tests/ga_tests/mesh_watchdog/selftest.sh` MWD-70..77 (partial override measured and
   overridden key wins, full, none, loud unknown). Red on master: MWD-70, 71, 74, 76, 77.
 
+### Security — vendored golang.org/x/{net,crypto,text,mod} in the rootfs Go binaries
+
+- The Go 1.26.9 floor does not touch the modules that Go packages vendor: they come from whatever the upstream `go.mod` resolved to, so
+  containerd, docker, netbird and telegraf carried x/net and x/crypto releases below the fixed ones. Advisories: GO-2026-6612 (Critical, fixed in x/net 0.60.0),
+  GHSA-rm3j-f69w-wqmq (Critical, fixed in x/crypto 0.52.0), and the High ones fixed by the same releases (GO-2026-6603, -6610, -6611, -6617,
+  -5942, -5026 in x/net; GO-2026-6354, -6355 in x/crypto; GO-2026-5970 in x/text; GO-2026-6179, -6180 in x/mod).
+- **Build**: `buildroot-external/go-modfloor.mk` lists the floors (x/net 0.60.0, x/crypto 0.57.0, x/text 0.42.0, x/mod 0.41.0 - one mutually
+  consistent set, x/net 0.60.0 itself requires x/crypto 0.57.0). `scripts/go-modbump.sh` runs as a POST_PATCH hook of netbird, telegraf,
+  os-agent, containerd, docker-engine and docker-cli, lifts every floored module that the package's module graph contains below its floor
+  (`go get module@floor`, re-vendor), never adds a module the package does not use, never lowers one, and fails when anything is still
+  below the floor afterwards. The floor releases are hash-pinned in `go-modfloor.sum`. runc links none of the four and is not hooked.
+  The recorded Go stamp of an output tree now includes a hash of the floors, their pins and the script, so an `update` bake dircleans the Go
+  packages when a floor changes (`ga_go_stamp_id`). These six packages now need the Go module proxy at patch time (cached under `$(DL_DIR)/gomod`).
+- **Gate**: GOTC-05 reads `go version -m` of every Go binary in `target/` and fails when a floored module is below its floor, when a floored
+  module is replaced by another module, and when it read no floored entry at all. `inputs_check.sh` pins minimum floors (GOTC-IN-07),
+  the hash pins (IN-08) and requires the hook on every enabled Go package (IN-09). Fixtures: must-flag and must-pass `.mods` scans, mutants of
+  the live verdict, the stamp/rebuild trigger, and the GOTC block of `run_build_tests.sh` itself over a stub `go`
+  (`tests/ga_tests/build/go_toolchain/selftest.sh`, CI).
+
 ### Fixed — ga-sign-ssh-cert.sh mirrors certificate validity in UTC
 
 - The fleet-manager ledger mirror posted the validity window exactly as `ssh-keygen -L` prints it: local time, no offset.

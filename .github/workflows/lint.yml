@@ -367,17 +367,20 @@ jobs:
         # Red-proven by restoring the first-row rule: OSV-01 and OSV-02 fail.
         run: sh tests/ga_tests/openstick/selftest.sh
 
-      - name: GOTC-03/04 reject a Go binary built with another toolchain than buildroot pins, or below the Go floor
+      - name: GOTC-03/04/05 reject a Go binary built with another toolchain than buildroot pins, below the Go floor, or embedding a vendored x/net, x/crypto, x/text, x/mod below its floor
         # BOSv1.5.0-rc4 shipped netbird, os-agent and runc built with go1.26.5
         # while buildroot pinned go1.26.8: buildroot does not recompile a package
         # when host-go changes. Drives the LIVE scripts/lib/go-toolchain.sh over
         # must-flag scans (the real rc4 target scan, a version-prefix look-alike,
         # devel/missing versions, an empty scan) and must-pass scans; two
         # weakened copies of the verdict (prefix compare, empty scan passes)
-        # must each be caught.
+        # must each be caught. GOTC-05 (BOSv1.5.1-rc2: x/net 0.55-0.59, x/crypto
+        # 0.48; Critical) has its own must-flag/must-pass `go version -m` scans,
+        # mutants, the stamp that re-runs the hooks on a reused tree, and the
+        # live GOTC block of run_build_tests.sh over a stub `go`.
         run: bash tests/ga_tests/build/go_toolchain/selftest.sh
 
-      - name: Go toolchain inputs - the rootfs Go packages are built with Go >= 1.26.9 (Odoo #1231)
+      - name: Go toolchain inputs - the rootfs Go packages are built with Go >= 1.26.9 (Odoo #1231) and carry the vendored-module floors hook
         # GO-2026-6604 / GO-2026-6612 are fixed in Go 1.26.9; the buildroot
         # submodule pins 1.26.8. buildroot-external/go-floor.mk (loaded through
         # buildroot-ihost/local.mk) raises it. This asks buildroot itself what

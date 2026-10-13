@@ -1,0 +1,7 @@
+usr/bin/a: go1.26.9
+	path	x
+	mod	x	(devel)	
+	dep	golang.org/x/network	v0.1.0	h1:AAAA=
+	dep	golang.org/x/net/html	v0.1.0	h1:AAAA=
+	dep	github.com/foo/golang.org/x/net	v0.1.0	h1:AAAA=
+	dep	golang.org/x/netx	v0.0.1	h1:AAAA=

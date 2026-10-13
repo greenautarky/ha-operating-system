@@ -2325,6 +2325,13 @@ GO_EXPECTED="$(ga_go_expected_version "$BUILDROOT_DIR" "$BR2EXT_NETBIRD")" || {
   echo "ERROR: cannot read GO_VERSION from ${BUILDROOT_DIR}/package/go/go.mk" >&2
   exit 1
 }
+# What ga_build.sh records per output tree: the Go version AND the vendored-module
+# floors (buildroot-external/go-modfloor.mk), so a changed floor also dircleans the
+# Go packages on a reused tree (scripts/lib/go-toolchain.sh ga_go_stamp_id).
+GO_STAMP="$(ga_go_stamp_id "$GO_EXPECTED" "$BR2EXT_NETBIRD")" || {
+  echo "ERROR: cannot build the Go inputs stamp (go-modfloor.mk/.sum or scripts/go-modbump.sh missing under ${BR2EXT_NETBIRD})" >&2
+  exit 1
+}
 
 # 1) Configure
 if [[ "$MODE" == "full" ]]; then
@@ -2333,13 +2340,13 @@ if [[ "$MODE" == "full" ]]; then
 
 elif [[ "$MODE" == "partial" ]]; then
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "$DEFCONFIG"
-  ga_go_rebuild_if_toolchain_changed "$OUT" "$BR2_EXTERNAL_PATH" "$GO_EXPECTED"
+  ga_go_rebuild_if_toolchain_changed "$OUT" "$BR2_EXTERNAL_PATH" "$GO_STAMP"
   ga_pkg_inputs_rebuild_if_changed "$OUT" "$BR2_EXTERNAL_PATH" "${BR2EXT_NETBIRD}/patches" || exit 1
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" linux-dirclean hassio-dirclean
 
 elif [[ "$MODE" == "kernel" ]]; then
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "$DEFCONFIG"
-  ga_go_rebuild_if_toolchain_changed "$OUT" "$BR2_EXTERNAL_PATH" "$GO_EXPECTED"
+  ga_go_rebuild_if_toolchain_changed "$OUT" "$BR2_EXTERNAL_PATH" "$GO_STAMP"
   ga_pkg_inputs_rebuild_if_changed "$OUT" "$BR2_EXTERNAL_PATH" "${BR2EXT_NETBIRD}/patches" || exit 1
   make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" linux-dirclean
 
@@ -2350,7 +2357,7 @@ elif [[ "$MODE" == "update" ]]; then
   # moved buildroot to go1.26.8: their build dirs were simply reused. Dirclean
   # every host-go package when the toolchain that built them is not the one
   # buildroot pins now (scripts/lib/go-toolchain.sh; checked by GOTC-03).
-  ga_go_rebuild_if_toolchain_changed "$OUT" "$BR2_EXTERNAL_PATH" "$GO_EXPECTED"
+  ga_go_rebuild_if_toolchain_changed "$OUT" "$BR2_EXTERNAL_PATH" "$GO_STAMP"
   # Same for the patches and configure options WE carry for buildroot packages
   # (libglib2, xz: buildroot-external/patches/; fluent-bit: its plugin switches).
   # Buildroot tracks neither (scripts/lib/pkg-inputs.sh).
@@ -2433,7 +2440,7 @@ log_build_step "Configure ($MODE mode)" "completed"
 log_build_step "Buildroot main build"
 make O="$OUT" BR2_EXTERNAL="$BR2_EXTERNAL_PATH" "${MAKE_OVERRIDES[@]}" -j"$(nproc)" 2>&1 | tee -a "$BUILD_LOG"
 # Only a successful build may record which Go toolchain built the Go packages.
-ga_go_record_toolchain "$OUT" "$GO_EXPECTED"
+ga_go_record_toolchain "$OUT" "$GO_STAMP"
 ga_pkg_inputs_record "$OUT" "$BR2_EXTERNAL_PATH" "${BR2EXT_NETBIRD}/patches"
 
 # 3) Inject build ID and regenerate final artifacts

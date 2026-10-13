@@ -1,0 +1,4 @@
+usr/bin/a: go1.26.9
+	path	x
+	mod	x	(devel)	
+	dep	golang.org/x/net	v0.9.0	h1:AAAA=

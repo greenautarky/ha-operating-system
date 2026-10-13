@@ -1,0 +1,8 @@
+usr/bin/ok: go1.26.9
+	path	x
+	mod	x	(devel)	
+	dep	golang.org/x/net	v0.61.0	h1:AAAA=
+usr/bin/bad: go1.26.9
+	path	y
+	mod	y	(devel)	
+	dep	golang.org/x/net	v0.59.0	h1:AAAA=
