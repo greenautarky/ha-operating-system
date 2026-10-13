@@ -4,10 +4,10 @@
 #   * Drives the LIVE scripts/go-sbom-merge.py and the LIVE ga_go_sbom_augment in
 #     scripts/lib/go-toolchain.sh. Nothing is re-declared here; if either stops
 #     being found the suite FAILS (never skips).
-#   * must-pass: fixtures/good - recorded `go version -m` of two real-shaped
+#   * green case: fixtures/good - recorded `go version -m` of two real-shaped
 #     binaries plus a third not owned by any package, a replace line, a
 #     +incompatible version, an upper-case module path, a (devel) main module.
-#   * must-fail: fixtures/zero-modules (Go binaries, zero modules -> rc 1) and
+#   * red cases: fixtures/zero-modules (Go binaries, zero modules -> rc 1) and
 #     fixtures/no-binaries (nothing to read -> rc 2).
 #   * seam: ga_go_sbom_augment over a stub `go` (only `go` is stubbed; the
 #     reader ga_go_scan_mods, the merger and the file list are live).
