@@ -69,6 +69,10 @@ log()  { echo "${LOG_TAG}: $*"; }
 warn() { echo "${LOG_TAG}: WARNING: $*" >&2; }
 die()  { echo "${LOG_TAG}: ERROR: $*" >&2; exit 1; }
 
+GA_SERVICES_CONF_LIB="${GA_SERVICES_CONF_LIB:-/usr/libexec/ga-services-conf.sh}"
+# shellcheck disable=SC1090
+[ -r "$GA_SERVICES_CONF_LIB" ] && . "$GA_SERVICES_CONF_LIB" || { echo "ga-enroll: ERROR: cannot load $GA_SERVICES_CONF_LIB — refusing to guess the endpoint config" >&2; exit 1; }
+
 # 1. Endpoint config — the override LAYERS ON TOP of the baked default.
 #
 #    It used to REPLACE it (`if override; then . override; else . default; fi`),
@@ -83,10 +87,8 @@ die()  { echo "${LOG_TAG}: ERROR: $*" >&2; exit 1; }
 #    ga-publish-services has read override-then-baked PER KEY since it was
 #    written, so layering is the intended semantics here, not a new invention
 #    — these three file-sourcing consumers were simply never swept.
-# shellcheck disable=SC1090
-[ -f "$CONF_DEFAULT" ] && . "$CONF_DEFAULT"
-# shellcheck disable=SC1090
-[ -f "$CONF_OVERRIDE" ] && . "$CONF_OVERRIDE"
+#    Layering lives in ONE shared helper (ga-services-conf.sh) used by every consumer.
+ga_load_services_conf "$CONF_DEFAULT" "$CONF_OVERRIDE" || true
 if [ -z "${GA_FLEET_HOST:-}" ]; then
     # Reachable now only when BOTH files lack the key, which is a broken image
     # rather than a configuration choice. Still exit 0 — an image may legitimately

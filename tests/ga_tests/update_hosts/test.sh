@@ -25,6 +25,8 @@
 # mounted).
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
+# The shared ga-services.conf loader the scripts under test source (device path: /usr/libexec).
+export GA_SERVICES_CONF_LIB="${GA_SERVICES_CONF_LIB:-$SCRIPT_DIR/../../../buildroot-external/rootfs-overlay/usr/libexec/ga-services-conf.sh}"
 
 suite_start "ga-update-hosts (Supervisor name resolution)"
 

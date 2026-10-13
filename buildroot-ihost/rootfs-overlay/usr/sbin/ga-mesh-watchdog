@@ -214,21 +214,33 @@ bail_unknown() {
     exit 0
 }
 
+# A missing input that makes the watchdog permanently blind is a configuration
+# defect, not a transient hold: error level (shipped by tier-0, PRIORITY 0-4) on
+# EVERY tick, not once on the transition. "unknown" at info was the silent state
+# that hid a blind watchdog for a day.
+bail_unknown_loud() {
+    consecutive=0; first_dead=0
+    loge "unknown: $1 — no action (fail closed)"
+    publish unknown "$1"
+    exit 0
+}
+
 command -v jq >/dev/null 2>&1 || bail_unknown "jq not available"
 
 # ------------------------------------------------------- 1. probe the subject
-if [ -f "$CONF_OVERRIDE" ]; then
-    # shellcheck source=/dev/null
-    . "$CONF_OVERRIDE"
-elif [ -f "$CONF_DEFAULT" ]; then
-    # shellcheck source=/dev/null
-    . "$CONF_DEFAULT"
-else
-    bail_unknown "no ga-services.conf — the ga-tools address is unknown"
-fi
+# The override layers ON TOP of the baked default (shared helper): a partial
+# override (the staging seed writes only the fleet values) must not hide
+# GA_SERVICES_IP. It used to be read INSTEAD of the default, which left every
+# such device unmeasured.
+GA_SERVICES_CONF_LIB="${GA_SERVICES_CONF_LIB:-/usr/libexec/ga-services-conf.sh}"
+# shellcheck disable=SC1090
+[ -r "$GA_SERVICES_CONF_LIB" ] && . "$GA_SERVICES_CONF_LIB" 2>/dev/null \
+    || bail_unknown_loud "cannot load $GA_SERVICES_CONF_LIB — the watchdog is BLIND on this device"
+ga_load_services_conf "$CONF_DEFAULT" "$CONF_OVERRIDE" \
+    || bail_unknown_loud "no ga-services.conf (neither $CONF_DEFAULT nor $CONF_OVERRIDE) — the ga-tools address is unknown, the watchdog is BLIND on this device"
 ADDR="${GA_SERVICES_IP:-}"
 PORTS="${GA_MESH_PROBE_PORTS:-${GA_FLEET_PORT:-8090} 1884}"
-[ -n "$ADDR" ] || bail_unknown "GA_SERVICES_IP is not set in ga-services.conf"
+[ -n "$ADDR" ] || bail_unknown_loud "GA_SERVICES_IP is set in neither $CONF_DEFAULT nor $CONF_OVERRIDE — the watchdog is BLIND on this device"
 probe_target="${MESH_IFACE}:$(echo "$PORTS" | tr ' ' ',')"
 # Reboot stage: OFF unless explicitly enabled (BOSv1.5.1, Odoo #1263). Without
 # a second mesh peer the device cannot tell "my tunnel is broken" from

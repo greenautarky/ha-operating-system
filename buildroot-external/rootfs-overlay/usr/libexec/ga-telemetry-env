@@ -46,6 +46,9 @@ set -u
 
 CONF_DEFAULT="${GA_TENV_CONF_DEFAULT:-/etc/ga-services.conf}"
 CONF_OVERRIDE="${GA_TENV_CONF_OVERRIDE:-/mnt/data/ga-services.conf}"
+GA_SERVICES_CONF_LIB="${GA_SERVICES_CONF_LIB:-/usr/libexec/ga-services-conf.sh}"
+# shellcheck disable=SC1090
+[ -r "$GA_SERVICES_CONF_LIB" ] && . "$GA_SERVICES_CONF_LIB" || { echo "ga-telemetry-env: ERROR: cannot load $GA_SERVICES_CONF_LIB — refusing to guess the endpoint config" >&2; exit 1; }
 ENROLL_STATE="${GA_TENV_ENROLL_STATE:-/mnt/data/supervisor/share/ga-enroll-state.json}"
 
 say() { # say <priority> <message>
@@ -59,16 +62,7 @@ say() { # say <priority> <message>
 resolved=$(
     n=0
     GA_FLEET_ENV=""
-    if [ -r "$CONF_DEFAULT" ]; then
-        # shellcheck disable=SC1090
-        . "$CONF_DEFAULT"
-        n=$((n + 1))
-    fi
-    if [ -r "$CONF_OVERRIDE" ]; then
-        # shellcheck disable=SC1090
-        . "$CONF_OVERRIDE"
-        n=$((n + 1))
-    fi
+    if ga_load_services_conf "$CONF_DEFAULT" "$CONF_OVERRIDE"; then n=1; fi
     printf '%s %s' "$n" "${GA_FLEET_ENV:-}"
 ) || resolved="0 "
 

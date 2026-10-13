@@ -14,6 +14,20 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased (BOSv1.5.1) — the device keeps its mesh path to ga-tools alive (Odoo #1263)
 
+### Fixed — ga-services.conf: the /mnt/data override layers on the baked default in every reader; the mesh watchdog is no longer blind
+
+- Cause: `ga-mesh-watchdog` read `/mnt/data/ga-services.conf` INSTEAD of `/etc/ga-services.conf`. The staging seed writes a partial override
+  (fleet values only), so on every such device `GA_SERVICES_IP` was unset, the watchdog stayed at `unknown` and measured nothing.
+  The same shape had been fixed by hand in `ga-enroll`, `ga-telemetry-env`, `ga-resolve-ota` and `ga-update-hosts` (#590); the watchdog copied the old shape.
+- Fix: one shared loader, `/usr/libexec/ga-services-conf.sh` (`ga_load_services_conf DEFAULT OVERRIDE`): baked default first, override on top
+  (override keys win, missing keys fall back). Used by `ga-enroll`, `ga-telemetry-env`, `ga-resolve-ota`, `ga-update-hosts` and `ga-mesh-watchdog`;
+  `ga-publish-services` already falls back per key and is unchanged.
+- The watchdog now reports a missing services address, a missing config or a missing loader at error level on EVERY tick
+  (it was a single warning on the transition into `unknown`, then info), with the reason in the published `detail`.
+- Tests (host, CI): `tests/ga_tests/services_config/layering.sh` (loader: partial / full / no override / no default / neither, plus a sweep that
+  fails if any script hand-sources the conf again); `tests/ga_tests/mesh_watchdog/selftest.sh` MWD-70..77 (partial override measured and
+  overridden key wins, full, none, loud unknown). Red on master: MWD-70, 71, 74, 76, 77.
+
 ### Fixed — ga-sign-ssh-cert.sh mirrors certificate validity in UTC
 
 - The fleet-manager ledger mirror posted the validity window exactly as `ssh-keygen -L` prints it: local time, no offset.
