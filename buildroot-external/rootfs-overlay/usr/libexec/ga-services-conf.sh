@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # ga-services-conf.sh — the ONE way a GA script loads ga-services.conf.
 # Sourced (`.`), never executed. POSIX sh / BusyBox ash compatible.
 #

@@ -24,7 +24,7 @@ run_test "LAY-00" "the shared loader exists" "test -r '$LIB'"
 
 W="$(mktemp -d "${TMPDIR:-/tmp}/svc_layer.XXXXXX")"
 trap 'rm -rf "$W"' EXIT
-printf 'GA_SERVICES_IP=10.0.0.1\nGA_OTA_IPS="10.0.0.2 10.0.0.3"\nGA_FLEET_PORT=8090\n' > "$W/baked.conf"
+printf 'GA_SERVICES_IP=svc-baked\nGA_OTA_IPS="ota-a ota-b"\nGA_FLEET_PORT=8090\n' > "$W/baked.conf"
 
 # probe CASE-FILE-ARGS... : load in a fresh shell, print "<rc>|<GA_CONF_LOADED-count>|IP|PORT|HOST"
 probe() {
@@ -36,20 +36,20 @@ probe() {
 printf 'GA_FLEET_HOST=f.example\nGA_FLEET_PORT=8091\n' > "$W/partial.conf"
 r="$(probe "$W/baked.conf" "$W/partial.conf")"
 run_test "LAY-01" "PARTIAL override: baked GA_SERVICES_IP survives (red on override-replaces-default)" \
-  "[ \"\$(echo '$r' | cut -d'|' -f3)\" = 10.0.0.1 ]"
+  "[ \"\$(echo '$r' | cut -d'|' -f3)\" = svc-baked ]"
 run_test "LAY-02" "…the override's keys win over the baked ones (port 8091, host set)" \
   "[ \"\$(echo '$r' | cut -d'|' -f4)\" = 8091 ] && [ \"\$(echo '$r' | cut -d'|' -f5)\" = f.example ]"
 run_test "LAY-03" "…and the loader reports both files and rc 0" \
   "echo '$r' | grep -q '^0|.*baked.conf + .*partial.conf|'"
 
-printf 'GA_SERVICES_IP=10.9.9.9\nGA_FLEET_PORT=1\n' > "$W/full.conf"
+printf 'GA_SERVICES_IP=svc-override\nGA_FLEET_PORT=1\n' > "$W/full.conf"
 r="$(probe "$W/baked.conf" "$W/full.conf")"
 run_test "LAY-04" "FULL override: every key it sets wins" \
-  "[ \"\$(echo '$r' | cut -d'|' -f3)\" = 10.9.9.9 ] && [ \"\$(echo '$r' | cut -d'|' -f4)\" = 1 ]"
+  "[ \"\$(echo '$r' | cut -d'|' -f3)\" = svc-override ] && [ \"\$(echo '$r' | cut -d'|' -f4)\" = 1 ]"
 
 r="$(probe "$W/baked.conf" "$W/none.conf")"
 run_test "LAY-05" "NO override: the baked file alone, rc 0" \
-  "[ \"\$(echo '$r' | cut -d'|' -f1)\" = 0 ] && [ \"\$(echo '$r' | cut -d'|' -f3)\" = 10.0.0.1 ]"
+  "[ \"\$(echo '$r' | cut -d'|' -f1)\" = 0 ] && [ \"\$(echo '$r' | cut -d'|' -f3)\" = svc-baked ]"
 r="$(probe "$W/none.conf" "$W/partial.conf")"
 run_test "LAY-06" "NO baked default, override only: loads it, rc 0, no invented IP" \
   "[ \"\$(echo '$r' | cut -d'|' -f1)\" = 0 ] && [ -z \"\$(echo '$r' | cut -d'|' -f3)\" ]"
