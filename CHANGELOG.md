@@ -33,6 +33,16 @@ build-time additions (Go modules in the SBOM, a U-Boot age policy).
 
 ## BOSv1.5.1 — the device keeps its mesh path to ga-tools alive (Odoo #1263)
 
+### Fixed - device suite preflight: wait for the apps inside the containers, not just "Up" (BOSv1.5.1-rc4 on K31, 2026-10-13)
+
+- Test-only change (`tests/ga_tests/lib/app_ready.sh`, `run_all.sh`); nothing on the device image changes.
+- A container reads Up long before its app listens: InfluxDB answers `/ping` some seconds later, Core's API some minutes after `ha core start`. Suites started in that gap failed for a timing reason.
+- `run_all.sh` now runs a preflight before the first suite: Core (`GET /api/` answers 200/3xx/401/403, not 000/5xx) and InfluxDB (`/ping` 200/204 inside `addon_*_ga_influxdbv1`), each only if its container is present. Bounded by `GA_PREFLIGHT_TIMEOUT` (default 300 s, polled every `GA_PREFLIGHT_INTERVAL`, default 5 s).
+- Fails closed: on timeout the run prints which app never answered and exits 3 without running suites. `GA_PREFLIGHT=0` skips it. No docker on the host (emulation / laptop run) prints that there is nothing to wait for.
+- Tests: `tests/ga_tests/lib/app_ready_selftest.sh` (lint.yml host-suites) drives the live functions through scripted answers (late start passes after a wait, dead app fails within the bound, 503 is not an answer, absent containers not waited for) plus run_all.sh wiring checks. Red before the change: the 4 wiring checks fail; red with the wait loop removed: the late-start cases fail.
+- Not covered by tests: the real `docker exec curl` and `curl` probes on a device (the seams replace them); not run on a device yet.
+
+
 ### Added - SBOM: Go module components (Odoo #1272, part 1)
 
 - Build/SBOM only; nothing on the device changes.
