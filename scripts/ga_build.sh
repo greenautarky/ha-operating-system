@@ -2521,14 +2521,14 @@ ga_cve_enforce() {
   local what="$1" rc="$2" report="$3" mode
   mode="$(ga_cve_enforcement)" || exit 1
   if [[ "$mode" == "block" ]]; then
-    echo "ERROR: ${what}: a CRITICAL finding with a fix available (policy D1) — refusing to build the image"
-    echo "       Bump the package, or add a time-boxed entry (owner, reason, <= 30 days) to .cve-allowlist. See ${report}"
+    echo "ERROR: ${what}: policy block (D1: a CRITICAL with a fix, or U-Boot older than the bootloader version policy) — refusing to build the image"
+    echo "       Bump the package/bootloader, or add a time-boxed entry (owner, reason, <= 30 days) to .cve-allowlist. See ${report}"
     exit 1
   fi
   {
     echo ""
     echo "################################################################################"
-    echo "# D1 WOULD BLOCK — ${what}: a CRITICAL finding with a fix available (scan exit ${rc})."
+    echo "# D1 WOULD BLOCK — ${what}: a CRITICAL with a fix, or U-Boot past the bootloader age limit (scan exit ${rc})."
     echo "# NOT stopping the bake: scripts/cve-enforcement.conf says OS_CVE_ENFORCEMENT=report"
     echo "# (BOSv1.5.0). Under 'block' this image would not have been built. See ${report}"
     echo "################################################################################"
