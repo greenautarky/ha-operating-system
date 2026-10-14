@@ -109,6 +109,16 @@ POLICY="d1"
 # An allowlist entry may suppress a finding for at most this many days (D1).
 # A constant, not a knob, for the same reason.
 readonly ALLOW_MAX_DAYS=30
+# Bootloader version policy (OS SBOM, --strict): the shipped U-Boot (component
+# "uboot") may be at most this many months older than the scan's reference
+# month. U-Boot ships four releases a year and has no LTS line, so 12 months =
+# at most four releases behind. A constant, not a knob: kernel/bootloader CVEs
+# are TRACK (not per-build fatal), and without an age bound a TRACK finding is
+# never acted on.
+readonly UBOOT_MAX_AGE_MONTHS=12
+# Reference month for the age (YYYY-MM). Defaults to the scan month; set it to
+# pin a reproducible verdict (fixtures, a re-scan of an old artefact).
+UBOOT_AGE_REF="${UBOOT_AGE_REF:-$(date +%Y-%m)}"
 # Saved image tarballs to scan instead of pulling from a registry (the bake).
 IMAGE_TARS=""
 # Root filesystem to scan for Go binaries (--rootfs), and the binaries that
@@ -883,6 +893,36 @@ check_package_coverage() {
   return 0
 }
 
+# check_uboot_age <sbom> — bootloader version policy (see UBOOT_MAX_AGE_MONTHS).
+# U-Boot versions are the release month (YYYY.MM[-rcN]), so the age needs no
+# network. No "uboot" component (x86 boards) = not checked, said out loud. A
+# version that cannot be read as YYYY.MM is BROKEN, never "young enough".
+check_uboot_age() {
+  local sbom="$1" v y m ry rm
+  v=$(jq -r '[.components // [] | .[] | select(.name == "uboot")
+              | select(((.properties // []) | map(select(.name=="BR_TYPE").value) | first) == "target")
+              | .version // ""] | first // empty' "$sbom" 2>/dev/null || true)
+  if [[ -z "$v" ]]; then
+    echo "  NOTE: no shipped 'uboot' component in the SBOM — bootloader age not checked"
+    return 0
+  fi
+  UBOOT_VERSION="$v"
+  if [[ ! "$v" =~ ^([0-9]{4})\.([0-9]{2}) || ! "$UBOOT_AGE_REF" =~ ^([0-9]{4})-([0-9]{2})$ ]]; then
+    echo "  ERROR: cannot read U-Boot version '${v}' / reference '${UBOOT_AGE_REF}' as a month — bootloader age unknown, BROKEN"
+    SCAN_BROKEN=true; return 0
+  fi
+  [[ "$v" =~ ^([0-9]{4})\.([0-9]{2}) ]]; y=${BASH_REMATCH[1]}; m=${BASH_REMATCH[2]}
+  [[ "$UBOOT_AGE_REF" =~ ^([0-9]{4})-([0-9]{2})$ ]]; ry=${BASH_REMATCH[1]}; rm=${BASH_REMATCH[2]}
+  UBOOT_AGE=$(( (10#$ry * 12 + 10#$rm) - (10#$y * 12 + 10#$m) ))
+  if [[ "$UBOOT_AGE" -gt "$UBOOT_MAX_AGE_MONTHS" ]]; then
+    UBOOT_BLOCKING=true
+    echo "  BOOTLOADER: U-Boot ${v} is ${UBOOT_AGE} months old (max ${UBOOT_MAX_AGE_MONTHS}) — BLOCKS (version policy), ${UBOOT_TRACKED} tracked CVE(s) in ${UBOOT_TRACK_FILE:-?}"
+  else
+    echo "  BOOTLOADER: U-Boot ${v} is ${UBOOT_AGE} months old (max ${UBOOT_MAX_AGE_MONTHS}) — ok, ${UBOOT_TRACKED} tracked CVE(s)"
+  fi
+}
+
+UBOOT_VERSION=""; UBOOT_AGE=-1; UBOOT_BLOCKING=false; UBOOT_TRACKED=0
 SBOM_COMPONENTS=0; SBOM_SCANNED=0; SBOM_COVERAGE=0; SBOM_FINDINGS=0; SBOM_SUPPRESSED=0; SBOM_TRACKED=0; SBOM_HOSTONLY=0
 SBOM_STATUS="skipped"
 if [[ "$SCAN_SBOM" == "true" ]]; then
@@ -945,6 +985,7 @@ if [[ "$SCAN_SBOM" == "true" ]]; then
       # assume the harmless answer.
       SBOM_FINDINGS=0; SBOM_SUPPRESSED=0; SBOM_TRACKED=0; SBOM_HOSTONLY=0; SBOM_BLOCKING=0
       TRACK_FILE="${OUTPUT_DIR}/os-tracked-cves.txt"; : > "$TRACK_FILE"
+      UBOOT_TRACK_FILE="${OUTPUT_DIR}/os-tracked-uboot-cves.txt"; : > "$UBOOT_TRACK_FILE"; UBOOT_TRACKED=0
       while IFS=' ' read -r _id _class _vsev _fix _pkgs; do
         [[ -z "$_id" ]] && continue
         case "$_class" in
@@ -959,7 +1000,12 @@ if [[ "$SCAN_SBOM" == "true" ]]; then
                 echo "    GATE     ${_id} ${_vsev} ${_pkgs} fixed-in ${_fix} — reported"
               fi
             fi ;;
-          TRACK)   SBOM_TRACKED=$((SBOM_TRACKED + 1)); printf '%s\n' "$_id" >> "$TRACK_FILE" ;;
+          TRACK)   SBOM_TRACKED=$((SBOM_TRACKED + 1)); printf '%s\n' "$_id" >> "$TRACK_FILE"
+                   if [[ "$_pkgs" == "uboot" ]]; then
+                     UBOOT_TRACKED=$((UBOOT_TRACKED + 1))
+                     printf '%s %s fixed-in %s\n' "$_id" "$_vsev" "$_fix" >> "$UBOOT_TRACK_FILE"
+                     echo "    UBOOT    ${_id} ${_vsev} fixed-in ${_fix} — tracked"
+                   fi ;;
           *)       SBOM_HOSTONLY=$((SBOM_HOSTONLY + 1)) ;;
         esac
       done < <(jq -r --arg sev "$_sev_re" '
@@ -982,10 +1028,12 @@ if [[ "$SCAN_SBOM" == "true" ]]; then
                                 else "GATE" end),
                          sev:({"4":"CRITICAL","3":"HIGH","2":"MEDIUM","1":"LOW"}[$rank|tostring] // "UNKNOWN"),
                          fix:([$v.properties // [] | .[] | select(.name == "ga:fixed-in") | .value] | first // "?"),
-                         pkgs:(([$userland[].n] | unique | join(",")) | if . == "" then "-" else . end) } ]
+                         pkgs:(if ($userland | length) > 0 then ([$userland[].n] | unique | join(","))
+                               elif ($ship | any(.n == "uboot")) then "uboot" else "-" end) } ]
                  | unique_by(.id) | .[] | "\(.id) \(.class) \(.sev) \(.fix) \(.pkgs)"' "$GA_SBOM" 2>/dev/null || true)
       [[ "$SBOM_TRACKED"  -gt 0 ]] && echo "  TRACKED: ${SBOM_TRACKED} kernel/bootloader finding(s) -> ${TRACK_FILE} — version policy + periodic triage, not a per-build block (see docs/CVE-SCANNING-POSTURE.md)"
       [[ "$SBOM_HOSTONLY" -gt 0 ]] && echo "  EXCLUDED: ${SBOM_HOSTONLY} finding(s) affecting only host/build-time packages — not shipped on the device"
+      check_uboot_age "$GA_SBOM"
       if [[ "$PACKAGE_COVERAGE" == "true" ]]; then check_package_coverage "$GA_SBOM"; fi
 
       if [[ "$SBOM_COVERAGE" -lt "$COVERAGE_MIN_PCT" ]]; then
@@ -1000,6 +1048,7 @@ if [[ "$SCAN_SBOM" == "true" ]]; then
         echo "  CLEAN: no unsuppressed exploitable ${SEVERITY} findings across ${SBOM_SCANNED} matched packages$([[ "$SBOM_SUPPRESSED" -gt 0 ]] && echo " (${SBOM_SUPPRESSED} allowlisted)")"
         SBOM_STATUS="clean"
       fi
+      if [[ "$POLICY" == "d1" && "$UBOOT_BLOCKING" == "true" ]]; then EXIT_CODE=1; fi
 
     # -- Fallback: no enrichment marker -> try trivy, which will almost -------
     # certainly cover nothing on a Buildroot SBOM and therefore exit 2.
@@ -1114,6 +1163,11 @@ jq -n \
   --argjson allow_private_active "${ALLOW_PRIVATE_ACTIVE:-0}" \
   --slurpfile img_list "$IMG_LIST_FILE" \
   --argjson sbom_blocking "${SBOM_BLOCKING:-0}" \
+  --arg ub_version "$UBOOT_VERSION" \
+  --argjson ub_age "$UBOOT_AGE" \
+  --argjson ub_max "$UBOOT_MAX_AGE_MONTHS" \
+  --argjson ub_blocking "$UBOOT_BLOCKING" \
+  --argjson ub_tracked "${UBOOT_TRACKED:-0}" \
   --argjson pkgcov_expected "${PKGCOV_EXPECTED:-0}" \
   --argjson pkgcov_covered "${PKGCOV_COVERED:-0}" \
   --argjson pkgcov_broken "${PKGCOV_BROKEN:-0}" \
@@ -1137,6 +1191,8 @@ jq -n \
     os:{status:$sbom_status, components:$sbom_components, scanned:$sbom_scanned,
         coverage_pct:$sbom_coverage, findings:$sbom_findings, suppressed:$sbom_suppressed,
         tracked:$sbom_tracked, host_only:$sbom_hostonly, blocking:$sbom_blocking,
+        bootloader:{version:$ub_version, checked:($ub_version != ""), age_months:$ub_age,
+                    max_age_months:$ub_max, blocking:$ub_blocking, tracked_cves:$ub_tracked},
         package_coverage:{checked:$pkgcov_on, expected:$pkgcov_expected, covered:$pkgcov_covered,
                           broken:$pkgcov_broken, list:$pkgcov_list}},
     rootfs:{status:$rfs_status, dir:$rfs_dir, go_binaries:$rfs_bin, by_trivy:$rfs_trivy,
@@ -1179,7 +1235,7 @@ fi
 
 if [[ "$EXIT_CODE" -ne 0 ]]; then
   if [[ "$STRICT" == "true" ]]; then
-    echo "  Result: POLICY BLOCK — ${SBOM_BLOCKING:-0} fixable CRITICAL finding(s) in shipped OS packages, strict mode (exit 1)"
+    echo "  Result: POLICY BLOCK — ${SBOM_BLOCKING:-0} fixable CRITICAL finding(s) in shipped OS packages$([[ "$UBOOT_BLOCKING" == "true" ]] && echo "; U-Boot ${UBOOT_VERSION} older than ${UBOOT_MAX_AGE_MONTHS} months"), strict mode (exit 1)"
     exit 1
   fi
   echo "  Result: findings above budget — reporting only (strict=false), exit 0"
