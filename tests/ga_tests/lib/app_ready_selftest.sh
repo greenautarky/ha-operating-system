@@ -61,6 +61,9 @@ a=$(grep -n 'ga_wait_apps_ready' "$RUN" | head -1 | cut -d: -f1); b=$(grep -n '^
 check "preflight runs before the suites" before "$o"
 check "preflight failure aborts the run" 1 "$(grep -A1 'PREFLIGHT FAILED' "$RUN" | grep -c 'exit 3')"
 
+# the serial-console runner ships lib files one by one: the helper must be among them
+check "serial path ships lib/app_ready.sh" 1 "$(grep -c 'lib/app_ready.sh -O' "$HERE/../../run_device_tests.sh")"
+
 [ "$n" -ge 12 ] || { echo "FAIL: only $n checks ran"; exit 1; }
 echo "$((n-bad))/$n passed"
 [ "$bad" -eq 0 ]
