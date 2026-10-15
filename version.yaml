@@ -13,7 +13,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.5.1-rc4  # marker. rc4 = rc3 + onboarding 2.12.2 (KI-Butler info page removed, #72 24h clock/DMY dates, #73 welcome/ethernet texts; #799), HEAT-06/MESH-04 test fixes (#798). rc3 = rc2 + z2m 2.12.1-9 NWK counter guard (#1221), services.conf layering (#791), Go module floors x/net 0.60 (#792). rc2 = rc1 + Go 1.26.9 floor for the rootfs Go packages (#787). rc1 = BOSv1.5.0 + profile deadlock fix (#776), mesh watchdog reboot-off (#772/#773), HEAT-02 broker count (#774), glib/xz patches (#778), fluent-bit minimal (#780), pins gm 0.252.0 / default_addon 2.1.5 / mosquitto 7.2.5, Go CVE allowlist exit.
+gaos_release: BOSv1.5.1  # marker baked into /etc/ga-release at build. BOSv1.5.1 = BOSv1.5.0 + profile deadlock fix (#776), mesh watchdog (reboot stage off by default; #772/#773), HEAT-02 broker count (#774), glib/xz patches (#778), fluent-bit minimal (#780), Go 1.26.9 and Go module floors for the rootfs Go binaries (#787, #792, #795-#797), ga-services.conf layering (#791), z2m 2.12.1-9 NWK counter guard (#1221), onboarding 2.12.2 (KI-Butler info page removed, 24h clock/DMY dates, welcome/ethernet texts), pins gm 0.252.0 / default_addon 2.1.5 / mosquitto 7.2.5, HEAT-06/MESH-04 test fixes (#798), Go modules in the SBOM (#801), U-Boot age gate in report mode (#804).
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at

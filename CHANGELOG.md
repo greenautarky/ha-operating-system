@@ -12,7 +12,22 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
-## Unreleased (BOSv1.5.1) — the device keeps its mesh path to ga-tools alive (Odoo #1263)
+## BOSv1.5.1 — final (prepared 2026-10-15)
+
+Maintenance release on top of BOSv1.5.0. It contains every section below up to the BOSv1.5.0 release heading.
+Proven on BOSv1.5.1-rc1 to -rc4 (clean flash on the staging canary). Headline changes: the device keeps its mesh
+path alive (watchdog), a Zigbee2MQTT NWK frame-counter guard (#1221), a telemetry profile switch no longer deadlocks
+the shippers, the rootfs Go binaries are built with Go 1.26.9 and updated module floors, onboarding 2.12.2, and two
+build-time additions (Go modules in the SBOM, a U-Boot age policy).
+
+### Added - bootloader version policy: U-Boot age bound in the CVE scan (#804)
+
+- Build/scan only; nothing on the device changes.
+- `scan-cves.sh --sbom --strict` reads the shipped `uboot` component and flags it when it is more than 12 months older than the scan month; an unreadable version is a broken scan; a build without a `uboot` component reports "not checked".
+- The build treats the flag like any other D1 policy block through `cve-enforcement.conf`, which is currently in `report` mode (banner, bake continues). Tracked U-Boot findings are listed in `os-tracked-uboot-cves.txt` and `summary.json`.
+- Tests: `tests/gates/cve-gate/scan-cves-scope-fixtures.sh` (FX-UBOOT-OLD/NEW/EDGE/UNREADABLE against the live script).
+
+## BOSv1.5.1 — the device keeps its mesh path to ga-tools alive (Odoo #1263)
 
 ### Added - SBOM: Go module components (Odoo #1272, part 1)
 
