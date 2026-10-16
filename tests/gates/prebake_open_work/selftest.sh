@@ -74,6 +74,14 @@ o=$(run "[]");      ck PBO-08 "MUST NOT FLAG: clean tree, clean pins -> green" 0
 o=$(run "$PIN" "" "1" "--acknowledge"); ck PBO-09 "--acknowledge bakes anyway, and SAYS so" 0 $? "ACKNOWLEDGED" "$o"
 o=$(run "[]");      ck PBO-10 "it reports HOW MANY it measured, not just a colour" 0 $? "measured" "$o"
 
+# BAKE_REF: only PRs that target the branch being baked are "left out".
+PINM='[{"number":611,"title":"pin on master","isDraft":false,"author":{"login":"t"},"baseRefName":"master","files":[{"path":"buildroot-external/package/hassio/addon-images.json"}]}]'
+PINR='[{"number":612,"title":"pin on release","isDraft":false,"author":{"login":"t"},"baseRefName":"release/1.5","files":[{"path":"buildroot-external/package/hassio/addon-images.json"}]}]'
+o=$(BAKE_REF=release/1.5 run "$PINM"); ck PBO-11 "MUST NOT FLAG: a master pin PR when baking release/1.5" 0 $? "" "$o"
+o=$(BAKE_REF=release/1.5 run "$PINR"); ck PBO-12 "MUST FLAG: a pin PR targeting release/1.5 when baking it" 1 $? "#612" "$o"
+o=$(BAKE_REF=master run "$PINM");      ck PBO-13 "MUST FLAG: a master pin PR when baking master" 1 $? "#611" "$o"
+o=$(run "$PINM");                      ck PBO-14 "unset BAKE_REF keeps the old behaviour (no filter)" 1 $? "#611" "$o"
+
 echo
 echo "--- prebake_open_work: $PASS passed, $FAIL failed ---"
 [[ $FAIL -eq 0 ]]

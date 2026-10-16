@@ -14,6 +14,7 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## Unreleased (BOSv1.5.1 final fix)
 
+- **Open-work gate: knows which branch is being baked.** Before: `preflight-open-work.sh` counted every open pin PR regardless of target branch, so a bake of `release/1.5` would have been blocked by (or, the other way round, not told about) PRs for the wrong branch. After: with `BAKE_REF` set (ga-ops bake `ref` input) only PRs that target that branch count; unset keeps the old behaviour. Build-time tooling only, nothing changes on the device. Fixtures: `tests/gates/prebake_open_work/selftest.sh` PBO-11..14 (red on the old script: PBO-11).
 - **CVE gate: the CPE-coverage quota no longer counts Go module components.** Before: #801 added 502 Go module components (purl `pkg:golang/…`, no CPE by design) to the OS SBOM, the quota fell from ~62 % to 17 % and the final bake stopped with "BROKEN SCAN". After: components tagged `ga:go-binary` are left out of the denominator (they are covered by GOTC-05); packages without a CPE still break the scan, untagged `pkg:golang` entries still count. Fixtures: `tests/gates/cve-gate/scan-cves-go-quota-fixtures.sh` (red on the old script: 1 of 3).
 
 ## BOSv1.5.1 — final (prepared 2026-10-15)
