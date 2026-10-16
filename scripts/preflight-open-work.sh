@@ -32,6 +32,11 @@ PIN_FILES_DEFAULT="buildroot-external/package/hassio/addon-images.json buildroot
 PIN_FILES="${PIN_FILES:-$PIN_FILES_DEFAULT}"
 ACK=0
 LOCAL=0
+# The branch this bake builds (ga-ops bake.yml `ref`). Unset = no filter, the
+# historical behaviour. Set, B1 only counts PRs that TARGET that branch: a pin
+# PR waiting on master is not "left out" of a release/1.5 bake on purpose, and
+# a pin PR targeting release/1.5 is.
+BAKE_REF="${BAKE_REF:-}"
 
 usage() { sed -n '2,30p' "$0"; exit 1; }
 while [[ $# -gt 0 ]]; do
@@ -51,7 +56,7 @@ echo
 
 # --- B1: open PRs on this repo that touch a pin file -------------------------
 if ! prs=$(gh pr list --repo "$REPO_SELF" --state open --limit 100 \
-            --json number,title,isDraft,author,files 2>/dev/null); then
+            --json number,title,isDraft,author,files,baseRefName 2>/dev/null); then
   echo "::error::could not list open PRs on $REPO_SELF — refusing to guess that there are none"
   exit 2
 fi
@@ -61,9 +66,10 @@ echo "$prs" | jq -e 'type == "array"' >/dev/null 2>&1 || {
 n_prs=$(echo "$prs" | jq 'length')
 echo "-- open PRs on $REPO_SELF: $n_prs (measured)"
 
-pinhits=$(echo "$prs" | jq -r --arg pins "$PIN_FILES" '
+pinhits=$(echo "$prs" | jq -r --arg pins "$PIN_FILES" --arg ref "$BAKE_REF" '
   ($pins | split(" ")) as $p
   | .[] | select(.isDraft | not)
+  | select($ref == "" or (.baseRefName // "") == $ref)
   | select(.author.login != "app/dependabot")
   | . as $pr | (.files // []) | map(.path) as $paths
   | select(any($paths[]; . as $f | $p | index($f)))
