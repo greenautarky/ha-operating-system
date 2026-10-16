@@ -21,7 +21,7 @@ on:
       - 'scripts/telegraf-config-guard-ci.sh'
       - '.github/workflows/telegraf-config-check.yml'
   pull_request:
-    branches: [master]
+    branches: [master, 'release/**']
     paths:
       - 'buildroot-external/package/telegraf/**'
       - 'scripts/telegraf-plugin-guard.sh'

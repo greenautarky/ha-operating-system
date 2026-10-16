@@ -14,7 +14,7 @@
     },
     "ga_zigbee2mqtt": {
       "image": "ghcr.io/greenautarky/ga_zigbee2mqtt-{arch}",
-      "version": "2.12.1-9"
+      "version": "2.12.1-10"
     },
     "sonoff_dongle_flasher": {
       "image": "ghcr.io/greenautarky/ga_dongle_flasher-{arch}",
@@ -22,7 +22,7 @@
     },
     "ga_manager": {
       "image": "ghcr.io/greenautarky/ga_manager-{arch}",
-      "version": "0.252.0"
+      "version": "0.253.0"
     },
     "ga_default_addon": {
       "image": "ghcr.io/greenautarky/ga_default_addon-{arch}",
@@ -30,11 +30,7 @@
     },
     "ga_hmvapp_addon": {
       "image": "ghcr.io/greenautarky/ga_hmvapp_addon-{arch}",
-      "version": "2.6.0",
-      "hold": {
-        "reason": "BOSv1.5.1 final = proven rc4 content (Thomas 2026-10-16); 2.6.1 ships with BOSv1.5.2",
-        "until": "2026-10-23"
-      }
+      "version": "2.6.1"
     }
   }
 }
