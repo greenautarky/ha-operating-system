@@ -30,7 +30,11 @@
     },
     "ga_hmvapp_addon": {
       "image": "ghcr.io/greenautarky/ga_hmvapp_addon-{arch}",
-      "version": "2.6.0"
+      "version": "2.6.0",
+      "hold": {
+        "reason": "BOSv1.5.1 final = proven rc4 content (Thomas 2026-10-16); 2.6.1 ships with BOSv1.5.2",
+        "until": "2026-10-23"
+      }
     }
   }
 }
