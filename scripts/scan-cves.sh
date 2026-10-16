@@ -936,6 +936,16 @@ if [[ "$SCAN_SBOM" == "true" ]]; then
 
     SBOM_COMPONENTS=$(jq '[.components // []] | flatten | length' "$GA_SBOM" 2>/dev/null || echo 0)
     echo "  Components in SBOM: ${SBOM_COMPONENTS}"
+    # Go module components (purl pkg:golang/..., tagged ga:go-binary by
+    # ga_go_sbom_augment) carry no CPE by design: Go vulnerabilities are matched
+    # by module, and the GOTC-05 floor gate + rootfs scan cover them. They must
+    # not dilute the CPE-coverage quota of the Buildroot package scan, which is
+    # what this denominator measures. Untagged pkg:golang entries still count.
+    _go_mods=$(jq '[.components // [] | .[] | select((.purl // "") | startswith("pkg:golang/")) | select([.properties // [] | .[] | select(.name=="ga:go-binary")] | length > 0)] | length' "$GA_SBOM" 2>/dev/null || echo 0)
+    if [[ "${_go_mods:-0}" -gt 0 ]]; then
+      SBOM_COMPONENTS=$(( SBOM_COMPONENTS - _go_mods ))
+      echo "  ...excluding ${_go_mods} Go module component(s) from the CPE quota (covered by GOTC-05): ${SBOM_COMPONENTS} counted"
+    fi
 
     # -- Preferred path: a SBOM already enriched by Buildroot's cve-check ------
     # cve-check matches on `cpe` (which Buildroot emits) instead of `purl`

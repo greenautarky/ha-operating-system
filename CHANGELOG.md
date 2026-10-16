@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (BOSv1.5.1 final fix)
+
+- **CVE gate: the CPE-coverage quota no longer counts Go module components.** Before: #801 added 502 Go module components (purl `pkg:golang/…`, no CPE by design) to the OS SBOM, the quota fell from ~62 % to 17 % and the final bake stopped with "BROKEN SCAN". After: components tagged `ga:go-binary` are left out of the denominator (they are covered by GOTC-05); packages without a CPE still break the scan, untagged `pkg:golang` entries still count. Fixtures: `tests/gates/cve-gate/scan-cves-go-quota-fixtures.sh` (red on the old script: 1 of 3).
+
 ## BOSv1.5.1 — final (prepared 2026-10-15)
 
 Maintenance release on top of BOSv1.5.0. It contains every section below up to the BOSv1.5.0 release heading.
