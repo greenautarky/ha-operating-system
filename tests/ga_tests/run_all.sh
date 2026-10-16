@@ -149,6 +149,9 @@ _os_version=$(. /etc/os-release 2>/dev/null && echo "${GA_BUILD_TIMESTAMP:-unkno
 # that finds it unresolved records its own failure; see lib/ha_port.sh.
 . "$SCRIPT_DIR/lib/ha_port.sh"
 _ga_ha_port_resolve 2>/dev/null || true
+# Preflight helper: wait for the APPS inside the containers, not just for the
+# containers to be Up (lib/app_ready.sh).
+. "$SCRIPT_DIR/lib/app_ready.sh"
 _ha_port_line=$(ga_ha_port_explain)
 
 echo "=============================================="
@@ -166,6 +169,20 @@ echo "  HA port:  $_ha_port_line"
 echo "  Uptime:   $_uptime"
 echo "  Suites:   $SUITES"
 echo "=============================================="
+
+# Preflight: a container reads Up long before its app listens (InfluxDB /ping,
+# Core's API). Suites that start in that gap fail for a timing reason. Bounded
+# (GA_PREFLIGHT_TIMEOUT, default 300 s) and fail-closed: a device whose apps
+# never answer gets exit 3 and the reason, not a report full of noise.
+# GA_PREFLIGHT=0 skips it (an operator who knows an app is down on purpose).
+if [ "${GA_PREFLIGHT:-1}" != "0" ]; then
+  echo ""
+  echo "=== preflight ==="
+  if ! ga_wait_apps_ready; then
+    echo "  Result: PREFLIGHT FAILED - suites not run (GA_PREFLIGHT=0 to skip)"
+    exit 3
+  fi
+fi
 
 for suite in $SUITES; do
   test_script="$SCRIPT_DIR/$suite/test.sh"
