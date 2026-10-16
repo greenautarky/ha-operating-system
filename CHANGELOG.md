@@ -12,6 +12,18 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## BOSv1.5.2-rc1 (prepared 2026-10-16)
+
+Maintenance release on top of BOSv1.5.1, built from branch `release/1.5`. Pins only plus one test-only change; no OS code change.
+
+- `ga_hmvapp_addon` 2.6.0 -> 2.6.1: the heating add-on logs "Missing data" once per transition instead of every cycle (Odoo #1225); heating decisions unchanged. The #806 hold entry is removed.
+- `ga_zigbee2mqtt` 2.12.1-9 -> 2.12.1-10: the NWK frame-counter guard logs INFO for expected persistence lag and WARNING above 4096 (Odoo #1221).
+- `ga_manager` 0.252.0 -> 0.253.0: the Supervisor per-add-on stats sweep runs at most every 300 s (Odoo #1203, idle CPU); `resource_pressure_5min` now averages over one sample.
+- `greenautarky-site` 2.12.2 -> 2.12.3: the wizard Ethernet step records the value the resident chose.
+- `ga-frontend-bundle` 1.23.5 -> 1.23.6: the master card no longer offers the full-site reset.
+- Test-only (#803): the device-suite preflight waits for the Core API and InfluxDB `/ping`, not just container Up.
+- CI: pull-request checks also run on PRs into `release/**`.
+
 ## Unreleased (BOSv1.5.1 final fix)
 
 - **CVE gate: the CPE-coverage quota no longer counts Go module components.** Before: #801 added 502 Go module components (purl `pkg:golang/…`, no CPE by design) to the OS SBOM, the quota fell from ~62 % to 17 % and the final bake stopped with "BROKEN SCAN". After: components tagged `ga:go-binary` are left out of the denominator (they are covered by GOTC-05); packages without a CPE still break the scan, untagged `pkg:golang` entries still count. Fixtures: `tests/gates/cve-gate/scan-cves-go-quota-fixtures.sh` (red on the old script: 1 of 3).
