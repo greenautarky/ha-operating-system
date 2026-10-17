@@ -20,10 +20,17 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
 
-suite_start "hassos-apparmor (profile presence + atomic download)"
+suite_start "haos-apparmor (profile presence + atomic download)"
 
-AA="/usr/libexec/hassos-apparmor"
-[ -x "$AA" ] || AA="$SCRIPT_DIR/../../../buildroot-external/rootfs-overlay/usr/libexec/hassos-apparmor"
+# HAOS 18.x: haos-apparmor, upstream's (GA's earlier edit is upstream since 17.x).
+# In the repo: exported from haos/ as the build sees it (scripts/apply-haos-patches.sh).
+AA="/usr/libexec/haos-apparmor"
+if [ ! -x "$AA" ]; then
+  _AA_EXP="$(mktemp -d 2>/dev/null || echo /tmp/aap_exp_$$)"
+  "$SCRIPT_DIR/../../../scripts/apply-haos-patches.sh" --export "$_AA_EXP" \
+    buildroot-external/rootfs-overlay/usr/libexec/haos-apparmor >/dev/null 2>&1
+  AA="$_AA_EXP/buildroot-external/rootfs-overlay/usr/libexec/haos-apparmor"
+fi
 
 run_test "AAP-01" "script present + executable" "test -x '$AA'"
 

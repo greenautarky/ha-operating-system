@@ -7,7 +7,7 @@ Documentation=file:/usr/libexec/ga-publish-services
 # republish — the alternative was naming this unit in the reconciler's restart
 # list, which is a coupling that silently rots the day someone adds a third
 # writer.
-After=hassos-overlay.service mnt-data.mount
+After=haos-overlay.service mnt-data.mount
 
 [Path]
 PathChanged=/mnt/data/ga-services.conf

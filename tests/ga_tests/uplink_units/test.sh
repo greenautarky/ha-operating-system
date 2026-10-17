@@ -119,10 +119,10 @@ if [ -s "$WORK/nmcli.log" ]; then
 else
     PASS "an intact device is left alone (no reload, no churn)"
 fi
-if grep -qE "^After=.*hassos-config\.service" "$UNITS/ga-wifi-fallback-restore.service"; then
+if grep -qE "^After=.*haos-config\.service" "$UNITS/ga-wifi-fallback-restore.service"; then
     PASS "restore runs after the import that wipes"
 else
-    FAIL "restore runs after hassos-config" "wrong order — the restore would be wiped again"
+    FAIL "restore runs after haos-config" "wrong order — the restore would be wiped again"
 fi
 if [ -L "$UNITS/multi-user.target.wants/ga-wifi-fallback-restore.service" ]; then
     PASS "restore unit is enabled"

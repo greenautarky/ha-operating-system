@@ -3,7 +3,7 @@
 #
 # WHY
 # ---
-# `hassos-config` imports a CONFIG folder from the boot partition (or a USB
+# `haos-config` imports a CONFIG folder from the boot partition (or a USB
 # stick labelled CONFIG) and, when that folder has a `network/` directory, it
 # does `rm -rf /etc/NetworkManager/system-connections/*` before copying the
 # operator's files in. That is how an installer puts a site WiFi on a device
@@ -14,7 +14,7 @@
 #   * openstick-auto       — the LTE stick's AP, priority 10
 #
 # `ga-overlay-init` does restore the install profile when it is missing, but it
-# runs Before=NetworkManager.service, i.e. BEFORE hassos-config wipes — so in
+# runs Before=NetworkManager.service, i.e. BEFORE haos-config wipes — so in
 # the same boot the restore happens first and the wipe second, and the fallback
 # is gone for as long as the CONFIG folder sits on the card. The openstick
 # profile is recreated by its own timer within 5 minutes, so it heals itself;
@@ -26,7 +26,7 @@
 # install WiFi 800 / priority -10), so re-adding it cannot take a working site
 # WiFi away; it only gives the device somewhere to go when the site WiFi fails.
 #
-# Runs after hassos-config, once per boot. Idempotent: it copies only what is
+# Runs after haos-config, once per boot. Idempotent: it copies only what is
 # missing and reloads NetworkManager only when it changed something.
 set -u
 

@@ -12,7 +12,8 @@ of it. So a unit that is renamed, or a name that is simply misspelled, turns an
 ordering the code relies on into nothing, with no error anywhere.
 
 That happened: GA units ordered themselves against `hassio-supervisor.service`,
-while the unit this image ships is `hassos-supervisor.service`. One of them
+while the unit the image shipped was `hassos-supervisor.service` (HAOS 18.x:
+`haos-supervisor.service`). One of them
 documents its `Before=` as the guard against a race with the Supervisor. The
 guard was never in effect. (An earlier instance of the same name, a
 `Requires=`, silently dropped ga-bootstrap.service; see SUP-11.)
@@ -51,7 +52,15 @@ a per-image job, not a source lint.
 
 Fails closed: zero unit files found is exit 2, never a pass.
 
-Usage: check-unit-refs.py [TREE ...]   (default: buildroot-external buildroot-ihost)
+Usage: check-unit-refs.py [--resolve-from TREE]... [TREE ...]
+       default: lint buildroot-external buildroot-ihost (the GA layer and the
+       board), resolving names also from haos/buildroot-external
+--resolve-from TREE: unit names defined in TREE count as shipped, but TREE's
+       units are not linted. Upstream HAOS (haos/, unmodified) provides the
+       units GA units order against (haos-supervisor.service, haos-config ...);
+       its own unit files are upstream's, not this tree's to fix. A missing
+       resolve tree is an error (exit 2): without it every upstream name would
+       be reported, or worse, silently allowed.
 Exit:  0 clean · 1 findings · 2 nothing inspected / usage error
 """
 import os
@@ -78,8 +87,10 @@ START_LIMIT_KEYS = {
 # entry is added only for a unit that exists on the device (or, marked ABSENT, a
 # no-op ordering copied verbatim from an upstream unit) — never to make a
 # finding go away. `systemctl cat <name>` on a device is the proof.
-# Every entry is referenced by at least one shipped unit; an unreferenced entry
-# is reported, so the list cannot grow stale.
+# Every entry is referenced by at least one shipped GA unit; an unreferenced
+# entry is reported, so the list cannot grow stale. (Upstream HAOS's own units
+# are resolve-only since HAOS 18.x and are not linted: their references need no
+# entry here.)
 BASE_UNITS = {
     # --- systemd special targets, systemd.special(7) ---
     "basic.target": "systemd",
@@ -179,14 +190,50 @@ def collect(trees):
 
 def main(argv):
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    trees = argv[1:] or [os.path.join(root, "buildroot-external"),
-                         os.path.join(root, "buildroot-ihost")]
-    for t in trees:
+    args = list(argv[1:])
+    resolve_trees = []
+    trees = []
+    while args:
+        a = args.pop(0)
+        if a == "--resolve-from":
+            if not args:
+                print("ERROR: --resolve-from needs a directory", file=sys.stderr)
+                return 2
+            resolve_trees.append(args.pop(0))
+        else:
+            trees.append(a)
+    if not trees:
+        trees = [os.path.join(root, "buildroot-external"),
+                 os.path.join(root, "buildroot-ihost")]
+        if not resolve_trees:
+            resolve_trees = [os.path.join(root, "haos", "buildroot-external")]
+    for t in trees + resolve_trees:
         if not os.path.isdir(t):
             print(f"ERROR: {t} is not a directory", file=sys.stderr)
             return 2
 
     units, defined = collect(trees)
+    if resolve_trees:
+        r_units, r_defined = collect(resolve_trees)
+        if not r_defined:
+            print("ERROR: found zero unit files in " + " ".join(resolve_trees) +
+                  " (resolve-only) — is haos/ checked out?", file=sys.stderr)
+            return 2
+        defined |= r_defined
+        for ru in r_units:
+            if ru.endswith(".conf"):
+                continue
+            for _, section, key, value in parse(ru):
+                if section == "Install" and key == "Alias":
+                    defined.update(value.split())
+        resolve_refs = set()
+        for ru in r_units:
+            for _, section, key, value in parse(ru):
+                if (section == "Unit" and key in UNIT_DEP_KEYS) or \
+                   (section == "Install" and key in INSTALL_DEP_KEYS):
+                    resolve_refs.update(value.split())
+    else:
+        resolve_refs = set()
     unit_files = [u for u in units if not u.endswith(".conf")]
     if not unit_files:
         print("ERROR: found zero unit files in " + " ".join(trees) +
@@ -243,6 +290,15 @@ def main(argv):
 
     # Only meaningful over the real tree: a fixture references a handful.
     if not argv[1:]:
+        def base_hit(n):
+            if n in BASE_UNITS:
+                return n
+            m = re.match(r"^([^@]+@)[^@]+(\.[a-z]+)$", n)
+            return (m.group(1) + m.group(2)) if m and (m.group(1) + m.group(2)) in BASE_UNITS else None
+        for n in resolve_refs:
+            h = base_hit(n)
+            if h:
+                used_base.add(h)
         for name in sorted(set(BASE_UNITS) - used_base):
             findings.append(f"BASE_UNITS: {name} is referenced by no shipped "
                             f"unit — remove the entry")

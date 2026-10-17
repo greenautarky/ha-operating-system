@@ -1,7 +1,7 @@
 [Unit]
 Description=Set ALSA volume and output mux on startup
 After=sound.target
-After=hassos-supervisor.service
+After=haos-supervisor.service
 Requires=sound.target
 
 [Service]

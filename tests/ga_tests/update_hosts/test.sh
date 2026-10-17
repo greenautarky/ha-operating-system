@@ -32,7 +32,14 @@ suite_start "ga-update-hosts (Supervisor name resolution)"
 
 REPO="$SCRIPT_DIR/../../.."
 UH="${GA_UPDATE_HOSTS:-$REPO/buildroot-ihost/rootfs-overlay/usr/sbin/ga-update-hosts}"
-LAUNCH="${HASSOS_SUPERVISOR:-$REPO/buildroot-external/rootfs-overlay/usr/sbin/hassos-supervisor}"
+# The Supervisor launcher: upstream HAOS's haos-supervisor + GA patch 0130,
+# exported from haos/ as the build sees it (scripts/apply-haos-patches.sh).
+if [ -z "${HASSOS_SUPERVISOR:-}" ]; then
+  _UH_EXP="$(mktemp -d 2>/dev/null || echo /tmp/uh_exp_$$)"
+  "$REPO/scripts/apply-haos-patches.sh" --export "$_UH_EXP" \
+    buildroot-external/rootfs-overlay/usr/sbin/haos-supervisor >/dev/null 2>&1
+fi
+LAUNCH="${HASSOS_SUPERVISOR:-$_UH_EXP/buildroot-external/rootfs-overlay/usr/sbin/haos-supervisor}"
 
 W="$(mktemp -d 2>/dev/null || echo "/tmp/uh_$$")"
 mkdir -p "$W/bin" "$W/state"
@@ -134,7 +141,7 @@ run_test "UH-13" "--verify-supervisor writes nothing" \
 container true no
 run_uh --verify-supervisor; RC=$?
 run_test "UH-14" "--verify-supervisor: container created without the mount -> exit non-zero, says how to fix" \
-  '[ "$RC" -ne 0 ] && grep -q "does not mount" "$W/out" && grep -q "hassos-supervisor.service" "$W/out"'
+  '[ "$RC" -ne 0 ] && grep -q "does not mount" "$W/out" && grep -q "haos-supervisor.service" "$W/out"'
 
 # --- refuses to write through a symlink -----------------------------------------
 rm -f "$SUPF"; echo "untouched" > "$W/elsewhere"; ln -s "$W/elsewhere" "$SUPF"
@@ -152,10 +159,10 @@ run_test "UH-17" "no docker exec result is swallowed with || true" \
 
 # --- launcher: the mount, and one path in two files -----------------------------
 HOOKED=0
-grep -q 'HASSOS_SUPERVISOR_FUNCTIONS_ONLY' "$LAUNCH" 2>/dev/null && HOOKED=1
+grep -q 'HAOS_SUPERVISOR_FUNCTIONS_ONLY' "$LAUNCH" 2>/dev/null && HOOKED=1
 mount_for() {
   [ "$HOOKED" = 1 ] || { echo "launcher has no functions-only hook - not sourced" > "$W/err"; return 1; }
-  ( HASSOS_SUPERVISOR_FUNCTIONS_ONLY=1; . "$LAUNCH"; ga_supervisor_hosts_mount "$@" ) 2>"$W/err"
+  ( HAOS_SUPERVISOR_FUNCTIONS_ONLY=1; . "$LAUNCH"; ga_supervisor_hosts_mount "$@" ) 2>"$W/err"
 }
 WRITER="$W/bin/systemctl"   # any executable stands in for the writer
 printf '127.0.0.1\tlocalhost\n' > "$W/present"

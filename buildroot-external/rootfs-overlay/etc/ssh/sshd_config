@@ -20,7 +20,7 @@ Include /etc/ssh/sshd_config.d/*.conf
 Port 22222
 
 # Where the shared key is read from. /root/.ssh is bind-mounted from the
-# overlay (root-.ssh.mount) and seeded on first boot by hassos-overlay.
+# overlay (root-.ssh.mount) and seeded on first boot by haos-overlay.
 # Shared plane only: the certificate-plane drop-in sets its own value first.
 AuthorizedKeysFile /root/.ssh/authorized_keys
 

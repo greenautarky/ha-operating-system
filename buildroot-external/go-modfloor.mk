@@ -41,9 +41,9 @@ GA_GO_MODFLOOR += golang.org/x/mod@v0.41.0
 #
 # Packages that vendor those modules. -modfile is the module file the package
 # builds with (docker-cli keeps vendor.mod, not go.mod).
-GA_GO_MODBUMP_SCRIPT = $(BR2_EXTERNAL_HASSOS_PATH)/../scripts/go-modbump.sh
-GA_GO_MODBUMP_FLOORS = $(BR2_EXTERNAL_HASSOS_PATH)/go-modfloor.mk
-GA_GO_MODBUMP_SUMS   = $(BR2_EXTERNAL_HASSOS_PATH)/go-modfloor.sum
+GA_GO_MODBUMP_SCRIPT = $(BR2_EXTERNAL_GA_HAOS_PATH)/../scripts/go-modbump.sh
+GA_GO_MODBUMP_FLOORS = $(BR2_EXTERNAL_GA_HAOS_PATH)/go-modfloor.mk
+GA_GO_MODBUMP_SUMS   = $(BR2_EXTERNAL_GA_HAOS_PATH)/go-modfloor.sum
 
 define GA_GO_MODBUMP_RUN
 	$(TARGET_MAKE_ENV) $(HOST_GO_COMMON_ENV) GOMODCACHE=$(DL_DIR)/gomod \

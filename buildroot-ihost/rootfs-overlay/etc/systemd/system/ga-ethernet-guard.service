@@ -1,6 +1,6 @@
 [Unit]
 Description=Apply Ethernet disable state from ga-env.conf
-After=NetworkManager.service hassos-config.service
+After=NetworkManager.service haos-config.service
 Wants=NetworkManager.service
 
 [Service]

@@ -51,7 +51,7 @@ define FLUENT_BIT_CONFIG_INSTALL_TARGET_CMDS
 	# every plugin in FLUENT_BIT_GA_PLUGINS and no Forward plugin. Runs here and
 	# not as a hook of the fluent-bit package: an `update` bake dircleans this
 	# package every time but not fluent-bit, so a hook there would be skipped.
-	$(BR2_EXTERNAL_HASSOS_PATH)/../scripts/fluent-bit-plugin-guard.sh \
+	$(BR2_EXTERNAL_GA_HAOS_PATH)/../scripts/fluent-bit-plugin-guard.sh \
 		--binary $(TARGET_DIR)/usr/bin/fluent-bit \
 		--mk $(FLUENT_BIT_CONFIG_PKGDIR)/fluent-bit-config.mk
 

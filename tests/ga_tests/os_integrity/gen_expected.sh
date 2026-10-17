@@ -56,24 +56,26 @@ SUPERVISOR=$(awk -F'"' '/^  homeassistant_supervisor:/{print $2; exit}' version.
 KERNEL=$(sed -nE 's/^BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="([0-9.]+)"/\1/p' buildroot-ihost/configs/ga_ihost_full_defconfig | head -1)
 [ -n "$KERNEL" ] || fail "no kernel version in ga_ihost_full_defconfig"
 
-# --- openssl, from the PINNED buildroot submodule -------------------------
-# Two sources, in order of preference:
-#   1. an initialised submodule checkout — but ONLY if it sits exactly on the
-#      pinned commit ('+'/'-' prefix in `git submodule status` means it does
-#      not, and reading a drifted checkout would repeat the rc3 defect here);
-#   2. the pinned commit fetched straight from the fork on GitHub.
+# --- openssl, from the PINNED buildroot --------------------------------------
+# Buildroot is the submodule upstream HAOS pins (haos/buildroot); the pointer is
+# read from the haos/ commit THIS tree pins. Two sources, in order of preference:
+#   1. an initialised haos/buildroot checkout — but ONLY if it sits exactly on
+#      that commit (reading a drifted checkout would repeat the rc3 defect);
+#   2. the pinned commit fetched straight from GitHub.
 # No third fallback. If neither works, this fails.
-BR_SHA=$(git ls-tree HEAD buildroot | awk '{print $3}')
-[ -n "$BR_SHA" ] || fail "no buildroot submodule pointer on HEAD"
+HAOS_SHA=$(git ls-tree HEAD haos | awk '{print $3}')
+[ -n "$HAOS_SHA" ] || fail "no haos submodule pointer on HEAD"
+BR_SHA=$(git -C haos ls-tree "$HAOS_SHA" buildroot 2>/dev/null | awk '{print $3}')
+[ -n "$BR_SHA" ] || fail "cannot read the buildroot pointer of haos @ ${HAOS_SHA} (git submodule update --init --depth 1 haos)"
 OPENSSL=""
-if [ -f buildroot/package/libopenssl/libopenssl.mk ] \
-   && git submodule status buildroot 2>/dev/null | grep -q "^ ${BR_SHA}"; then
-  OPENSSL=$(grep -E '^LIBOPENSSL_VERSION = ' buildroot/package/libopenssl/libopenssl.mk | awk '{print $3}')
+if [ -f haos/buildroot/package/libopenssl/libopenssl.mk ] \
+   && [ "$(git -C haos/buildroot rev-parse HEAD 2>/dev/null)" = "$BR_SHA" ]; then
+  OPENSSL=$(grep -E '^LIBOPENSSL_VERSION = ' haos/buildroot/package/libopenssl/libopenssl.mk | awk '{print $3}')
 else
   OPENSSL=$(curl -fsS "https://raw.githubusercontent.com/home-assistant/buildroot/${BR_SHA}/package/libopenssl/libopenssl.mk" \
               | grep -E '^LIBOPENSSL_VERSION = ' | awk '{print $3}') || true
 fi
-[ -n "$OPENSSL" ] || fail "could not derive OpenSSL from buildroot @ ${BR_SHA} (submodule drifted or unreachable) — refusing to emit a blank expectation"
+[ -n "$OPENSSL" ] || fail "could not derive OpenSSL from buildroot @ ${BR_SHA} (checkout drifted or unreachable) — refusing to emit a blank expectation"
 
 # --- add-on images, from the bake pin file --------------------------------
 ADDONS=$(python3 - <<'PY'
@@ -112,9 +114,11 @@ fi
 # live line, never a copy here. It was a hardcoded .../main/ until the rc5
 # dress rehearsal baked from candidate/stable-1.4: a copy would have described
 # main's stable.json (upstream plugins) while the image carries the candidate's.
-VERSION_URL=$(sed -nE 's/^HASSIO_VERSION_URL[[:space:]]*\??=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' \
-  buildroot-external/package/hassio/hassio.mk | head -1)
-[ -n "$VERSION_URL" ] || fail "no HASSIO_VERSION_URL in buildroot-external/package/hassio/hassio.mk — refusing to guess a branch"
+# hassio.mk is upstream HAOS's with GA patch 0131 applied; --cat shows it as
+# the build sees it, without touching the haos/ working tree.
+VERSION_URL=$(scripts/apply-haos-patches.sh --cat buildroot-external/package/hassio/hassio.mk \
+  | sed -nE 's/^HASSIO_VERSION_URL[[:space:]]*\??=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' | head -1)
+[ -n "$VERSION_URL" ] || fail "no HASSIO_VERSION_URL in the patched haos hassio.mk (scripts/apply-haos-patches.sh --cat) — refusing to guess a branch"
 PLUGINS=$(CHANNEL="$CHANNEL" VERSION_URL="$VERSION_URL" python3 - <<'PYEOF'
 import json, os, sys, urllib.request
 url = os.environ["VERSION_URL"] + os.environ["CHANNEL"] + ".json"

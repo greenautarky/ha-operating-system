@@ -1,37 +1,23 @@
 #!/bin/bash
-# shellcheck disable=SC1090,SC1091
+# GA_HAOS post-build. Listed in BR2_ROOTFS_POST_BUILD_SCRIPT AFTER upstream
+# HAOS's ($(BR2_EXTERNAL_HAOS_PATH)/scripts/post-build.sh, unmodified), so
+# os-release and the RAUC config already exist when this runs, and BEFORE the
+# board's (which runs the board's post-build.d hooks).
+#
+#   $1 = TARGET_DIR, $2 = board dir (BR2_ROOTFS_POST_SCRIPT_ARGS)
+#
+# Until HAOS 18.x the GA lines below were edits of HAOS's own post-build.sh.
 set -e
 
-SCRIPT_DIR=${BR2_EXTERNAL_HASSOS_PATH}/scripts
-BOARD_DIR=${2}
+TARGET_DIR=${1:?TARGET_DIR missing}
 
-. "${BR2_EXTERNAL_HASSOS_PATH}/meta"
-. "${BOARD_DIR}/meta"
+OS_RELEASE="${TARGET_DIR}/usr/lib/os-release"
+[ -f "${OS_RELEASE}" ] || { echo "ga-haos post-build: FAIL: ${OS_RELEASE} missing (the HAOS post-build must run first)" >&2; exit 1; }
 
-. "${SCRIPT_DIR}/rootfs-layer.sh"
-. "${SCRIPT_DIR}/name.sh"
-. "${SCRIPT_DIR}/rauc.sh"
+# PRETTY_NAME: "<name> <version>, based on Home Assistant"
+sed -i 's/^PRETTY_NAME="\(.*\)"$/PRETTY_NAME="\1, based on Home Assistant"/' "${OS_RELEASE}"
 
-
-# HassOS tasks
-fix_rootfs
-install_tini_docker
-setup_localtime
-
-# Write os-release
-# shellcheck disable=SC2153
-(
-    echo "NAME=\"${HASSOS_NAME}\""
-    echo "VERSION=\"$(hassos_version) (${BOARD_NAME})\""
-    echo "ID=${HASSOS_ID}"
-    echo "VERSION_ID=$(hassos_version)"
-    echo "PRETTY_NAME=\"${HASSOS_NAME} $(hassos_version), based on Home Assistant\""
-    echo "CPE_NAME=cpe:2.3:o:home-assistant:${HASSOS_ID}:$(hassos_version):*:${DEPLOYMENT}:*:*:*:${BOARD_ID}:*"
-    echo "HOME_URL=https://www.home-assistant.io/"
-    echo "VARIANT=\"${HASSOS_NAME} ${BOARD_NAME}\""
-    echo "VARIANT_ID=${BOARD_ID}"
-    echo "SUPERVISOR_MACHINE=${SUPERVISOR_MACHINE}"
-    echo "SUPERVISOR_ARCH=${SUPERVISOR_ARCH}"
+{
     # GreenAutarky build info (set by ga_build.sh via env vars)
     if [ -n "${GA_BUILD_TIMESTAMP:-}" ]; then
         # GA_ENV is a runtime label (telemetry `env`), constant since
@@ -42,12 +28,12 @@ setup_localtime
     fi
     # GA-side release identifier (e.g. "BOSv1.2.0") alongside the cryptic
     # HAOS-internal VERSION_ID. Operators + fleet-manager read this; nothing
-    # in the supervisor cares about it. Set via GA_RELEASE env var on the
-    # build invocation (`GA_RELEASE=BOSv1.2.0 ./scripts/ga_build.sh update`).
+    # in the supervisor cares about it. ga_build.sh resolves it (env, else
+    # version.yaml gaos_release) and refuses to build without one.
     if [ -n "${GA_RELEASE:-}" ]; then
         echo "GA_RELEASE=\"${GA_RELEASE}\""
     fi
-) > "${TARGET_DIR}/usr/lib/os-release"
+} >> "${OS_RELEASE}"
 
 # GA-side release identifier also lives at /etc/ga-release for cheap
 # `cat /etc/ga-release` use by tests, ga_manager, telegraf tags, etc.
@@ -55,19 +41,3 @@ if [ -n "${GA_RELEASE:-}" ]; then
     printf '%s\n' "${GA_RELEASE}" > "${TARGET_DIR}/etc/ga-release"
     chmod 0644 "${TARGET_DIR}/etc/ga-release"
 fi
-
-# Write machine-info
-(
-    echo "CHASSIS=${CHASSIS}"
-    echo "DEPLOYMENT=${DEPLOYMENT}"
-) > "${TARGET_DIR}/etc/machine-info"
-
-
-# Setup RAUC
-prepare_rauc_signing
-write_rauc_config
-install_rauc_certs
-install_bootloader_config
-
-# Fix overlay presets
-"${HOST_DIR}/bin/systemctl" --root="${TARGET_DIR}" preset-all

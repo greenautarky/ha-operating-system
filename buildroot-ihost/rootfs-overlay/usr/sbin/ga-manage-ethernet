@@ -28,7 +28,7 @@
 #                                      (operator decision): provisioning runs
 #                                      over Ethernet, not WiFi, and a cable
 #                                      beats a WLAN per bench. The image build
-#                                      writes it (board hassos-hook.sh).
+#                                      writes it (board haos-hook.sh).
 #                                      An earlier version of this comment said
 #                                      "physical access IS the authorisation —
 #                                      whoever set this had the card in a

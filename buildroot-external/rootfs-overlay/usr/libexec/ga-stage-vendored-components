@@ -50,7 +50,7 @@
 # location the attacker cannot write rather than a check on the content.
 #
 # SAFETY: best-effort — this must NEVER block boot (it is ordered
-# Before=hassos-supervisor.service). Every failure is logged and swallowed;
+# Before=haos-supervisor.service). Every failure is logged and swallowed;
 # the script always exits 0. Staging is version-gated (compares manifest.json)
 # so an unchanged device performs NO writes — important for eMMC longevity.
 

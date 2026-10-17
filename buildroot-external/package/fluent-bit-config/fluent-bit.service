@@ -2,7 +2,7 @@
 Description=Fluent Bit log agent
 # The Supervisor ordering that stood here named hassio-supervisor.service, a
 # unit this image does not ship, so it was never in effect. It is not switched
-# on: ordering after hassos-supervisor.service would hold this unit until the
+# on: ordering after haos-supervisor.service would hold this unit until the
 # Supervisor's whole start chain is through (docker, time sync, the OTA endpoint
 # probe), which delays the log stream at boot. Open decision, see CHANGELOG.
 After=network-online.target netbird.service ga-telemetry-consent.service

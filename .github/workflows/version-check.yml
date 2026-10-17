@@ -135,6 +135,12 @@ jobs:
         timeout-minutes: 8
         run: ./scripts/check-supervisor-core-image.sh
 
+      # The source-level build tests read upstream HAOS files with the GA patch
+      # set applied (run_build_tests.sh SRC-HAOS-01 exports them from haos/).
+      - name: haos/ submodule (upstream HAOS, shallow)
+        if: '!cancelled()'
+        run: git submodule update --init --depth 1 haos
+
       # Same reasoning: the source tests answer a different question from image
       # availability, so one must not hide the other.
       - name: Run source-level build tests

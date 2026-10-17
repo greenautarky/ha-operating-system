@@ -1,0 +1,383 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] rauc: GA signing material, GA keyring, release floor, marker-free OTA boot
+
+GA deltas of the RAUC/genimage scripts and templates (until HAOS 18.x edits of
+the files themselves), on HAOS 18.x:
+
+  scripts/rauc.sh          signing key + certificate from the read-only
+                           secrets mount ($GA_SECRETS_DIR, default /secrets);
+                           the keyring holds the GA OTA root only, read from
+                           the GA layer (ota/rel-ca.pem, builder-provided,
+                           pinned by ga_build.sh); missing or empty fails, a
+                           signing certificate that does not chain fails.
+  scripts/hdd-image.sh     same signing material for the bundle; manifest
+                           [meta.ga] release from the rootfs /etc/ga-release;
+                           the bundle gets boot-ota.vfat (the boot tree minus
+                           the provisioning marker). Slot sizes are upstream's
+                           (fresh 18.x images: 256M system slots).
+  ota/system.conf.gtpl     pre-install handler /usr/lib/rauc/ga-release-floor.
+  ota/manifest.raucm.gtpl  [meta.ga] release=.
+  genimage/image-raucb-*   GA key/certificate; boot.vfat <- boot-ota.vfat;
+                           upstream's intermediate (HA cross-signed root) is
+                           not carried: the GA keyring trusts the GA root only.
+  genimage/images-boot-ota.cfg  new: the OTA boot image.
+---
+ .../genimage/image-raucb-nospl.cfg            |  17 ++-
+ .../genimage/image-raucb-spl.cfg              |  17 ++-
+ .../genimage/images-boot-ota.cfg              |  29 +++++
+ buildroot-external/ota/manifest.raucm.gtpl    |  10 ++
+ buildroot-external/ota/system.conf.gtpl       |   7 +-
+ buildroot-external/scripts/hdd-image.sh       |  54 ++++++++-
+ buildroot-external/scripts/rauc.sh            | 105 +++++++++++++++---
+ 7 files changed, 211 insertions(+), 28 deletions(-)
+
+diff --git a/buildroot-external/genimage/image-raucb-nospl.cfg b/buildroot-external/genimage/image-raucb-nospl.cfg
+index 38df198b3..569194607 100644
+--- a/buildroot-external/genimage/image-raucb-nospl.cfg
++++ b/buildroot-external/genimage/image-raucb-nospl.cfg
+@@ -1,12 +1,19 @@
+ rauc {
+-	key = "/build/key.pem"
+-	cert = "/build/cert.pem"
+-	# intermediate can be removed after May 14th 2028, along with old CAs from the keyrings
+-	intermediate = "${BR2_EXTERNAL_HAOS_PATH}/ota/rel-ca-xsign-oldroot.cert.pem"
++	# Set by hdd-image.sh from the build mode. The default is a path that does
++	# NOT exist, on purpose: an unset selector must fail loudly here rather than
++	# silently fall back to the production key. Until 2026-07-30 these two lines
++	# hardcoded /build/key.pem, so every dev build signed with the production key
++	# regardless of what the rest of the build thought it was doing.
++	key = "${GA_SIGN_KEY:-/build/GA_SIGN_KEY-IS-UNSET}"
++	cert = "${GA_SIGN_CERT:-/build/GA_SIGN_CERT-IS-UNSET}"
+ 	keyring = "${TARGET_DIR}/etc/rauc/keyring.pem"
+ 	manifest = "${RAUC_MANIFEST:-PLEASE_SPECIFY_RAUC_MANIFEST}"
+ 	file hook { image = "${BR2_EXTERNAL_HAOS_PATH}/ota/rauc-hook" }
+-	file boot.vfat { image = "boot.vfat" }
++	# NOT boot.vfat: the OTA boot partition is marker-free by construction.
++	# See buildroot-external/genimage/images-boot-ota.cfg for why. The name
++	# INSIDE the bundle stays boot.vfat — manifest.raucm addresses it by that
++	# name and every deployed device's install hook expects it.
++	file boot.vfat { image = "boot-ota.vfat" }
+ 	file kernel.img { image = "kernel.img" }
+ 	file rootfs.img { image = ${SYSTEM_IMAGE} }
+ }
+diff --git a/buildroot-external/genimage/image-raucb-spl.cfg b/buildroot-external/genimage/image-raucb-spl.cfg
+index 75c2bea61..0bd51fff6 100644
+--- a/buildroot-external/genimage/image-raucb-spl.cfg
++++ b/buildroot-external/genimage/image-raucb-spl.cfg
+@@ -1,13 +1,20 @@
+ rauc {
+-	key = "/build/key.pem"
+-	cert = "/build/cert.pem"
+-	# intermediate can be removed after May 14th 2028, along with old CAs from the keyrings
+-	intermediate = "${BR2_EXTERNAL_HAOS_PATH}/ota/rel-ca-xsign-oldroot.cert.pem"
++	# Set by hdd-image.sh from the build mode. The default is a path that does
++	# NOT exist, on purpose: an unset selector must fail loudly here rather than
++	# silently fall back to the production key. Until 2026-07-30 these two lines
++	# hardcoded /build/key.pem, so every dev build signed with the production key
++	# regardless of what the rest of the build thought it was doing.
++	key = "${GA_SIGN_KEY:-/build/GA_SIGN_KEY-IS-UNSET}"
++	cert = "${GA_SIGN_CERT:-/build/GA_SIGN_CERT-IS-UNSET}"
+ 	keyring = "${TARGET_DIR}/etc/rauc/keyring.pem"
+ 	manifest = "${RAUC_MANIFEST:-PLEASE_SPECIFY_RAUC_MANIFEST}"
+ 	file hook { image = "${BR2_EXTERNAL_HAOS_PATH}/ota/rauc-hook" }
+ 	file spl.img { image = "spl.img" }
+-	file boot.vfat { image = "boot.vfat" }
++	# NOT boot.vfat: the OTA boot partition is marker-free by construction.
++	# See buildroot-external/genimage/images-boot-ota.cfg for why. The name
++	# INSIDE the bundle stays boot.vfat — manifest.raucm addresses it by that
++	# name and every deployed device's install hook expects it.
++	file boot.vfat { image = "boot-ota.vfat" }
+ 	file kernel.img { image = "kernel.img" }
+ 	file rootfs.img { image = ${SYSTEM_IMAGE} }
+ }
+diff --git a/buildroot-external/genimage/images-boot-ota.cfg b/buildroot-external/genimage/images-boot-ota.cfg
+new file mode 100644
+index 000000000..31f954005
+--- /dev/null
++++ b/buildroot-external/genimage/images-boot-ota.cfg
+@@ -0,0 +1,29 @@
++# Boot filesystem for the OTA BUNDLE — deliberately NOT the same artifact as
++# the SD image's boot.vfat.
++#
++# The two differ in exactly one file: /ga-ethernet-force. The SD image carries
++# it (provisioning runs over the LAN socket, operator decision 2026-07-30); the
++# OTA bundle must not, because the RAUC install_boot hook copies the bundle's
++# boot partition over /mnt/boot wholesale and preserves only *.txt and grubenv.
++# A marker inside the bundle is therefore RE-CREATED on every device an update
++# reaches — including customer devices where the LAN socket was never on and
++# nobody asked for it.
++#
++# Measured on the rc43 bundle, 2026-09-19:
++#   unsquashfs bos_ihost-…raucb -> boot.vfat -> `GA-ETH~1  112  ga-ethernet-force`
++# Before ha-operating-system#582 the defect was masked: ga-ethernet-retire.path
++# won the race against ga-ethernet-guard.service, so the restored marker was
++# deleted before anything read it. Fixing the race turned a dormant bug into a
++# fleet-wide posture change, which is why this file exists.
++#
++# The durable switch is the fleet's, not the image's: ga_manager's
++# `ethernet.force_enabled` writes an add-on-private marker that survives every
++# reboot and is removed only when the fleet-manager clears it. Provisioning
++# sets it; nothing else may.
++image boot-ota.vfat {
++	size = ${BOOT_SIZE:-PLEASE_SPECIFY_BOOT_SIZE}
++
++	vfat {
++		label = "hassos-boot"
++	}
++}
+diff --git a/buildroot-external/ota/manifest.raucm.gtpl b/buildroot-external/ota/manifest.raucm.gtpl
+index 932257961..9d40eaab3 100644
+--- a/buildroot-external/ota/manifest.raucm.gtpl
++++ b/buildroot-external/ota/manifest.raucm.gtpl
+@@ -1,6 +1,16 @@
+ [update]
+ compatible={{ env "ota_compatible" }}
+ version={{ env "ota_version" }}
++{{- if env "ota_ga_release" }}
++
++# The GA release this bundle's rootfs carries in /etc/ga-release. A device's
++# RAUC pre-install handler (/usr/lib/rauc/ga-release-floor) refuses a bundle
++# whose release is older than its own, or that has none. The HAOS version
++# above cannot order GA releases: it was 16.3.1.9 from BOSv1.2.15 to
++# BOSv1.5.0-rc1, and it does not move with every release.
++[meta.ga]
++release={{ env "ota_ga_release" }}
++{{- end }}
+ 
+ [bundle]
+ format=verity
+diff --git a/buildroot-external/ota/system.conf.gtpl b/buildroot-external/ota/system.conf.gtpl
+index 4a183d84b..61d799194 100644
+--- a/buildroot-external/ota/system.conf.gtpl
++++ b/buildroot-external/ota/system.conf.gtpl
+@@ -11,11 +11,14 @@ bootloader={{ env "BOOTLOADER" }}
+ grubenv=/mnt/boot/EFI/BOOT/grubenv
+ {{- end }}
+ 
+-{{- if eq (env "BOOTLOADER") "tryboot" }}
+ [handlers]
++# The GA release floor: runs from THIS rootfs for every install, after the
++# signature check, before any slot is written. See the script's header.
++pre-install=/usr/lib/rauc/ga-release-floor
++{{- if eq (env "BOOTLOADER") "tryboot" }}
+ bootloader-custom-backend=/usr/lib/rauc/rpi-tryboot.sh
+-
+ {{- end }}
++
+ [keyring]
+ path=/etc/rauc/keyring.pem
+ 
+diff --git a/buildroot-external/scripts/hdd-image.sh b/buildroot-external/scripts/hdd-image.sh
+index 0506c73a6..460ae19f3 100755
+--- a/buildroot-external/scripts/hdd-image.sh
++++ b/buildroot-external/scripts/hdd-image.sh
+@@ -18,10 +18,23 @@ function create_disk_image() {
+ 
+     # variables from meta file
+     export DISK_SIZE BOOTLOADER KERNEL_FILE PARTITION_TABLE_TYPE BOOT_SIZE BOOT_SPL BOOT_SPL_SIZE
++    # Signing material for the RAUC bundle: the one pair from the read-only
++    # secrets mount (ADR-0027 D9). The paths come from rauc.sh (sourced
++    # alongside this file by post-image.sh), so the key genimage signs with and
++    # the anchor install_rauc_certs() ships are defined in ONE place; a literal
++    # path in the genimage config is what once made them disagree (SRC-22).
++    GA_SIGN_KEY="$(ga_signing_key)"
++    GA_SIGN_CERT="$(ga_signing_cert)"
++    export GA_SIGN_KEY GA_SIGN_CERT
++    echo "RAUC signing material: ${GA_SIGN_CERT}"
++
+     # variables used in raucb manifest template
+     ota_compatible="$(haos_rauc_compatible)"
+     ota_version="$(haos_version)"
+-    export ota_compatible ota_version
++    # The GA release floor (manifest [meta.ga] release=): see ga_bundle_release.
++    ota_ga_release="$(ga_bundle_release)"
++    echo "RAUC bundle GA release: ${ota_ga_release:-<none>}"
++    export ota_compatible ota_version ota_ga_release
+     # variables used in genimage configs
+     export BOOTSTATE_SIZE SYSTEM_SIZE KERNEL_SIZE OVERLAY_SIZE
+     RAUC_MANIFEST=$(tempio -template "${BR2_EXTERNAL_HAOS_PATH}/ota/manifest.raucm.gtpl")
+@@ -32,8 +45,9 @@ function create_disk_image() {
+     DATA_IMAGE=$(path_data_img)
+     export SYSTEM_IMAGE DATA_IMAGE
+ 
+-    trap 'rm -rf "${ROOTPATH_TMP}" "${GENIMAGE_TMPPATH}"' EXIT
++    trap 'rm -rf "${ROOTPATH_TMP}" "${BOOTPATH_OTA:-}" "${GENIMAGE_TMPPATH}"' EXIT
+     ROOTPATH_TMP="$(mktemp -d)"
++    BOOTPATH_OTA=""
+ 
+     rm -rf "${GENIMAGE_TMPPATH}"
+     # Generate boot FS image - run in a separate step with specific rootpath
+@@ -43,6 +57,42 @@ function create_disk_image() {
+       --includepath "${BOARD_DIR}:${BR2_EXTERNAL_HAOS_PATH}/genimage" \
+       --config images-boot.cfg
+ 
++    # Generate the OTA bundle's boot FS image — the SAME tree minus
++    # /ga-ethernet-force. Two artifacts because the two destinations differ:
++    #
++    #   boot.vfat      -> the SD image. Carries the marker: provisioning runs
++    #                     over the LAN socket (operator decision 2026-07-30).
++    #   boot-ota.vfat  -> the RAUC bundle. Must NOT carry it. install_boot
++    #                     copies the bundle's boot partition over /mnt/boot
++    #                     wholesale, keeping only *.txt and grubenv, so a
++    #                     marker in here is re-created on EVERY device an
++    #                     update reaches -- customer units included, where the
++    #                     socket was never on and nobody asked for it.
++    #
++    # Measured on the rc43 bundle 2026-09-19 (unsquashfs -> boot.vfat ->
++    # `GA-ETH~1  112  ga-ethernet-force`). It was harmless only while
++    # ga-ethernet-retire.path won its race with the guard; #582 fixed the race
++    # and thereby made the marker effective fleet-wide. The durable switch is
++    # the fleet's (`ethernet.force_enabled`), not the image's.
++    #
++    # A copy rather than a delete-and-restore: mutating path_boot_dir() would
++    # make the SD image depend on the order of two genimage runs, and the one
++    # that loses is silently wrong.
++    BOOTPATH_OTA="$(mktemp -d)"
++    cp -a "$(path_boot_dir)/." "${BOOTPATH_OTA}/"
++    rm -f "${BOOTPATH_OTA}/ga-ethernet-force"
++    if [ -e "${BOOTPATH_OTA}/ga-ethernet-force" ]; then
++        echo "hdd-image: FAILED to strip ga-ethernet-force from the OTA boot tree" >&2
++        exit 1
++    fi
++
++    rm -rf "${GENIMAGE_TMPPATH}"
++    genimage \
++      --rootpath "${BOOTPATH_OTA}" \
++      --configdump - \
++      --includepath "${BOARD_DIR}:${BR2_EXTERNAL_HAOS_PATH}/genimage" \
++      --config images-boot-ota.cfg
++
+     rm -rf "${GENIMAGE_TMPPATH}"
+     # Generate OS image (no files are copied to temporary rootpath here)
+     genimage \
+diff --git a/buildroot-external/scripts/rauc.sh b/buildroot-external/scripts/rauc.sh
+index 963718ddb..2bf092586 100755
+--- a/buildroot-external/scripts/rauc.sh
++++ b/buildroot-external/scripts/rauc.sh
+@@ -2,13 +2,67 @@
+ set -e
+ 
+ 
++# Signing material and trust anchor: ONE of each (ADR-0027 Amendment 1, D9).
++#
++# The keyring gets the OTA root CA (ota/rel-ca.pem); bundles are signed with the
++# one signing certificate issued under that root. There is no build-mode
++# selector any more: the dev key protected nothing in the fleet (no device
++# trusted it) and the selector around it produced one real incident, where a
++# production keyring came to trust a self-signed certificate.
++#
++# Signing material is read from /secrets, a dedicated read-only mount, and from
++# NOWHERE else. /build is the bind-mounted source checkout: a --privileged
++# container gets it wholesale, `git clean -xdf` walks it, and the CI runner's
++# own user can rename or replace files in it. The fallback to it that bridged
++# the move to /secrets is gone; a missing mount now fails the build.
++GA_SECRETS_DIR="${GA_SECRETS_DIR:-/secrets}"
++
++function ga_signing_key()  { echo "${GA_SECRETS_DIR}/key.pem"; }
++function ga_signing_cert() { echo "${GA_SECRETS_DIR}/cert.pem"; }
++# The OTA root (the keyring anchor) is GreenAutarky's, never the Home Assistant
++# root that ships in this (upstream) tree's ota/. It is a builder-provided,
++# git-ignored file in the GA layer, pinned by fingerprint: ga_build.sh refuses
++# to start unless it is THE root (scripts/verify-rauc-keyring.sh --check-root),
++# and the keyring audit (KEYRING-01/02) checks the shipped keyring. Absent or
++# empty fails here as well. GA_OTA_ROOT_CA overrides the path.
++function ga_base_ca()      { echo "${GA_OTA_ROOT_CA:-${BR2_EXTERNAL_GA_HAOS_PATH}/ota/rel-ca.pem}"; }
++
++# The GA release the bundle being built will carry in its manifest
++# ([meta.ga] release=), read from the rootfs that goes into the same bundle —
++# so the two cannot disagree. Empty (with a loud warning) when the target has
++# no /etc/ga-release yet: ga_build.sh stamps it after the first buildroot pass
++# and rebuilds, and the build gate RFLOOR-01 fails a final bundle without it.
++# A malformed value is fatal: devices would refuse the bundle.
++function ga_bundle_release() {
++    local f="${TARGET_DIR}/etc/ga-release" rel
++    if [ ! -s "${f}" ]; then
++        echo "WARNING: ${f} is missing — this bundle carries NO GA release;" >&2
++        echo "         devices with the release floor will refuse it." >&2
++        return 0
++    fi
++    rel="$(head -n 1 "${f}" | tr -d '\r\n')"
++    if ! [[ "${rel}" =~ ^BOSv[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(-(rc|dev)[0-9]{1,6})?$ ]]; then
++        echo "FATAL: ${f} holds '${rel}', not a GA release (BOSvX.Y.Z[-rcN|-devN])" >&2
++        return 1
++    fi
++    echo "${rel}"
++}
++
+ function prepare_rauc_signing() {
+-    local key="/build/key.pem"
+-    local cert="/build/cert.pem"
++    local key cert
++    key="$(ga_signing_key)"
++    cert="$(ga_signing_cert)"
+ 
+-    if [ ! -f "${key}" ]; then
+-        echo "Generating a self-signed certificate for development"
+-        "${BR2_EXTERNAL_HAOS_PATH}"/scripts/generate-signing-key.sh "${cert}" "${key}"
++    # NEVER generate a key here. A self-signed certificate created on the fly
++    # becomes a fleet trust anchor via install_rauc_certs(), with one build-log
++    # line as the only trace — that is how a production keyring once came to
++    # trust a throwaway certificate.
++    if [ ! -f "${key}" ] || [ ! -f "${cert}" ]; then
++        echo "FATAL: RAUC signing material missing: ${key} / ${cert}." >&2
++        echo "       It is read from the read-only secrets mount only" >&2
++        echo "       (docker run -v <secrets>:${GA_SECRETS_DIR}:ro). Refusing to" >&2
++        echo "       generate a key or to read one from the source checkout." >&2
++        exit 1
+     fi
+ }
+ 
+@@ -30,21 +84,44 @@ function write_rauc_config() {
+ 
+ 
+ function install_rauc_certs() {
+-    local cert="/build/cert.pem"
++    local cert base_ca
++    cert="$(ga_signing_cert)"
++    base_ca="$(ga_base_ca)"
+ 
+-    if [ "${DEPLOYMENT}" == "development" ]; then
+-        # Contains development and release certificate
+-        cp "${BR2_EXTERNAL_HAOS_PATH}/ota/dev-ca.pem" "${TARGET_DIR}/etc/rauc/keyring.pem"
+-    else
+-        cp "${BR2_EXTERNAL_HAOS_PATH}/ota/rel-ca.pem" "${TARGET_DIR}/etc/rauc/keyring.pem"
++    if [ ! -s "${base_ca}" ]; then
++        echo "FATAL: GA OTA root CA missing or empty: ${base_ca} (place the pinned OTA root there, or set GA_OTA_ROOT_CA)" >&2
++        exit 1
+     fi
++    cp "${base_ca}" "${TARGET_DIR}/etc/rauc/keyring.pem"
+ 
+-    # Add local self-signed certificate (if not trusted by the dev or release
+-    # certificate it is a self-signed certificate, dev-ca.pem contains both)
+-    if ! openssl verify -CAfile "${BR2_EXTERNAL_HAOS_PATH}/ota/dev-ca.pem" -no-CApath "${cert}"; then
++    # The signing cert must chain to the root. If it does not, it used to be
++    # appended as a second anchor; KEYRING-02 now fails any keyring that holds
++    # more than the pinned root, so a non-chaining cert is caught at the end of
++    # the build. Appending is kept (rather than failing here) so that audit
++    # sees — and names — exactly what a mis-issued cert would have shipped.
++    if ! openssl verify -CAfile "${base_ca}" -no-CApath "${cert}"; then
+         echo "Adding self-signed certificate to keyring."
+         openssl x509 -in "${cert}" -text >> "${TARGET_DIR}/etc/rauc/keyring.pem"
+     fi
++
++    # The retired pre-2026-03-27 ("F13") signing CA is DELETED, not gated.
++    #
++    # It used to be re-added here behind GA_LEGACY_CA_BRIDGE so pre-rotation
++    # devices could still verify current OTAs. That cert is a self-signed
++    # CA:TRUE root valid until 2035 and system.conf has no check-crl, so
++    # trusting it fleet-wide had no revocation path — it effectively un-did the
++    # rotation. Operator decision 2026-07-30: the remaining pre-cut devices are
++    # being swapped, not bridged, so the material goes away entirely.
++    #
++    # Deleting beats keeping-it-off: a flag can be flipped by anyone who finds
++    # the cert sitting next to it.
++    # With no cert and no flag, re-trusting the retired CA takes a deliberate act
++    # that has to reintroduce both.
++    #
++    # This does NOT remove the bridge-FORWARD path for old devices. That works
++    # the other way round — sign a new image with the OLD KEY, which is archived
++    # off the builder (2026-07-30) and deliberately not destroyed. It never
++    # needed this cert in the keyring.
+ }
+ 
+ 

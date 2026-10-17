@@ -1,7 +1,7 @@
 [Unit]
 Description=Watch ga_manager's SSH principal label in its own data directory (ADR-0019)
 ConditionPathExists=/etc/ssh/ga_user_ca.pub
-After=hassos-overlay.service mnt-data.mount
+After=haos-overlay.service mnt-data.mount
 
 [Path]
 # ga_manager's private data dir under its PINNED slug (/etc/ga-addon-prime.conf).

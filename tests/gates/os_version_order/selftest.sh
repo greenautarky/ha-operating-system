@@ -111,7 +111,7 @@ gaob_fixture() {
       d="$W/$id"; rm -rf "$d"; mkdir -p "$d/ext" "$d/out/images"
       printf "VERSION_MAJOR=\"16\"\nVERSION_MINOR=\"3\"\nVERSION_SUFFIX=\"%s\"\n" "$suf" > "$d/ext/meta"
       for f in "$@"; do : > "$d/out/images/$f"; done
-      got="$(BR2EXT_NETBIRD="$d/ext" OUT="$d/out" get_original_image_basename 2>/dev/null)"; rc=$?
+      got="$(HAOS_EXT="$d/ext" OUT="$d/out" get_original_image_basename 2>/dev/null)"; rc=$?
       got="${got#"$d/out/images/"}"
       if [ "$want" = FAIL ]; then
         if [ "$rc" != 0 ]; then ok "$id"; else bad "$id" "rc=0 out=$got want=failure"; fi

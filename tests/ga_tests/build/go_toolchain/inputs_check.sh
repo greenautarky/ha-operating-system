@@ -3,7 +3,8 @@
 # actually build the rootfs Go packages with Go >= 1.26.9? (Odoo #1231)
 #
 # GO-2026-6604 and GO-2026-6612 (Go stdlib) are fixed in Go 1.26.9; the
-# buildroot submodule pins 1.26.8 and we cannot push there. The carry is
+# buildroot that upstream HAOS pins (haos/buildroot) has 1.26.8 and we cannot
+# push there. The carry is
 # buildroot-external/go-floor.mk, loaded before package/*/*.mk through
 # buildroot-ihost/local.mk, with the tarball hashes in buildroot-external/patches/.
 # GOTC-04 (run_build_tests.sh) proves the BUILT binaries; this proves the INPUTS
@@ -13,7 +14,7 @@
 #   so lowering the floor there (or deleting the file) is red here.
 #   Raise MIN_GO when a newer Go advisory moves the minimum.
 #
-# Needs the buildroot submodule (make printvars). Without it the check FAILS
+# Needs haos/ and its buildroot submodule (make printvars). Without them the check FAILS
 # rather than skips: a check that silently stops looking is the failure class
 # this file exists to prevent.
 set -u
@@ -21,10 +22,13 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="${GA_REPO_ROOT:-$(cd "$HERE/../../../.." && pwd)}"
 MIN_GO="1.26.9"
-EXT="$REPO_ROOT/buildroot-external"
-IHOST="$REPO_ROOT/buildroot-ihost"
-BR="$REPO_ROOT/buildroot"
-DEFCONFIG="ga_ihost_full_defconfig"
+# shellcheck source=../../../../scripts/lib/tree-paths.sh
+. "$REPO_ROOT/scripts/lib/tree-paths.sh"
+EXT="$REPO_ROOT/$GA_LAYER_DIR"
+IHOST="$REPO_ROOT/$GA_BOARD_DIR_ihost"
+HAOS_EXT="$REPO_ROOT/$GA_HAOS_DIR/buildroot-external"
+BR="$REPO_ROOT/$GA_HAOS_DIR/buildroot"
+DEFCONFIG="$(basename "$GA_DEFCONFIG_ihost")"
 pass=0 fail=0
 _pass() { echo "  PASS  $1"; pass=$((pass+1)); }
 _fail() { echo "  FAIL  $1"; fail=$((fail+1)); }
@@ -141,10 +145,11 @@ fi
 
 # GOTC-IN-05: what buildroot itself resolves for the real config.
 if [ ! -f "$BR/package/go/go.mk" ]; then
-  _fail "GOTC-IN-05: buildroot submodule not checked out at $BR - cannot resolve the real Go version (git submodule update --init buildroot)"
+  _fail "GOTC-IN-05: buildroot not checked out at $BR - cannot resolve the real Go version (git submodule update --init --recursive $GA_HAOS_DIR)"
 else
   O="$(mktemp -d)"
-  E="$IHOST:$EXT"
+  # Same externals, same order as the build: upstream HAOS, the board, GA.
+  E="$HAOS_EXT:$IHOST:$EXT"
   if make -C "$BR" O="$O" BR2_EXTERNAL="$E" "$DEFCONFIG" >/dev/null 2>&1; then
     vars="$(make -s -C "$BR" O="$O" BR2_EXTERNAL="$E" printvars VARS='HOST_GO_SRC_VERSION HOST_GO_SRC_SOURCE PACKAGES' 2>/dev/null)"
     rv="$(sed -n 's/^HOST_GO_SRC_VERSION=//p' <<<"$vars")"

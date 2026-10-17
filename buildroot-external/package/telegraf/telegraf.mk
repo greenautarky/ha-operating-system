@@ -135,7 +135,7 @@ endef
 TELEGRAF_GA_QEMU_ARCH = $(if $(BR2_aarch64),aarch64,$(if $(BR2_arm),arm))
 
 define TELEGRAF_GA_PLUGIN_GUARD
-	$(BR2_EXTERNAL_HASSOS_PATH)/../scripts/telegraf-plugin-guard-build.sh \
+	$(BR2_EXTERNAL_GA_HAOS_PATH)/../scripts/telegraf-plugin-guard-build.sh \
 		$(TARGET_DIR) $(@D) $(STAGING_DIR) $(TELEGRAF_GA_QEMU_ARCH)
 endef
 TELEGRAF_POST_INSTALL_TARGET_HOOKS += TELEGRAF_GA_PLUGIN_GUARD

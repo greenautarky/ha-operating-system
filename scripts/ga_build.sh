@@ -19,7 +19,10 @@ fi
 # ga_build.sh — iHost Buildroot wrapper (container-safe)
 #
 # What it does:
-#  1) Uses buildroot-ihost defconfig (external tree) + buildroot-external (your pkgs)
+#  1) Builds a board (--board, default ihost) from three Buildroot externals:
+#     upstream HAOS 18.x, unmodified (haos/buildroot-external, GA patch set
+#     applied by scripts/apply-haos-patches.sh), the board tree and the GA
+#     layer (buildroot-external/, external GA_HAOS). Paths: scripts/lib/tree-paths.sh
 #  2) Builds full system with Buildroot's Go toolchain untouched (avoids containerd mismatch)
 #  3) Disables Buildroot netbird package (because NetBird v0.60.x requires Go >= 1.24.10)
 #  4) Builds NetBird standalone with Go 1.24.10 (SHA256-verified) and injects it into O/target
@@ -74,7 +77,8 @@ fi
 #       - LICENSE-SUMMARY.txt
 #
 # Usage:
-#   ./scripts/ga_build.sh [full|partial|kernel|update]     (default: full)
+#   ./scripts/ga_build.sh [--board <board>] [full|partial|kernel|update]
+#                                              (default: --board ihost full)
 #
 # Modes (default: full):
 #   full    - Clean build from scratch (rm -rf $OUT)
@@ -89,9 +93,10 @@ fi
 # `dev`/`test` are refused. Parsing lives in scripts/lib/ga-build-args.sh.
 #
 # Environment Variables (override defaults):
-#   BUILDROOT_DIR    - Path to Buildroot source (default: /build/buildroot)
-#   BR2EXT_IHOST     - Path to buildroot-ihost external tree (default: /build/buildroot-ihost)
-#   BR2EXT_NETBIRD   - Path to buildroot-external tree (default: /build/buildroot-external)
+#   BUILDROOT_DIR    - Path to Buildroot source (default: /build/haos/buildroot)
+#   HAOS_EXT         - Upstream HAOS external (default: /build/haos/buildroot-external)
+#   BR2EXT_IHOST     - Path to the board external tree (default: the --board's dir)
+#   BR2EXT_NETBIRD   - Path to the GA layer (default: /build/buildroot-external)
 #   OUT              - Output directory (default: /build/ga_output)
 #   NETBIRD_TAG      - NetBird version tag (default: v0.80.0)
 #   GA_BUILD_TIMESTAMP - Override build timestamp (default: auto-generated)
@@ -132,11 +137,17 @@ ga_parse_build_args "$@" || exit 1
 . "${SCRIPT_DIR}/lib/pkg-inputs.sh"
 echo "Building with MODE=$MODE (one build mode, ADR-0027 D9)"
 
-# ---- Paths inside container ----
-BUILDROOT_DIR="${BUILDROOT_DIR:-/build/buildroot}"
-BR2EXT_IHOST="${BR2EXT_IHOST:-/build/buildroot-ihost}"
-BR2EXT_NETBIRD="${BR2EXT_NETBIRD:-/build/buildroot-external}"
-BR2_EXTERNAL_PATH="${BR2EXT_IHOST}:${BR2EXT_NETBIRD}"
+# ---- Paths inside container (layout from scripts/lib/tree-paths.sh) ----
+# The parser sourced the map and validated BOARD against it.
+_GA_DEFCONFIG_REL="$(ga_board_var DEFCONFIG "$BOARD")" || { echo "FAIL: no defconfig mapped for board '$BOARD'" >&2; exit 1; }
+DEFCONFIG="$(basename "$_GA_DEFCONFIG_REL")"
+HAOS_DIR="${HAOS_DIR:-/build/${GA_HAOS_DIR}}"
+BUILDROOT_DIR="${BUILDROOT_DIR:-${HAOS_DIR}/buildroot}"
+HAOS_EXT="${HAOS_EXT:-${HAOS_DIR}/buildroot-external}"
+BR2EXT_IHOST="${BR2EXT_IHOST:-/build/$(ga_board_var BOARD_DIR "$BOARD")}"
+BR2EXT_NETBIRD="${BR2EXT_NETBIRD:-/build/${GA_LAYER_DIR}}"
+# Order matters for external.mk evaluation: HAOS, then the board, then GA.
+BR2_EXTERNAL_PATH="${HAOS_EXT}:${BR2EXT_IHOST}:${BR2EXT_NETBIRD}"
 
 # Output dir (writable in container)
 OUT="${OUT:-/build/ga_output}"
@@ -151,8 +162,10 @@ OTA_DIR="${OTA_DIR:-${BR2EXT_NETBIRD}/ota}"
 REL_CA_PEM="${REL_CA_PEM:-${OTA_DIR}/rel-ca.pem}"
 GA_SECRETS_DIR="${GA_SECRETS_DIR:-/secrets}"
 
+echo "Using BOARD=$BOARD (defconfig $DEFCONFIG)"
 echo "Using OUT=$OUT"
 echo "Using BUILDROOT_DIR=$BUILDROOT_DIR"
+echo "Using HAOS_EXT=$HAOS_EXT"
 echo "Using BR2EXT_DIR=$BR2EXT_NETBIRD"
 echo "Using BR2_EXTERNAL=$BR2_EXTERNAL_PATH"
 echo "Using NETBIRD_TAG=$NETBIRD_TAG"
@@ -257,11 +270,12 @@ fi
 echo "=== Pre-build validation ==="
 PREFLIGHT_FAIL=0
 
-[[ -d "$BUILDROOT_DIR" ]] || { echo "FAIL: BUILDROOT_DIR not found: $BUILDROOT_DIR" >&2; PREFLIGHT_FAIL=1; }
+[[ -d "$BUILDROOT_DIR" ]] || { echo "FAIL: BUILDROOT_DIR not found: $BUILDROOT_DIR (git submodule update --init --recursive ${GA_HAOS_DIR})" >&2; PREFLIGHT_FAIL=1; }
+[[ -d "$HAOS_EXT" ]] || { echo "FAIL: HAOS_EXT not found: $HAOS_EXT" >&2; PREFLIGHT_FAIL=1; }
 [[ -d "$BR2EXT_IHOST"  ]] || { echo "FAIL: BR2EXT_IHOST not found: $BR2EXT_IHOST" >&2; PREFLIGHT_FAIL=1; }
 [[ -d "$BR2EXT_NETBIRD" ]] || { echo "FAIL: BR2EXT_NETBIRD not found: $BR2EXT_NETBIRD" >&2; PREFLIGHT_FAIL=1; }
-[[ -f "$BR2EXT_IHOST/configs/ga_ihost_full_defconfig" ]] || {
-  echo "FAIL: Defconfig not found: $BR2EXT_IHOST/configs/ga_ihost_full_defconfig" >&2; PREFLIGHT_FAIL=1;
+[[ -f "$BR2EXT_IHOST/configs/${DEFCONFIG}" ]] || {
+  echo "FAIL: Defconfig not found: $BR2EXT_IHOST/configs/${DEFCONFIG}" >&2; PREFLIGHT_FAIL=1;
 }
 [[ -f "${BUILDROOT_DIR}/utils/config" ]] || {
   echo "FAIL: Buildroot utils/config not found: ${BUILDROOT_DIR}/utils/config" >&2; PREFLIGHT_FAIL=1;
@@ -307,8 +321,35 @@ if ! bash "$GA_NB_KEY_HOOK" --check; then
   PREFLIGHT_FAIL=1
 fi
 
-# Version suffix set (not empty for release builds)
-VERSION_SUFFIX_CHECK=$(grep 'VERSION_SUFFIX=' "$BR2EXT_NETBIRD/meta" 2>/dev/null | cut -d'"' -f2)
+# haos/ must sit exactly on the commit this tree pins (a '+' in `git submodule
+# status` is a moved checkout nobody committed), and so must its buildroot.
+# Then the GA patch set goes on: scripts/apply-haos-patches.sh is the only
+# way GA changes reach haos/, and it fails on a patch that does not apply and
+# on any edit no patch explains.
+_REPO="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# The container runs as root over a builder-owned mount: git refuses such a
+# repository ("dubious ownership") unless it is a global safe.directory, and a
+# refused status would read as "not pinned" here (see the provenance step for
+# why only the global entry works).
+for _sd in "$_REPO" "$HAOS_DIR" "$BUILDROOT_DIR"; do
+  git config --global --add safe.directory "$_sd" 2>/dev/null || true
+done
+_haos_st="$(git -C "$_REPO" submodule status -- "${GA_HAOS_DIR}" 2>/dev/null | cut -c1)"
+_br_st="$(git -C "$HAOS_DIR" submodule status -- buildroot 2>/dev/null | cut -c1)"
+if [[ "$_haos_st" != " " || "$_br_st" != " " ]]; then
+  echo "FAIL: ${GA_HAOS_DIR}/ (status '${_haos_st:-?}') or ${GA_HAOS_DIR}/buildroot (status '${_br_st:-?}') is not at the pinned commit." >&2
+  echo "      Run: git submodule update --init --recursive ${GA_HAOS_DIR}" >&2
+  PREFLIGHT_FAIL=1
+elif ! "${SCRIPT_DIR}/apply-haos-patches.sh"; then
+  echo "FAIL: the GA patch set does not apply to ${GA_HAOS_DIR}/ (see above)." >&2
+  PREFLIGHT_FAIL=1
+elif [[ "$BOARD" == ihost ]] && ! "${SCRIPT_DIR}/ihost/check-haos-patch-mirror.sh"; then
+  PREFLIGHT_FAIL=1
+fi
+
+# Version suffix set (not empty for release builds). The OS version comes from
+# upstream HAOS's meta with the GA patch set applied.
+VERSION_SUFFIX_CHECK=$(grep 'VERSION_SUFFIX=' "$HAOS_EXT/meta" 2>/dev/null | cut -d'"' -f2)
 if [[ -z "$VERSION_SUFFIX_CHECK" ]]; then
   echo "WARN: VERSION_SUFFIX is empty in meta — the build will use base version only" >&2
 fi
@@ -881,7 +922,7 @@ archive_build_configs() {
 
   # Kernel config fragments from external trees
   mkdir -p "${cfg_dir}/kernel-fragments"
-  for ext_dir in "$BR2EXT_IHOST" "$BR2EXT_NETBIRD"; do
+  for ext_dir in "$HAOS_EXT" "$BR2EXT_IHOST" "$BR2EXT_NETBIRD"; do
     if [[ -d "${ext_dir}/board" ]]; then
       find "${ext_dir}/board" -name "linux*.config" -o -name "*.config.fragment" 2>/dev/null | while read -r frag; do
         local rel_path="${frag#${ext_dir}/}"
@@ -923,7 +964,7 @@ archive_build_configs() {
       cp -v "$dts" "${cfg_dir}/device-tree/" 2>/dev/null || true
     done
     # Also check external tree for custom DTS
-    for ext_dir in "$BR2EXT_IHOST" "$BR2EXT_NETBIRD"; do
+    for ext_dir in "$HAOS_EXT" "$BR2EXT_IHOST" "$BR2EXT_NETBIRD"; do
       find "$ext_dir" -name "*.dts" -o -name "*.dtsi" 2>/dev/null | while read -r dts; do
         local base
         base="$(basename "$dts")"
@@ -1076,7 +1117,7 @@ archive_build_configs() {
   # global config entry is the only mechanism that works. Verified in the
   # container: -c fails, env fails, global config succeeds.
   local _repo_root="${SCRIPT_DIR%/scripts}"
-  for _sd in "$_repo_root" "$BUILDROOT_DIR" "$BR2EXT_IHOST" "$BR2EXT_NETBIRD"; do
+  for _sd in "$_repo_root" "$HAOS_DIR" "$BUILDROOT_DIR" "$BR2EXT_IHOST" "$BR2EXT_NETBIRD"; do
     [[ -n "$_sd" ]] && git config --global --add safe.directory "$_sd" 2>/dev/null || true
   done
 
@@ -1131,6 +1172,7 @@ ${_j}"
     echo '  "repositories": {'
 
     [[ -d "$_repo_root" ]]     && add_repo_pin "$_repo_root"     "ha-operating-system"
+    [[ -d "$HAOS_DIR" ]]       && add_repo_pin "$HAOS_DIR"       "haos"
     [[ -d "$BUILDROOT_DIR" ]]  && add_repo_pin "$BUILDROOT_DIR"  "buildroot"
     [[ -d "$BR2EXT_IHOST" ]]   && add_repo_pin "$BR2EXT_IHOST"   "buildroot-ihost"
     [[ -d "$BR2EXT_NETBIRD" ]] && add_repo_pin "$BR2EXT_NETBIRD" "buildroot-external"
@@ -1169,6 +1211,7 @@ ${_j}"
       while [[ "$_name" == *-* && "${_name##*-}" =~ ^[0-9] ]]; do _name="${_name%-*}"; done
       for _cand in "${BUILDROOT_DIR}/package/${_name}/${_name}.hash" \
                    "${BUILDROOT_DIR}/package/${_name#host-}/${_name#host-}.hash" \
+                   "${HAOS_EXT}/package/${_name}/${_name}.hash" \
                    "${BR2EXT_IHOST}/package/${_name}/${_name}.hash" \
                    "${BR2EXT_NETBIRD}/package/${_name}/${_name}.hash"; do
         [[ -f "$_cand" ]] && { _hash="$_cand"; break; }
@@ -1763,7 +1806,7 @@ get_original_image_basename() {
   # a haos_* left by an earlier build that died before this rename (another
   # version — e.g. 16.3.1.9 next to 16.3.1.10) could be renamed and shipped
   # under this build's timestamp.
-  meta="${BR2EXT_NETBIRD}/meta"
+  meta="${HAOS_EXT}/meta"
   maj="$(sed -n 's/^VERSION_MAJOR="\(.*\)"$/\1/p' "$meta" 2>/dev/null)"
   min="$(sed -n 's/^VERSION_MINOR="\(.*\)"$/\1/p' "$meta" 2>/dev/null)"
   suf="$(sed -n 's/^VERSION_SUFFIX="\(.*\)"$/\1/p' "$meta" 2>/dev/null)"
@@ -1988,6 +2031,7 @@ create_provisioning_image() {
   # Find the genimage config - check multiple possible locations
   local genimage_cfg=""
   for cfg_path in \
+    "${HAOS_EXT}/genimage/genimage.cfg" \
     "${BR2EXT_NETBIRD}/genimage/genimage.cfg" \
     "${OUT}/build/genimage.cfg" \
     "${BUILDROOT_DIR}/../buildroot-external/genimage/genimage.cfg" \
@@ -2190,6 +2234,8 @@ start_build_log() {
     echo "PWD:          $(pwd)"
     echo ""
     echo "=== Environment ==="
+    echo "BOARD=$BOARD"
+    echo "HAOS_EXT=$HAOS_EXT"
     echo "BUILDROOT_DIR=$BUILDROOT_DIR"
     echo "BR2EXT_IHOST=$BR2EXT_IHOST"
     echo "BR2EXT_NETBIRD=$BR2EXT_NETBIRD"
@@ -2268,7 +2314,6 @@ run_logged() {
 # Build flow
 # -----------------------------------------------------------------------------
 cd "$BUILDROOT_DIR"
-DEFCONFIG="ga_ihost_full_defconfig"
 
 # Fail closed unless ota/rel-ca.pem is the pinned OTA root. Never auto-create it.
 require_base_ca

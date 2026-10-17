@@ -42,7 +42,7 @@
 #
 # WHY sshd READS THE BAKED FILE, AND WHY THE REVOCATION LIST
 # The overlay copy /root/.ssh/authorized_keys is seeded only when it is absent
-# (hassos-overlay). A device that reaches this image by an OTA update keeps the
+# (haos-overlay). A device that reaches this image by an OTA update keeps the
 # overlay file its FIRST image wrote, so the image-side seed never reaches it.
 # The two directives make the plane hold on such a device as well as on a
 # fresh flash, and re-assert it on every boot:

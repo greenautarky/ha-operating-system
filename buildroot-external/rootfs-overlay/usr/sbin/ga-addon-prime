@@ -32,7 +32,7 @@ if [ ! -f "$PRIME_CONF" ]; then
 fi
 
 # Wait for hassio_cli container to be up (= comes online a few seconds
-# after hassos-supervisor starts).
+# after haos-supervisor starts).
 for i in $(seq 1 60); do
     if docker exec hassio_cli /bin/true >/dev/null 2>&1; then
         break

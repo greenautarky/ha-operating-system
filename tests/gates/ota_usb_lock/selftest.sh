@@ -4,7 +4,7 @@
 # =============================================================================
 # ADR-0029 D3: the iHost boots with usbcore.authorized_default=0. A fresh flash
 # gets it from cmdline.txt. A device that reaches the image by an OTA update
-# does not: the RAUC boot-slot hook (buildroot-external/ota/rauc-hook,
+# does not: the RAUC boot-slot hook (upstream HAOS ota/rauc-hook in haos/,
 # install_boot) copies the bundle's boot partition over /mnt/boot and then puts
 # the device's own *.txt files back — so cmdline.txt stays whatever the
 # device's FIRST image wrote. boot.scr, on the other hand, is replaced.
@@ -32,7 +32,6 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
-HOOK="$ROOT/buildroot-external/ota/rauc-hook"
 USH="$ROOT/buildroot-ihost/board/sonoff/ihost/uboot-boot.ush"
 CMDLINE="$ROOT/buildroot-ihost/board/sonoff/ihost/cmdline.txt"
 
@@ -40,10 +39,16 @@ RED=$'\033[0;31m'; GRN=$'\033[0;32m'; NC=$'\033[0m'
 fails=0; ran=0
 bad() { printf '  %sFAIL%s  %s\n' "$RED" "$NC" "$*"; fails=$((fails + 1)); }
 ok()  { printf '  %sok%s    %s\n' "$GRN" "$NC" "$*"; }
-for f in "$HOOK" "$USH" "$CMDLINE"; do [[ -s "$f" ]] || { echo "FATAL: $f missing"; exit 1; }; done
+for f in "$USH" "$CMDLINE"; do [[ -s "$f" ]] || { echo "FATAL: $f missing"; exit 1; }; done
 command -v python3 >/dev/null || { echo "FATAL: python3 required"; exit 1; }
 
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
+# The hook is upstream HAOS's (haos/, GA patch set applied), exported as the
+# build sees it by the live applier.
+"$ROOT/scripts/apply-haos-patches.sh" --export "$W/haos" buildroot-external/ota/rauc-hook >/dev/null \
+  || { echo "FATAL: cannot export ota/rauc-hook from haos/ (is it checked out?)"; exit 1; }
+HOOK="$W/haos/buildroot-external/ota/rauc-hook"
+[[ -s "$HOOK" ]] || { echo "FATAL: $HOOK missing"; exit 1; }
 
 # ── the LIVE hook, paths relocated ───────────────────────────────────────────
 relocate() {  # <from> <to> — exactly one assignment must match

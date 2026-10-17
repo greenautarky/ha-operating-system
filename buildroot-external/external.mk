@@ -1,8 +1,15 @@
-include $(sort $(wildcard $(BR2_EXTERNAL_HASSOS_PATH)/package/*/*.mk))
+# GA_HAOS external (this tree): the GreenAutarky layer every board builds, the
+# third external after upstream HAOS (haos/buildroot-external) and the board.
+# Upstream HAOS's own external.mk stays unmodified (haos/); its targets, such
+# as linux-check-dotconfig, come from there.
+#
+# Only GA packages live under package/: package/hassio/ holds GA files that
+# the patched upstream hassio package reads (pins, image checks), no .mk.
+include $(sort $(wildcard $(BR2_EXTERNAL_GA_HAOS_PATH)/package/*/*.mk))
 
 # Module floors for the vendored golang.org/x/* in the rootfs Go binaries.
 # Hooks only (read at recipe time), so it can follow the package includes.
-include $(BR2_EXTERNAL_HASSOS_PATH)/go-modfloor.mk
+include $(BR2_EXTERNAL_GA_HAOS_PATH)/go-modfloor.mk
 
 # CPE identifiers for upstream Buildroot packages that ship without one.
 #
@@ -51,14 +58,3 @@ LIBGLIB2_IGNORE_CVES += CVE-2025-4056
 # xz 5.6.4: two patches, 0101-0102, the upstream v5.6 branch commits for
 # GHSA-5qpq-xqfv-j9pg (fixed in 5.8.4; no CVE id assigned yet, so there is
 # nothing to list here and NVD has no entry for cve-check to match).
-
-.PHONY: linux-check-dotconfig
-linux-check-dotconfig: linux-check-configuration-done
-	CC=$(TARGET_CC) LD=$(TARGET_LD) srctree=$(LINUX_SRCDIR) \
-	ARCH=$(if $(BR2_x86_64),x86,$(if $(BR2_aarch64),arm64,$(ARCH))) \
-	SRCARCH=$(if $(BR2_x86_64),x86,$(if $(BR2_aarch64),arm64,$(ARCH))) \
-	 $(BR2_EXTERNAL_HASSOS_PATH)/scripts/check-dotconfig.py \
-		$(BR2_CHECK_DOTCONFIG_OPTS) \
-		--src-kconfig $(LINUX_SRCDIR)Kconfig \
-		--actual-config $(LINUX_SRCDIR).config \
-		$(shell echo $(BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE) $(BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES))

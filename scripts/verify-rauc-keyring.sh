@@ -141,8 +141,21 @@ TARGET="${OUT}/target"
 [[ -d "$TARGET" ]] || TARGET="$OUT"
 KEYRING="${TARGET}/etc/rauc/keyring.pem"
 OTA_DIR="${REPO_ROOT}/buildroot-external/ota"
-META="${REPO_ROOT}/buildroot-external/meta"
-BR_SCRIPTS="${REPO_ROOT}/buildroot-external/scripts"
+# meta, rauc.sh and hdd-image.sh are upstream HAOS files with the GA patch set
+# applied (HAOS 18.x layout). Read them as the build sees them: exported by
+# scripts/apply-haos-patches.sh from haos/, never from a copy. GA_KEYRING_SRC
+# names a directory laid out the same way instead (the self-test's fixtures).
+if [[ -n "${GA_KEYRING_SRC:-}" ]]; then
+  _SRC_EXT="$GA_KEYRING_SRC"
+else
+  _SRC_TMP="$(mktemp -d)"; trap 'rm -rf "$_SRC_TMP"' EXIT
+  "${REPO_ROOT}/scripts/apply-haos-patches.sh" --export "$_SRC_TMP" \
+      buildroot-external/meta buildroot-external/scripts/rauc.sh buildroot-external/scripts/hdd-image.sh >&2 \
+    || { echo "  ERROR: cannot export meta/rauc.sh/hdd-image.sh from haos/ with the GA patch set (scripts/apply-haos-patches.sh)" >&2; exit 2; }
+  _SRC_EXT="$_SRC_TMP/buildroot-external"
+fi
+META="${_SRC_EXT}/meta"
+BR_SCRIPTS="${_SRC_EXT}/scripts"
 
 echo ""
 echo "=== RAUC keyring audit ==="
@@ -152,9 +165,9 @@ echo "  Pinned root: ${GA_OTA_ROOT_FP:0:23}...   (one key, one build mode — AD
 command -v openssl >/dev/null 2>&1 \
   || { echo "  ERROR: openssl not found — cannot verify the keyring" >&2; exit 2; }
 [[ -f "$META" ]] \
-  || { echo "  ERROR: no buildroot-external/meta under ${REPO_ROOT}" >&2; exit 2; }
+  || { echo "  ERROR: no meta at ${META}" >&2; exit 2; }
 [[ -f "${BR_SCRIPTS}/rauc.sh" ]] \
-  || { echo "  ERROR: no buildroot-external/scripts/rauc.sh under ${REPO_ROOT} — cannot check KEYRING-06" >&2; exit 2; }
+  || { echo "  ERROR: no scripts/rauc.sh under ${_SRC_EXT} — cannot check KEYRING-06" >&2; exit 2; }
 if [[ ! -f "$KEYRING" ]]; then
   echo "  ERROR: no keyring at ${KEYRING} — build output missing or rauc.sh did not run" >&2
   exit 2
