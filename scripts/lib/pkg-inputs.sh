@@ -82,3 +82,4 @@ ga_pkg_inputs_record() {
     ga_pkg_inputs_fingerprint "$_p" "$_root" "$_extra" > "$(ga_pkg_inputs_stamp "$_out" "$_p")"
   done
 }
+
