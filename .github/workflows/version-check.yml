@@ -19,7 +19,7 @@ on:
       - 'tests/ga_tests/**'
       - '.github/workflows/version-check.yml'
   pull_request:
-    branches: [master]
+    branches: [master, 'release/**', 'feat/**']
     paths:
       - 'version.yaml'
       - 'buildroot-external/**'
