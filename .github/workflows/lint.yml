@@ -889,3 +889,13 @@ jobs:
           set -eu
           git submodule update --init --depth 1 haos
           HAOS_PATCHES_REQUIRE_LIVE=1 ./tests/gates/haos_patches/selftest.sh
+
+      # A rootfs that outgrows the 256 MiB system slot of a fresh HAOS 18.x
+      # image does not fail the build; genimage or RAUC refuse it later, on the
+      # device. scripts/check-rootfs-size.sh (called by ga_build.sh on every
+      # build) holds it to the slot minus 10 %, a pinned limit. The self-test
+      # drives the live gate over sparse fixture images: the measured iHost
+      # size and one exactly at the limit pass; one byte over, no image and
+      # two images fail. Red-proven: dropping the margin turns one-byte-over red.
+      - name: Rootfs fits the system slot (pinned limit, exactly one image)
+        run: ./tests/gates/rootfs_size/selftest.sh
