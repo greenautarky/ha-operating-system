@@ -1,0 +1,97 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] ssh: OpenSSH replaces dropbear (haos-config, root-.ssh.mount, dropbear units)
+
+GA SSH plane (ADR-0019) on HAOS 18.x. The image builds OpenSSH, not dropbear
+(BR2_PACKAGE_DROPBEAR off):
+  * haos-config: starts/stops sshd instead of dropbear;
+  * root-.ssh.mount: Before=sshd.service;
+  * etc-dropbear.mount and dropbear.service.d/haos.conf deleted: without
+    dropbear, etc-dropbear.mount (WantedBy=haos-bind.target) would bind onto
+    a missing /etc/dropbear.
+---
+ .../systemd/system/dropbear.service.d/haos.conf | 17 -----------------
+ .../usr/lib/systemd/system/etc-dropbear.mount   | 14 --------------
+ .../usr/lib/systemd/system/root-.ssh.mount      |  4 ++--
+ .../rootfs-overlay/usr/sbin/haos-config         |  7 +++++--
+ 4 files changed, 7 insertions(+), 35 deletions(-)
+
+diff --git a/buildroot-external/rootfs-overlay/usr/lib/systemd/system/dropbear.service.d/haos.conf b/buildroot-external/rootfs-overlay/usr/lib/systemd/system/dropbear.service.d/haos.conf
+deleted file mode 100644
+index c4a9c4902..000000000
+--- a/buildroot-external/rootfs-overlay/usr/lib/systemd/system/dropbear.service.d/haos.conf
++++ /dev/null
+@@ -1,17 +0,0 @@
+-[Unit]
+-RequiresMountsFor=/etc/dropbear
+-ConditionFileNotEmpty=/root/.ssh/authorized_keys
+-# Systemd stops units in reverse start order, so ordering dropbear before the
+-# Supervisor and Docker keeps SSH available while their (potentially minutes
+-# long) teardown runs. Both already require the same mounts dropbear needs, so
+-# this adds no extra work to boot.
+-Before=haos-supervisor.service docker.service
+-
+-[Service]
+-Type=forking
+-PIDFile=/run/dropbear.pid
+-ExecStartPre=
+-ExecStart=
+-ExecStart=-/usr/sbin/dropbear -R -E -p 22222 -s
+-KillMode=mixed
+-OOMPolicy=continue
+diff --git a/buildroot-external/rootfs-overlay/usr/lib/systemd/system/etc-dropbear.mount b/buildroot-external/rootfs-overlay/usr/lib/systemd/system/etc-dropbear.mount
+deleted file mode 100644
+index 1c7c46344..000000000
+--- a/buildroot-external/rootfs-overlay/usr/lib/systemd/system/etc-dropbear.mount
++++ /dev/null
+@@ -1,14 +0,0 @@
+-[Unit]
+-Description=Dropbear persistent keys
+-Requires=mnt-overlay.mount
+-After=mnt-overlay.mount
+-Before=dropbear.service
+-
+-[Mount]
+-What=/mnt/overlay/etc/dropbear
+-Where=/etc/dropbear
+-Type=none
+-Options=bind
+-
+-[Install]
+-WantedBy=haos-bind.target
+diff --git a/buildroot-external/rootfs-overlay/usr/lib/systemd/system/root-.ssh.mount b/buildroot-external/rootfs-overlay/usr/lib/systemd/system/root-.ssh.mount
+index aabf5a764..226b3409e 100644
+--- a/buildroot-external/rootfs-overlay/usr/lib/systemd/system/root-.ssh.mount
++++ b/buildroot-external/rootfs-overlay/usr/lib/systemd/system/root-.ssh.mount
+@@ -1,8 +1,8 @@
+ [Unit]
+-Description=Dropbear persistent user
++Description=SSH persistent root user dir (authorized_keys)
+ Requires=mnt-overlay.mount
+ After=mnt-overlay.mount
+-Before=dropbear.service haos-config.service
++Before=sshd.service haos-config.service
+ 
+ [Mount]
+ What=/mnt/overlay/root/.ssh
+diff --git a/buildroot-external/rootfs-overlay/usr/sbin/haos-config b/buildroot-external/rootfs-overlay/usr/sbin/haos-config
+index 3818da742..3ce5cecd3 100755
+--- a/buildroot-external/rootfs-overlay/usr/sbin/haos-config
++++ b/buildroot-external/rootfs-overlay/usr/sbin/haos-config
+@@ -77,12 +77,15 @@ if [ -f "${CONFIG_DIR}/authorized_keys" ]; then
+     cp -f ${CONFIG_DIR}/authorized_keys /root/.ssh/authorized_keys
+     chmod 600 /root/.ssh/authorized_keys
+ 
+-    systemctl start dropbear > /dev/null 2>&1
++    # GA: OpenSSH (sshd) replaces dropbear. --no-block: a blocking start
++    # from inside this oneshot would deadlock if sshd were ever ordered
++    # After= haos-config.
++    systemctl --no-block start sshd > /dev/null 2>&1
+ else
+     echo "[Info] Stop SSH debug access"
+ 
+     rm -f /root/.ssh/authorized_keys
+-    systemctl stop dropbear > /dev/null 2>&1
++    systemctl stop sshd > /dev/null 2>&1
+ fi
+ 
+ ##

@@ -1,0 +1,400 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] hassio: GA channel bake, GA Supervisor tag, add-on images, full Core
+
+GA deltas of the hassio package (until HAOS 18.x edits of the files
+themselves), on HAOS 18.x's containerd/oci-archive bake. Applies after
+patches/haos/0003 (armv7 -> OCI arm/v7).
+
+- HASSIO_VERSION_URL ?= GreenAutarky's haos-version (overridable from the make
+  command line); installed as /etc/ga-version-url (0444);
+- version.json gate: pinned Supervisor/Core, GA Supervisor image,
+  check-core-image.sh and check-supervisor-image.sh (GA layer), Supervisor and
+  Core equal to the version.yaml pins;
+- BR2_PACKAGE_HASSIO_FULL_CORE (Core = homeassistant.<machine>) and
+  BR2_PACKAGE_HASSIO_DATA_IMAGE_SIZE;
+- add-on images from the board's HASSIO_ADDON_IMAGES_JSON (fetch-addon-images.sh,
+  one version file per add-on into fetch-container-image.sh);
+- dind import: Supervisor tagged ghcr.io/greenautarky/<arch>-hassio-supervisor:latest;
+  the exact image count (images.expected, computed from the inputs) or fail;
+- updater.json: channel + baked Core version + Core image;
+- GA_HASSIO_SKIP_IMAGES: a board whose arch has no GA image says so, loudly;
+  never substituted by an upstream image;
+- fetch-container-image.sh: a stale lock the build user cannot write is
+  removed before flock.
+
+Not carried from the HAOS 16.3-era edits (obsolete on 18.x): the multi-format
+image loader and its online fallback, the registry-auth mount into the dind
+container, docker-archive transport, --storage-driver overlay2.
+---
+ buildroot-external/package/hassio/Config.in   |  14 ++
+ .../package/hassio/create-data-partition.sh   |  24 ++-
+ .../package/hassio/dind-import-containers.sh  |  45 +++++-
+ .../package/hassio/fetch-addon-images.sh      |  31 ++++
+ .../package/hassio/fetch-container-image.sh   |   6 +
+ buildroot-external/package/hassio/hassio.mk   | 142 +++++++++++++++++-
+ 6 files changed, 247 insertions(+), 15 deletions(-)
+
+diff --git a/buildroot-external/package/hassio/Config.in b/buildroot-external/package/hassio/Config.in
+index 7f802015e..257c6befd 100644
+--- a/buildroot-external/package/hassio/Config.in
++++ b/buildroot-external/package/hassio/Config.in
+@@ -18,6 +18,20 @@ config BR2_PACKAGE_HASSIO_MACHINE
+ 	help
+ 	  Machine to pull containers for (used for landing page).
+ 
++config BR2_PACKAGE_HASSIO_FULL_CORE
++	bool "Bake the full Home Assistant Core"
++	help
++	  GA: bake the channel's Core (homeassistant.<machine>) instead of
++	  the landing page.
++
++config BR2_PACKAGE_HASSIO_DATA_IMAGE_SIZE
++	string "Data image build size"
++	default "1280M"
++	help
++	  GA: size of the data.ext4 the bake fills (shrunk to its content
++	  afterwards). Must hold every baked image unpacked (containerd
++	  snapshotter: content store + snapshots).
++
+ choice
+ 	prompt "Default Channel"
+ 	default BR2_PACKAGE_HASSIO_CHANNEL_STABLE
+diff --git a/buildroot-external/package/hassio/create-data-partition.sh b/buildroot-external/package/hassio/create-data-partition.sh
+index bc717c178..48c7add47 100755
+--- a/buildroot-external/package/hassio/create-data-partition.sh
++++ b/buildroot-external/package/hassio/create-data-partition.sh
+@@ -5,6 +5,9 @@ build_dir=$1
+ dst_dir=$2
+ channel=$3
+ docker_version=$4
++# GA: build size of data.ext4 (BR2_PACKAGE_HASSIO_DATA_IMAGE_SIZE); shrunk to
++# its content below, so a large value costs nothing in the image
++data_image_size=${5:-1280M}
+ 
+ data_img="${dst_dir}/data.ext4"
+ data_dir="${build_dir}/data"
+@@ -13,7 +16,7 @@ APPARMOR_URL="https://version.home-assistant.io/apparmor_${channel}.txt"
+ 
+ # Make image
+ rm -f "${data_img}"
+-truncate --size="1280M" "${data_img}"
++truncate --size="${data_image_size}" "${data_img}"
+ mkfs.ext4 -L "hassos-data" -E lazy_itable_init=0,lazy_journal_init=0 "${data_img}"
+ 
+ # Mount / init file structs
+@@ -39,10 +42,25 @@ touch "${data_dir}/.docker-use-containerd-snapshotter"
+ mkdir -p "${data_dir}/supervisor/apparmor"
+ curl -fsL -o "${data_dir}/supervisor/apparmor/hassio-supervisor" "${APPARMOR_URL}"
+ 
+-# Persist build-time updater channel
+-jq -n --arg channel "${channel}" '{"channel": \$channel}' > "${data_dir}/supervisor/updater.json"
+ EOF
+ 
++# Persist build-time updater channel.
++# GA: plus the baked Core version and image when a Core is baked: on a fresh
++# device the Supervisor has not fetched the channel yet, and an updater.json
++# without the image leaves it on the upstream Core name (no 2026 armv7 tag).
++# Read from the same version.json the bake fetched from.
++core_version=$(jq -r '.core // empty' "${build_dir}/version.json")
++core_image=$(jq -r '.images.core // empty' "${build_dir}/version.json")
++if [ "${core_version}" != "landingpage" ] && ls "${build_dir}"/images/*"${core_version}"@* > /dev/null 2>&1; then
++	jq -n --arg channel "${channel}" --arg core "${core_version}" --arg image "${core_image}" \
++		'{channel: $channel, homeassistant: $core, image: {homeassistant: $image}}' \
++		| sudo tee "${data_dir}/supervisor/updater.json" > /dev/null
++else
++	echo "GA create-data-partition: no full Core baked -- updater.json carries the channel only"
++	jq -n --arg channel "${channel}" '{"channel": $channel}' | sudo tee "${data_dir}/supervisor/updater.json" > /dev/null
++fi
++echo "GA create-data-partition: updater.json = $(sudo cat "${data_dir}/supervisor/updater.json" | tr -d '\n ')"
++
+ # Tear down docker and unmount the data partition before shrinking
+ docker rm -f "${container}" > /dev/null
+ sudo umount "${data_dir}"
+diff --git a/buildroot-external/package/hassio/dind-import-containers.sh b/buildroot-external/package/hassio/dind-import-containers.sh
+index d3397b08a..7cbb9de27 100755
+--- a/buildroot-external/package/hassio/dind-import-containers.sh
++++ b/buildroot-external/package/hassio/dind-import-containers.sh
+@@ -7,17 +7,48 @@ while ! docker version 2> /dev/null > /dev/null; do
+ 	sleep 1
+ done
+ 
+-# Install Supervisor, plug-ins and landing page
++# Install Supervisor, plug-ins, Core/landing page and (GA) the add-on images
+ echo "Loading container images..."
+ 
++# GA: count what was loaded against /build/images.expected (hassio.mk, from
++# the inputs); any difference fails the bake (fail closed: a silent partial
++# load is an image without add-ons).
++n_tar=0
++n_loaded=0
++
+ # Make sure to order images by size (largest first)
+ # It seems docker load requires space during operation
+ # shellcheck disable=SC2045
+-for image in $(ls -S /build/images/*.tar); do
+-	docker load --input "${image}"
++for image in $(ls -S /build/images/*.tar 2>/dev/null); do
++	n_tar=$((n_tar + 1))
++	out=$(docker load --input "${image}")
++	echo "${out}"
++	if echo "${out}" | grep -q '^Loaded image'; then
++		n_loaded=$((n_loaded + 1))
++	else
++		echo "GA dind-import: ERROR: ${image} loaded no image" >&2
++	fi
+ done
++expected=$(cat /build/images.expected 2>/dev/null || echo "")
++echo "GA dind-import: loaded ${n_loaded} of ${n_tar} archive(s), expected ${expected:-?}"
++case "${expected}" in ''|*[!0-9]*) echo "GA dind-import: ERROR: /build/images.expected missing or invalid" >&2; exit 1 ;; esac
++[ "${n_tar}" -eq "${expected}" ] || { echo "GA dind-import: ERROR: ${n_tar} archives, expected ${expected}" >&2; exit 1; }
++[ "${n_loaded}" -eq "${n_tar}" ] || { echo "GA dind-import: ERROR: ${n_loaded} of ${n_tar} archives loaded" >&2; exit 1; }
++
++# Tag the Supervisor how the OS expects it to be tagged.
++# GA: the GA launcher (haos-supervisor, patch 0130) runs
++# ghcr.io/greenautarky/<arch>-hassio-supervisor:latest -- never the upstream
++# name. A board that does not bake a Supervisor (GA_HASSIO_SKIP_IMAGES) gets
++# none; the launcher pulls it from the GA channel at runtime.
++supervisor=$(docker images --filter "label=io.hass.type=supervisor" --quiet | head -n 1)
++if [ -n "${supervisor}" ]; then
++	arch=$(docker inspect --format '{{ index .Config.Labels "io.hass.arch" }}' "${supervisor}")
++	[ -n "${arch}" ] || { echo "GA dind-import: ERROR: Supervisor image has no io.hass.arch label" >&2; exit 1; }
++	docker tag "${supervisor}" "ghcr.io/greenautarky/${arch}-hassio-supervisor:latest"
++	echo "GA dind-import: Supervisor tagged ghcr.io/greenautarky/${arch}-hassio-supervisor:latest"
++else
++	echo "GA dind-import: ERROR-LEVEL NOTICE: no Supervisor image baked (board skip list) -- the device pulls it from the GA channel" >&2
++fi
+ 
+-# Tag the Supervisor how the OS expects it to be tagged
+-supervisor=$(docker images --filter "label=io.hass.type=supervisor" --quiet)
+-arch=$(docker inspect --format '{{ index .Config.Labels "io.hass.arch" }}' "${supervisor}")
+-docker tag "${supervisor}" "ghcr.io/home-assistant/${arch}-hassio-supervisor:latest"
++echo "GA dind-import: images in the data partition:"
++docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}'
+diff --git a/buildroot-external/package/hassio/fetch-addon-images.sh b/buildroot-external/package/hassio/fetch-addon-images.sh
+new file mode 100755
+index 000000000..43a44587c
+--- /dev/null
++++ b/buildroot-external/package/hassio/fetch-addon-images.sh
+@@ -0,0 +1,31 @@
++#!/usr/bin/env bash
++# GA: fetch the add-on images listed in an addon-images.json (board data) for
++# the data-partition bake. For each add-on it writes a one-entry version file
++# ({"images": {"<addon>": "<image>"}, "<addon>": "<version>"}) and calls the
++# unchanged fetch-container-image.sh with it (oci-archive, digest-pinned file
++# name) -- so this patch does not touch the file board patch 0003 changes.
++# Any failure fails the build: an image without a listed add-on is not an
++# image this list describes.
++set -eu -o pipefail
++
++arch=$1
++machine=$2
++addon_json=$3
++dl_dir=$4
++dst_dir=$5
++
++script_dir="$(dirname "$0")"
++[ -f "${addon_json}" ] || { echo "fetch-addon-images: ERROR: ${addon_json} not found" >&2; exit 1; }
++n=$(jq -r '.addons | length' "${addon_json}")
++[ "${n}" -gt 0 ] || { echo "fetch-addon-images: ERROR: ${addon_json} lists no add-on" >&2; exit 1; }
++echo "fetch-addon-images: ${n} add-on(s) from ${addon_json} (arch ${arch})"
++
++work=$(mktemp -d "${dst_dir}/.addon-json.XXXXXX")
++trap 'rm -rf "${work}"' EXIT
++for addon in $(jq -r '.addons | keys[]' "${addon_json}"); do
++	jq -e --arg a "$addon" '{images: {($a): .addons[$a].image}, ($a): .addons[$a].version}' \
++		"${addon_json}" > "${work}/${addon}.json"
++	echo ">>> Addon: ${addon} -> $(jq -r --arg a "$addon" --arg arch "$arch" '.images[$a] | sub("{arch}"; $arch)' "${work}/${addon}.json"):$(jq -r --arg a "$addon" '.[$a]' "${work}/${addon}.json")"
++	"$script_dir/fetch-container-image.sh" \
++		"$arch" "$machine" "${work}/${addon}.json" "$addon" "$dl_dir" "$dst_dir"
++done
+diff --git a/buildroot-external/package/hassio/fetch-container-image.sh b/buildroot-external/package/hassio/fetch-container-image.sh
+index 950e08b79..5f1284c84 100755
+--- a/buildroot-external/package/hassio/fetch-container-image.sh
++++ b/buildroot-external/package/hassio/fetch-container-image.sh
+@@ -58,6 +58,12 @@ image_file_name="${full_image_name//[:\/]/_}@${image_digest//[:\/]/_}"
+ image_file_path="${dl_dir}/${image_file_name}.tar"
+ dst_image_file_path="${dst_dir}/${image_file_name}.tar"
+ 
++# GA: remove a stale lock this user cannot write (e.g. left by a container that
++# ran as another user); flock below would otherwise fail on it.
++if [ -f "${image_file_path}.lock" ] && ! [ -w "${image_file_path}.lock" ]; then
++	rm -f "${image_file_path}.lock"
++fi
++
+ (
+ 	# Use file locking to avoid race condition
+ 	flock --verbose 3
+diff --git a/buildroot-external/package/hassio/hassio.mk b/buildroot-external/package/hassio/hassio.mk
+index 4f73167e0..4c9b6043f 100644
+--- a/buildroot-external/package/hassio/hassio.mk
++++ b/buildroot-external/package/hassio/hassio.mk
+@@ -9,7 +9,56 @@ HASSIO_LICENSE = Apache License 2.0
+ # HASSIO_LICENSE_FILES = $(BR2_EXTERNAL_HAOS_PATH)/../LICENSE
+ HASSIO_SITE = $(BR2_EXTERNAL_HAOS_PATH)/package/hassio
+ HASSIO_SITE_METHOD = local
+-HASSIO_VERSION_URL = "https://version.home-assistant.io/"
++# The channel the BUILD bakes from. This MUST be the same branch the devices
++# poll, or every freshly flashed unit bricks its own provisioning — see below.
++#
++# It used to point at release/v1.2-rebuild, a "V1.2-clean WIP" pointer whose own
++# comment said "revert to main/ at the V1.2 promote". That promote never
++# happened (v1.2 reached rc40 without ever being released), the branch went
++# stale on 2026-06-01, and the temporary pointer became permanent.
++#
++# What that cost, measured on K31 2026-07-30: the branch pins supervisor
++# 2025.11.4.5, so the build baked 4.5, while devices poll main and see 4.6.
++# Supervisor therefore reports update_available=true on first boot, which trips
++# its `supervisor_updated` job condition and BLOCKS StoreManager.add_repository.
++# ga-bootstrap cannot register the vibe_addons store, no add-on installs,
++# ga_manager never runs, the device never finishes provisioning — and nothing
++# reports an error. The device boots, answers on serial, and is inert.
++#
++# Keep this pointing where the fleet points — with ONE sanctioned exception.
++#
++# What it decides: (1) the {channel}.json the bake reads, and (2) since
++# BOSv1.4.0-rc5, what the device POLLS — the value is installed as
++# /etc/ga-version-url (HASSIO_INSTALL_TARGET_CMDS below), which GA Supervisor
++# 2025.11.5.6+ reads. An older Supervisor ignores the file and polls the URL
++# compiled into it, haos-version/main/{channel}.json. The channel itself stays
++# in updater.json (seeded by dind-import-containers.sh).
++#
++# 1.6 (HAOS 18.x): this still carries the BOSv1.5 fleet value. A 1.6 image
++# must not poll the 1.5 fleet's channel once 1.6 ships; the own 1.6 channel
++# path is WP8 of the 1.6 plan, and patch 0130 reads the same file.
++#
++# The exception (ADR-0037, decided 2026-10-06, "variant A"): the stable-channel
++# dress rehearsal BOSv1.4.0-rc5 bakes the CANDIDATE stable.json from the
++# candidate/stable-1.4 branch, because the fleet-facing stable.json on main
++# moves only at the 1.4.0 promotion. scripts/check-version-url-scope.sh (lint)
++# allows a candidate/* branch only while gaos_release is an -rc, so a final
++# BOSv1.4.0 cannot bake from here: the promotion PR points this back at main/.
++#
++# Know what the rehearsal devices see at runtime: until promotion, main's
++# stable.json still describes the old fleet (upstream Core image 2025.11.3,
++# Supervisor 2025.11.4.6). A device polls candidate/stable-1.4 only once its
++# Supervisor reads /etc/ga-version-url (2025.11.5.6+); with an older one it
++# polls main and reconciles Core/plugin images to main's stable.json.
++#
++# Every consumer reads THIS line, so they cannot disagree: the build (below),
++# /etc/ga-version-url on the image, ga-ops' hassio_channel_guard.py,
++# run_build_tests.sh (XVER-*), gen_expected.sh and scan-cves.sh. A
++# `make HASSIO_VERSION_URL=…` override bypasses all of them but the build and
++# the baked file — do not use one for an image that ships.
++# 2026-10-12, BOSv1.5.0 (final): back at main/. haos-version #25 promoted main
++# stable/beta/dev identical to candidate/stable-1.5 (merged before this bake).
++HASSIO_VERSION_URL ?= "https://raw.githubusercontent.com/greenautarky/haos-version/main/"
+ ifeq ($(BR2_PACKAGE_HASSIO_CHANNEL_STABLE),y)
+ HASSIO_VERSION_CHANNEL = "stable"
+ else ifeq ($(BR2_PACKAGE_HASSIO_CHANNEL_BETA),y)
+@@ -20,24 +69,107 @@ endif
+ 
+ HASSIO_CONTAINER_IMAGES_ARCH = supervisor dns audio cli multicast observer core
+ 
++# GA: a board whose arch has no GA image in the channel lists the keys here
++# (board external.mk). They are NOT baked, loudly (build log), and the device
++# gets them -- or not -- from the GA channel at runtime; there is no upstream
++# substitute. Empty = bake every image (the default).
++GA_HASSIO_SKIP_IMAGES ?=
++HASSIO_GA_IMAGES = $(filter-out $(GA_HASSIO_SKIP_IMAGES),$(HASSIO_CONTAINER_IMAGES_ARCH))
++
++# GA: add-on images pre-baked into the data partition (board data: each board
++# external sets HASSIO_ADDON_IMAGES_JSON to its addon-images.json). Empty = no
++# add-ons, said in the build log.
++HASSIO_ADDON_IMAGES_JSON ?=
++
++ifeq ($(BR2_PACKAGE_HASSIO_FULL_CORE),y)
++HASSIO_CORE_VERSION = $(shell curl -fsS $(HASSIO_VERSION_URL)$(HASSIO_VERSION_CHANNEL)".json" | jq '.homeassistant["$(call qstrip,$(BR2_PACKAGE_HASSIO_MACHINE))"] // .homeassistant.default')
++else
++HASSIO_CORE_VERSION = "landingpage"
++endif
++
+ define HASSIO_CONFIGURE_CMDS
+-	# Deploy only landing page for "core" by setting version to "landingpage"
+-	curl -s $(HASSIO_VERSION_URL)$(HASSIO_VERSION_CHANNEL)".json" | jq '.core = "landingpage"' > $(@D)/version.json
++	# HomeAssistantOS Deploy only landing page for "core" by setting version to "landingpage", but we are using the full core image whether BR2_PACKAGE_HASSIO_FULL_CORE is set or not
++	curl -fsS $(HASSIO_VERSION_URL)$(HASSIO_VERSION_CHANNEL)".json" | jq '.core = $(HASSIO_CORE_VERSION)' > $(@D)/version.json;
++	# Validate version.json: reject "latest" and wrong registries (catches stale stable.json)
++	# Core is the GA armv7 build again (2026-09-28): upstream stopped building
++	# armv7 in late 2025, so the stock image is frozen at 2025.11.3.
++	# check-core-image.sh refuses the upstream image, a pre-2026 tag, and an
++	# image without the labels + s6 entrypoint the Supervisor needs.
++	# check-supervisor-image.sh refuses a non-GA Supervisor image, a tag other
++	# than the version.yaml pin, and an image whose io.hass labels disagree.
++	@VJ=$(@D)/version.json; \
++	SUP=$$(jq -r '.supervisor' $$VJ); \
++	CORE=$$(jq -r '.core' $$VJ); \
++	TINKER=$$(jq -r '.homeassistant.tinker // .homeassistant.default' $$VJ); \
++	SUP_IMG=$$(jq -r '.images.supervisor' $$VJ); \
++	CORE_IMG=$$(jq -r '.images.core' $$VJ); \
++	FAIL=0; \
++	if [ "$$SUP" = "latest" ] || [ -z "$$SUP" ] || [ "$$SUP" = "null" ]; then echo "ERROR: version.json supervisor='$$SUP' (must be pinned version)"; FAIL=1; fi; \
++	if [ "$$CORE" = "latest" ] || [ -z "$$CORE" ] || [ "$$CORE" = "null" ]; then echo "ERROR: version.json core='$$CORE' (must be pinned version)"; FAIL=1; fi; \
++	if [ "$$TINKER" = "latest" ] || [ -z "$$TINKER" ]; then echo "ERROR: version.json tinker='$$TINKER' (must be pinned version)"; FAIL=1; fi; \
++	if ! echo "$$SUP_IMG" | grep -q greenautarky; then echo "ERROR: version.json supervisor image='$$SUP_IMG' (must use greenautarky)"; FAIL=1; fi; \
++	if ! $(BR2_EXTERNAL_GA_HAOS_PATH)/package/hassio/check-core-image.sh $$VJ $(BR2_PACKAGE_HASSIO_MACHINE); then FAIL=1; fi; \
++	PIN=$$(sed -nE 's/^[[:space:]]*homeassistant_supervisor:[[:space:]]*"?([^"[:space:]#]+)"?.*/\1/p' $(BR2_EXTERNAL_GA_HAOS_PATH)/../version.yaml | head -1); \
++	if ! $(BR2_EXTERNAL_GA_HAOS_PATH)/package/hassio/check-supervisor-image.sh $$VJ $(BR2_PACKAGE_HASSIO_ARCH) "$$PIN"; then FAIL=1; fi; \
++	if [ -n "$$PIN" ] && [ "$$SUP" != "$$PIN" ]; then \
++	  echo "ERROR: version.json supervisor='$$SUP' but version.yaml pins '$$PIN'"; \
++	  echo "       The BAKED supervisor would differ from the pin. A device whose"; \
++	  echo "       supervisor is older than the channel sets update_available=true,"; \
++	  echo "       which blocks StoreManager and leaves the device unprovisionable."; \
++	  echo "       Check HASSIO_VERSION_URL points at the branch the fleet polls."; \
++	  FAIL=1; \
++	fi; \
++	CORE_PIN=$$(sed -nE 's/^[[:space:]]*homeassistant_core:[[:space:]]*"?([^"[:space:]#]+)"?.*/\1/p' $(BR2_EXTERNAL_GA_HAOS_PATH)/../version.yaml | head -1); \
++	if [ -n "$$CORE_PIN" ] && [ "$$CORE" != "$$CORE_PIN" ]; then \
++	  echo "ERROR: version.json core='$$CORE' but version.yaml pins '$$CORE_PIN'"; \
++	  echo "       The baked Core would differ from the pin the on-device suite"; \
++	  echo "       (OSI-04, expected.env) asserts."; \
++	  FAIL=1; \
++	fi; \
++	if [ $$FAIL -ne 0 ]; then echo "FATAL: version.json validation failed — check haos-version stable.json"; exit 1; fi; \
++	echo "version.json validated: supervisor=$$SUP core=$$CORE tinker=$$TINKER (pin=$$PIN core_pin=$$CORE_PIN)"
++	$(if $(GA_HASSIO_SKIP_IMAGES),@echo "GA hassio: ERROR-LEVEL NOTICE: NOT baking [$(GA_HASSIO_SKIP_IMAGES)] for $(BR2_PACKAGE_HASSIO_ARCH) (GA_HASSIO_SKIP_IMAGES, board external.mk) -- this image carries no such image; the device must pull it from the GA channel at runtime")
+ endef
+ 
+ define HASSIO_BUILD_CMDS
+ 	$(Q)mkdir -p $(@D)/images
+ 	$(Q)mkdir -p $(HASSIO_DL_DIR)
+-	$(foreach image,$(HASSIO_CONTAINER_IMAGES_ARCH),\
++	$(foreach image,$(HASSIO_GA_IMAGES),\
+ 		$(BR2_EXTERNAL_HAOS_PATH)/package/hassio/fetch-container-image.sh \
+ 			$(BR2_PACKAGE_HASSIO_ARCH) $(BR2_PACKAGE_HASSIO_MACHINE) $(@D)/version.json $(image) "$(HASSIO_DL_DIR)" "$(@D)/images"
+ 	)
++	$(if $(HASSIO_ADDON_IMAGES_JSON),\
++		$(BR2_EXTERNAL_HAOS_PATH)/package/hassio/fetch-addon-images.sh \
++			$(BR2_PACKAGE_HASSIO_ARCH) $(BR2_PACKAGE_HASSIO_MACHINE) \
++			$(HASSIO_ADDON_IMAGES_JSON) "$(HASSIO_DL_DIR)" "$(@D)/images",\
++		@echo "GA hassio: WARNING: no HASSIO_ADDON_IMAGES_JSON for this board -- no add-on is pre-baked")
++	# GA: how many images the data partition must carry, from the INPUTS
++	# (image keys + add-on list), never from what was fetched;
++	# dind-import-containers.sh fails unless exactly this many load.
++	$(Q)echo $$(( $(words $(HASSIO_GA_IMAGES)) + $(if $(HASSIO_ADDON_IMAGES_JSON),$$(jq -r '.addons | length' $(HASSIO_ADDON_IMAGES_JSON)),0) )) > $(@D)/images.expected
++	@echo "GA hassio: data partition must carry $$(cat $(@D)/images.expected) image(s)"
++endef
++
++# /etc/ga-version-url: the haos-version base URL the device POLLS, written from
++# HASSIO_VERSION_URL above — the same make variable the bake reads, so what the
++# image was baked from and what it polls cannot drift apart. The GA Supervisor
++# reads it inside its container from 2025.11.5.6 (absent or invalid -> main,
++# with a warning); haos-supervisor (patch 0130) bind-mounts it read-only at the same path.
++# Mode 0444 on top of the read-only squashfs. Evaluated by
++# scripts/probe-ga-version-url.sh for check-version-url-scope.sh (a final
++# release must carry main/) and run_build_tests.sh XVER-09; GVU-01..03 read the
++# baked rootfs.
++define HASSIO_INSTALL_TARGET_CMDS
++	mkdir -p $(TARGET_DIR)/etc
++	rm -f $(TARGET_DIR)/etc/ga-version-url
++	printf '%s\n' $(HASSIO_VERSION_URL) > $(TARGET_DIR)/etc/ga-version-url
++	chmod 0444 $(TARGET_DIR)/etc/ga-version-url
+ endef
+ 
+ HASSIO_INSTALL_IMAGES = YES
+ 
+ define HASSIO_INSTALL_IMAGES_CMDS
+-	$(BR2_EXTERNAL_HAOS_PATH)/package/hassio/create-data-partition.sh "$(@D)" "$(BINARIES_DIR)" "$(HASSIO_VERSION_CHANNEL)" "$(DOCKER_ENGINE_VERSION)"
++	$(BR2_EXTERNAL_HAOS_PATH)/package/hassio/create-data-partition.sh "$(@D)" "$(BINARIES_DIR)" "$(HASSIO_VERSION_CHANNEL)" "$(DOCKER_ENGINE_VERSION)" "$(BR2_PACKAGE_HASSIO_DATA_IMAGE_SIZE)"
+ endef
+ 
+ $(eval $(generic-package))

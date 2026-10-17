@@ -1839,9 +1839,32 @@ else
   SRC=""
 fi
 
+# Upstream HAOS files the GA patch set changes, as the build reads them. Since
+# the HAOS 18.x lift, haos/ is unmodified upstream and the GA deltas of these
+# files are patches (GA layer patches-haos/); scripts/apply-haos-patches.sh
+# --export writes upstream + the whole set, from a throwaway index (the haos/
+# working tree is neither read nor written). Same result in the build container
+# (haos/ patched) and in CI's source mode (haos/ checked out, unpatched).
+HAOS_EXT_SRC=""
+_RBT_REPO="${SRC:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+_RBT_HAOS_EXP="$(mktemp -d)"
+if "${_RBT_REPO}/scripts/apply-haos-patches.sh" --export "$_RBT_HAOS_EXP" \
+     buildroot-external/package/hassio/hassio.mk \
+     buildroot-external/package/hassio/dind-import-containers.sh \
+     buildroot-external/package/hassio/create-data-partition.sh \
+     buildroot-external/rootfs-overlay/usr/sbin/haos-supervisor \
+     buildroot-external/meta buildroot-external/scripts/rauc.sh \
+     buildroot-external/genimage/partitions-os-gpt.cfg \
+     buildroot-external/genimage/partitions-os-mbr.cfg >/dev/null 2>"$_RBT_HAOS_EXP.err"; then
+  HAOS_EXT_SRC="$_RBT_HAOS_EXP/buildroot-external"
+  _pass "SRC-HAOS-01: upstream HAOS sources with the GA patch set exported (haos @ $(git -C "${_RBT_REPO}/haos" rev-parse --short HEAD 2>/dev/null || echo '?'))"
+else
+  _fail "SRC-HAOS-01: cannot export the patched HAOS sources (scripts/apply-haos-patches.sh): $(head -c 300 "$_RBT_HAOS_EXP.err")"
+fi
+
 if [[ -n "$SRC" ]]; then
   # SRC-01: hassio.mk VERSION_URL
-  HASSIO_MK="${SRC}/buildroot-external/package/hassio/hassio.mk"
+  HASSIO_MK="${HAOS_EXT_SRC}/package/hassio/hassio.mk"
   if [[ -f "$HASSIO_MK" ]]; then
     grep -q 'greenautarky/haos-version' "$HASSIO_MK" \
       && _pass "SRC-01: hassio.mk VERSION_URL is greenautarky" \
@@ -1887,7 +1910,7 @@ if [[ -n "$SRC" ]]; then
   fi
 
   # SRC-03: dind-import-containers.sh tags greenautarky
-  DIND="${SRC}/buildroot-external/package/hassio/dind-import-containers.sh"
+  DIND="${HAOS_EXT_SRC}/package/hassio/dind-import-containers.sh"
   if [[ -f "$DIND" ]]; then
     grep -q 'ghcr.io/greenautarky.*hassio-supervisor' "$DIND" \
       && _pass "SRC-03: dind-import tags supervisor as greenautarky" \
@@ -1904,10 +1927,15 @@ if [[ -n "$SRC" ]]; then
   fi
 
   # SRC-05: hassos-supervisor source matches dind-import tag prefix
-  HSUP_SRC="${SRC}/buildroot-external/rootfs-overlay/usr/sbin/hassos-supervisor"
+  HSUP_SRC="${HAOS_EXT_SRC}/rootfs-overlay/usr/sbin/haos-supervisor"
   if [[ -f "$HSUP_SRC" ]] && [[ -f "$DIND" ]]; then
     # Extract the image prefix from both files and compare
     HSUP_PREFIX="$(grep 'SUPERVISOR_IMAGE=' "$HSUP_SRC" | head -1 | sed 's/.*"\(.*\)\/.*/\1/')"
+    # The 18.x launcher names the registry once (GA_SUPERVISOR_REGISTRY="...")
+    # and builds the image from it: resolve one ${VAR} from its own assignment.
+    if [[ "$HSUP_PREFIX" =~ ^\$\{([A-Z_]+)\}$ ]]; then
+      HSUP_PREFIX="$(sed -nE "s/^${BASH_REMATCH[1]}=\"([^\"]+)\"$/\\1/p" "$HSUP_SRC" | head -1)"
+    fi
     DIND_PREFIX="$(grep 'docker tag.*hassio-supervisor' "$DIND" | head -1 | sed 's/.*"\(.*\)\/.*/\1/')"
     if [[ "$HSUP_PREFIX" == "$DIND_PREFIX" ]] && [[ -n "$HSUP_PREFIX" ]]; then
       _pass "SRC-05: hassos-supervisor and dind-import use same prefix: $HSUP_PREFIX"
@@ -1919,7 +1947,18 @@ if [[ -n "$SRC" ]]; then
   fi
 
   # SRC-06: updater.json core version is read dynamically from version.json (not hardcoded)
-  if [[ -f "$DIND" ]]; then
+  # HAOS 18.x writes updater.json on the host in create-data-partition.sh (GA
+  # patch 0131), not inside the dind container.
+  CDP="${HAOS_EXT_SRC}/package/hassio/create-data-partition.sh"
+  if [[ -f "$CDP" ]]; then
+    if grep -q 'version\.json' "$CDP" && grep -q '\.core' "$CDP" && grep -q 'updater\.json' "$CDP"; then
+      _pass "SRC-06: updater.json core version is read dynamically from version.json (create-data-partition.sh)"
+    elif grep 'updater.json' "$CDP" | grep -q '"latest"'; then
+      _fail "SRC-06: updater.json uses 'latest' (HA rejects this)"
+    else
+      _fail "SRC-06: updater.json core version is not read from version.json (may be hardcoded)"
+    fi
+  elif [[ -f "$DIND" ]]; then
     if grep -q 'version\.json' "$DIND" && grep -q '\.core' "$DIND"; then
       _pass "SRC-06: updater.json core version is read dynamically from version.json"
     elif grep 'updater.json' "$DIND" | grep -q '"latest"'; then
@@ -2685,7 +2724,7 @@ if [[ -n "$SRC" ]]; then
   # So the coupling is now mechanical. Two places that MUST agree should not be
   # two places. If the URL cannot be read from hassio.mk this FAILS rather than
   # falling back to a guess — a guess is what created this.
-  _HASSIO_MK="$(dirname "${BASH_SOURCE[0]}")/../../buildroot-external/package/hassio/hassio.mk"
+  _HASSIO_MK="${HAOS_EXT_SRC}/package/hassio/hassio.mk"
   _VER_BASE="$(sed -n 's/^HASSIO_VERSION_URL[[:space:]]*?\?=[[:space:]]*"\([^"]*\)".*/\1/p' "$_HASSIO_MK" 2>/dev/null | head -1)"
   if [[ -z "$_VER_BASE" ]]; then
     _fail "XVER-00: cannot read HASSIO_VERSION_URL from hassio.mk — the version chain cannot be checked against the source the build actually uses"
@@ -2841,7 +2880,7 @@ if [[ -n "$SRC" ]]; then
   #            Supervisor container at the same path.
   # Source-level, no network: they run in CI on every PR.
   _GVU_PROBE_DIR="$(mktemp -d 2>/dev/null || echo "/tmp/gvu_probe_$$")"
-  _GVU_MK="${SRC}/buildroot-external/package/hassio/hassio.mk"
+  _GVU_MK="${HAOS_EXT_SRC}/package/hassio/hassio.mk"
   _GVU_URL="$(sed -n 's/^HASSIO_VERSION_URL[[:space:]]*?\?=[[:space:]]*"\([^"]*\)".*/\1/p' "$_GVU_MK" 2>/dev/null | head -1)"
   if ! "${SRC}/scripts/probe-ga-version-url.sh" "$_GVU_MK" "$_GVU_PROBE_DIR" >/dev/null 2>"$_GVU_PROBE_DIR.err"; then
     _fail "XVER-09: hassio.mk's install recipe could not be evaluated: $(head -c 300 "$_GVU_PROBE_DIR.err")"
@@ -2865,7 +2904,7 @@ if [[ -n "$SRC" ]]; then
   fi
   rm -rf "$_GVU_PROBE_DIR" "$_GVU_PROBE_DIR.err"
 
-  _GVU_LAUNCH="${SRC}/buildroot-external/rootfs-overlay/usr/sbin/hassos-supervisor"
+  _GVU_LAUNCH="${HAOS_EXT_SRC}/rootfs-overlay/usr/sbin/haos-supervisor"
   # The create command, from `docker container create` to the image argument.
   _gvu_create="$(awk '/docker container create/{on=1} on{print} on && /SUPERVISOR_IMAGE\}:latest"/{exit}' "$_GVU_LAUNCH" 2>/dev/null)"
   if [[ -z "$_gvu_create" ]]; then
@@ -2876,7 +2915,9 @@ if [[ -n "$SRC" ]]; then
     _fail "XVER-10: GA_VERSION_URL_MOUNT is not set from ga_version_url_mount with its default path"
   elif ! grep -qF 'ga_version_url_mount() {' "$_GVU_LAUNCH" \
        || ! grep -qF ':/etc/ga-version-url:ro' "$_GVU_LAUNCH" \
-       || ! grep -qE '_ga_vu_src="\$\{1:-/etc/ga-version-url\}"' "$_GVU_LAUNCH"; then
+       || ! { grep -qE '_ga_vu_src="\$\{1:-/etc/ga-version-url\}"' "$_GVU_LAUNCH" \
+              || { grep -qE '_ga_vu_src="\$\{1:-\$\{GA_VERSION_URL_FILE\}\}"' "$_GVU_LAUNCH" \
+                   && grep -qxF 'GA_VERSION_URL_FILE="/etc/ga-version-url"' "$_GVU_LAUNCH"; }; }; then
     _fail "XVER-10: ga_version_url_mount does not mount /etc/ga-version-url read-only at /etc/ga-version-url"
   else
     _pass "XVER-10: the Supervisor container gets -v /etc/ga-version-url:/etc/ga-version-url:ro"
@@ -3560,8 +3601,7 @@ fi
 echo ""
 echo "--- Version URL (/etc/ga-version-url) ---"
 GVU_FILE="${TARGET}/etc/ga-version-url"
-GVU_MK="${OUT}/../buildroot-external/package/hassio/hassio.mk"
-[[ -n "${SRC:-}" ]] && GVU_MK="${SRC}/buildroot-external/package/hassio/hassio.mk"
+GVU_MK="${HAOS_EXT_SRC}/package/hassio/hassio.mk"
 GVU_DECLARED="$(sed -n 's/^HASSIO_VERSION_URL[[:space:]]*?\?=[[:space:]]*"\([^"]*\)".*/\1/p' "$GVU_MK" 2>/dev/null | head -1)"
 if [[ -f "$GVU_FILE" ]]; then
   GVU_BAKED="$(cat "$GVU_FILE")"
@@ -3939,8 +3979,8 @@ _lca_src="${GA_SRC_ROOT:-/build}"
 [[ -d "${_lca_src}/buildroot-external" ]] || _lca_src="$(cd "$(dirname "$0")/../.." && pwd)"
 _lca_residue=""
 [[ -f "${_lca_src}/buildroot-external/ota/legacy-signing-cert.pem" ]] && _lca_residue+="ota/legacy-signing-cert.pem "
-grep -q '^GA_LEGACY_CA_BRIDGE=' "${_lca_src}/buildroot-external/meta" 2>/dev/null && _lca_residue+="GA_LEGACY_CA_BRIDGE-in-meta "
-grep -q 'function add_legacy_ca_if_enabled' "${_lca_src}/buildroot-external/scripts/rauc.sh" 2>/dev/null && _lca_residue+="add_legacy_ca_if_enabled() "
+grep -q '^GA_LEGACY_CA_BRIDGE=' "${HAOS_EXT_SRC}/meta" 2>/dev/null && _lca_residue+="GA_LEGACY_CA_BRIDGE-in-meta "
+grep -q 'function add_legacy_ca_if_enabled' "${HAOS_EXT_SRC}/scripts/rauc.sh" 2>/dev/null && _lca_residue+="add_legacy_ca_if_enabled() "
 if [[ -z "$_lca_residue" ]]; then
   _pass "SRC-21: retired CA bridge fully removed (no cert, no flag, no bake function)"
 else
@@ -3960,8 +4000,8 @@ fi
 # actually landed is asserted on the device by PROV-11 (provisioning/test.sh),
 # because only a flashed device can answer that. Two layers, two questions.
 _slot1_missing=""
-for _pcfg in "${SRC}/buildroot-external/genimage/partitions-os-gpt.cfg" \
-             "${SRC}/buildroot-external/genimage/partitions-os-mbr.cfg"; do
+for _pcfg in "${HAOS_EXT_SRC}/genimage/partitions-os-gpt.cfg" \
+             "${HAOS_EXT_SRC}/genimage/partitions-os-mbr.cfg"; do
   [[ -f "$_pcfg" ]] || { _slot1_missing+="$(basename "$_pcfg"):absent "; continue; }
   for _part in hassos-kernel1 hassos-system1; do
     # the partition block, then whether it declares an image

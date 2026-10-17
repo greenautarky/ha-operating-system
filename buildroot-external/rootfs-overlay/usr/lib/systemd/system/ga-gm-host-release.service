@@ -7,7 +7,7 @@ RequiresMountsFor=/mnt/data
 After=mnt-data.mount
 # Before the Supervisor starts the add-on, so its first read already sees the
 # release of the slot that is running.
-Before=hassos-supervisor.service
+Before=haos-supervisor.service
 
 [Service]
 Type=oneshot

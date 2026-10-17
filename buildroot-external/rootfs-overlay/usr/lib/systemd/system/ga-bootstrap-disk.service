@@ -4,7 +4,7 @@ Documentation=man:systemd.special(7)
 DefaultDependencies=no
 # Needs only the data partition mounted — runs early, before the Supervisor.
 After=local-fs.target mnt-data.mount
-Before=basic.target hassos-supervisor.service
+Before=basic.target haos-supervisor.service
 RequiresMountsFor=/mnt/data
 Conflicts=shutdown.target
 

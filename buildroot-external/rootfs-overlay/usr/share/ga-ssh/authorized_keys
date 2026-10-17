@@ -1,6 +1,6 @@
 # GA operator SSH keys — baked into the V1.2-clean OS image.
 # Copied to /mnt/overlay/root/.ssh/authorized_keys on first boot by
-# /usr/libexec/hassos-overlay (only if the overlay doesn't already
+# /usr/libexec/haos-overlay (only if the overlay doesn't already
 # have one — operator-managed keys are never overwritten).
 #
 # This file is the SINGLE SOURCE OF TRUTH for keys that should reach

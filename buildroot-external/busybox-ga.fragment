@@ -1,0 +1,6 @@
+# GA_HAOS: BusyBox applets for the GA console login (pam.d/login, passwd,
+# ADR-0039), on top of upstream HAOS busybox.config (unmodified).
+CONFIG_LOGIN=y
+CONFIG_FEATURE_SHADOWPASSWDS=y
+CONFIG_PASSWD=y
+CONFIG_GETTY=y

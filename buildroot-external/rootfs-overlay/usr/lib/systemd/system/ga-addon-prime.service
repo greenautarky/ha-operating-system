@@ -19,8 +19,8 @@ Description=GA addon auto-prime (one-shot, runs after first boot post-OTA to upd
 Documentation=https://github.com/greenautarky/ha-operating-system
 
 # Supervisor + hassio_cli must be up — they run the actual addon update.
-Requires=hassos-supervisor.service
-After=hassos-supervisor.service network-online.target
+Requires=haos-supervisor.service
+After=haos-supervisor.service network-online.target
 Wants=network-online.target
 
 # Don't re-run if marker present (= last successful prime).

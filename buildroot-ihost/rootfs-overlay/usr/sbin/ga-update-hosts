@@ -19,7 +19,7 @@
 # Writes to:
 #   /mnt/overlay/etc/hosts           (bind-mounted as /etc/hosts by HAOS)
 #   /mnt/data/ga-supervisor-hosts    (bind-mounted READ-ONLY as /etc/hosts into
-#                                     the Supervisor container by hassos-supervisor)
+#                                     the Supervisor container by haos-supervisor)
 #
 # Modes:
 #   ga-update-hosts                     write both files; if the Supervisor
@@ -51,7 +51,7 @@ CONF_OVERRIDE="${GA_SERVICES_CONF_OVERRIDE:-/mnt/data/ga-services.conf}"
 CONF_DEFAULT="${GA_SERVICES_CONF_BAKED:-/etc/ga-services.conf}"
 HOSTS_FILE="${GA_HOSTS_FILE:-/mnt/overlay/etc/hosts}"
 OTA_ACTIVE_FILE="${GA_OTA_ACTIVE_FILE:-/run/ga-resolve-ota.active}"
-# The Supervisor container's /etc/hosts. hassos-supervisor bind-mounts this
+# The Supervisor container's /etc/hosts. haos-supervisor bind-mounts this
 # file READ-ONLY at /etc/hosts in the container; keep the two paths in step.
 SUP_HOSTS_FILE="${GA_SUPERVISOR_HOSTS_FILE:-/mnt/data/ga-supervisor-hosts}"
 SUP_CONTAINER="hassio_supervisor"
@@ -137,7 +137,7 @@ GA_HOSTS_LINE="${GA_SERVICES_IP}"
 # rebuild that file on the next container start, so the append could never
 # have survived a Supervisor restart or self-update anyway.
 #
-# Now hassos-supervisor bind-mounts $SUP_HOSTS_FILE read-only at /etc/hosts
+# Now haos-supervisor bind-mounts $SUP_HOSTS_FILE read-only at /etc/hosts
 # when it creates the container (the same pattern as /etc/ga-services.conf
 # and /etc/ga-version-url), and this script owns the file on the HOST. The
 # container's process never writes, so AppArmor has nothing to deny, and the
@@ -179,7 +179,7 @@ verify_supervisor() {
     _ok=0
     _src=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/etc/hosts"}}{{.Source}}{{end}}{{end}}' "$SUP_CONTAINER" 2>/dev/null) || _src=""
     if [ "$_src" != "$SUP_HOSTS_FILE" ]; then
-        err "$SUP_CONTAINER does not mount $SUP_HOSTS_FILE at /etc/hosts (mount source: '${_src:-none}') — the container was created by a launcher without the GA hosts mount; restart hassos-supervisor.service to recreate it"
+        err "$SUP_CONTAINER does not mount $SUP_HOSTS_FILE at /etc/hosts (mount source: '${_src:-none}') — the container was created by a launcher without the GA hosts mount; restart haos-supervisor.service to recreate it"
         _ok=1
     fi
     _in=$(docker exec "$SUP_CONTAINER" cat /etc/hosts 2>&1) || {

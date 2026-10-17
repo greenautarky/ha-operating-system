@@ -286,7 +286,7 @@ run_test "RS-78" "test.sh pastes no message into an eval'd single-quoted echo" "
 # ── the units ─────────────────────────────────────────────────────────────
 unit_has() { grep -qx "$2" "$1"; }
 run_test "RS-30" "unit runs before sysinit.target, after the overlay" \
-	"unit_has '$UNIT' 'DefaultDependencies=no' && unit_has '$UNIT' 'Before=sysinit.target shutdown.target' && grep -q '^After=.*hassos-overlay.service' '$UNIT'"
+	"unit_has '$UNIT' 'DefaultDependencies=no' && unit_has '$UNIT' 'Before=sysinit.target shutdown.target' && grep -q '^After=.*haos-overlay.service' '$UNIT'"
 run_test "RS-31" "unit is enabled (sysinit.target.wants link → the unit)" \
 	"[ \"\$(readlink '$OV/etc/systemd/system/sysinit.target.wants/ga-root-shadow.service')\" = /usr/lib/systemd/system/ga-root-shadow.service ]"
 for u in emergency rescue; do

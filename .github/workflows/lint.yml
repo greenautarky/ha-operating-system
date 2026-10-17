@@ -159,6 +159,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # haos/ is upstream Home Assistant OS, unmodified (HAOS 18.x layout). The
+      # suites below that judge a GA delta of an upstream file read it through
+      # scripts/apply-haos-patches.sh --cat/--export (upstream + the GA patch set,
+      # working tree untouched), and the unit lint resolves upstream unit names
+      # from it. Shallow and non-recursive; a step that needs haos/buildroot
+      # fetches it itself.
+      - name: haos/ submodule (upstream HAOS, shallow)
+        run: git submodule update --init --depth 1 haos
+
       - name: Install jq, busybox
         uses: ./.github/actions/apt-install
         with:
@@ -400,7 +409,7 @@ jobs:
 
       - name: Go toolchain inputs - the rootfs Go packages are built with Go >= 1.26.9 (Odoo #1231) and carry the vendored-module floors hook
         # GO-2026-6604 / GO-2026-6612 are fixed in Go 1.26.9; the buildroot
-        # submodule pins 1.26.8. buildroot-external/go-floor.mk (loaded through
+        # upstream HAOS pins (haos/buildroot) has 1.26.8. buildroot-external/go-floor.mk (loaded through
         # buildroot-ihost/local.mk) raises it. This asks buildroot itself what
         # host-go-src version ga_ihost_full_defconfig resolves to, against a
         # PINNED minimum, plus the hash entries and the floor's make semantics
@@ -408,7 +417,8 @@ jobs:
         # submodule: without it the check fails, it does not skip.
         # Red on master (host-go-src 1.26.8), green on the fix.
         run: |
-          git submodule update --init --depth 1 buildroot
+          git submodule update --init --depth 1 haos
+          git -C haos submodule update --init --depth 1 buildroot
           bash tests/ga_tests/build/go_toolchain/inputs_check.sh
 
       - name: pkg-inputs rebuilds a package when our patches or configure options for it change
@@ -503,7 +513,7 @@ jobs:
           fi
           echo "expected.env is in step with version.yaml + addon-images.json ($n expectations)"
 
-      - name: hassos-supervisor asks the device's own channel file
+      - name: haos-supervisor asks the device's own channel file
         # Sources the live launch script (functions only) against updater.json
         # fixtures for dev/beta/stable and the broken cases. Red-proven: 9 of 9
         # fail on the script that hardcoded .../main/stable.json. HSC-10..14:
@@ -538,7 +548,7 @@ jobs:
       - name: ga-stage-vendored-components (trusted staging root)
         run: sh tests/ga_tests/stage_components/test.sh
 
-      - name: hassos-apparmor (profile presence + atomic download)
+      - name: haos-apparmor (profile presence + atomic download)
         run: sh tests/ga_tests/apparmor_profile/test.sh
 
       - name: ga-publish-services (services address -> /share bridge)
@@ -568,6 +578,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # haos/ is upstream Home Assistant OS, unmodified (HAOS 18.x layout). The
+      # suites below that judge a GA delta of an upstream file read it through
+      # scripts/apply-haos-patches.sh --cat/--export (upstream + the GA patch set,
+      # working tree untouched), and the unit lint resolves upstream unit names
+      # from it. Shallow and non-recursive; a step that needs haos/buildroot
+      # fetches it itself.
+      - name: haos/ submodule (upstream HAOS, shallow)
+        run: git submodule update --init --depth 1 haos
       - name: Gate self-tests (each pattern fires on known-bad, stays quiet on known-good)
         run: ./tests/gates/run_gate_selftests.sh
 
@@ -859,10 +878,9 @@ jobs:
       # working tree only through scripts/apply-haos-patches.sh, which fails on a
       # patch that no longer applies and on any edit no patch explains. The
       # self-test drives the LIVE script over throwaway repos (pending, applied,
-      # reverted, two patches stacked on one file, --cat/--export of a patched
-      # file; broken patch, stray edit, empty patch set, missing checkout,
-      # patch already in upstream, --cat of a deleted path or over a broken
-      # set), then applies the REAL patch set to the pinned submodule. Shallow,
+      # reverted, two patches stacked on one file; broken patch, stray edit,
+      # empty patch set, missing checkout, patch already in upstream), then
+      # applies the REAL patch set to the pinned submodule. Shallow,
       # non-recursive checkout: the nested buildroot is not needed for this.
       # Red-proven: disabling the stray-edit guard or the broken-patch branch in
       # the live script turns exactly that case red.

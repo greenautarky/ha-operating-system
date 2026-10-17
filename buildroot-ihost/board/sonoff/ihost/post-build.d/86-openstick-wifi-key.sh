@@ -6,7 +6,7 @@
 set -e
 
 TARGET_DIR="$1"
-KEY_FILE="/build/secrets/openstick-wifi.key"
+KEY_FILE="${OPENSTICK_WIFI_KEY_FILE:-/build/secrets/openstick-wifi.key}"
 DEST="${TARGET_DIR}/usr/share/ga-wifi/openstick-wifi.key"
 
 if [ ! -f "$KEY_FILE" ]; then

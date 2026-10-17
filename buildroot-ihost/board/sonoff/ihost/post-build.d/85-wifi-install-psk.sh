@@ -8,7 +8,7 @@ TARGET_DIR="$1"
 # because HAOS bind-mounts an overlay partition over /etc/NetworkManager/system-connections/.
 # A first-boot service (ga-wifi-install.service) copies it to the overlay.
 NM_FILE="${TARGET_DIR}/usr/share/ga-wifi/GreenAutarky-Install.nmconnection"
-PSK_FILE="/build/secrets/wifi-install.psk"
+PSK_FILE="${WIFI_INSTALL_PSK_FILE:-/build/secrets/wifi-install.psk}"
 
 if [ ! -f "$NM_FILE" ]; then
   echo "wifi-install-psk: no connection template found, skipping"

@@ -3,9 +3,9 @@ Description=Generate /etc/hosts from ga-services.conf
 # Must run after overlay is mounted (hosts file lives on /mnt/data) and after
 # ga-resolve-ota has picked the best OTA IP. Before services that need DNS
 # resolution (telegraf, fluent-bit, supervisor).
-After=hassos-overlay.service hassos-config.service ga-resolve-ota.service
-Before=hassos-supervisor.service telegraf.service fluent-bit.service netbird.service
-Wants=hassos-overlay.service ga-resolve-ota.service
+After=haos-overlay.service haos-config.service ga-resolve-ota.service
+Before=haos-supervisor.service telegraf.service fluent-bit.service netbird.service
+Wants=haos-overlay.service ga-resolve-ota.service
 
 [Service]
 Type=oneshot

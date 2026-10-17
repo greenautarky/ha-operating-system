@@ -20,7 +20,7 @@
 #
 # CONTRACT
 # --------
-# - Runs after hassos-supervisor is up (Wants/After=hassos-supervisor.service).
+# - Runs after haos-supervisor is up (Wants/After=haos-supervisor.service).
 # - Probes supervisor API readiness up to 5 min (`ha supervisor info`).
 # - For each setting: check current state, write only if drifted from desired.
 # - Exits 0 on success or "nothing to do". Exits non-zero on hard failure

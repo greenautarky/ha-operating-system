@@ -2,7 +2,9 @@
 # check-version-url-scope.sh — the version branch a bake reads must fit the release.
 #
 # Usage: scripts/check-version-url-scope.sh [hassio.mk] [version.yaml]
-#        (defaults: the live files of this tree)
+#        (defaults: the live files of this tree — hassio.mk is upstream HAOS's
+#        with the GA patch set applied, exported by scripts/apply-haos-patches.sh
+#        --export, i.e. exactly the file the build reads; needs haos/ checked out)
 #
 # hassio.mk's HASSIO_VERSION_URL decides which {channel}.json the build bakes
 # Supervisor, Core and plugins from. A bake from a candidate branch ships
@@ -28,10 +30,20 @@
 #                                    release once: release/v1.2-rebuild)
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MK="${1:-$ROOT/buildroot-external/package/hassio/hassio.mk}"
 VY="${2:-$ROOT/version.yaml}"
 
 fail() { echo "version-url-scope: FAIL: $*" >&2; exit 1; }
+
+PROBE="$(mktemp -d)" || fail "mktemp failed"
+trap 'rm -rf "$PROBE" "$PROBE.err" "$PROBE.mk"' EXIT
+if [ -n "${1:-}" ]; then
+  MK="$1"
+else
+  _hm=buildroot-external/package/hassio/hassio.mk
+  "$ROOT/scripts/apply-haos-patches.sh" --export "$PROBE.mk" "$_hm" >&2 \
+    || fail "cannot show the patched hassio.mk (scripts/apply-haos-patches.sh --export; is haos/ checked out?)"
+  MK="$PROBE.mk/$_hm"
+fi
 
 [ -f "$MK" ] || fail "hassio.mk not found at $MK"
 [ -f "$VY" ] || fail "version.yaml not found at $VY"
@@ -49,8 +61,6 @@ esac
 BRANCH="${URL#"$PREFIX"}"; BRANCH="${BRANCH%/}"
 
 # What the image would carry: run hassio.mk's install recipe into a scratch dir.
-PROBE="$(mktemp -d)" || fail "mktemp failed"
-trap 'rm -rf "$PROBE" "$PROBE.err"' EXIT
 "$ROOT/scripts/probe-ga-version-url.sh" "$MK" "$PROBE" >/dev/null 2>"$PROBE.err" \
   || fail "could not evaluate the install recipe of $MK: $(head -c 300 "$PROBE.err")"
 GVU="$PROBE/etc/ga-version-url"

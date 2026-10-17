@@ -586,8 +586,10 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
     IMG_SOURCE="channel:${CHANNEL}"
     # Default = the branch the BUILD reads (hassio.mk), not a hardcoded main/:
     # during an rc dress rehearsal the image bakes from a candidate branch.
-    _mk_url="$(sed -nE 's/^HASSIO_VERSION_URL[[:space:]]*\??=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' \
-      "${REPO_ROOT}/buildroot-external/package/hassio/hassio.mk" 2>/dev/null | head -1 || true)"
+    # hassio.mk is upstream HAOS's with GA patch 0131 applied (HAOS 18.x
+    # layout): read as the build sees it, haos/ working tree untouched.
+    _mk_url="$("${REPO_ROOT}/scripts/apply-haos-patches.sh" --cat buildroot-external/package/hassio/hassio.mk 2>/dev/null \
+      | sed -nE 's/^HASSIO_VERSION_URL[[:space:]]*\??=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' | head -1 || true)"
     if [[ -z "${HASSIO_VERSION_URL:-}" && -z "$_mk_url" ]]; then
       echo "  ERROR: no HASSIO_VERSION_URL in hassio.mk and none given — cannot tell which images ship"
       SCAN_BROKEN=true

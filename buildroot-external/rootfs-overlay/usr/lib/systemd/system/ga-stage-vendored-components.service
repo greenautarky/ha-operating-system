@@ -7,7 +7,7 @@ Documentation=man:systemd.special(7)
 # converge fix; layer 2 is ga_manager reconcile_vendored_on_startup).
 DefaultDependencies=no
 After=local-fs.target mnt-data.mount ga-bootstrap-disk.service
-Before=basic.target hassos-supervisor.service
+Before=basic.target haos-supervisor.service
 RequiresMountsFor=/mnt/data
 Conflicts=shutdown.target
 

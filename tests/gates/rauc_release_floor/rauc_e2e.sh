@@ -22,8 +22,13 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
 HANDLER="$ROOT/buildroot-external/rootfs-overlay/usr/lib/rauc/ga-release-floor"
-MF_TPL="$ROOT/buildroot-external/ota/manifest.raucm.gtpl"
-SC_TPL="$ROOT/buildroot-external/ota/system.conf.gtpl"
+# Upstream HAOS templates with the GA patch set applied, as the build sees them.
+EXP="$(mktemp -d)"; trap 'rm -rf "$EXP"' EXIT
+"$ROOT/scripts/apply-haos-patches.sh" --export "$EXP" buildroot-external/ota/manifest.raucm.gtpl \
+    buildroot-external/ota/system.conf.gtpl >/dev/null \
+  || { echo "FATAL: cannot export the RAUC templates from haos/ (is it checked out?)"; exit 1; }
+MF_TPL="$EXP/buildroot-external/ota/manifest.raucm.gtpl"
+SC_TPL="$EXP/buildroot-external/ota/system.conf.gtpl"
 RAUC="${RAUC:-$(command -v rauc || true)}"
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; NC=$'\033[0m'
@@ -39,7 +44,7 @@ $SUDO true 2>/dev/null || { echo "FATAL: needs root or passwordless sudo"; exit 
 command -v dbus-run-session >/dev/null || { echo "FATAL: dbus-run-session missing"; exit 1; }
 echo "=== release floor through a real RAUC: $("$RAUC" --version) ==="
 
-W="$(mktemp -d)"; trap '$SUDO rm -rf "$W"' EXIT
+W="$(mktemp -d)"; trap '$SUDO rm -rf "$W"; rm -rf "$EXP"' EXIT
 cd "$W" || exit 1
 openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -days 2 \
   -subj "/CN=floor-e2e-ca" -addext basicConstraints=critical,CA:TRUE >/dev/null 2>&1

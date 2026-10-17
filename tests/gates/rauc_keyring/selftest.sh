@@ -134,13 +134,19 @@ mkout() { # mkout <name> <cert>...
   echo "$o"
 }
 
-# A repo root for KEYRING-06: the live tree's meta + signing scripts, with an
-# optional line appended to rauc.sh (the residue under test).
+# A repo root for KEYRING-06: the live tree's meta + signing scripts as the
+# build sees them (upstream HAOS + the GA patch set, exported from haos/ by the
+# live applier), with an optional line appended to rauc.sh (the residue under
+# test). The audit reads them through GA_KEYRING_SRC=<repo>/buildroot-external.
+LIVE_SRC="$WORK/live-src"
+"$ROOT/scripts/apply-haos-patches.sh" --export "$LIVE_SRC" \
+    buildroot-external/meta buildroot-external/scripts/rauc.sh buildroot-external/scripts/hdd-image.sh >/dev/null \
+  || { echo "FATAL: cannot export the live meta/rauc.sh/hdd-image.sh from haos/ (is it checked out?)"; exit 1; }
 mkrepo() { # mkrepo <name> [<line appended to rauc.sh>]
   local r="$WORK/repo-$1"
   mkdir -p "$r/buildroot-external/scripts" "$r/buildroot-external/ota"
-  cp "$ROOT/buildroot-external/meta" "$r/buildroot-external/meta"
-  cp "$ROOT/buildroot-external/scripts/rauc.sh" "$ROOT/buildroot-external/scripts/hdd-image.sh" "$r/buildroot-external/scripts/"
+  cp "$LIVE_SRC/buildroot-external/meta" "$r/buildroot-external/meta"
+  cp "$LIVE_SRC/buildroot-external/scripts/rauc.sh" "$LIVE_SRC/buildroot-external/scripts/hdd-image.sh" "$r/buildroot-external/scripts/"
   [[ -n "${2:-}" ]] && printf '%s\n' "$2" >> "$r/buildroot-external/scripts/rauc.sh"
   echo "$r"
 }
@@ -150,7 +156,13 @@ expect() {
   local label="$1" want="$2" re="$3" audit="$4" repo="$5" out="$6" log rc
   ran=$((ran + 1))
   log="$WORK/log.$ran"
-  REPO_ROOT="$repo" "$audit" "$out" >"$log" 2>&1
+  # The live tree: the audit exports meta/rauc.sh itself (the real path).
+  # A fixture repo: point the audit at the fixture's copies.
+  if [[ "$repo" == "$ROOT" ]]; then
+    REPO_ROOT="$repo" "$audit" "$out" >"$log" 2>&1
+  else
+    REPO_ROOT="$repo" GA_KEYRING_SRC="$repo/buildroot-external" "$audit" "$out" >"$log" 2>&1
+  fi
   rc=$?
   if [[ "$rc" != "$want" ]]; then
     bad "$label — exit $rc, want $want"; sed 's/^/        /' "$log" | grep -E 'FAIL|ERROR|WARN' | head -6

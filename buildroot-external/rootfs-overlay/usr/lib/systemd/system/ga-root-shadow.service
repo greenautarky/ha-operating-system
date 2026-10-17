@@ -5,7 +5,7 @@ Documentation=https://github.com/greenautarky/ha-operating-system/blob/master/bu
 # (which is ordered after sysinit.target). The default dependencies would order
 # it AFTER sysinit.target, hence DefaultDependencies=no.
 DefaultDependencies=no
-After=mnt-overlay.mount hassos-overlay.service mnt-data.mount
+After=mnt-overlay.mount haos-overlay.service mnt-data.mount
 Before=sysinit.target shutdown.target
 Conflicts=shutdown.target
 

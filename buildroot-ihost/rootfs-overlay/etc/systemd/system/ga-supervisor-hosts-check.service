@@ -4,7 +4,7 @@ Description=Verify the Supervisor container resolves the GA names to their mesh 
 # before the container runs, so it cannot check the result itself. This unit
 # waits for the container and fails (error-level journal lines, unit failed)
 # when the container does not mount the file or a GA name resolves elsewhere.
-After=ga-update-hosts.service hassos-supervisor.service
+After=ga-update-hosts.service haos-supervisor.service
 Wants=ga-update-hosts.service
 
 [Service]

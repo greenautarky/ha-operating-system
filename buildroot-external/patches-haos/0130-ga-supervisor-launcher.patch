@@ -1,0 +1,252 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] haos-supervisor: GreenAutarky Supervisor, GA channel, never upstream
+
+GA delta of the Supervisor launcher (hassos-supervisor until HAOS 18.x):
+- image ghcr.io/greenautarky/<arch>-hassio-supervisor (the bake tags :latest);
+- base URL from /etc/ga-version-url (baked from HASSIO_VERSION_URL, read by
+  the GA Supervisor 2025.11.5.6+ as well) + the device's channel from
+  updater.json;
+- upstream's curl retry kept, on the GA URL; a failed read exits 1 with an
+  error line, never another channel;
+- on a failed pull the channel is kept and only the version dropped (upstream
+  deletes updater.json, which would fall back to the upstream channel);
+- ga-services.conf, ga-version-url and the Supervisor hosts file bind-mounted;
+- every remaining fallback (missing URL file -> GA main, unknown channel ->
+  GA stable) logs at journal priority err.
+---
+ .../rootfs-overlay/usr/sbin/haos-supervisor   | 178 ++++++++++++++++--
+ 1 file changed, 166 insertions(+), 12 deletions(-)
+
+diff --git a/buildroot-external/rootfs-overlay/usr/sbin/haos-supervisor b/buildroot-external/rootfs-overlay/usr/sbin/haos-supervisor
+index 8db314bbf..7883bd2d5 100755
+--- a/buildroot-external/rootfs-overlay/usr/sbin/haos-supervisor
++++ b/buildroot-external/rootfs-overlay/usr/sbin/haos-supervisor
+@@ -5,6 +5,128 @@
+ # ==============================================================================
+ set -e
+ 
++# GA (GreenAutarky layer, ga-haos-overlay/patches-haos/0130): this device runs
++# the GreenAutarky Supervisor fork and follows GreenAutarky's channel files.
++#
++# Upstream 18.x looks for ghcr.io/home-assistant/<arch>-hassio-supervisor and,
++# with no local version, asks https://version.home-assistant.io/stable.json;
++# after a failed pull it DELETES updater.json, so the next start falls to that
++# upstream channel. On armv7 there is no upstream image (the device never gets
++# a Supervisor); on aarch64 there is one, and the device would silently leave
++# GA control. This launcher never asks an upstream channel and never deletes
++# the channel: every remaining fallback is logged at journal priority err.
++#
++# Sources of truth (all from the image or the data partition, never invented
++# here):
++#   image   ghcr.io/greenautarky/<SUPERVISOR_ARCH>-hassio-supervisor (the
++#           image the bake tags as :latest, dind-import-containers.sh)
++#   base    /etc/ga-version-url, written by the bake from HASSIO_VERSION_URL
++#           (the branch the image was baked from) and read by the GA
++#           Supervisor 2025.11.5.6+ itself -- launcher and Supervisor poll the
++#           same branch
++#   channel .channel in /mnt/data/supervisor/updater.json (seeded by the bake,
++#           kept by the Supervisor)
++GA_SUPERVISOR_REGISTRY="ghcr.io/greenautarky"
++GA_VERSION_URL_FILE="/etc/ga-version-url"
++# Used only when the image carries no valid /etc/ga-version-url (err logged):
++# the branch the GA Supervisor itself falls back to.
++GA_VERSION_URL_DEFAULT="https://raw.githubusercontent.com/greenautarky/haos-version/main/"
++
++# Journal priority err: systemd reads a "<3>" line prefix on stdout/stderr
++# (SyslogLevelPrefix=yes, the default).
++ga_err() {
++    echo "<3>[ERROR] $*" >&2
++}
++
++# Prints the haos-version base URL (ends in /). Missing or invalid file ->
++# err + the GA default; never an upstream URL.
++ga_version_url_base() {
++    _ga_vu_file="${1:-${GA_VERSION_URL_FILE}}"
++    _ga_vu=""
++    [ -f "${_ga_vu_file}" ] && _ga_vu="$(head -n 1 "${_ga_vu_file}" | tr -d ' \t\r"')"
++    case "${_ga_vu}" in
++        https://raw.githubusercontent.com/greenautarky/haos-version/*/)
++            echo "${_ga_vu}" ;;
++        *)
++            ga_err "${_ga_vu_file} missing or not a greenautarky/haos-version URL ('${_ga_vu}') - using ${GA_VERSION_URL_DEFAULT}"
++            echo "${GA_VERSION_URL_DEFAULT}" ;;
++    esac
++}
++
++# Prints the device's channel from updater.json. Unreadable, missing or unknown
++# -> err + stable (GA's stable, from the GA base above).
++ga_supervisor_channel() {
++    _ga_ch="$(jq -r '.channel // empty' "$1" 2>/dev/null)" || _ga_ch=""
++    case "${_ga_ch}" in
++        stable|beta|dev) echo "${_ga_ch}" ;;
++        *)
++            ga_err "channel in $1 is '${_ga_ch}' (file missing, unreadable or unknown value) - using GA stable"
++            echo "stable"
++            ;;
++    esac
++}
++
++ga_channel_version_url() {
++    echo "$(ga_version_url_base)$(ga_supervisor_channel "$1").json"
++}
++
++# After a failed pull: drop the version from updater.json (the "way back from
++# a bad release" upstream wants), KEEP the channel. The old file is kept next
++# to it for diagnosis.
++ga_forget_supervisor_version() {
++    _ga_uj="$1"
++    _ga_keep_ch="$(ga_supervisor_channel "${_ga_uj}")"
++    [ -f "${_ga_uj}" ] && cp -f "${_ga_uj}" "${_ga_uj}.ga-pull-failed" || true
++    if jq -n --arg channel "${_ga_keep_ch}" '{"channel": $channel}' > "${_ga_uj}.ga-tmp" \
++        && mv -f "${_ga_uj}.ga-tmp" "${_ga_uj}"; then
++        ga_err "removed the Supervisor version from ${_ga_uj}, kept channel ${_ga_keep_ch}; the next start asks $(ga_channel_version_url "${_ga_uj}")"
++    else
++        ga_err "cannot rewrite ${_ga_uj} - left unchanged"
++    fi
++}
++
++# Prints the docker option that mounts /etc/ga-version-url read-only into the
++# Supervisor (GA Supervisor 2025.11.5.6+ reads it). Only for a regular file: a
++# bind mount of a missing source makes Docker create a directory.
++# shellcheck disable=SC2120  # production calls it without an argument
++ga_version_url_mount() {
++    _ga_vu_src="${1:-${GA_VERSION_URL_FILE}}"
++    if [ -f "${_ga_vu_src}" ]; then
++        echo "-v ${_ga_vu_src}:/etc/ga-version-url:ro"
++    else
++        ga_err "${_ga_vu_src} missing or not a file - the Supervisor polls haos-version main"
++    fi
++}
++
++# The Supervisor container's /etc/hosts is a HOST-managed file, mounted
++# read-only; ga-update-hosts writes the GA mesh entries into it (the upstream
++# AppArmor profile denies writing the container's own /etc/hosts, and Docker
++# rebuilds that file on every container start). A missing file is re-seeded
++# with the localhost lines before create/start (a container created with this
++# mount would not start without its source). An image without ga-update-hosts
++# has no writer: no mount.
++# shellcheck disable=SC2120  # production calls it without an argument
++ga_supervisor_hosts_mount() {
++    _ga_sh_src="${1:-/mnt/data/ga-supervisor-hosts}"
++    _ga_sh_writer="${2:-/usr/sbin/ga-update-hosts}"
++    [ -x "${_ga_sh_writer}" ] || return 0
++    if [ ! -e "${_ga_sh_src}" ] && [ ! -L "${_ga_sh_src}" ]; then
++        echo "[WARNING] ${_ga_sh_src} missing - seeding it without GA entries; ga-update-hosts adds them" >&2
++        printf '127.0.0.1\tlocalhost\n::1\t\tlocalhost ip6-localhost ip6-loopback\nff02::1\t\tip6-allnodes\nff02::2\t\tip6-allrouters\n' \
++            > "${_ga_sh_src}" || ga_err "cannot seed ${_ga_sh_src}"
++    fi
++    if [ -f "${_ga_sh_src}" ] && [ ! -L "${_ga_sh_src}" ]; then
++        echo "-v ${_ga_sh_src}:/etc/hosts:ro"
++    else
++        ga_err "${_ga_sh_src} is not a regular file - the Supervisor gets Docker's /etc/hosts WITHOUT the GA mesh entries"
++    fi
++}
++
++# Tests source this file for the helpers above and stop here.
++if [ "${HAOS_SUPERVISOR_FUNCTIONS_ONLY:-0}" = "1" ]; then
++    return 0
++fi
++
+ # Load configs
+ . /etc/os-release
+ 
+@@ -13,7 +135,7 @@ SUPERVISOR_DATA=/mnt/data/supervisor
+ SUPERVISOR_STARTUP_MARKER="/run/supervisor/startup-marker"
+ SUPERVISOR_CIDFILE="${SUPERVISOR_DATA}/hassio_supervisor.cid"
+ SUPERVISOR_STARTSCRIPT_VERSION="/mnt/data/.haos-supervisor-version"
+-SUPERVISOR_IMAGE="ghcr.io/home-assistant/${SUPERVISOR_ARCH}-hassio-supervisor"
++SUPERVISOR_IMAGE="${GA_SUPERVISOR_REGISTRY}/${SUPERVISOR_ARCH}-hassio-supervisor"
+ 
+ SUPERVISOR_IMAGE_ID=$(docker images --no-trunc --filter "reference=${SUPERVISOR_IMAGE}:latest" --format "{{.ID}}" || echo "")
+ SUPERVISOR_CONTAINER_ID=$(docker inspect --format='{{.Image}}' hassio_supervisor || echo "")
+@@ -47,16 +169,24 @@ if [ -z "${SUPERVISOR_IMAGE_ID}" ]; then
+     # broken, this creates a way back (e.g., bad release).
+     SUPERVISOR_VERSION=$(jq -r '.supervisor // "stable"' "${SUPERVISOR_DATA}/updater.json" || echo "stable")
+ 
+-    # Get version from stable channel in case we have no local version
+-    # information. Retry for a while: especially on first boot after a data
+-    # wipe this can race with time synchronization (TLS fails until the
+-    # clock is correct) or run before the network is fully up.
++    # GA: no local version ("stable" is jq's placeholder above, not a channel):
++    # ask the device's OWN channel file on the GA base the image carries --
++    # never version.home-assistant.io. Retry for a while: on first boot after
++    # a data wipe this can race with time sync (TLS) or the network.
+     if [ "${SUPERVISOR_VERSION}" = "stable" ]; then
+-        STABLE_JSON="$(curl -fSs --retry 5 --retry-delay 10 --retry-all-errors --max-time 30 --location https://version.home-assistant.io/stable.json)"
+-        SUPERVISOR_VERSION="$(printf '%s' "${STABLE_JSON}" | jq -e -r '.supervisor')"
++        GA_CHANNEL_URL="$(ga_channel_version_url "${SUPERVISOR_DATA}/updater.json")"
++        echo "[INFO] No local Supervisor version, asking ${GA_CHANNEL_URL}"
++        if ! CHANNEL_JSON="$(curl -fSs --retry 5 --retry-delay 10 --retry-all-errors --max-time 30 --location "${GA_CHANNEL_URL}")"; then
++            ga_err "cannot read ${GA_CHANNEL_URL} - no Supervisor version; not falling back to any other channel"
++            exit 1
++        fi
++        if ! SUPERVISOR_VERSION="$(printf '%s' "${CHANNEL_JSON}" | jq -e -r '.supervisor')"; then
++            ga_err "${GA_CHANNEL_URL} has no .supervisor - no Supervisor version; not falling back to any other channel"
++            exit 1
++        fi
+     fi
+ 
+-    echo "[WARNING] Supervisor image missing, downloading a fresh one: ${SUPERVISOR_VERSION}"
++    echo "[WARNING] Supervisor image missing, downloading a fresh one: ${SUPERVISOR_IMAGE}:${SUPERVISOR_VERSION}"
+ 
+     # Pull in the Supervisor
+     if docker pull "${SUPERVISOR_IMAGE}:${SUPERVISOR_VERSION}"; then
+@@ -64,10 +194,10 @@ if [ -z "${SUPERVISOR_IMAGE_ID}" ]; then
+         docker tag "${SUPERVISOR_IMAGE}:${SUPERVISOR_VERSION}" "${SUPERVISOR_IMAGE}:latest"
+     else
+         # Pull failed, updater info might be corrupted or the release might have
+-        # been removed from the container registry, delete the updater info
+-        # to start from scratch on next try.
+-        echo "[ERROR] Supervisor download failed."
+-        rm -f "${SUPERVISOR_DATA}/updater.json"
++        # been removed from the container registry. GA: forget the VERSION
++        # only; the channel stays, so the next try asks the same GA channel.
++        ga_err "Supervisor download failed: ${SUPERVISOR_IMAGE}:${SUPERVISOR_VERSION}"
++        ga_forget_supervisor_version "${SUPERVISOR_DATA}/updater.json"
+         exit 1
+     fi
+ 
+@@ -91,12 +221,33 @@ if [ -n "${SUPERVISOR_CONTAINER_ID}" ]; then
+     fi
+ fi
+ 
++# GA: runs on every launch, so the mount source exists before create AND start.
++# shellcheck disable=SC2119
++GA_SUPERVISOR_HOSTS_MOUNT="$(ga_supervisor_hosts_mount)"
++
+ # If Supervisor container is missing, create it
+ if [ -z "${SUPERVISOR_CONTAINER_ID}" ]; then
+     # We need to remove the CID file here, Docker will refuse to start if the
+     # file is present. Single instance is ensured by other code paths.
+     [ -f "${SUPERVISOR_CIDFILE}" ] && rm -f "${SUPERVISOR_CIDFILE}"
+ 
++    # GA: the Supervisor fork's DNS plugin learns the GA service addresses from
++    # /etc/ga-services.conf (+ its /mnt/data twin); without the mount it falls
++    # back to an address compiled into it. Read-only and only when present (a
++    # missing bind source becomes a directory).
++    GA_SERVICES_MOUNT=""
++    if [ -f /etc/ga-services.conf ]; then
++        GA_SERVICES_MOUNT="-v /etc/ga-services.conf:/etc/ga-services.conf:ro"
++    else
++        ga_err "/etc/ga-services.conf missing - Supervisor DNS will fall back to its hardcoded IP"
++    fi
++    if [ -f /mnt/data/ga-services.conf ]; then
++        GA_SERVICES_MOUNT="${GA_SERVICES_MOUNT} -v /mnt/data/ga-services.conf:/mnt/data/ga-services.conf:ro"
++    fi
++
++    # shellcheck disable=SC2119
++    GA_VERSION_URL_MOUNT="$(ga_version_url_mount)"
++
+     echo "[INFO] Creating a new Supervisor container..."
+     # shellcheck disable=SC2086
+     docker container create \
+@@ -114,6 +265,9 @@ if [ -z "${SUPERVISOR_CONTAINER_ID}" ]; then
+         -v /run/udev:/run/udev:ro \
+         -v /etc/machine-id:/etc/machine-id:ro \
+         -v ${SUPERVISOR_DATA}:/data:rw,slave \
++        ${GA_SERVICES_MOUNT} \
++        ${GA_VERSION_URL_MOUNT} \
++        ${GA_SUPERVISOR_HOSTS_MOUNT} \
+         -e SUPERVISOR_SHARE=${SUPERVISOR_DATA} \
+         -e SUPERVISOR_NAME=hassio_supervisor \
+         -e SUPERVISOR_MACHINE=${SUPERVISOR_MACHINE} \

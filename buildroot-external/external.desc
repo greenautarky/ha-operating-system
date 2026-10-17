@@ -1,2 +1,2 @@
-name: HASSOS
-desc: HassOS Buildroot tree
+name: GA_HAOS
+desc: GreenAutarky OS layer (third Buildroot external next to upstream HAOS haos/buildroot-external and the board tree)

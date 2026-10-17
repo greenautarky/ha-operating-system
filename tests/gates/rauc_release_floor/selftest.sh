@@ -30,9 +30,16 @@ ROOT="$(cd "$HERE/../../.." && pwd)"
 OVL="$ROOT/buildroot-external/rootfs-overlay"
 HANDLER="$OVL/usr/lib/rauc/ga-release-floor"
 OVERRIDE="$OVL/usr/sbin/ga-rauc-install-older"
-MF_TPL="$ROOT/buildroot-external/ota/manifest.raucm.gtpl"
-SC_TPL="$ROOT/buildroot-external/ota/system.conf.gtpl"
-RAUC_SH="$ROOT/buildroot-external/scripts/rauc.sh"
+# The templates, rauc.sh and tempio.mk are upstream HAOS files with the GA
+# patch set applied: exported as the build sees them by the live applier.
+EXP="$(mktemp -d)"
+"$ROOT/scripts/apply-haos-patches.sh" --export "$EXP" buildroot-external/ota/manifest.raucm.gtpl \
+    buildroot-external/ota/system.conf.gtpl buildroot-external/scripts/rauc.sh \
+    buildroot-external/package/tempio/tempio.mk >/dev/null \
+  || { echo "FATAL: cannot export the RAUC templates/rauc.sh from haos/ (is it checked out?)"; exit 1; }
+MF_TPL="$EXP/buildroot-external/ota/manifest.raucm.gtpl"
+SC_TPL="$EXP/buildroot-external/ota/system.conf.gtpl"
+RAUC_SH="$EXP/buildroot-external/scripts/rauc.sh"
 RUNNER="$ROOT/tests/ga_tests/run_build_tests.sh"
 INSTALL="$OVL/usr/sbin/ga-rauc-install"
 
@@ -50,13 +57,13 @@ done
 [[ -x "$OVERRIDE" ]] || { echo "FATAL: $OVERRIDE is not executable in the tree"; exit 1; }
 
 W="$(mktemp -d)"
-cleanup() { sudo -n rm -rf "$W" 2>/dev/null || rm -rf "$W"; }
+cleanup() { sudo -n rm -rf "$W" 2>/dev/null || rm -rf "$W"; rm -rf "$EXP"; }
 trap cleanup EXIT
 
 # --- tempio (the renderer the build uses) ------------------------------------
 # shellcheck source=tempio.sh
 . "$HERE/tempio.sh"; tempio_fetch "$W"
-_mk_ver="$(sed -n 's/^TEMPIO_VERSION = //p' "$ROOT/buildroot-external/package/tempio/tempio.mk")"
+_mk_ver="$(sed -n 's/^TEMPIO_VERSION = //p' "$EXP/buildroot-external/package/tempio/tempio.mk")"
 [[ "$_mk_ver" == "$TEMPIO_VERSION" ]] && ok "tempio ${TEMPIO_VERSION} = the version the image builds with" \
   || bad "tempio pin ${TEMPIO_VERSION} != tempio.mk '${_mk_ver}' — templates rendered by another renderer"
 
