@@ -75,6 +75,19 @@ run "$HS" "$PS" "$L" --check;    pass_case stacked-check
 run "$HS" "$PS" "$L" --revert;   pass_case stacked-revert
 [ -z "$(g "$HS" status --porcelain)" ] || { echo "  FAIL  stacked-revert left changes in the tree"; bad=1; }
 
+# --cat / --export show a file as the build sees it (upstream + the set), from
+# the throwaway index: the working tree must stay untouched.
+HC="$tmp/haos-cat"; mkhaos "$HC"; chmod +x "$HC/buildroot-external/a.sh"; g "$HC" add -A; g "$HC" commit -qm mode
+run "$HC" "$P" "$L" --cat buildroot-external/a.sh
+n=$((n+1)); np=$((np+1))
+if [ "$rc" -eq 0 ] && grep -qx 'line2-ga' <<<"$out" && [ -z "$(g "$HC" status --porcelain)" ]; then echo "  ok    must-pass/cat-shows-patched"
+else echo "  FAIL  must-pass/cat-shows-patched rc=$rc :: $(tr '\n' '|' <<<"$out")"; bad=1; fi
+run "$HC" "$P" "$L" --export "$tmp/exp" buildroot-external/a.sh
+n=$((n+1)); np=$((np+1))
+if [ "$rc" -eq 0 ] && grep -qx 'line2-ga' "$tmp/exp/buildroot-external/a.sh" && [ -x "$tmp/exp/buildroot-external/a.sh" ] \
+   && [ -z "$(g "$HC" status --porcelain)" ]; then echo "  ok    must-pass/export-writes-patched-with-mode"
+else echo "  FAIL  must-pass/export-writes-patched-with-mode rc=$rc :: $(tr '\n' '|' <<<"$out")"; bad=1; fi
+
 # --- must-fail ---------------------------------------------------------------
 H2="$tmp/haos2"; mkhaos "$H2"; sed -i 's/^line2$/upstream-changed/' "$H2/buildroot-external/a.sh"; g "$H2" commit -qam bump
 run "$H2" "$P" "$L";           fail_case broken-patch "neither applies nor is already applied"
@@ -87,6 +100,8 @@ run "$H" "$tmp/empty" "$tmp/empty"; fail_case no-patches "no patches found"
 run "$tmp/not-a-checkout" "$P" "$L"; fail_case no-checkout "is not initialised"
 HU="$tmp/haos-up"; mkhaos "$HU"; sed -i 's/^line2$/line2-ga/' "$HU/buildroot-external/a.sh"; g "$HU" commit -qam "upstream took it"
 run "$HU" "$P" "$L";           fail_case in-upstream "already contained in upstream"
+run "$HC" "$P" "$L" --cat buildroot-external/no-such-file; fail_case cat-missing-path "is not in haos/ with the patch set applied"
+run "$H2" "$P" "$L" --cat buildroot-external/a.sh;          fail_case cat-broken-set "patch set does not apply"
 
 # --- live: the real patch set applies to the pinned submodule ------------------
 if [ -e "$repo/haos/.git" ]; then
@@ -101,6 +116,6 @@ else
 	echo "  note  haos/ not checked out: live patch-set case not run here (CI runs it)"
 fi
 
-[ "$n" -ge 13 ] && [ "$np" -ge 8 ] || { echo "FAIL: only $n cases ($np must-pass) ran"; exit 1; }
+[ "$n" -ge 17 ] && [ "$np" -ge 10 ] || { echo "FAIL: only $n cases ($np must-pass) ran"; exit 1; }
 echo "$n cases ran"
 exit "$bad"
