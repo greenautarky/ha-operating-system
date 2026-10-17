@@ -1,0 +1,11 @@
+name: x
+on:
+  pull_request:
+    branches: [master, 'feat/**']
+    paths:
+      - 'layer/**'
+      - 'board/**'
+      - 'version.yaml'
+      - 'scripts/**'
+      - 'tests/**'
+jobs: {}

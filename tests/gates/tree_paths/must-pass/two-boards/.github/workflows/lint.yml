@@ -1,0 +1,5 @@
+name: x
+on:
+  pull_request:
+    branches: [master, 'feat/**']
+jobs: {}

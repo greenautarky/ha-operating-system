@@ -841,3 +841,16 @@ jobs:
       # the bytes it never saw.
       - name: Slot-pair gate (red on an empty second slot, green on identical pairs)
         run: ./tests/gates/slot_pairs/selftest.sh
+
+      # The tree layout is about to move (HAOS 18.x lift). A gate that names a
+      # path that is gone inspects zero files and reports green, so the path map
+      # (scripts/lib/tree-paths.sh) is held to the tree: every mapped path exists
+      # and is non-empty, every workflow `paths:` filter matches a tracked file,
+      # every pull_request branch filter admits feat/**, version-check covers the
+      # map. Fixtures: tests/gates/tree_paths (must-fail incl. a stale path in the
+      # LIVE map, must-pass). Red-proven against origin/master, which omits feat/**.
+      - name: Tree path map (a stale path or an empty inspection must go red)
+        run: |
+          set -eu
+          ./tests/gates/tree_paths/selftest.sh
+          ./scripts/check-tree-paths.sh
