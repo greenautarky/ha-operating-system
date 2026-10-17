@@ -1,0 +1,1 @@
+lint.yml: pull_request branches filter omits feat/**
