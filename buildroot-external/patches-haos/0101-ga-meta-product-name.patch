@@ -1,19 +1,25 @@
 From: GreenAutarky OS <noreply@greenautarky.invalid>
-Subject: [PATCH] meta: product name GreenAutarky BOS
+Subject: [PATCH] meta: product name GreenAutarky BOS, GA version suffix
 
 GA delta of HAOS's meta (until HAOS 18.x an edit of the file itself):
-HASSOS_NAME="GreenAutarky BOS". VERSION_SUFFIX is upstream's here.
+  HAOS_NAME="GreenAutarky BOS"
+  VERSION_SUFFIX="1.6"  -> OS version 18.3.1.6, the <HAOS>.<GA> scheme of the
+                           16.3 line (16.3.1.10 = BOSv1.5.x). Without it the
+                           version is a bare 18.3, which cannot be told apart
+                           from upstream's. One value for every board.
 ---
- buildroot-external/meta | 2 +-
- 1 file changed, 1 insertion(+), 1 deletion(-)
+ buildroot-external/meta | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/buildroot-external/meta b/buildroot-external/meta
-index 51a0f913a..61a260fb9 100644
+index 51a0f91..26f5a10 100644
 --- a/buildroot-external/meta
 +++ b/buildroot-external/meta
-@@ -2,7 +2,7 @@ VERSION_MAJOR="18"
+@@ -1,8 +1,8 @@
+ VERSION_MAJOR="18"
  VERSION_MINOR="3"
- VERSION_SUFFIX=""
+-VERSION_SUFFIX=""
++VERSION_SUFFIX="1.6"
  
 -HAOS_NAME="Home Assistant OS"
 +HAOS_NAME="GreenAutarky BOS"
