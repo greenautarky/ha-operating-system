@@ -3,13 +3,16 @@
 #
 # A throwaway git repo stands in for haos/; patches are generated against it.
 # must-pass: a pending patch applies; a second run is idempotent; --check is
-#            green on an applied set; --revert leaves the tree clean.
+#            green on an applied set; --revert leaves the tree clean; two
+#            STACKED patches on one file (the second written on top of the
+#            first) apply, re-apply, check and revert.
 # must-fail: each case must fail with rc 1 AND name its own reason — a failure
 #            for some other reason leaves the rule under test unproven:
 #   broken patch   -> "neither applies nor is already applied"
 #   stray edit     -> "carries changes no patch explains"
 #   no patches     -> "no patches found"
 #   no checkout    -> "is not initialised"
+#   in upstream    -> "already contained in upstream"
 # Live: if the real haos/ submodule is checked out, the real patch set must
 # apply to the pinned commit. CI checks it out for exactly this and sets
 # HAOS_PATCHES_REQUIRE_LIVE=1, so a missing checkout there fails, never skips.
@@ -54,6 +57,24 @@ run "$H" "$P" "$L" --check;    pass_case check-applied
 run "$H" "$P" "$L" --revert;   pass_case revert
 [ -z "$(g "$H" status --porcelain)" ] || { echo "  FAIL  revert left changes in the tree"; bad=1; }
 
+# Two patches on ONE file, the second written on top of the first. Judging each
+# patch against the current tree (the applier's first version) calls the first
+# one broken as soon as both are applied.
+HS="$tmp/haos-stack"; PS="$tmp/ps"; mkdir -p "$PS"; mkhaos "$HS"
+sed -i 's/^line2$/line2-ga/' "$HS/buildroot-external/a.sh"; g "$HS" diff > "$PS/0001-first.patch"
+g "$HS" checkout -q -- .
+git -C "$HS" apply "$PS/0001-first.patch"; cp "$HS/buildroot-external/a.sh" "$tmp/after1"
+sed -i 's/^line2-ga$/line2-ga-more/' "$HS/buildroot-external/a.sh"
+diff -u --label a/buildroot-external/a.sh --label b/buildroot-external/a.sh "$tmp/after1" "$HS/buildroot-external/a.sh" \
+	| sed '1i diff --git a/buildroot-external/a.sh b/buildroot-external/a.sh' > "$PS/0002-second.patch"
+g "$HS" checkout -q -- .
+run "$HS" "$PS" "$L";            pass_case stacked-apply
+grep -qx 'line2-ga-more' "$HS/buildroot-external/a.sh" || { echo "  FAIL  stacked-apply: file not at the stacked result"; bad=1; }
+run "$HS" "$PS" "$L";            pass_case stacked-second-run
+run "$HS" "$PS" "$L" --check;    pass_case stacked-check
+run "$HS" "$PS" "$L" --revert;   pass_case stacked-revert
+[ -z "$(g "$HS" status --porcelain)" ] || { echo "  FAIL  stacked-revert left changes in the tree"; bad=1; }
+
 # --- must-fail ---------------------------------------------------------------
 H2="$tmp/haos2"; mkhaos "$H2"; sed -i 's/^line2$/upstream-changed/' "$H2/buildroot-external/a.sh"; g "$H2" commit -qam bump
 run "$H2" "$P" "$L";           fail_case broken-patch "neither applies nor is already applied"
@@ -64,6 +85,8 @@ run "$H3" "$tmp/p3" "$L";      fail_case stray-edit "carries changes no patch ex
 mkdir -p "$tmp/empty"
 run "$H" "$tmp/empty" "$tmp/empty"; fail_case no-patches "no patches found"
 run "$tmp/not-a-checkout" "$P" "$L"; fail_case no-checkout "is not initialised"
+HU="$tmp/haos-up"; mkhaos "$HU"; sed -i 's/^line2$/line2-ga/' "$HU/buildroot-external/a.sh"; g "$HU" commit -qam "upstream took it"
+run "$HU" "$P" "$L";           fail_case in-upstream "already contained in upstream"
 
 # --- live: the real patch set applies to the pinned submodule ------------------
 if [ -e "$repo/haos/.git" ]; then
@@ -78,6 +101,6 @@ else
 	echo "  note  haos/ not checked out: live patch-set case not run here (CI runs it)"
 fi
 
-[ "$n" -ge 8 ] && [ "$np" -ge 4 ] || { echo "FAIL: only $n cases ($np must-pass) ran"; exit 1; }
+[ "$n" -ge 13 ] && [ "$np" -ge 8 ] || { echo "FAIL: only $n cases ($np must-pass) ran"; exit 1; }
 echo "$n cases ran"
 exit "$bad"

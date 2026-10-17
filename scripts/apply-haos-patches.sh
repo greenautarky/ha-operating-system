@@ -17,8 +17,12 @@
 # Both directories come from scripts/lib/tree-paths.sh.
 #
 # Rules — every one of them fails, none of them skips:
-#   * A patch that neither applies nor is already applied stops the build. A
-#     HAOS bump that breaks a patch must not produce an image without the fix.
+#   * apply always starts from upstream: every applied patch is reverted
+#     (backwards), then the whole set is applied in order, so a patch always
+#     meets exactly the tree it was written against, also when two patches
+#     touch one file. A patch that does not apply there stops the build; a HAOS
+#     bump that breaks a patch must not produce an image without the fix. A
+#     patch upstream already contains stops it too (delete the patch).
 #   * After applying, every modified/untracked path in haos/ (nested buildroot
 #     submodule included) must be one a patch touches. Anything else is a hand
 #     edit of upstream.
@@ -50,53 +54,77 @@ fi
 [ -e "$_haos_dir/.git" ] || die "$_haos_dir is not initialised (run: git submodule update --init --recursive haos)"
 echo "apply-haos-patches: ${#PATCHES[@]} patch(es), haos at $(git -C "$_haos_dir" rev-parse --short=12 HEAD)"
 
-state() {   # prints applied | pending | broken
-	if git -C "$_haos_dir" apply --check "$1" 2>/dev/null; then echo pending
-	elif git -C "$_haos_dir" apply --check -R "$1" 2>/dev/null; then echo applied
-	else echo broken
+# All paths the patch set touches (one per line).
+touched() { for p in "${PATCHES[@]}"; do git -C "$_haos_dir" apply --numstat "$p" | cut -f3; done | sort -u; }
+
+# check_set — validate the whole set against upstream HEAD in a throwaway index
+# (the working tree is neither read nor written): in order, each patch must
+# apply on upstream + the patches before it, and must not be contained there
+# already (it would reverse-apply). Prints one verdict per patch; returns 1 on
+# the first bad one.
+check_set() {
+	local idx p n rc=0
+	idx=$(mktemp)
+	GIT_INDEX_FILE="$idx" git -C "$_haos_dir" read-tree HEAD
+	for p in "${PATCHES[@]}"; do
+		n=$(basename "$p")
+		if GIT_INDEX_FILE="$idx" git -C "$_haos_dir" apply --cached --check -R "$p" 2>/dev/null \
+		   && ! GIT_INDEX_FILE="$idx" git -C "$_haos_dir" apply --cached --check "$p" 2>/dev/null; then
+			printf '  %-16s %s\n' in-upstream "$n"
+			echo "apply-haos-patches: $n is already contained in upstream haos/ — delete the patch" >&2
+			rc=1; break
+		elif GIT_INDEX_FILE="$idx" git -C "$_haos_dir" apply --cached "$p" 2>/dev/null; then
+			printf '  %-16s %s\n' ok "$n"
+		else
+			printf '  %-16s %s\n' broken "$n"
+			GIT_INDEX_FILE="$idx" git -C "$_haos_dir" apply --cached --check -v "$p" >&2 || true
+			echo "apply-haos-patches: $n neither applies nor is already applied to haos/ — rebase the patch onto the new pin (or drop it if upstream took it)" >&2
+			rc=1; break
+		fi
+	done
+	rm -f "$idx"
+	return $rc
+}
+
+# revert_all — walk the set BACKWARDS and reverse every patch that is applied.
+# Backwards matters: when two patches touch one file, the later one is only
+# reversible first. A patch that does not reverse-apply is skipped here, and
+# judged by the end state instead: every touched path must be back at upstream
+# HEAD, else the tree is in a state no prefix of the patch set explains.
+revert_all() {
+	local i p
+	for (( i=${#PATCHES[@]}-1; i>=0; i-- )); do
+		p="${PATCHES[$i]}"
+		if git -C "$_haos_dir" apply --check -R "$p" 2>/dev/null; then
+			git -C "$_haos_dir" apply -R "$p"; echo "  reverted         $(basename "$p")"
+		fi
+	done
+	mapfile -t _t < <(touched)
+	if ! git -C "$_haos_dir" diff --quiet HEAD -- "${_t[@]}" \
+	   || [ -n "$(git -C "$_haos_dir" ls-files --others --exclude-standard -- "${_t[@]}")" ]; then
+		git -C "$_haos_dir" status --short -- "${_t[@]}" >&2
+		die "patched paths in haos/ are in an unknown state (not upstream after reverting every applied patch) — refusing to touch them"
 	fi
 }
 
 case "$MODE" in
 apply|--apply)
+	# Validate the set first (nothing touched yet), then always from pristine:
+	# revert what is applied, apply the whole set in order. Each patch thus meets
+	# exactly the tree it was written against (upstream + the patches before
+	# it), also when several patches touch one file.
+	check_set >/dev/null || die "patch set does not apply to haos/ @ $(git -C "$_haos_dir" rev-parse --short=12 HEAD) (see above)"
+	revert_all
 	for p in "${PATCHES[@]}"; do
-		n=$(basename "$p")
-		case "$(state "$p")" in
-		pending) git -C "$_haos_dir" apply "$p"; echo "  applied          $n" ;;
-		applied)
-			echo "  already applied  $n"
-			# Applied, yet the files it touches equal upstream HEAD: upstream
-			# itself carries the change now. The patch is dead weight.
-			mapfile -t files < <(git -C "$_haos_dir" apply --numstat "$p" | cut -f3)
-			if git -C "$_haos_dir" diff --quiet HEAD -- "${files[@]}"; then
-				echo "  WARNING: upstream haos/ already contains $n — delete the patch" >&2
-			fi
-			;;
-		broken)
-			echo "  DOES NOT APPLY   $n" >&2
-			git -C "$_haos_dir" apply --check -v "$p" >&2 || true
-			die "$n neither applies nor is already applied to haos/ — rebase the patch onto the new pin (or drop it if upstream took it)"
-			;;
-		esac
+		git -C "$_haos_dir" apply "$p" || die "$(basename "$p") failed to apply after validation"
+		echo "  applied          $(basename "$p")"
 	done
 	;;
 --revert)
-	for (( i=${#PATCHES[@]}-1; i>=0; i-- )); do
-		p="${PATCHES[$i]}"; n=$(basename "$p")
-		case "$(state "$p")" in
-		applied) git -C "$_haos_dir" apply -R "$p"; echo "  reverted         $n" ;;
-		pending) echo "  not applied      $n" ;;
-		broken)  die "$n is in an unknown state in haos/, refusing to touch it" ;;
-		esac
-	done
+	revert_all
 	;;
 --check)
-	rc=0
-	for p in "${PATCHES[@]}"; do
-		s=$(state "$p"); printf '  %-16s %s\n' "$s" "$(basename "$p")"
-		[ "$s" = broken ] && rc=1
-	done
-	exit $rc
+	check_set; exit $?
 	;;
 *) die "unknown mode '$MODE'" ;;
 esac
