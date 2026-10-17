@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 GA_LAYER_DIR=layer
 GA_VERSION_FILE=version.yaml
 GA_BOARDS=""
