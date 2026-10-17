@@ -6,7 +6,11 @@
 # hash, and runs the SBOM, the CVE gate, the keyring audit and the build tests.
 # The only choice left is how much of the tree to rebuild:
 #
-#   ga_build.sh [full|partial|kernel|update]      (default: full)
+#   ga_build.sh [--board <board>] [full|partial|kernel|update]
+#                                                 (default: --board ihost full)
+#
+# The board names one entry of scripts/lib/tree-paths.sh (GA_BOARDS); its board
+# dir and defconfig come from there. A board the map does not define is refused.
 #
 # Kept in its own file so the parser can be exercised without starting a
 # build: tests/gates/build_mode/selftest.sh sources THIS file and drives the
@@ -24,11 +28,15 @@
 #         something other than what it asked for, silently.
 #   any other GA_ENV value — refused, as before.
 #
-# On return: MODE is set; GA_ENV is unset so that nothing further down the
-# build can key a decision on it.
+# On return: MODE and BOARD are set; GA_ENV is unset so that nothing further
+# down the build can key a decision on it.
+
+# shellcheck source=tree-paths.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tree-paths.sh"
 
 ga_build_usage() {
-  echo "Usage: ga_build.sh [full|partial|kernel|update]   (default: full)"
+  echo "Usage: ga_build.sh [--board <board>] [full|partial|kernel|update]   (default: --board ihost full)"
+  echo "       boards: ${GA_BOARDS}"
 }
 
 _ga_build_no_dev() {
@@ -47,13 +55,31 @@ _ga_build_prod_deprecated() {
   echo "==========================================================================" >&2
 }
 
-# ga_parse_build_args "$@" — sets MODE, validates and unsets GA_ENV.
+# ga_parse_build_args "$@" — sets MODE and BOARD, validates and unsets GA_ENV.
 # Returns non-zero (never exits) so a caller that sources this can decide.
 ga_parse_build_args() {
   MODE=""
+  BOARD=""
   local arg
-  for arg in "$@"; do
+  while [[ $# -gt 0 ]]; do
+    arg="$1"; shift
     case "$arg" in
+      --board|--board=*)
+        if [[ -n "$BOARD" ]]; then
+          echo "ERROR: Duplicate --board (already have '$BOARD')." >&2
+          return 1
+        fi
+        if [[ "$arg" == --board ]]; then
+          [[ $# -gt 0 ]] || { echo "ERROR: --board needs a board name (${GA_BOARDS})." >&2; return 1; }
+          BOARD="$1"; shift
+        else
+          BOARD="${arg#--board=}"
+        fi
+        if ! [[ " ${GA_BOARDS} " == *" ${BOARD} "* ]] || ! ga_board_var BOARD_DIR "$BOARD" >/dev/null; then
+          echo "ERROR: Unknown board '${BOARD}' (scripts/lib/tree-paths.sh defines: ${GA_BOARDS})." >&2
+          return 1
+        fi
+        ;;
       full|partial|kernel|update)
         if [[ -n "$MODE" ]]; then
           echo "ERROR: Duplicate mode argument: '$arg' (already have '$MODE')." >&2
@@ -92,5 +118,6 @@ ga_parse_build_args() {
   unset GA_ENV
 
   MODE="${MODE:-full}"
+  BOARD="${BOARD:-ihost}"
   return 0
 }

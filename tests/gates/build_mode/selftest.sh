@@ -110,7 +110,36 @@ must_pass "'prod' alone"                     full    yes -     prod
 must_pass "GA_ENV=prod with 'update'"        update  yes prod  update
 echo
 
-if (( ran < 19 )); then
+echo "board — --board selects an entry of scripts/lib/tree-paths.sh, nothing else:"
+pboard() { # pboard <args...> -> "rc=<n> mode=<m> board=<b>"
+  (
+    unset GA_ENV MODE BOARD
+    # shellcheck source=../../../scripts/lib/ga-build-args.sh
+    . "$LIB"
+    ga_parse_build_args "$@"; rc=$?
+    printf 'rc=%s mode=%s board=%s\n' "$rc" "${MODE:-}" "${BOARD:-}"
+  ) 2>"$ERR"
+}
+board_pass() { # board_pass <label> <want-mode> <want-board> <args...>
+  local label="$1" wm="$2" wb="$3"; shift 3; ran=$((ran + 1))
+  local out; out="$(pboard "$@")"
+  if [[ "$out" == "rc=0 mode=$wm board=$wb" ]]; then ok "$label"; else bad "$label — got '$out', want 'rc=0 mode=$wm board=$wb'"; fi
+}
+board_fail() { # board_fail <label> <stderr-regex> <args...>
+  local label="$1" re="$2"; shift 2; ran=$((ran + 1))
+  local out; out="$(pboard "$@")"
+  if [[ "$out" == rc=0* ]]; then bad "$label — ACCEPTED ($out)"; return; fi
+  grep -qE -- "$re" "$ERR" && ok "$label" || bad "$label — refused, but not with ($re): $(head -1 "$ERR")"
+}
+board_pass "no --board -> ihost (the bake's call shape)" update ihost update
+board_pass "'--board ihost update'"                      update ihost --board ihost update
+board_pass "'update --board=ihost'"                      update ihost update --board=ihost
+board_fail "unknown board"                               "Unknown board"   --board nosuchboard
+board_fail "--board without a value"                     "needs a board"   --board
+board_fail "duplicate --board"                           "Duplicate --board" --board ihost --board=ihost
+echo
+
+if (( ran < 25 )); then
   echo "ERROR: only $ran checks ran — refusing to report a pass over a shrunken set" >&2
   exit 2
 fi
