@@ -2515,6 +2515,12 @@ verify_outputs
 log_build_step "Rebuild artifacts"
 rebuild_artifacts
 
+# The rootfs must fit the smallest system slot it can land in (fresh HAOS 18.x
+# images: 256 MiB), with a margin. Pinned limit, exactly one rootfs image.
+log_build_step "Rootfs size gate"
+"${SCRIPT_DIR}/check-rootfs-size.sh" "${OUT}/images" 2>&1 | tee -a "$BUILD_LOG"
+[[ "${PIPESTATUS[0]}" -eq 0 ]] || { echo "ERROR: rootfs size gate failed (see above)" >&2; exit 1; }
+
 # 6) Rename images with ga-build-id timestamp suffix
 log_build_step "Rename images"
 rename_images_with_build_id
