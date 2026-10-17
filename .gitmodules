@@ -1,3 +1,6 @@
 [submodule "buildroot"]
 	path = buildroot
 	url = https://github.com/home-assistant/buildroot.git
+[submodule "haos"]
+	path = haos
+	url = https://github.com/home-assistant/operating-system.git

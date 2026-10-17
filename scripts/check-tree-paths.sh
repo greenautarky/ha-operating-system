@@ -4,6 +4,9 @@
 # A gate that names a path that is gone inspects zero files and reports green.
 # This check fails closed on that:
 #   1. every path in the map exists; directories are non-empty, files non-empty;
+#      GA_HAOS_DIR (when mapped) must be a submodule: a gitlink in the index, so
+#      an uninitialised CI checkout (empty dir) passes and a plain copied
+#      directory in its place fails;
 #   2. the map yields at least MIN_PATHS entries (a map that lost its entries
 #      would otherwise pass over zero items);
 #   3. every `paths:` filter in .github/workflows matches >=1 tracked file
@@ -33,11 +36,16 @@ bad=0
 fail() { echo "FAIL: $*"; bad=1; }
 
 # --- 1+2: the map itself ----------------------------------------------------
+is_gitlink() { git -C "$ROOT" ls-files -s -- "$1" | awk '$1=="160000" && $4==P {f=1} END {exit !f}' P="$1"; }
 n=0
 while read -r name p; do
 	[ -n "$name" ] || continue
 	n=$((n+1))
 	if [ "$p" = "<undefined>" ]; then fail "$name is not defined in the map"; continue; fi
+	if [ "$name" = GA_HAOS_DIR ]; then
+		is_gitlink "$p" || fail "$name: not a submodule (no gitlink in the index): $p"
+		continue
+	fi
 	if [ -d "$ROOT/$p" ]; then
 		[ -n "$(ls -A "$ROOT/$p")" ] || fail "$name: directory is empty: $p"
 	elif [ -f "$ROOT/$p" ]; then

@@ -44,11 +44,30 @@ if [ "$rc" -eq 0 ]; then echo "  ok    live tree green"; else echo "  FAIL  live
 n=$((n+1)); np=$((np+1))
 live="$tmp/live"; mkdir -p "$live"
 # tracked + not-yet-committed files of the live tree (so it works pre-commit too)
-( cd "$repo" && git ls-files -co --exclude-standard -z | tar --null -T - -cf - ) | tar -x -C "$live"
+# Submodules (gitlinks) are not copied: their checkout is another repository.
+# They are recreated in the copy's index as gitlinks, which is all the gate reads.
+gitlinks="$(git -C "$repo" ls-files -s | awk '$1=="160000" {print $2" "$4}')"
+( cd "$repo" && git ls-files -co --exclude-standard -z \
+	| { if [ -n "$gitlinks" ]; then grep -zvxF -f <(awk '{print $2}' <<<"$gitlinks"); else cat; fi; } \
+	| tar --null -T - -cf - ) | tar -x -C "$live"
 git -C "$live" init -q && git -C "$live" add -A -f >/dev/null 2>&1
+while read -r sha path; do
+	[ -n "$path" ] && git -C "$live" update-index --add --cacheinfo "160000,$sha,$path"
+done <<<"$gitlinks"
 sed -i 's#^GA_LAYER_DIR=.*#GA_LAYER_DIR=buildroot-external-moved#' "$live/scripts/lib/tree-paths.sh"
 verdict "live-map-stale-layer" must-fail "$live" "path does not exist: buildroot-external-moved"
 n=$((n+1))
-[ "$n" -ge 10 ] && [ "$np" -ge 3 ] || { echo "FAIL: only $n cases ($np must-pass) ran"; exit 1; }
+# GA_HAOS_DIR must be a submodule: a gitlink passes (CI never initialises it, so
+# the directory is empty there), a plain directory in its place fails.
+hg="$tmp/haos-gitlink"; mkrepo "$here/must-pass/good-minimal" "$hg"
+printf 'GA_HAOS_DIR=haos\n' >> "$hg/scripts/lib/tree-paths.sh"
+sed -i "s#^ga_tree_paths() {#ga_tree_paths() {\n\tprintf '%s %s\\\\n' GA_HAOS_DIR \"\$GA_HAOS_DIR\"#" "$hg/scripts/lib/tree-paths.sh"
+git -C "$hg" update-index --add --cacheinfo "160000,$(git -C "$hg" rev-parse HEAD),haos"
+grep -q "GA_HAOS_DIR haos" <(sh -c ". \"$hg/scripts/lib/tree-paths.sh\"; ga_tree_paths") || { echo "  FAIL  haos-gitlink fixture does not map GA_HAOS_DIR"; bad=1; }
+verdict "haos-gitlink" must-pass "$hg"; n=$((n+1)); np=$((np+1))
+hd="$tmp/haos-plain-dir"; mkrepo "$hg" "$hd"
+git -C "$hd" rm -q --cached haos 2>/dev/null; mkdir -p "$hd/haos" && echo x > "$hd/haos/f" && git -C "$hd" add -f haos/f
+verdict "haos-plain-dir" must-fail "$hd" "GA_HAOS_DIR: not a submodule"; n=$((n+1))
+[ "$n" -ge 12 ] && [ "$np" -ge 3 ] || { echo "FAIL: only $n cases ($np must-pass) ran"; exit 1; }
 echo "$n cases ran"
 exit "$bad"
