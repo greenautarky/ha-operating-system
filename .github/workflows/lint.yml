@@ -899,3 +899,14 @@ jobs:
       # two images fail. Red-proven: dropping the margin turns one-byte-over red.
       - name: Rootfs fits the system slot (pinned limit, exactly one image)
         run: ./tests/gates/rootfs_size/selftest.sh
+
+      # HAOS 18.x names the Supervisor unit haos-supervisor.service; components
+      # synced into the image and 1.5-era scripts name it hassos-supervisor.service
+      # (ga-bootstrap.service Requires= it, and a Requires= on a missing unit
+      # drops the start job silently). The GA layer ships the old name as an
+      # alias symlink. The self-test runs the real unit loader
+      # (systemd-analyze --root verify) on a staged root with upstream's patched
+      # unit and the LIVE alias: must resolve through it; without it the loader
+      # must report the name missing. Red-proven: removing the alias fails it.
+      - name: hassos-supervisor.service resolves to haos-supervisor.service (alias, real unit loader)
+        run: ./tests/gates/supervisor_alias/selftest.sh
