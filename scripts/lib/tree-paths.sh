@@ -19,6 +19,11 @@
 
 GA_LAYER_DIR=buildroot-external
 GA_VERSION_FILE=version.yaml
+# Upstream Home Assistant OS, unmodified, as a git submodule (HAOS 18.x). Its
+# working tree changes only through the patches scripts/apply-haos-patches.sh
+# applies: GA_HAOS_PATCH_DIR, then GA_LAYER_DIR/patches-haos.
+GA_HAOS_DIR=haos
+GA_HAOS_PATCH_DIR=patches/haos
 GA_BOARDS="ihost"
 
 GA_BOARD_DIR_ihost=buildroot-ihost
@@ -38,6 +43,8 @@ ga_board_var() {
 ga_tree_paths() {
 	printf '%s %s\n' GA_LAYER_DIR "$GA_LAYER_DIR"
 	printf '%s %s\n' GA_VERSION_FILE "$GA_VERSION_FILE"
+	[ -z "${GA_HAOS_DIR:-}" ] || printf '%s %s\n' GA_HAOS_DIR "$GA_HAOS_DIR"
+	[ -z "${GA_HAOS_PATCH_DIR:-}" ] || printf '%s %s\n' GA_HAOS_PATCH_DIR "$GA_HAOS_PATCH_DIR"
 	for _b in $GA_BOARDS; do
 		for _k in BOARD_DIR DEFCONFIG ADDON_PINS; do
 			_p="$(ga_board_var "$_k" "$_b")" || _p="<undefined>"

@@ -854,3 +854,18 @@ jobs:
           set -eu
           ./tests/gates/tree_paths/selftest.sh
           ./scripts/check-tree-paths.sh
+
+      # haos/ is upstream Home Assistant OS, unmodified; GA changes reach its
+      # working tree only through scripts/apply-haos-patches.sh, which fails on a
+      # patch that no longer applies and on any edit no patch explains. The
+      # self-test drives the LIVE script over throwaway repos (pending, applied,
+      # reverted; broken patch, stray edit, empty patch set, missing checkout),
+      # then applies the REAL patch set to the pinned submodule. Shallow,
+      # non-recursive checkout: the nested buildroot is not needed for this.
+      # Red-proven: disabling the stray-edit guard or the broken-patch branch in
+      # the live script turns exactly that case red.
+      - name: HAOS patch set applies to the pinned haos/ (fail-loud applier)
+        run: |
+          set -eu
+          git submodule update --init --depth 1 haos
+          HAOS_PATCHES_REQUIRE_LIVE=1 ./tests/gates/haos_patches/selftest.sh
