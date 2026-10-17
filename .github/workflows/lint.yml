@@ -859,9 +859,10 @@ jobs:
       # working tree only through scripts/apply-haos-patches.sh, which fails on a
       # patch that no longer applies and on any edit no patch explains. The
       # self-test drives the LIVE script over throwaway repos (pending, applied,
-      # reverted, two patches stacked on one file; broken patch, stray edit,
-      # empty patch set, missing checkout, patch already in upstream), then
-      # applies the REAL patch set to the pinned submodule. Shallow,
+      # reverted, two patches stacked on one file, --cat/--export of a patched
+      # file; broken patch, stray edit, empty patch set, missing checkout,
+      # patch already in upstream, --cat of a deleted path or over a broken
+      # set), then applies the REAL patch set to the pinned submodule. Shallow,
       # non-recursive checkout: the nested buildroot is not needed for this.
       # Red-proven: disabling the stray-edit guard or the broken-patch branch in
       # the live script turns exactly that case red.

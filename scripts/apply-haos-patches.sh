@@ -9,6 +9,19 @@
 #   scripts/apply-haos-patches.sh --list    print the ordered patch list, one
 #                                           path per line (the single definition
 #                                           of the patch set)
+#   scripts/apply-haos-patches.sh --cat <path>
+#                                           print <path> (relative to haos/, e.g.
+#                                           buildroot-external/package/hassio/hassio.mk)
+#                                           as the build sees it: upstream with the
+#                                           whole set applied, from the throwaway
+#                                           index. Working tree untouched; a file
+#                                           the set deletes or that does not exist
+#                                           fails. For gates and tests that judge a
+#                                           GA delta of an upstream file.
+#   scripts/apply-haos-patches.sh --export <dir> <path>...
+#                                           the same, written to <dir>/<path> with
+#                                           the file's mode (for consumers that need
+#                                           a file to run, source or copy).
 #
 # Patch set, in this order (revert walks it backwards):
 #   1. $GA_HAOS_PATCH_DIR/*.patch        build fixes to upstream files
@@ -52,7 +65,9 @@ if [ "$MODE" = "--list" ]; then
 fi
 
 [ -e "$_haos_dir/.git" ] || die "$_haos_dir is not initialised (run: git submodule update --init --recursive haos)"
-echo "apply-haos-patches: ${#PATCHES[@]} patch(es), haos at $(git -C "$_haos_dir" rev-parse --short=12 HEAD)"
+if [ "$MODE" != "--cat" ] && [ "$MODE" != "--export" ]; then
+	echo "apply-haos-patches: ${#PATCHES[@]} patch(es), haos at $(git -C "$_haos_dir" rev-parse --short=12 HEAD)"
+fi
 
 # All paths the patch set touches (one per line).
 touched() { for p in "${PATCHES[@]}"; do git -C "$_haos_dir" apply --numstat "$p" | cut -f3; done | sort -u; }
@@ -64,7 +79,7 @@ touched() { for p in "${PATCHES[@]}"; do git -C "$_haos_dir" apply --numstat "$p
 # the first bad one.
 check_set() {
 	local idx p n rc=0
-	idx=$(mktemp)
+	idx="${_KEEP_IDX:-$(mktemp)}"
 	GIT_INDEX_FILE="$idx" git -C "$_haos_dir" read-tree HEAD
 	for p in "${PATCHES[@]}"; do
 		n=$(basename "$p")
@@ -82,7 +97,7 @@ check_set() {
 			rc=1; break
 		fi
 	done
-	rm -f "$idx"
+	[ -n "${_KEEP_IDX:-}" ] || rm -f "$idx"
 	return $rc
 }
 
@@ -125,6 +140,30 @@ apply|--apply)
 	;;
 --check)
 	check_set; exit $?
+	;;
+--cat|--export)
+	if [ "$MODE" = "--cat" ]; then
+		[ $# -eq 2 ] || die "usage: --cat <path relative to haos/>"
+		out=""; rels=("$2")
+	else
+		[ $# -ge 3 ] || die "usage: --export <dir> <path relative to haos/>..."
+		out="$2"; rels=("${@:3}")
+	fi
+	_KEEP_IDX=$(mktemp); trap 'rm -f "$_KEEP_IDX"' EXIT
+	check_set >/dev/null || die "patch set does not apply to haos/ — cannot show the tree as the build sees it"
+	for rel in "${rels[@]}"; do
+		fmode="" blob=""
+		read -r fmode blob _ < <(GIT_INDEX_FILE="$_KEEP_IDX" git -C "$_haos_dir" ls-files -s -- "$rel") || true
+		[ -n "${blob:-}" ] || die "$rel is not in haos/ with the patch set applied (deleted by a patch, or no such file)"
+		if [ -z "$out" ]; then
+			git -C "$_haos_dir" cat-file blob "$blob"
+		else
+			mkdir -p "$out/$(dirname "$rel")"
+			git -C "$_haos_dir" cat-file blob "$blob" > "$out/$rel"
+			[ "$fmode" = 100755 ] && chmod 0755 "$out/$rel" || chmod 0644 "$out/$rel"
+		fi
+	done
+	exit 0
 	;;
 *) die "unknown mode '$MODE'" ;;
 esac
