@@ -1,0 +1,11 @@
+# Linux 6.18.54 (the DSGW-210 kernel and its headers). The hash files of the
+# pinned Buildroot carry the license-file hashes of an older release family:
+# the GPL-2.0 text changed since, so legal-info stops on "wrong sha256".
+# This versioned file is used only when the package version is exactly 6.18.54,
+# so the iHost (6.12.x) keeps Buildroot's own hash file.
+# Tarball hash: kernel.org sha256sums.asc for v6.x.
+sha256  9df30b02dd8102bbd0be52556288ef6889ddbe7f1ddb96fbf847d0becf3eacac  linux-6.18.54.tar.xz
+# Licenses hashes (computed from the extracted 6.18.54 tree)
+sha256  fb5a425bd3b3cd6071a3a9aff9909a859e7c1158d54d32e07658398cd67eb6a0  COPYING
+sha256  8780e78a1a737e127f25a65f6d95269bffd36158dc261114de7859b490bfc5aa  LICENSES/preferred/GPL-2.0
+sha256  8e378ab93586eb55135d3bc119cce787f7324f48394777d00c34fa3d0be3303f  LICENSES/exceptions/Linux-syscall-note
