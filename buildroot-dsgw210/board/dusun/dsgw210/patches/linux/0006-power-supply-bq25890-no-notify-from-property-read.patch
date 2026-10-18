@@ -1,0 +1,79 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] power: supply: bq25890: do not signal userspace from the property read path
+
+bq25890_power_supply_get_property() calls bq25890_update_state(), which runs
+the IRQ handler body ("in case we lost an interrupt"). When the chip state
+differs from the cached one, that body calls power_supply_changed(). Building
+the resulting uevent (power_supply_uevent -> add_prop_uevent) reads EVERY
+property, each read again runs the handler body, and as long as the chip state
+keeps changing between two reads the uevent re-queues itself:
+
+  power_supply_changed <- __bq25890_handle_irq <- bq25890_update_state
+    <- bq25890_power_supply_get_property <- power_supply_format_property
+    <- add_prop_uevent <- power_supply_uevent <- kobject_uevent
+    <- power_supply_changed_work
+
+That is a self-sustaining uevent/IRQ loop whenever the charger's state keeps
+changing.
+
+Fix: the property read path still refreshes the cached state but no longer
+calls power_supply_changed(); the IRQ handler (and the optional poll work)
+keep signalling. Limitation: a change first seen by a property read is not
+signalled by that read.
+
+Signed-off-by: GreenAutarky OS <noreply@greenautarky.invalid>
+---
+--- a/drivers/power/supply/bq25890_charger.c
++++ b/drivers/power/supply/bq25890_charger.c
+@@ -451,7 +451,7 @@
+ 	}
+ }
+ 
+-static irqreturn_t __bq25890_handle_irq(struct bq25890_device *bq);
++static irqreturn_t __bq25890_handle_irq(struct bq25890_device *bq, bool notify);
+ 
+ static int bq25890_get_vbus_voltage(struct bq25890_device *bq)
+ {
+@@ -472,8 +472,12 @@
+ 	int ret;
+ 
+ 	mutex_lock(&bq->lock);
+-	/* update state in case we lost an interrupt */
+-	__bq25890_handle_irq(bq);
++	/*
++	 * update state in case we lost an interrupt. Do not signal userspace from
++	 * here: building the uevent reads every property, which lands here, and
++	 * a flapping chip state then re-queues the uevent forever.
++	 */
++	__bq25890_handle_irq(bq, false);
+ 	*state = bq->state;
+ 	do_adc_conv = (!state->online || state->hiz) && bq25890_is_adc_property(psp);
+ 	if (do_adc_conv)
+@@ -814,7 +818,7 @@
+ 	return 0;
+ }
+ 
+-static irqreturn_t __bq25890_handle_irq(struct bq25890_device *bq)
++static irqreturn_t __bq25890_handle_irq(struct bq25890_device *bq, bool notify)
+ {
+ 	bool adc_conv_rate, new_adc_conv_rate;
+ 	struct bq25890_state new_state;
+@@ -849,7 +853,8 @@
+ 	}
+ 
+ 	bq->state = new_state;
+-	power_supply_changed(bq->charger);
++	if (notify)
++		power_supply_changed(bq->charger);
+ 
+ 	return IRQ_HANDLED;
+ error:
+@@ -864,7 +869,7 @@
+ 	irqreturn_t ret;
+ 
+ 	mutex_lock(&bq->lock);
+-	ret = __bq25890_handle_irq(bq);
++	ret = __bq25890_handle_irq(bq, true);
+ 	mutex_unlock(&bq->lock);
+ 
+ 	return ret;

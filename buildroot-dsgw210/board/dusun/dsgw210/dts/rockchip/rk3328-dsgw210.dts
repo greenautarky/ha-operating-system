@@ -305,8 +305,9 @@
  * Binding-level translation only:
  *   - compatible: "ti,bq25890" -> mainline "ti,bq25895", "ti,bq25890"
  *     (the driver reads the chip ID anyway)
- *   - IRQ: vendor property bq25890_irq-gpios = GPIO0_D6 active-low ->
- *     mainline interrupts on gpio0 RK_PD6, falling edge.
+ *   - IRQ: the vendor INT line (bq25890_irq-gpios = GPIO0_D6, active-low) is
+ *     not used; the node polls (ti,poll-interval-ms, kernel patch 0007), see
+ *     the comment in the node.
  * The charger and gauge are populated only on units fitted with a battery.
  * Pinmux (i2c0_xfer) is inherited from rk3328.dtsi.
  */
@@ -316,11 +317,9 @@
 	charger@6a {
 		compatible = "ti,bq25895", "ti,bq25890";
 		reg = <0x6a>;
-		interrupt-parent = <&gpio0>;
-		interrupts = <RK_PD6 IRQ_TYPE_EDGE_FALLING>;
 		/*
-		 * GPIO0_D6 defaults to sdmmc0m1_pwren (func 3); without an explicit
-		 * GPIO mux the IRQ request fails and the probe returns -EIO.
+		 * GPIO0_D6 defaults to sdmmc0m1_pwren (func 3); it is muxed as a
+		 * GPIO input here (see the charger-int hog below).
 		 */
 		pinctrl-names = "default";
 		pinctrl-0 = <&charger_int>;
@@ -333,6 +332,13 @@
 		ti,boost-max-current = <1400000>;
 		ti,use-ilim-pin;
 		ti,thermal-regulation-threshold = <100>;
+		/*
+		 * Poll the chip instead of using the INT line (kernel patches 0006
+		 * + 0007): the event rate is bounded by the poll interval however
+		 * often the charge state changes. The node therefore has no
+		 * interrupts property.
+		 */
+		ti,poll-interval-ms = <1000>;
 	};
 
 	fuel-gauge@55 {
@@ -700,10 +706,10 @@
 
 /*
  * bq25895 INT (GPIO0_D6) as an input hog. The bootloader builds on the
- * rock64 DT, which drives GPIO0_D6 as the vcc_sd switch, so the line arrives
- * as an OUTPUT and gpiochip_lock_as_irq() refuses it. The pin mux alone does
- * not change the direction; the hog makes it an input before the charger
- * requests its IRQ.
+ * rock64 DT, which drives GPIO0_D6 as the vcc_sd switch, so the line can
+ * arrive as an OUTPUT. The pin mux alone does not change the direction; the
+ * hog makes it a plain input, so the pin is never driven against the
+ * charger's open-drain INT output.
  */
 &gpio0 {
 	charger-int-hog {

@@ -1,0 +1,105 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] power: supply: bq25890: add optional polling instead of the INT line
+
+New optional DT property "ti,poll-interval-ms": when set, the driver does not
+request the INT line (the interrupts/gpio lookup is skipped) and re-reads the
+chip state from a delayed work every N ms, using the same state compare and
+notification as the IRQ handler. Without the property nothing changes.
+Applies on top of 0006.
+
+Signed-off-by: GreenAutarky OS <noreply@greenautarky.invalid>
+---
+--- a/drivers/power/supply/bq25890_charger.c
++++ b/drivers/power/supply/bq25890_charger.c
+@@ -117,6 +117,8 @@
+ 	struct notifier_block usb_nb;
+ 	struct work_struct usb_work;
+ 	struct delayed_work pump_express_work;
++	struct delayed_work poll_work;
++	u32 poll_interval_ms;
+ 	unsigned long usb_event;
+ 
+ 	struct regmap *rmap;
+@@ -863,6 +865,31 @@
+ 	return IRQ_HANDLED;
+ }
+ 
++/*
++ * GA/DSGW-210: poll the chip state instead of using the INT line. Every state
++ * change pulses INT and produces one uevent; polling bounds the event rate to
++ * 1 / ti,poll-interval-ms however often the chip state changes.
++ */
++static void bq25890_poll_work(struct work_struct *work)
++{
++	struct bq25890_device *bq = container_of(work, struct bq25890_device,
++						 poll_work.work);
++
++	mutex_lock(&bq->lock);
++	__bq25890_handle_irq(bq, true);
++	mutex_unlock(&bq->lock);
++
++	queue_delayed_work(system_power_efficient_wq, &bq->poll_work,
++			   msecs_to_jiffies(bq->poll_interval_ms));
++}
++
++static void bq25890_poll_cancel(void *data)
++{
++	struct bq25890_device *bq = data;
++
++	cancel_delayed_work_sync(&bq->poll_work);
++}
++
+ static irqreturn_t bq25890_irq_handler_thread(int irq, void *private)
+ {
+ 	struct bq25890_device *bq = private;
+@@ -1436,6 +1463,7 @@
+ 	}
+ 
+ 	bq->skip_reset = device_property_read_bool(bq->dev, "linux,skip-reset");
++	device_property_read_u32(bq->dev, "ti,poll-interval-ms", &bq->poll_interval_ms);
+ 	bq->read_back_init_data = device_property_read_bool(bq->dev,
+ 						"linux,read-back-settings");
+ 	if (bq->read_back_init_data)
+@@ -1509,10 +1537,10 @@
+ 		return ret;
+ 	}
+ 
+-	if (client->irq <= 0)
++	if (!bq->poll_interval_ms && client->irq <= 0)
+ 		client->irq = bq25890_irq_probe(bq);
+ 
+-	if (client->irq < 0) {
++	if (!bq->poll_interval_ms && client->irq < 0) {
+ 		dev_err(dev, "No irq resource found.\n");
+ 		return client->irq;
+ 	}
+@@ -1536,12 +1564,23 @@
+ 	if (ret < 0)
+ 		return dev_err_probe(dev, ret, "registering power supply\n");
+ 
+-	ret = devm_request_threaded_irq(dev, client->irq, NULL,
+-					bq25890_irq_handler_thread,
+-					IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+-					BQ25890_IRQ_PIN, bq);
+-	if (ret)
+-		return ret;
++	if (bq->poll_interval_ms) {
++		INIT_DELAYED_WORK(&bq->poll_work, bq25890_poll_work);
++		/* devm LIFO: runs before the power_supply is unregistered */
++		ret = devm_add_action_or_reset(dev, bq25890_poll_cancel, bq);
++		if (ret)
++			return ret;
++		queue_delayed_work(system_power_efficient_wq, &bq->poll_work,
++				   msecs_to_jiffies(bq->poll_interval_ms));
++		dev_info(dev, "polling every %u ms, no IRQ\n", bq->poll_interval_ms);
++	} else {
++		ret = devm_request_threaded_irq(dev, client->irq, NULL,
++						bq25890_irq_handler_thread,
++						IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
++						BQ25890_IRQ_PIN, bq);
++		if (ret)
++			return ret;
++	}
+ 
+ 	if (!IS_ERR_OR_NULL(bq->usb_phy)) {
+ 		INIT_WORK(&bq->usb_work, bq25890_usb_work);
