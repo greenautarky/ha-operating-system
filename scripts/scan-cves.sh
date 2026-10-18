@@ -130,7 +130,14 @@ ROOTFS_GO_EXPECTED="netbird telegraf os-agent runc dockerd containerd"
 PACKAGE_COVERAGE=false
 COVERAGE_CONF="${COVERAGE_CONF:-${SCRIPT_DIR}/cve-package-coverage.conf}"
 GA_DEFCONFIG="${GA_DEFCONFIG:-${REPO_ROOT}/buildroot-ihost/configs/ga_ihost_full_defconfig}"
-BASE_DEFCONFIG="${BASE_DEFCONFIG:-${REPO_ROOT}/buildroot-ihost/configs/ihost_full_defconfig}"
+# The "upstream" side of the delta: since the HAOS 18.x lift, haos/ is upstream
+# Home Assistant OS and the packages it ships are the BR2_PACKAGE_*=y symbols of
+# its defconfigs. There is no upstream armv7 iHost board, so the base is the
+# UNION of every haos/buildroot-external/configs/*_defconfig: a symbol none of
+# them enables is something GA adds. BASE_DEFCONFIG may name one file or several
+# (space-separated); an empty expansion is an error, never an empty base (an
+# empty base would call every package GA-added, a missing one none).
+BASE_DEFCONFIG="${BASE_DEFCONFIG:-$(ls "${REPO_ROOT}/haos/buildroot-external/configs/"*_defconfig 2>/dev/null | tr '\n' ' ')}"
 # Symbols the delta parser MUST find — if it stops seeing these, it has lost
 # its subject, and an empty delta would otherwise pass as "nothing to cover".
 readonly COVERAGE_MUST_SEE="FLUENT_BIT OPENSSH NFTABLES NETBIRD TELEGRAF"
@@ -824,15 +831,21 @@ check_package_coverage() {
   echo ""
   echo "  --- Per-package coverage: GA defconfig delta ---"
   local bad=0
-  for f in "$COVERAGE_CONF" "$GA_DEFCONFIG" "$BASE_DEFCONFIG"; do
+  local base_files=() base_f
+  read -r -a base_files <<<"$BASE_DEFCONFIG"
+  if [[ ${#base_files[@]} -eq 0 ]]; then
+    echo "  ERROR: no base defconfig (haos/buildroot-external/configs/*_defconfig not found — is the haos/ submodule checked out?) — the package coverage cannot be asserted"
+    bad=1
+  fi
+  for f in "$COVERAGE_CONF" "$GA_DEFCONFIG" ${base_files[@]+"${base_files[@]}"}; do
     [[ -f "$f" ]] || { echo "  ERROR: ${f} not found — the package coverage cannot be asserted"; bad=1; }
   done
   if [[ "$bad" -ne 0 ]]; then PKGCOV_BROKEN=1; SCAN_BROKEN=true; return 0; fi
   local delta=()
   mapfile -t delta < <(comm -23 \
       <(sed -nE 's/^BR2_PACKAGE_([A-Z0-9_]+)=y[[:space:]]*$/\1/p' "$GA_DEFCONFIG" | sort -u) \
-      <(sed -nE 's/^BR2_PACKAGE_([A-Z0-9_]+)=y[[:space:]]*$/\1/p' "$BASE_DEFCONFIG" | sort -u))
-  echo "  GA-added package symbols: ${#delta[@]} ($(basename "$GA_DEFCONFIG") minus $(basename "$BASE_DEFCONFIG"))"
+      <(cat "${base_files[@]}" | sed -nE 's/^BR2_PACKAGE_([A-Z0-9_]+)=y[[:space:]]*$/\1/p' | sort -u))
+  echo "  GA-added package symbols: ${#delta[@]} ($(basename "$GA_DEFCONFIG") minus ${#base_files[@]} upstream HAOS defconfig(s))"
   local must
   for must in $COVERAGE_MUST_SEE; do
     if ! printf '%s\n' ${delta[@]+"${delta[@]}"} | grep -qxF -- "$must"; then
