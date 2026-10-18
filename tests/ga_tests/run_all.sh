@@ -59,6 +59,7 @@ SUITES_EXCLUDED="
   device_run_lock host suite: CI lint.yml host-suites — the runner's one-run-per-device lock
   uplink_ladder   host suite: CI lint.yml host-suites
   uplink_units    host suite: CI lint.yml host-suites
+  board_conf      host suite: CI lint.yml host-suites — per-board values (ga-board.conf, USB port allowlist) of the shared scripts
   share_writers   host suite: CI lint.yml host-suites — needs bubblewrap, drives the writers in a sandbox
   host_control    host suite: CI lint.yml host-suites — needs bubblewrap, drives the host control units in a sandbox (ADR-0041)
   ota_fetch       host suite: CI lint.yml host-suites — needs bubblewrap, drives ga-resolve-ota + ga-rauc-install in a sandbox

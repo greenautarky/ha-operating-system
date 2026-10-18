@@ -32,7 +32,7 @@
 #     might delete.
 #   * If `nft -f` fails the table is deleted, leaving the device as it was.
 #
-# INTERFACES
+# INTERFACES (iHost defaults; a board names its own in /usr/share/ga-board.conf)
 #   eth0    customer LAN — the only interface facing the household network.
 #   wlan0   NOT household WiFi: the device joins the LTE dongle's own AP
 #           (connection `openstick-auto`). Locked down identically — the stick
@@ -62,8 +62,16 @@ OFF_MARKER=/mnt/boot/ga-firewall-off
 TABLE="inet ga_firewall"
 
 # Physical interfaces the allowlist governs. Everything arriving here that is
-# not explicitly allowed below is dropped.
-LAN_IFACES='"eth0", "wlan0"'
+# not explicitly allowed below is dropped. The names come from the board
+# (/usr/share/ga-board.conf, GA_LAN_IFACES, space separated); a board without
+# that file keeps the default below, so the iHost needs no file.
+GA_BOARD_CONF="${GA_BOARD_CONF:-/usr/share/ga-board.conf}"
+# shellcheck disable=SC1090
+[ -r "$GA_BOARD_CONF" ] && . "$GA_BOARD_CONF"
+LAN_IFACES=''
+for _if in ${GA_LAN_IFACES:-eth0 wlan0}; do
+	LAN_IFACES="${LAN_IFACES:+$LAN_IFACES, }\"$_if\""
+done
 
 # What stays reachable from those interfaces.
 HOST_ALLOW_TCP='22222'          # sshd — on-site + local diagnostics

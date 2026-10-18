@@ -4,19 +4,40 @@
 # (ADR-0029 D3) nothing binds until this says so. Fail CLOSED: any doubt
 # (missing allowlist, unreadable syspath) leaves the device unauthorized.
 #
-# POSIX /bin/sh. Test hook: GA_USB_ALLOWLIST + GA_USB_TEST override the
-# allowlist path and suppress the sysfs write (echo the decision instead).
+# A board whose USB devices sit behind an on-board hub can also name them by
+# PORT PATH (the sysfs device name, e.g. 3-1.2) in /usr/share/ga-usb-port-allowlist.
+# A port path cannot be taken over by plugging something in: a VID:PID rule
+# would also open an external port to any adapter that carries the same ID.
+# A board without that file (the iHost) is unchanged: VID:PID rules only.
+#
+# POSIX /bin/sh. Test hook: GA_USB_ALLOWLIST, GA_USB_PORT_ALLOWLIST and
+# GA_USB_TEST override the list paths and suppress the sysfs write (echo the
+# decision instead).
 set -u
 SYS="${1:-}"; VID="$(echo "${2:-}" | tr 'A-F' 'a-f')"; PID="$(echo "${3:-}" | tr 'A-F' 'a-f')"
 ALLOWLIST="${GA_USB_ALLOWLIST:-/usr/share/ga-usb-allowlist}"
+PORT_ALLOWLIST="${GA_USB_PORT_ALLOWLIST:-/usr/share/ga-usb-port-allowlist}"
 LOG_TAG="ga-usb-authorize"
 _log() { logger -t "$LOG_TAG" -p "daemon.$1" "$2" 2>/dev/null || echo "$LOG_TAG: $2" >&2; }
+
+# Port-path rule: an exact line match on the device's sysfs name. Checked first,
+# because an internal device is identified by where it is, not by what it says.
+PORT="${SYS##*/}"
+if [ -n "$PORT" ] && [ -f "$PORT_ALLOWLIST" ] && grep -viE '^[[:space:]]*(#|$)' "$PORT_ALLOWLIST" 2>/dev/null \
+     | tr -d ' \t\r' | grep -qxF "$PORT"; then
+    _log info "authorizing device on allowlisted port ${PORT}"
+    if [ -n "${GA_USB_TEST:-}" ]; then echo "authorize port ${PORT}"; exit 0; fi
+    [ -w "$SYS/authorized" ] && echo 1 > "$SYS/authorized" 2>/dev/null || true
+    exit 0
+fi
 
 [ -n "$VID" ] && [ -n "$PID" ] || { _log warning "missing VID/PID — leaving device unauthorized"; exit 0; }
 
 # Match "vid:pid" against the allowlist, ignoring comments/blank/whitespace.
+# Whitespace is stripped per line (not the newlines): with two or more entries
+# the lines must stay separate for -x to match any one of them.
 if [ -f "$ALLOWLIST" ] && grep -viE '^[[:space:]]*(#|$)' "$ALLOWLIST" 2>/dev/null \
-     | tr 'A-F' 'a-f' | tr -d '[:space:]' | grep -qx "${VID}:${PID}"; then
+     | tr 'A-F' 'a-f' | tr -d ' \t\r' | grep -qx "${VID}:${PID}"; then
     _log info "authorizing allowlisted host-port device ${VID}:${PID}"
     if [ -n "${GA_USB_TEST:-}" ]; then echo "authorize ${VID}:${PID}"; exit 0; fi
     [ -w "$SYS/authorized" ] && echo 1 > "$SYS/authorized" 2>/dev/null || true
