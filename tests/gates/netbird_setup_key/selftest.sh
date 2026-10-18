@@ -108,7 +108,8 @@ expect_gate PASS "$d" "image tree the hook produced"
 echo "── wiring: ga_build.sh runs the check in its preflight ──"
 ran=$((ran + 1))
 if grep -qE '88-netbird-setup-key\.sh' "$BUILD" \
-   && grep -A3 -E '^if ! bash "\$GA_NB_KEY_HOOK" --check' "$BUILD" | grep -q 'PREFLIGHT_FAIL=1'; then
+   && grep -A3 -E '^(el)?if ! bash "\$GA_NB_KEY_HOOK" --check' "$BUILD" | grep -q 'PREFLIGHT_FAIL=1' \
+   && grep -qE '^if \[\[ ! -e "\$GA_NB_KEY_HOOK" && "\$BOARD" != ihost \]\]' "$BUILD"; then
   ok "ga_build.sh preflight calls the hook's --check and fails on it"
 else bad "ga_build.sh does not run the setup-key --check fail-closed in its preflight"; fi
 ran=$((ran + 1))
