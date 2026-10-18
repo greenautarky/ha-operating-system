@@ -47,7 +47,14 @@ fi
 # dependencies (the staged root carries no docker/dbus units).
 deps="$(sed -nE 's/^(Requires|Wants|After|BindsTo|Requisite)=//p' "$tmp/with/usr/lib/systemd/system/haos-supervisor.service" | tr ' ' '\n' | sed '/^$/d')"
 missing="$(sed -nE 's/.*Unit ([^ ]+) not found.*/\1/p' <<<"$out" | head -1)"
-if [ -z "$missing" ] || grep -qxF -- "$missing" <<<"$deps"; then
+# The loader reports ONE missing unit and which one varies from run to run (it
+# walks a hash map): haos-supervisor.service's declared dependencies, or the
+# targets a service unit gets implicitly (DefaultDependencies=yes; the consumer
+# has it off, so only haos-supervisor.service can bring them in). Any of them
+# means the loader got inside haos-supervisor.service. This accepted only the
+# declared ones, and failed ~1 run in 3 on 'sysinit.target'.
+implicit="sysinit.target basic.target shutdown.target umount.target"
+if [ -z "$missing" ] || grep -qxF -- "$missing" <<<"$deps" || grep -qwF -- "$missing" <<<"$implicit"; then
   echo "  ok    must-pass/with-alias (resolved into haos-supervisor.service${missing:+; next missing: its dependency $missing})"
 else echo "  FAIL  must-pass/with-alias: stopped at '$missing', not inside haos-supervisor.service :: $out"; bad=1; fi
 stage "$tmp/without" no
