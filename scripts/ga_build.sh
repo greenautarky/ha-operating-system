@@ -145,6 +145,9 @@ HAOS_DIR="${HAOS_DIR:-/build/${GA_HAOS_DIR}}"
 BUILDROOT_DIR="${BUILDROOT_DIR:-${HAOS_DIR}/buildroot}"
 HAOS_EXT="${HAOS_EXT:-${HAOS_DIR}/buildroot-external}"
 BR2EXT_IHOST="${BR2EXT_IHOST:-/build/$(ga_board_var BOARD_DIR "$BOARD")}"
+# The directory inside the board external that holds its `meta` file and its
+# post-build.d/ hooks (iHost: board/sonoff/ihost, DSGW-210: board/dusun/dsgw210).
+BOARD_BASE_DIR="${BOARD_BASE_DIR:-/build/$(ga_board_var BOARD_BASE "$BOARD")}"
 BR2EXT_NETBIRD="${BR2EXT_NETBIRD:-/build/${GA_LAYER_DIR}}"
 # Order matters for external.mk evaluation: HAOS, then the board, then GA.
 BR2_EXTERNAL_PATH="${HAOS_EXT}:${BR2EXT_IHOST}:${BR2EXT_NETBIRD}"
@@ -315,8 +318,17 @@ fi
 # `NeedsLogin` and never joins the mesh, so the post-build hook refuses — ask
 # here, in seconds, with the same script in --check mode so the two cannot
 # disagree.
-GA_NB_KEY_HOOK="${BR2EXT_IHOST}/board/sonoff/ihost/post-build.d/88-netbird-setup-key.sh"
-if ! bash "$GA_NB_KEY_HOOK" --check; then
+#
+# The hook lives in the iHost board's post-build.d/ today. A board without its
+# own copy (the DSGW-210, until the shared hooks move into the GA layer) has no
+# hook to ask and no hook to install the key: the image then does NOT
+# self-register on the mesh. That is announced here, loudly, and never for the
+# iHost, where a missing hook stays a failure.
+GA_NB_KEY_HOOK="${BOARD_BASE_DIR}/post-build.d/88-netbird-setup-key.sh"
+if [[ ! -e "$GA_NB_KEY_HOOK" && "$BOARD" != ihost ]]; then
+  echo "WARN: board '$BOARD' has no NetBird setup-key hook (${GA_NB_KEY_HOOK##*/build/}):" >&2
+  echo "      this image will NOT join the NetBird mesh on first boot." >&2
+elif ! bash "$GA_NB_KEY_HOOK" --check; then
   echo "FAIL: NetBird setup key missing or empty — see the line above." >&2
   PREFLIGHT_FAIL=1
 fi
@@ -344,6 +356,8 @@ elif ! "${SCRIPT_DIR}/apply-haos-patches.sh"; then
   echo "FAIL: the GA patch set does not apply to ${GA_HAOS_DIR}/ (see above)." >&2
   PREFLIGHT_FAIL=1
 elif [[ "$BOARD" == ihost ]] && ! "${SCRIPT_DIR}/ihost/check-haos-patch-mirror.sh"; then
+  PREFLIGHT_FAIL=1
+elif [[ "$BOARD" == dsgw210 ]] && ! "${SCRIPT_DIR}/dsgw210/check-haos-patch-mirror.sh"; then
   PREFLIGHT_FAIL=1
 fi
 
@@ -484,8 +498,11 @@ export GA_BUILD_TIMESTAMP GA_RELEASE
 # PUBLIC keys from the secrets mount. The post-build hook refuses without them
 # too, but only after the rootfs is built — ask here, in seconds. Below the cut
 # this is a no-op. Same script, --check mode, so the two cannot disagree.
-GA_SSH_CERT_HOOK="${BR2EXT_IHOST}/board/sonoff/ihost/post-build.d/87-ssh-cert-plane.sh"
-if [[ -x "$GA_SSH_CERT_HOOK" ]]; then
+GA_SSH_CERT_HOOK="${BOARD_BASE_DIR}/post-build.d/87-ssh-cert-plane.sh"
+if [[ ! -e "$GA_SSH_CERT_HOOK" && "$BOARD" != ihost ]]; then
+  echo "WARN: board '$BOARD' has no SSH certificate-plane hook (${GA_SSH_CERT_HOOK##*/build/}):" >&2
+  echo "      this image will NOT carry the ADR-0019 user CA." >&2
+elif [[ -x "$GA_SSH_CERT_HOOK" ]]; then
   GA_SECRETS_DIR="$GA_SECRETS_DIR" "$GA_SSH_CERT_HOOK" --check "$GA_RELEASE" || {
     echo "FAIL: $GA_RELEASE is on the SSH certificate plane (ADR-0019) but its keys are not in ${GA_SECRETS_DIR}/ssh/." >&2
     echo "      Put ga_user_ca.pub + ga_breakglass.pub there (key ceremony runbook) and re-run." >&2
@@ -723,8 +740,7 @@ verify_outputs() {
     "${OUT}/images/boot/linux" \
     "${OUT}/images/boot/zImage" \
     "${OUT}/images/boot/Image" \
-    "${OUT}/images/boot/rv1109-sonoff-ihost.dtb" \
-    "${OUT}/images/boot/rv1126-sonoff-ihost.dtb"
+    "${OUT}"/images/boot/*.dtb
   do
     [[ -f "$f" ]] && sha256sum "$f"
   done
@@ -1174,7 +1190,7 @@ ${_j}"
     [[ -d "$_repo_root" ]]     && add_repo_pin "$_repo_root"     "ha-operating-system"
     [[ -d "$HAOS_DIR" ]]       && add_repo_pin "$HAOS_DIR"       "haos"
     [[ -d "$BUILDROOT_DIR" ]]  && add_repo_pin "$BUILDROOT_DIR"  "buildroot"
-    [[ -d "$BR2EXT_IHOST" ]]   && add_repo_pin "$BR2EXT_IHOST"   "buildroot-ihost"
+    [[ -d "$BR2EXT_IHOST" ]]   && add_repo_pin "$BR2EXT_IHOST"   "$(basename "$BR2EXT_IHOST")"
     [[ -d "$BR2EXT_NETBIRD" ]] && add_repo_pin "$BR2EXT_NETBIRD" "buildroot-external"
 
     printf '%s\n' "$GA_PINS_ENTRIES"
@@ -1975,7 +1991,7 @@ create_provisioning_image() {
   local genimage_tmp="${OUT}/build/genimage-prov.tmp"
   rm -rf "$genimage_tmp"
 
-  local board_dir="${BR2EXT_IHOST}/board/sonoff/ihost"
+  local board_dir="${BOARD_BASE_DIR}"
 
   # Load board meta file for genimage variables
   local meta_file="${board_dir}/meta"
