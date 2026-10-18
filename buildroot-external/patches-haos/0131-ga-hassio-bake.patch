@@ -286,7 +286,7 @@ index 4f73167e0..4c9b6043f 100644
  ifeq ($(BR2_PACKAGE_HASSIO_CHANNEL_STABLE),y)
  HASSIO_VERSION_CHANNEL = "stable"
  else ifeq ($(BR2_PACKAGE_HASSIO_CHANNEL_BETA),y)
-@@ -20,24 +69,107 @@ endif
+@@ -20,24 +69,110 @@ endif
  
  HASSIO_CONTAINER_IMAGES_ARCH = supervisor dns audio cli multicast observer core
  
@@ -327,14 +327,17 @@ index 4f73167e0..4c9b6043f 100644
 +	SUP_IMG=$$(jq -r '.images.supervisor' $$VJ); \
 +	CORE_IMG=$$(jq -r '.images.core' $$VJ); \
 +	FAIL=0; \
++	SKIP_SUP=$(if $(filter supervisor,$(GA_HASSIO_SKIP_IMAGES)),1,0); \
++	SKIP_CORE=$(if $(filter core,$(GA_HASSIO_SKIP_IMAGES)),1,0); \
++	if [ $$SKIP_SUP = 1 ] || [ $$SKIP_CORE = 1 ]; then echo "GA hassio: image checks for [supervisor=$$SKIP_SUP core=$$SKIP_CORE] skipped: this board bakes no such image (GA_HASSIO_SKIP_IMAGES)"; fi; \
 +	if [ "$$SUP" = "latest" ] || [ -z "$$SUP" ] || [ "$$SUP" = "null" ]; then echo "ERROR: version.json supervisor='$$SUP' (must be pinned version)"; FAIL=1; fi; \
 +	if [ "$$CORE" = "latest" ] || [ -z "$$CORE" ] || [ "$$CORE" = "null" ]; then echo "ERROR: version.json core='$$CORE' (must be pinned version)"; FAIL=1; fi; \
 +	if [ "$$TINKER" = "latest" ] || [ -z "$$TINKER" ]; then echo "ERROR: version.json tinker='$$TINKER' (must be pinned version)"; FAIL=1; fi; \
 +	if ! echo "$$SUP_IMG" | grep -q greenautarky; then echo "ERROR: version.json supervisor image='$$SUP_IMG' (must use greenautarky)"; FAIL=1; fi; \
-+	if ! $(BR2_EXTERNAL_GA_HAOS_PATH)/package/hassio/check-core-image.sh $$VJ $(BR2_PACKAGE_HASSIO_MACHINE); then FAIL=1; fi; \
++	if [ $$SKIP_CORE = 0 ] && ! $(BR2_EXTERNAL_GA_HAOS_PATH)/package/hassio/check-core-image.sh $$VJ $(BR2_PACKAGE_HASSIO_MACHINE); then FAIL=1; fi; \
 +	PIN=$$(sed -nE 's/^[[:space:]]*homeassistant_supervisor:[[:space:]]*"?([^"[:space:]#]+)"?.*/\1/p' $(BR2_EXTERNAL_GA_HAOS_PATH)/../version.yaml | head -1); \
-+	if ! $(BR2_EXTERNAL_GA_HAOS_PATH)/package/hassio/check-supervisor-image.sh $$VJ $(BR2_PACKAGE_HASSIO_ARCH) "$$PIN"; then FAIL=1; fi; \
-+	if [ -n "$$PIN" ] && [ "$$SUP" != "$$PIN" ]; then \
++	if [ $$SKIP_SUP = 0 ] && ! $(BR2_EXTERNAL_GA_HAOS_PATH)/package/hassio/check-supervisor-image.sh $$VJ $(BR2_PACKAGE_HASSIO_ARCH) "$$PIN"; then FAIL=1; fi; \
++	if [ $$SKIP_SUP = 0 ] && [ -n "$$PIN" ] && [ "$$SUP" != "$$PIN" ]; then \
 +	  echo "ERROR: version.json supervisor='$$SUP' but version.yaml pins '$$PIN'"; \
 +	  echo "       The BAKED supervisor would differ from the pin. A device whose"; \
 +	  echo "       supervisor is older than the channel sets update_available=true,"; \
@@ -343,7 +346,7 @@ index 4f73167e0..4c9b6043f 100644
 +	  FAIL=1; \
 +	fi; \
 +	CORE_PIN=$$(sed -nE 's/^[[:space:]]*homeassistant_core:[[:space:]]*"?([^"[:space:]#]+)"?.*/\1/p' $(BR2_EXTERNAL_GA_HAOS_PATH)/../version.yaml | head -1); \
-+	if [ -n "$$CORE_PIN" ] && [ "$$CORE" != "$$CORE_PIN" ]; then \
++	if [ $$SKIP_CORE = 0 ] && [ -n "$$CORE_PIN" ] && [ "$$CORE" != "$$CORE_PIN" ]; then \
 +	  echo "ERROR: version.json core='$$CORE' but version.yaml pins '$$CORE_PIN'"; \
 +	  echo "       The baked Core would differ from the pin the on-device suite"; \
 +	  echo "       (OSI-04, expected.env) asserts."; \
