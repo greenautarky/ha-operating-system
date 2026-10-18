@@ -17,7 +17,11 @@ BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_HAOS_PATH)/rootfs-overlay $(BR2_EXTERNAL_GA_H
 # Permission table — forces the LTE NM keyfile to 0600 (git/overlay can
 # only carry 0644, and NetworkManager rejects insecure keyfiles).
 BR2_ROOTFS_DEVICE_TABLE="system/device_table.txt $(BR2_EXTERNAL_DSGW210_PATH)/board/dusun/dsgw210/lte-permissions.txt"
-BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_HAOS_PATH)/scripts/post-build.sh $(BR2_EXTERNAL_GA_HAOS_PATH)/scripts/post-build.sh"
+BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_HAOS_PATH)/scripts/post-build.sh $(BR2_EXTERNAL_GA_HAOS_PATH)/scripts/post-build.sh $(BR2_EXTERNAL_DSGW210_PATH)/scripts/post-build.sh"
+# ADR-0039 start password (the iHost mechanism: 80-root-password.sh in the
+# board's post-build.d plus post-fakeroot.sh, both failing closed without
+# ROOT_PW_HASH). Without it the HAOS default root has an empty password.
+BR2_ROOTFS_POST_FAKEROOT_SCRIPT="$(BR2_EXTERNAL_DSGW210_PATH)/board/dusun/dsgw210/post-fakeroot.sh"
 BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_HAOS_PATH)/scripts/post-image.sh"
 BR2_ROOTFS_POST_SCRIPT_ARGS="$(BR2_EXTERNAL_DSGW210_PATH)/board/dusun/dsgw210 $(BR2_EXTERNAL_DSGW210_PATH)/board/dusun/dsgw210/haos-hook.sh"
 BR2_LINUX_KERNEL=y

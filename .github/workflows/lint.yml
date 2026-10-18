@@ -292,6 +292,14 @@ jobs:
         # shadow untouched. Red-proven by deleting the defconfig line (3 of 8
         # fail).
         run: sh tests/ga_tests/ihost_root_password/test.sh
+      - name: DSGW-210 consoles follow the iHost model (ADR-0039 start password)
+        # Static + fixture: the defconfig wires the board post-build runner and
+        # post-fakeroot script, /etc/securetty and pam.d/login equal the iHost
+        # files (pinned sha256), the live hook scripts write ROOT_PW_HASH into
+        # root's shadow field and nothing else, and every unset or malformed
+        # hash fails the build with the shadow untouched. Red-proven against
+        # the tree before the hook was wired (7 of 9 fail).
+        run: sh tests/ga_tests/dsgw_console/test.sh
 
       - name: HW-02b reads the kernel log it can actually see
         # HW-02 was one check over a VOLATILE source and went red on a healthy
