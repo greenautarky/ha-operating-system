@@ -23,6 +23,12 @@ _pass() { echo -e "${GREEN}  PASS${RESET}  $1"; pass=$((pass+1)); }
 _fail() { echo -e "${RED}  FAIL${RESET}  $1"; fail=$((fail+1)); }
 _skip() { echo -e "${YELLOW}  SKIP${RESET}  $1 ($2)"; skip=$((skip+1)); }
 
+# _missing_in_image ID WHAT -- an artefact the image must carry is absent:
+# FAIL when there is a rootfs to look in, SKIP in a source-only run (no target/).
+_missing_in_image() {
+  if [[ -d "${TARGET}/usr" ]]; then _fail "$1: $2"; else _skip "$1" "source-only run (no target/ under $OUT)"; fi
+}
+
 echo ""
 echo "=== Build-time verification tests ==="
 echo "  Output: $OUT"
@@ -795,7 +801,7 @@ if [[ -s "$NM_CONF" ]]; then
     && _pass "WIFI-07: WiFi defaults scoped to type:wifi" \
     || _fail "WIFI-07: WiFi defaults NOT scoped to type:wifi"
 else
-  _fail "WIFI-01..07: ${NM_MAIN} missing or empty -- the image has no NetworkManager configuration"
+  _missing_in_image "WIFI-01..07" "${NM_MAIN} missing or empty -- the image has no NetworkManager configuration"
 fi
 
 # WIFI-08: GreenAutarky-Install fallback WiFi connection
@@ -1611,7 +1617,7 @@ if [[ -f "$HSUP" ]]; then
     _pass "REG-06: haos-supervisor has no stale upstream refs"
   fi
 else
-  _fail "REG-04/05/06: ${HSUP} missing -- the Supervisor launcher is not in the image"
+  _missing_in_image "REG-04/05/06" "${HSUP} missing -- the Supervisor launcher is not in the image"
 fi
 
 # REG-07: Supervisor image tar uses greenautarky (only after full build)
@@ -2339,7 +2345,7 @@ if [[ -n "$SRC" ]]; then
       _fail "SRC-20: haos-supervisor does NOT mount /etc/ga-services.conf — the DNS plugin will silently use its hardcoded fallback IP"
     fi
   else
-    _fail "SRC-20: ${_SUP_LAUNCH} missing -- the Supervisor launcher is not in the image"
+    _missing_in_image "SRC-20" "${_SUP_LAUNCH} missing -- the Supervisor launcher is not in the image"
   fi
 
   # SRC-19: nothing may be written into target/ after the rootfs is sealed.
@@ -3777,7 +3783,7 @@ if [[ -f "$SUPERVISOR_LAUNCH" ]]; then
     _pass "SUP-CHANNEL-01: haos-supervisor does not set SUPERVISOR_DEV (channel stays stable)"
   fi
 else
-  _fail "SUP-CHANNEL-01: SUPERVISOR_DEV guard -- ${SUPERVISOR_LAUNCH} missing, the Supervisor launcher is not in the image"
+  _missing_in_image "SUP-CHANNEL-01" "SUPERVISOR_DEV guard -- ${SUPERVISOR_LAUNCH} missing, the Supervisor launcher is not in the image"
 fi
 
 # SUP-CHANNEL-02: the Supervisor image must be pulled from the GA fork.
@@ -3788,7 +3794,7 @@ if [[ -f "$SUPERVISOR_LAUNCH" ]]; then
     _fail "SUP-CHANNEL-02: Supervisor image is NOT pinned to ghcr.io/greenautarky (fork drift risk)"
   fi
 else
-  _fail "SUP-CHANNEL-02: Supervisor image pin -- ${SUPERVISOR_LAUNCH} missing, the Supervisor launcher is not in the image"
+  _missing_in_image "SUP-CHANNEL-02" "Supervisor image pin -- ${SUPERVISOR_LAUNCH} missing, the Supervisor launcher is not in the image"
 fi
 
 # SUP-CHANNEL-03: the bootstrap version-feed fallback in the launch
@@ -3807,7 +3813,7 @@ if [[ -f "$SUPERVISOR_LAUNCH" ]]; then
     _skip "SUP-CHANNEL-03: version-feed fallback" "no feed URL in launch script (relies on supervisor const.py)"
   fi
 else
-  _fail "SUP-CHANNEL-03: version-feed fallback -- ${SUPERVISOR_LAUNCH} missing, the Supervisor launcher is not in the image"
+  _missing_in_image "SUP-CHANNEL-03" "version-feed fallback -- ${SUPERVISOR_LAUNCH} missing, the Supervisor launcher is not in the image"
 fi
 
 # =========================================================================
