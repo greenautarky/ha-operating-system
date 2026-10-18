@@ -90,15 +90,20 @@ def _decompress_layer(data: bytes, media_type: str) -> bytes:
     decompressor module and is a loud error without one (never a skipped layer)."""
     if media_type.endswith("+zstd") or data[:4] == b"\x28\xb5\x2f\xfd":
         try:
-            import zstandard  # type: ignore[import-not-found]
-            return zstandard.ZstdDecompressor().stream_reader(io.BytesIO(data)).read()
-        except ImportError:
-            pass
-        try:
-            from compression import zstd  # type: ignore[import-not-found]  # Python >= 3.14
-            return zstd.decompress(data)
-        except ImportError:
-            raise ValueError("zstd-compressed layer and no zstd decompressor available") from None
+            try:
+                import zstandard  # type: ignore[import-not-found]
+                return zstandard.ZstdDecompressor().stream_reader(io.BytesIO(data)).read()
+            except ImportError:
+                pass
+            try:
+                from compression import zstd  # type: ignore[import-not-found]  # Python >= 3.14
+                return zstd.decompress(data)
+            except ImportError:
+                raise ValueError("zstd-compressed layer and no zstd decompressor available") from None
+        except ValueError:
+            raise
+        except Exception as e:  # a decompressor's own error type (ZstdError, ...)
+            raise ValueError(f"zstd layer not decodable ({e.__class__.__name__})") from None
     return data
 
 
