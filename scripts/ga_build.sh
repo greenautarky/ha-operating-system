@@ -855,7 +855,11 @@ verify_build_integrity() {
     # looks like `YYYY.MM.PATCH[.SUFFIX]` or `latest` (back-compat).
     local core_ver
     core_ver="$(jq -r '.core // "unknown"' "$version_json" 2>/dev/null)"
-    if [[ "$core_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || [[ "$core_ver" == "latest" ]]; then
+    if board_skips core; then
+      # The board declares (external.mk) that it bakes no Core image, so the
+      # version.json core entry is a placeholder and there is no tag to judge.
+      _check_pass "Core image tag: not checked, board '${BOARD}' bakes no Core image (GA_HASSIO_SKIP_IMAGES)"
+    elif [[ "$core_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || [[ "$core_ver" == "latest" ]]; then
       _check_pass "Core image tag: $core_ver"
     else
       _check_fail "Core image tag invalid: '$core_ver' (expected pinned version or 'latest')"
