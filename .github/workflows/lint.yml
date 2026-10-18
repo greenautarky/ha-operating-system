@@ -952,3 +952,11 @@ jobs:
       # must report the name missing. Red-proven: removing the alias fails it.
       - name: hassos-supervisor.service resolves to haos-supervisor.service (alias, real unit loader)
         run: ./tests/gates/supervisor_alias/selftest.sh
+
+      # scripts/release.sh bumps the OS version. Since HAOS 18.x `meta` is an
+      # upstream file; the GA suffix is one line of patches-haos/0101. The
+      # self-test drives the LIVE release.sh in a sandbox of three git repos
+      # (nothing pushed) and reads the version back through the applier, the way
+      # the build does. Red-proven: the sed-on-meta release.sh fails it.
+      - name: release.sh bumps the GA suffix in the meta patch (sandbox, read back like the build)
+        run: ./tests/gates/release_suffix/selftest.sh

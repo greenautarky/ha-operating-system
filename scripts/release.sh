@@ -7,7 +7,10 @@
 #   3. haos-version/stable.json                      "ihost" key (under hassos)
 #   4. haos-version/stable.json                      "ga_release" key   (since v1.2)
 #   5. ha-operating-system/version.yaml              "gaos_release:" key (since BOSv1.2.4 — read by ga_build.sh)
-#   6. ha-operating-system/buildroot-external/meta   VERSION_{MAJOR,MINOR,SUFFIX}
+#   6. ha-operating-system/buildroot-external/patches-haos/0101-*.patch
+#                                                    VERSION_SUFFIX (HAOS 18.x: `meta` is
+#                                                    upstream's; MAJOR/MINOR come from the
+#                                                    pinned haos/ and must match OS_VERSION)
 #
 # After this runs, the next steps are MANUAL (intentionally):
 #   a. SSH to the build host ($GA_BUILDER_HOST), run: ./scripts/ga_build.sh update
@@ -42,6 +45,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HA_OS_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=lib/ga-os-meta.sh
+. "$SCRIPT_DIR/lib/ga-os-meta.sh"
 SUPERVISOR_REPO="${SUPERVISOR_REPO:-/home/user/git/ha-supervisor}"
 HAOS_VERSION_REPO="${HAOS_VERSION_REPO:-/home/user/git/haos-version}"
 
@@ -150,29 +155,45 @@ preflight "$HA_OS_REPO"          "master"                 "ha-operating-system" 
 echo ""
 
 # Read current values to show diff
-META_FILE="$HA_OS_REPO/buildroot-external/meta"
+META_PATCH="$HA_OS_REPO/$GA_META_PATCH_REL"
 CUR_SUP=$(grep -E '^SUPERVISOR_VERSION' "$SUPERVISOR_REPO/supervisor/const.py" \
     | sed -E 's/.*"([^"]+)".*/\1/')
 CUR_OS=$(python3 -c "import json; print(json.load(open('$HAOS_VERSION_REPO/stable.json'))['hassos']['ihost'])")
 CUR_SUP_JSON=$(python3 -c "import json; print(json.load(open('$HAOS_VERSION_REPO/stable.json'))['supervisor'])")
 CUR_GA_REL=$(python3 -c "import json; print(json.load(open('$HAOS_VERSION_REPO/stable.json')).get('ga_release',''))")
-# Reconstruct OS version from meta (VERSION_MAJOR + VERSION_MINOR + VERSION_SUFFIX)
-META_MAJOR=$(grep '^VERSION_MAJOR=' "$META_FILE" | cut -d'"' -f2)
-META_MINOR=$(grep '^VERSION_MINOR=' "$META_FILE" | cut -d'"' -f2)
-META_SUFFIX=$(grep '^VERSION_SUFFIX=' "$META_FILE" | cut -d'"' -f2)
+# Reconstruct the OS version the way the build does: the patched upstream meta
+# (VERSION_MAJOR + VERSION_MINOR from haos/, VERSION_SUFFIX from the GA patch).
+META_MAJOR=$(ga_meta_get "$HA_OS_REPO" VERSION_MAJOR)
+META_MINOR=$(ga_meta_get "$HA_OS_REPO" VERSION_MINOR)
+META_SUFFIX=$(ga_meta_get "$HA_OS_REPO" VERSION_SUFFIX)
+if [[ -z "$META_MAJOR" || -z "$META_MINOR" ]]; then
+    echo "ERROR: cannot read VERSION_MAJOR/VERSION_MINOR from the patched haos meta (scripts/apply-haos-patches.sh --cat) — is the haos/ submodule checked out?"
+    exit 1
+fi
 CUR_META_OS="${META_MAJOR}.${META_MINOR}.${META_SUFFIX}"
 
-# Compute target meta values from requested OS_VERSION (e.g. 16.3.1.2 → MAJOR=16, MINOR=3, SUFFIX=1.2)
+# Compute target values from requested OS_VERSION (e.g. 18.3.1.2 → MAJOR=18, MINOR=3, SUFFIX=1.2)
 NEW_MAJOR=$(echo "$OS_VERSION" | cut -d. -f1)
 NEW_MINOR=$(echo "$OS_VERSION" | cut -d. -f2)
 NEW_SUFFIX=$(echo "$OS_VERSION" | cut -d. -f3-)
+if [[ "$OS_VERSION" != *.*.* ]]; then
+    echo "ERROR: OS version '$OS_VERSION' has no GA suffix (expected MAJOR.MINOR.SUFFIX, e.g. $META_MAJOR.$META_MINOR.1.7)"
+    exit 1
+fi
+# MAJOR.MINOR are upstream's (the haos/ pin): a release cannot change them. A
+# mismatch means OS_VERSION names another HAOS base than the one this tree builds.
+if [[ "$NEW_MAJOR.$NEW_MINOR" != "$META_MAJOR.$META_MINOR" ]]; then
+    echo "ERROR: OS version $OS_VERSION is based on HAOS $NEW_MAJOR.$NEW_MINOR, this tree builds $META_MAJOR.$META_MINOR (haos/ pin)."
+    echo "       Only the GA suffix is released from here; a new HAOS base is a haos/ submodule bump."
+    exit 1
+fi
 
 echo "Current values:"
 echo "  ha-supervisor const.py SUPERVISOR_VERSION = $CUR_SUP"
 echo "  haos-version stable.json supervisor       = $CUR_SUP_JSON"
 echo "  haos-version stable.json hassos.ihost     = $CUR_OS"
 echo "  haos-version stable.json ga_release       = $CUR_GA_REL"
-echo "  buildroot-external/meta OS-version        = $CUR_META_OS"
+echo "  GA meta patch OS-version                  = $CUR_META_OS"
 echo ""
 echo "Will change to:"
 echo "  ha-supervisor const.py SUPERVISOR_VERSION = $SUP_VERSION"
@@ -183,7 +204,7 @@ if [[ -n "$GA_RELEASE" ]]; then
 else
     echo "  haos-version stable.json ga_release       = (unchanged: $CUR_GA_REL)"
 fi
-echo "  buildroot-external/meta OS-version        = $OS_VERSION (MAJOR=$NEW_MAJOR MINOR=$NEW_MINOR SUFFIX=$NEW_SUFFIX)"
+echo "  GA meta patch OS-version                  = $OS_VERSION (SUFFIX=$NEW_SUFFIX; MAJOR=$NEW_MAJOR MINOR=$NEW_MINOR from haos/)"
 echo ""
 
 # Skip-checks: bail if nothing changed
@@ -233,12 +254,11 @@ else
     echo "  → supervisor=$SUP_VERSION, hassos.ihost=$OS_VERSION (ga_release unchanged) ✓"
 fi
 
-echo "Applying buildroot-external/meta..."
-sed -i.bak -E "s|^VERSION_MAJOR=.*|VERSION_MAJOR=\"$NEW_MAJOR\"|" "$META_FILE"
-sed -i.bak -E "s|^VERSION_MINOR=.*|VERSION_MINOR=\"$NEW_MINOR\"|" "$META_FILE"
-sed -i.bak -E "s|^VERSION_SUFFIX=.*|VERSION_SUFFIX=\"$NEW_SUFFIX\"|" "$META_FILE"
-rm "$META_FILE.bak"
-NEW_META=$(grep '^VERSION_MAJOR=' "$META_FILE" | cut -d'"' -f2).$(grep '^VERSION_MINOR=' "$META_FILE" | cut -d'"' -f2).$(grep '^VERSION_SUFFIX=' "$META_FILE" | cut -d'"' -f2)
+echo "Applying the GA meta patch (VERSION_SUFFIX)..."
+ga_meta_set_suffix "$META_PATCH" "$NEW_SUFFIX" || exit 1
+# Read it back the way the build reads it (patched upstream meta), not from the
+# line just written.
+NEW_META="$(ga_meta_get "$HA_OS_REPO" VERSION_MAJOR).$(ga_meta_get "$HA_OS_REPO" VERSION_MINOR).$(ga_meta_get "$HA_OS_REPO" VERSION_SUFFIX)"
 [[ "$NEW_META" == "$OS_VERSION" ]] || { echo "  FAIL: meta edit didn't take ($NEW_META)"; exit 1; }
 echo "  → $NEW_META ✓"
 
@@ -268,7 +288,7 @@ echo ""
 # Commit + push
 #
 # $2 (file) may be a single path OR a space-separated list. Word-splitting is
-# intentional here so callers can stage e.g. "buildroot-external/meta version.yaml"
+# intentional here so callers can stage e.g. "<meta patch> version.yaml"
 # in a single commit. shellcheck-disable=SC2086 lives below for that reason.
 commit_repo() {
     local repo="$1" file="$2" subject="$3" branch="$4"
@@ -302,8 +322,8 @@ commit_repo "$HAOS_VERSION_REPO" "stable.json" \
 # Stage version.yaml alongside meta in the ha-operating-system commit when
 # we touched it above (i.e. --ga-release was supplied). Single commit, single
 # push — the meta + gaos_release pair must always land together.
-HA_OS_FILES="buildroot-external/meta"
-HA_OS_SUBJECT="chore: bump OS version to $OS_VERSION (buildroot-external/meta)"
+HA_OS_FILES="$GA_META_PATCH_REL"
+HA_OS_SUBJECT="chore: bump OS version to $OS_VERSION (GA meta patch)"
 if [[ -n "$GA_RELEASE" && -f "$HA_OS_REPO/version.yaml" ]]; then
     HA_OS_FILES="$HA_OS_FILES version.yaml"
     HA_OS_SUBJECT="chore: bump OS to $OS_VERSION + gaos_release=$GA_RELEASE"
