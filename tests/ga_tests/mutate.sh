@@ -68,7 +68,13 @@ trap cleanup EXIT INT TERM
 
 # Only the source trees the SRC-* checks actually read. Never the repo root:
 # that is where ga_output and the signing keys live.
-SRC_SUBDIRS=(buildroot-external buildroot-ihost tests scripts)
+#
+# patches/ and the GA layer's patches-haos/ are in the list because, since
+# HAOS 18.x, the GA delta of every upstream file is a patch and the SRC-* checks
+# read the patched result (scripts/apply-haos-patches.sh --export). The upstream
+# tree itself (haos/) is NOT copied: it is read-only input, and the scratch copy
+# is linked into the scratch repo (copy_source).
+SRC_SUBDIRS=(buildroot-external buildroot-ihost tests scripts patches)
 
 copy_source() {
     local dest="$1" d
@@ -80,6 +86,14 @@ copy_source() {
             return 1
         }
     done
+    # The upstream tree is read-only input: link it, do not copy it (the applier
+    # and the Go-toolchain check read haos/ relative to the scratch repo root).
+    if [[ -e "${REPO_ROOT}/haos/buildroot-external" ]]; then
+        ln -s "${REPO_ROOT}/haos" "${dest}/haos"
+    else
+        echo "ERROR: ${REPO_ROOT}/haos is not checked out - the SRC-* checks cannot read upstream" >&2
+        return 1
+    fi
     # Belt and braces: if a PRIVATE key ever moves into one of those
     # directories, this is where it stops. A copy of signing material in /tmp is
     # not acceptable even for a second.
@@ -119,8 +133,8 @@ apply_mutation() {
     local name="$1" out="$2" src="$3"
     case "$name" in
         no-marker)         rm -f "$out/images/boot/ga-ethernet-force" ;;
-        no-sup-mount)      grep -v 'GA_SERVICES_MOUNT' "$out/target/usr/sbin/hassos-supervisor" \
-                             > "$out/target/usr/sbin/.tmp" && mv "$out/target/usr/sbin/.tmp" "$out/target/usr/sbin/hassos-supervisor" ;;
+        no-sup-mount)      grep -v 'GA_SERVICES_MOUNT' "$out/target/usr/sbin/haos-supervisor" \
+                             > "$out/target/usr/sbin/.tmp" && mv "$out/target/usr/sbin/.tmp" "$out/target/usr/sbin/haos-supervisor" ;;
         # The PEM header is assembled at runtime, not written literally. The
         # file this produces is identical either way — but the SOURCE then does
         # not contain a string that the disclosure gate (correctly) treats as a
@@ -132,9 +146,24 @@ apply_mutation() {
                            printf -- '-----BEGIN %s-----\nMUTATION\n-----END %s-----\n' "$_pem" "$_pem" \
                              > "$out/target/etc/ssh/injected.key" ;;
         post-seal-write)   touch "$out/target/etc/injected-after-seal" ;;
-        hardcoded-signkey) sed -i 's|key = "${GA_SIGN_KEY.*}"|key = "/build/key.pem"|' \
-                             "$src/buildroot-external/genimage/image-raucb-nospl.cfg" ;;
-        bridge-residue)    printf 'GA_LEGACY_CA_BRIDGE="false"\n' >> "$src/buildroot-external/meta" ;;
+        # The raucb genimage configs and meta are UPSTREAM files; the GA delta is
+        # a patch. The defect is injected into the patch, which is where it
+        # would be re-introduced for real. The test then asserts it did change
+        # the patch: an injector that edits nothing proves nothing.
+        hardcoded-signkey) _p="$src/buildroot-external/patches-haos/0110-ga-rauc-signing-keyring-release-floor.patch"
+                           sed -i 's|^+\tkey = "${GA_SIGN_KEY[^"]*}"|+\tkey = "/build/key.pem"|' "$_p"
+                           grep -q '^+.key = "/build/key.pem"' "$_p" ;;
+        bridge-residue)    _p="$src/buildroot-external/patches-haos/0101-ga-meta-product-name.patch"
+                           python3 - "$_p" <<'PY' || return 1
+import sys
+p = sys.argv[1]
+s = open(p).read()
+a = '+VERSION_SUFFIX="1.6"\n'
+assert s.count(a) == 1 and '@@ -1,8 +1,8 @@' in s
+s = s.replace(a, a + '+GA_LEGACY_CA_BRIDGE="false"\n').replace('@@ -1,8 +1,8 @@', '@@ -1,8 +1,9 @@')
+open(p, 'w').write(s)
+PY
+                           ;;
         *) return 1 ;;
     esac
 }
@@ -212,7 +241,7 @@ while IFS='|' read -r name expect desc; do
     # GA_SRC_ROOT is what makes the source mutations reachable: without it the
     # suite reads the real tree and every source mutation reports "not caught"
     # while the guard is in fact fine.
-    out="$(GA_SRC_ROOT="$srcwork/repo" "$srcwork/repo/tests/ga_tests/run_build_tests.sh" "$work" 2>/dev/null)"
+    out="$(HAOS_DIR="${REPO_ROOT}/haos" GA_SRC_ROOT="$srcwork/repo" "$srcwork/repo/tests/ga_tests/run_build_tests.sh" "$work" 2>/dev/null)"
     # [A-Za-z0-9-] not [A-Z0-9-]: check ids are not all upper case (CFG-49a),
     # and a failed substitution leaves the whole FAIL line in the id list,
     # which then reads as a bizarre extra "check".
