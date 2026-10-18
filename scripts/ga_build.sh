@@ -148,6 +148,17 @@ BR2EXT_IHOST="${BR2EXT_IHOST:-/build/$(ga_board_var BOARD_DIR "$BOARD")}"
 # The directory inside the board external that holds its `meta` file and its
 # post-build.d/ hooks (iHost: board/sonoff/ihost, DSGW-210: board/dusun/dsgw210).
 BOARD_BASE_DIR="${BOARD_BASE_DIR:-/build/$(ga_board_var BOARD_BASE "$BOARD")}"
+
+# The container images a board declares it does NOT bake: GA_HASSIO_SKIP_IMAGES
+# in its external.mk (patch 0131 reads the same variable). Empty for the iHost.
+# Read from the file, not remembered here, so the inventory and the scans below
+# cannot disagree with what the build actually baked.
+board_skipped_images() {
+  sed -n 's/^GA_HASSIO_SKIP_IMAGES[[:space:]]*=[[:space:]]*//p' "${BR2EXT_IHOST}/external.mk" 2>/dev/null \
+    | head -n 1 | sed 's/[[:space:]]*#.*$//'
+}
+# board_skips KEY — true when the board declares it does not bake KEY.
+board_skips() { case " $(board_skipped_images) " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 BR2EXT_NETBIRD="${BR2EXT_NETBIRD:-/build/${GA_LAYER_DIR}}"
 # Order matters for external.mk evaluation: HAOS, then the board, then GA.
 BR2_EXTERNAL_PATH="${HAOS_EXT}:${BR2EXT_IHOST}:${BR2EXT_NETBIRD}"
@@ -1713,20 +1724,30 @@ generate_sbom() {
 
     if [[ -f "$version_json" ]] && command -v jq &>/dev/null; then
       # Parse from version.json (preferred — has all metadata)
+      # Arch and machine are the board's (iHost: armv7 / tinker); components the
+      # board declares it does not bake are not listed as baked.
+      local inv_arch inv_machine
+      inv_arch="$(sed -n 's/^BR2_PACKAGE_HASSIO_ARCH="\(.*\)"$/\1/p' "${OUT}/.config" 2>/dev/null | head -n 1)"
+      inv_machine="$(sed -n 's/^BR2_PACKAGE_HASSIO_MACHINE="\(.*\)"$/\1/p' "${OUT}/.config" 2>/dev/null | head -n 1)"
+      inv_arch="${inv_arch:-armv7}"; inv_machine="${inv_machine:-tinker}"
       for comp in supervisor dns audio cli multicast observer; do
         local ver img
+        if board_skips "$comp"; then continue; fi
         ver="$(jq -r ".${comp} // \"unknown\"" "$version_json")"
-        img="$(jq -r ".images.${comp} // \"unknown\"" "$version_json" | sed 's/{arch}/armv7/g')"
+        img="$(jq -r ".images.${comp} // \"unknown\"" "$version_json" | sed "s/{arch}/${inv_arch}/g")"
         [[ "$first" == "true" ]] || echo ","
         first=false
         echo "    { \"name\": \"${comp}\", \"image\": \"${img}\", \"version\": \"${ver}\" }"
       done
       # core uses {machine} not {arch}
-      local core_ver core_img
-      core_ver="$(jq -r '.core // "unknown"' "$version_json")"
-      core_img="$(jq -r '.images.core // "unknown"' "$version_json" | sed 's/{machine}/tinker/g')"
-      echo ","
-      echo "    { \"name\": \"core\", \"image\": \"${core_img}\", \"version\": \"${core_ver}\" }"
+      if ! board_skips core; then
+        local core_ver core_img
+        core_ver="$(jq -r '.core // "unknown"' "$version_json")"
+        core_img="$(jq -r '.images.core // "unknown"' "$version_json" | sed "s/{machine}/${inv_machine}/g")"
+        [[ "$first" == "true" ]] || echo ","
+        first=false
+        echo "    { \"name\": \"core\", \"image\": \"${core_img}\", \"version\": \"${core_ver}\" }"
+      fi
 
     elif [[ -d "$images_dir" ]]; then
       # Fallback: parse from tar filenames
@@ -2720,7 +2741,17 @@ if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]];
   # The last line of the report stays the one-line summary read further down.
   _cve_images_dir="$(ls -d "${OUT}/build/hassio-"*/images 2>/dev/null | head -n 1 || true)"
   _cve_scan_file="${OUT}/images/reports/cve-scan-containers.txt"
-  if [[ -d "$_cve_images_dir" ]]; then
+  # A board that declares it bakes NO container image (GA_HASSIO_SKIP_IMAGES
+  # covers every key in its external.mk) has nothing to scan. That is accepted
+  # only when BOTH sources agree: the board says so AND the build produced no
+  # image file. A board that bakes images, or any disagreement, keeps the
+  # fail-closed behaviour below ("scanned zero" is a failure, not a pass).
+  _none_declared=1
+  for _k in supervisor dns audio cli multicast observer core; do board_skips "$_k" || _none_declared=0; done
+  if [[ "$_none_declared" == 1 && -z "$(find "${OUT}"/build/hassio-*/images -maxdepth 1 -type f 2>/dev/null | head -n 1)" ]]; then
+    echo "NOTICE: board '${BOARD}' declares it bakes no container images (GA_HASSIO_SKIP_IMAGES) and none were baked -- the container image scan has nothing to scan and did NOT run" \
+      | tee "$_cve_scan_file"
+  elif [[ -d "$_cve_images_dir" ]]; then
     echo ""
     echo "Scanning the baked container images (CRITICAL,HIGH; fixable CRITICAL blocks)..."
     _img_out="${OUT}/images/reports/containers"

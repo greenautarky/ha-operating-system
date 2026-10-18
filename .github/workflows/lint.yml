@@ -1000,6 +1000,14 @@ jobs:
           ./tests/gates/dsgw_patch_mirror/selftest.sh
           ./scripts/dsgw210/check-haos-patch-mirror.sh
 
+      # ga_build.sh reads from the board's external.mk which container images
+      # the board does not bake (GA_HASSIO_SKIP_IMAGES): the container
+      # inventory leaves them out and a scan of zero images is accepted only
+      # when the board declares ALL of them skipped. The self-test extracts the
+      # live functions and runs them over fixtures and the two real boards.
+      - name: Board-declared skipped container images (inventory and scan follow external.mk)
+        run: ./tests/gates/board_skipped_images/selftest.sh
+
       # HAOS 18.x names the Supervisor unit haos-supervisor.service; components
       # synced into the image and 1.5-era scripts name it hassos-supervisor.service
       # (ga-bootstrap.service Requires= it, and a Requires= on a missing unit
