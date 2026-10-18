@@ -1,0 +1,2 @@
+source "$BR2_EXTERNAL_DSGW210_PATH/package/dsgw210-led/Config.in"
+source "$BR2_EXTERNAL_DSGW210_PATH/package/ga-wlan-platdata/Config.in"

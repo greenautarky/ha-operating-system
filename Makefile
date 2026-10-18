@@ -9,7 +9,7 @@
 # release build is scripts/ga_build.sh (preflights, stamping, gates); this
 # Makefile is the developer entry for the same tree.
 #
-#   make ihost                  patch haos/ + configure + build
+#   make ihost | dsgw210        patch haos/ + configure + build
 #   make ihost-config           patch haos/ + configure only
 #   make haos-patch             apply the GA patch set to haos/ (fail-loud)
 #   make haos-unpatch           revert it (haos/ back to upstream)
@@ -63,6 +63,7 @@ $(addsuffix -config,$(BOARDS)): %-config: haos-patch
 		echo "FAIL: $(O) holds a config for another defconfig; use another O= or 'make distclean'." >&2; exit 1; \
 	fi
 	$(if $(filter ihost,$*),$(REPO)/scripts/ihost/check-haos-patch-mirror.sh)
+	$(if $(filter dsgw210,$*),$(REPO)/scripts/dsgw210/check-haos-patch-mirror.sh)
 	$(MAKE) -C $(BUILDROOT) O=$(O) BR2_EXTERNAL=$(HAOS)/buildroot-external:$(call board_dir,$*):$(GA_LAYER) $(call board_defc,$*)
 
 $(BOARDS): %: %-config

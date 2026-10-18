@@ -1,0 +1,24 @@
+[Unit]
+Description=DSGW-210 status-LED ring daemon (TM1929 on i2c-0)
+# Early: needs only /run (tmpfs) and the built-in i2c-dev + i2c-rk3x
+# (CONFIG_I2C_CHARDEV=y, CONFIG_I2C_RK3X=y). If /dev/i2c-0 is not there
+# yet the daemon logs it once and retries every 5 s; it never blocks boot.
+DefaultDependencies=no
+After=systemd-modules-load.service local-fs.target
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/dsgw-led daemon
+# Booting (iHost semantics: red ring sliding). dsgw-led-booted.service
+# switches to "Solid Yellow" once multi-user.target is reached.
+ExecStartPost=/usr/bin/dsgw-led set "Marquee Red"
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=sysinit.target

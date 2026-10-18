@@ -1,0 +1,18 @@
+config BR2_PACKAGE_DSGW210_LED
+	bool "dsgw210-led (dsgw-led: TM1929 status-LED ring daemon)"
+	depends on BR2_aarch64
+	help
+	  Status-LED daemon + client for the Dusun DSGW-210 front ring:
+	  6 RGB LEDs on a Titan Micro TM1929 at I2C 0x23 on /dev/i2c-0
+	  (no kernel driver, no DT node; the chip is driven from
+	  userspace like Dusun's own `dsled`).
+
+	    dsgw-led daemon | set "<Option>" | get | list | selftest
+
+	  Option names are the iHost hardware-control add-on's
+	  ("Solid Red", "Marquee Red", "Breathing Blue", ...). Installed
+	  as a static binary at /usr/bin/dsgw-led; the systemd units live
+	  in the dsgw210 board rootfs-overlay.
+
+comment "dsgw210-led needs an aarch64 toolchain"
+	depends on !BR2_aarch64

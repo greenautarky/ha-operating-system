@@ -1,0 +1,30 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] rockchip: rk3328: DSGW-210 usb20_otg as peripheral in u-boot
+
+rk3328-rock64.dts sets &usb20_otg dr_mode = "host". The dwc2 gadget driver
+(DM_USB_GADGET) rejects any node that is neither "peripheral" nor "otg", so
+rockusb would fail with "No USB device found". On the DSGW-210 this controller
+is the USB-C port (the kernel runs it as a CDC-ACM gadget), and in u-boot it
+is only ever used as a gadget: set dr_mode = "peripheral" in the u-boot dtsi.
+The kernel DT is not affected (it is built from board/dusun/dsgw210/dts).
+
+Applies on top of 0001-relabel-as-dsgw210.patch.
+
+Signed-off-by: GreenAutarky OS <noreply@greenautarky.invalid>
+---
+--- a/arch/arm/dts/rk3328-rock64-u-boot.dtsi
++++ b/arch/arm/dts/rk3328-rock64-u-boot.dtsi
+@@ -67,6 +67,13 @@
+ 
+ &usb20_otg {
+ 	hnp-srp-disable;
++	/*
++	 * DSGW-210: the USB-C port is the device port. rock64 sets
++	 * dr_mode = "host", which makes the dwc2 gadget driver refuse the
++	 * controller ("Invalid mode"), so no rockusb. Peripheral mode lets
++	 * u-boot serve rockusb (2207:320c) here for re-flashing over USB-C.
++	 */
++	dr_mode = "peripheral";
+ };
+ 
+ &vcc_sd {

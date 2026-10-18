@@ -1,0 +1,775 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Dusun DSGW-210 IoT Edge Gateway
+ *
+ * Copyright (c) 2026 GreenAutarky
+ *
+ * Derived from rk3328-rock64.dts (Pine64 Rock64): same RK3328 SoC and RK805
+ * PMIC. Differences from the Rock64:
+ *   - Ethernet uses `gmac2phy` (internal RMII PHY @ ff550000), not `gmac2io`
+ *     (external RGMII @ ff540000).
+ *   - No HDMI / VOP / audio / IR nodes (headless device) and no SPI-NOR.
+ *   - USB OTG stays in dr_mode="otg" so the USB-C port can serve as a CDC-ACM
+ *     serial console gadget (see the ga-usb-gadget-serial systemd unit).
+ *   - i2c0 is enabled for the TM1929 LED controller (driven from userspace).
+ *   - Board-level settings follow the vendor's device tree unless a comment
+ *     gives a reason. Deliberate deviations: watchdog on, 1.5 Mbaud ttyS2
+ *     console, headless removals, SDIO power sequencing plus the GMAC-M1 GRF
+ *     route fix, radio GPIO hogs. The thermal trips are the rk3328.dtsi
+ *     defaults and are not overridden here.
+ */
+
+/dts-v1/;
+#include <dt-bindings/input/input.h>
+#include "rk3328.dtsi"
+
+/ {
+	model = "Dusun DSGW-210";
+	compatible = "dusun,dsgw210", "rockchip,rk3328";
+
+	aliases {
+		ethernet0 = &gmac2phy;
+		serial0 = &uart0;
+		mmc0 = &sdmmc;
+		mmc1 = &emmc;
+		serial1 = &uart1;
+		serial2 = &uart2;
+	};
+
+	chosen {
+		stdout-path = "serial2:1500000n8";
+	};
+
+	/*
+	 * pstore/ramoops: 1 MiB at 0x30000000, holding the previous boot's
+	 * console and panic/oops records across a warm reset (watchdog,
+	 * reboot). Chosen to be safe on a 1 GiB DSGW variant as well as on
+	 * the 2 GiB board (it was 0x3ff00000 = the top MiB of a 1 GiB part,
+	 * exactly where u-boot relocates itself on 1 GiB):
+	 *  - BL31 (TF-A) lives at 0x40000 and u-boot keeps 0-2 MiB out of
+	 *    the kernel's memory map for it; no OP-TEE in this build;
+	 *  - u-boot 2026.04 fixed addresses (rk3328_common.h) all end below
+	 *    0x0a000000: scriptaddr 0x00500000, pxefile_addr_r 0x00600000,
+	 *    fdt_addr_r 0x01e00000, fdtoverlay_addr_r 0x01f00000,
+	 *    kernel_addr_r 0x02080000 (+ image_size 0x2690000 = 0x04710000),
+	 *    ramdisk_addr_r 0x06000000, kernel_comp_addr_r 0x08000000 +
+	 *    kernel_comp_size 0x2000000 = 0x0a000000; SPL stack 0x03e00000;
+	 *  - u-boot relocates itself (~0.7 MiB), its 32 MiB malloc and the
+	 *    FDT copy to the top of RAM: ~0x3dd00000..0x40000000 on 1 GiB,
+	 *    ~0x7dd00000..0x80000000 on 2 GiB; bootm's LMB allocations come
+	 *    from just below that, top-down;
+	 *  - the shipped DT has no other reserved-memory node.
+	 * So nothing written by SPL/u-boot/the kernel image lands there.
+	 * Layout: 512 KiB console ring, the other 512 KiB as 4 x 128 KiB
+	 * dmesg (oops/panic) records; no ftrace/pmsg zones.
+	 */
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		ramoops@30000000 {
+			compatible = "ramoops";
+			reg = <0x0 0x30000000 0x0 0x100000>;
+			console-size = <0x80000>;
+			record-size = <0x20000>;
+			ftrace-size = <0x0>;
+			pmsg-size = <0x0>;
+			ecc-size = <16>;
+		};
+	};
+	/* No external 125 MHz gmac_clkin — DSGW-210 uses internal RMII PHY,
+	 * MAC2PHY clock is generated on-chip from cpll/gpll. */
+
+	vcc_sys: regulator-vcc-sys {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc_sys";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+	};
+
+	/*
+	 * Reset key as in the vendor DT: gpio-keys "ResetKey" on GPIO1_A7,
+	 * active-low, linux,code = KEY_RIGHTALT, wakeup source.
+	 */
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		button-reset {
+			label = "ResetKey";
+			gpios = <&gpio1 RK_PA7 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RIGHTALT>;
+			wakeup-source;
+		};
+	};
+
+	/*
+	 * Status LEDs: the front RGB indicator is driven by a Titan Micro
+	 * TM1929 LED controller at i2c0 address 0x23, not by GPIOs. There is no
+	 * mainline kernel driver and no DT node for the chip; it is controlled
+	 * from userspace over /dev/i2c-0 (see the dsgw210-led package). i2c0 is
+	 * enabled below.
+	 */
+};
+
+&cpu0 { cpu-supply = <&vdd_arm>; };
+&cpu1 { cpu-supply = <&vdd_arm>; };
+&cpu2 { cpu-supply = <&vdd_arm>; };
+&cpu3 { cpu-supply = <&vdd_arm>; };
+
+/*
+ * CPU OPP voltages as in the vendor DT (cpu0-opp-table), L0 column. The BSP
+ * picks per chip between L0 (higher) and L1 (= mainline values) from the efuse
+ * leakage (rockchip,leakage-voltage-sel); mainline cannot select leakage
+ * bins, so the conservative L0 set is used for every chip. <target min max>
+ * as the vendor DT: max 1.35 V on all OPPs. Same six frequencies (408..1296
+ * MHz), same opp-suspend (408 MHz).
+ */
+&cpu0_opp_table {
+	opp-408000000 { opp-microvolt = <950000 950000 1350000>; };
+	opp-600000000 { opp-microvolt = <950000 950000 1350000>; };
+	opp-816000000 { opp-microvolt = <1050000 1050000 1350000>; };
+	opp-1008000000 { opp-microvolt = <1150000 1150000 1350000>; };
+	opp-1200000000 { opp-microvolt = <1275000 1275000 1350000>; };
+	opp-1296000000 { opp-microvolt = <1350000 1350000 1350000>; };
+};
+
+/*
+ * eMMC as in the vendor DT: 8-bit, disable-wp, non-removable, max-frequency
+ * 150 MHz (= rk3328.dtsi default), no speed caps and no vmmc/vqmmc supplies,
+ * so the card runs in legacy timing. Both rails are always-on RK805 outputs
+ * (vcc_io 3.3 V, vcc18_emmc 1.8 V = vccio2). HS200 is deliberately not
+ * enabled: it needs a soak/CRC test on this board first.
+ */
+&emmc {
+	bus-width = <8>;
+	disable-wp;
+	non-removable;
+	pinctrl-names = "default";
+	pinctrl-0 = <&emmc_clk &emmc_cmd &emmc_bus8>;
+	status = "okay";
+};
+
+/* The board uses the on-chip RMII MAC with its integrated PHY (gmac2phy @
+ * ff550000). The external RGMII path (gmac2io @ ff540000) is unused. The
+ * vendor DT has ethernet@ff550000 enabled with phy-mode "rmii",
+ * phy-is-integrated and clock_in_out "output". */
+&gmac2phy {
+	phy-supply = <&vcc_io>;
+	clock_in_out = "output";
+	assigned-clocks = <&cru SCLK_MAC2PHY_SRC>;
+	assigned-clock-rate = <50000000>;
+	assigned-clock-parents = <&cru PLL_CPLL>;
+	status = "okay";
+};
+
+/* gmac2io explicitly disabled — keeps any later overlay from re-enabling
+ * by accident, and documents why we don't use it here. */
+&gmac2io {
+	status = "disabled";
+};
+
+/*
+ * Integrated PHY: no LED pinmux, as in the vendor DT (the node has
+ * pinctrl-names but no pinctrl-0). The mainline rk3328.dtsi puts the
+ * fephyled_linkm1 (GPIO2_D0 func2) and fephyled_rxm1 (GPIO2_D1 func2) groups
+ * on the PHY node; those are the same pads as i2c0_xfer (GPIO2_D0/D1 func1),
+ * which is enabled for the TM1929 LED controller. Two owners for one pad:
+ * whichever device binds second would fail its pinctrl claim.
+ */
+&phy {
+	/delete-property/ pinctrl-names;
+	/delete-property/ pinctrl-0;
+};
+
+/*
+ * SDIO bus + RTL8821CS Wi-Fi/BT combo chip (SDIO host @ ff510000; the chip is
+ * bound by the mainline rtw88_8821cs driver once the card enumerates).
+ *
+ * The vendor firmware uses the Rockchip BSP `wlan-platdata` driver, which
+ * drives two GPIOs high before triggering an SDIO rescan (a Rockchip-only
+ * kernel API):
+ *   poweren = gpio1 PC2 (WLAN_REG_ON)
+ *   vbat    = gpio1 PD0 (VBAT_EN, main power rail)
+ *
+ * Mainline has no such driver, so the equivalent sequence is built from
+ * mainline bindings: WLAN_REG_ON is owned by an mmc-pwrseq-simple node
+ * (asserted low at probe, released before bus init, 500 ms settle), the RK805
+ * 32 kHz clock output feeds the chip's LPO input, and VBAT is an always-on
+ * regulator.
+ */
+/ {
+	/*
+	 * VBAT_EN for the RTL8821CS — gpio1 RK_PD0 (= gpio56). Always-on
+	 * regulator; mirrors the vendor behaviour where vbat is HIGH from boot.
+	 */
+	vcc_wifi: regulator-vcc-wifi {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc_wifi";
+		enable-active-high;
+		gpio = <&gpio1 RK_PD0 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&wifi_vbat_h>;
+		regulator-always-on;
+		regulator-boot-on;
+		vin-supply = <&vcc_io>;
+	};
+
+	/*
+	 * WLAN_REG_ON (gpio1 PC2) is owned by the pwrseq node below. The chip
+	 * must not be powered before the SDIO host has been set up: a chip that
+	 * is powered but uninitialised holds DAT0 low and stalls the host
+	 * controller's clock update. The bootloader therefore leaves the line
+	 * low, and mmc-core drives it low->high in mmc_power_up before the first
+	 * card command.
+	 */
+	sdio_pwrseq: sdio-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		clocks = <&rk805 1>;
+		clock-names = "ext_clock";
+		pinctrl-names = "default";
+		pinctrl-0 = <&wifi_enable_h>;
+		reset-gpios = <&gpio1 RK_PC2 GPIO_ACTIVE_LOW>;
+		post-power-on-delay-ms = <500>;
+		status = "okay";
+	};
+
+	/*
+	 * Node for the out-of-tree ga-wlan-platdata module, which holds the
+	 * 32 kHz LPO clock (`ext_clock`) enabled. WL_REG_ON is owned by the
+	 * pwrseq node above, so the module does not claim that GPIO.
+	 */
+	wireless_wlan: wireless-wlan {
+		compatible = "greenautarky,wlan-platdata";
+		clocks = <&rk805 1>;
+		clock-names = "ext_clock";
+		mmc-host = <&sdio>;
+		status = "okay";
+	};
+};
+
+&pinctrl {
+	sdio-pwrseq {
+		wifi_enable_h: wifi-enable-h {
+			rockchip,pins = <1 RK_PC2 RK_FUNC_GPIO &pcfg_pull_none_12ma>;
+		};
+		wifi_vbat_h: wifi-vbat-h {
+			rockchip,pins = <1 RK_PD0 RK_FUNC_GPIO &pcfg_pull_none_12ma>;
+		};
+	};
+};
+
+/*
+ * SDIO bus for the RTL8821CS Wi-Fi. Matches the vendor DT with one addition,
+ * `rockchip,clear-gmac-m1-routes`, the opt-in for the dw_mmc-rockchip patch
+ * that clears stale GMAC-M1 route bits in the GRF (see patches/linux/0005).
+ */
+&sdio {
+	bus-width = <4>;
+	cap-sd-highspeed;
+	cap-sdio-irq;
+	disable-wp;
+	keep-power-in-suspend;
+	max-frequency = <50000000>;
+	mmc-pwrseq = <&sdio_pwrseq>;
+	non-removable;
+	num-slots = <1>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&sdmmc1_bus4 &sdmmc1_cmd &sdmmc1_clk>;
+	supports-sdio;
+
+	/* Keep clk_sdio's parent at 100 MHz (vendor value); the controller's
+	 * clock divider derives the card-side bus rate from it. */
+	assigned-clocks = <&cru SCLK_SDIO>;
+	assigned-clock-rates = <100000000>;
+
+	/* Clear the GMAC-M1 route override bits in GRF_SOC_CON34 at probe time,
+	 * so the SDIO IOMUX controls PB6/PB3 instead of the GMAC-M1 path
+	 * driving them. Handled by the dw_mmc-rockchip patch, see
+	 * patches/linux/0005-...
+	 */
+	rockchip,grf = <&grf>;
+	rockchip,clear-gmac-m1-routes;
+
+	status = "okay";
+};
+
+/*
+ * i2c0 -- peripheral bus:
+ *   0x23  TM1929 RGB-LED controller (userspace-driven, no DT node)
+ *   0x55  bq27546 battery fuel gauge
+ *   0x6A  bq25895 battery charger
+ * Charger and gauge nodes follow the vendor DT with the same ti,* values.
+ * Binding-level translation only:
+ *   - compatible: "ti,bq25890" -> mainline "ti,bq25895", "ti,bq25890"
+ *     (the driver reads the chip ID anyway)
+ *   - IRQ: vendor property bq25890_irq-gpios = GPIO0_D6 active-low ->
+ *     mainline interrupts on gpio0 RK_PD6, falling edge.
+ * The charger and gauge are populated only on units fitted with a battery.
+ * Pinmux (i2c0_xfer) is inherited from rk3328.dtsi.
+ */
+&i2c0 {
+	status = "okay";
+
+	charger@6a {
+		compatible = "ti,bq25895", "ti,bq25890";
+		reg = <0x6a>;
+		interrupt-parent = <&gpio0>;
+		interrupts = <RK_PD6 IRQ_TYPE_EDGE_FALLING>;
+		/*
+		 * GPIO0_D6 defaults to sdmmc0m1_pwren (func 3); without an explicit
+		 * GPIO mux the IRQ request fails and the probe returns -EIO.
+		 */
+		pinctrl-names = "default";
+		pinctrl-0 = <&charger_int>;
+		ti,battery-regulation-voltage = <4256000>;
+		ti,charge-current = <1088000>;
+		ti,termination-current = <128000>;
+		ti,precharge-current = <128000>;
+		ti,minimum-sys-voltage = <3000000>;
+		ti,boost-voltage = <5126000>;
+		ti,boost-max-current = <1400000>;
+		ti,use-ilim-pin;
+		ti,thermal-regulation-threshold = <100>;
+	};
+
+	fuel-gauge@55 {
+		compatible = "ti,bq27546";
+		reg = <0x55>;
+	};
+};
+
+&i2c1 {
+	status = "okay";
+
+	rk805: pmic@18 {
+		compatible = "rockchip,rk805";
+		reg = <0x18>;
+		interrupt-parent = <&gpio2>;
+		interrupts = <6 IRQ_TYPE_LEVEL_LOW>;
+		#clock-cells = <1>;
+		clock-output-names = "xin32k", "rk805-clkout2";
+		gpio-controller;
+		#gpio-cells = <2>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pmic_int_l>;
+		system-power-controller;
+		wakeup-source;
+
+		vcc1-supply = <&vcc_sys>;
+		vcc2-supply = <&vcc_sys>;
+		vcc3-supply = <&vcc_sys>;
+		vcc4-supply = <&vcc_sys>;
+		vcc5-supply = <&vcc_io>;
+		vcc6-supply = <&vcc_sys>;
+
+		regulators {
+			vdd_logic: DCDC_REG1 {
+				regulator-name = "vdd_logic";
+				regulator-min-microvolt = <712500>;
+				regulator-max-microvolt = <1450000>;
+				regulator-ramp-delay = <12500>;
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-state-mem {
+					regulator-on-in-suspend;
+					regulator-suspend-microvolt = <1000000>;
+				};
+			};
+
+			vdd_arm: DCDC_REG2 {
+				regulator-name = "vdd_arm";
+				regulator-min-microvolt = <712500>;
+				regulator-max-microvolt = <1450000>;
+				regulator-ramp-delay = <12500>;
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-state-mem {
+					regulator-on-in-suspend;
+					regulator-suspend-microvolt = <950000>;
+				};
+			};
+
+			vcc_ddr: DCDC_REG3 {
+				regulator-name = "vcc_ddr";
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-state-mem {
+					regulator-on-in-suspend;
+				};
+			};
+
+			vcc_io: DCDC_REG4 {
+				regulator-name = "vcc_io";
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-state-mem {
+					regulator-on-in-suspend;
+					regulator-suspend-microvolt = <3300000>;
+				};
+			};
+
+			/* regulator-name as Dusun (RK805_LDO1 "vdd_18") */
+			vcc_18: LDO_REG1 {
+				regulator-name = "vdd_18";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-state-mem {
+					regulator-on-in-suspend;
+					regulator-suspend-microvolt = <1800000>;
+				};
+			};
+
+			/* regulator-name as Dusun (RK805_LDO2 "vcc_18emmc") */
+			vcc18_emmc: LDO_REG2 {
+				regulator-name = "vcc_18emmc";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-state-mem {
+					regulator-on-in-suspend;
+					regulator-suspend-microvolt = <1800000>;
+				};
+			};
+
+			/*
+			 * 1.1 V as in the vendor DT (RK805_LDO3 "vdd_11", suspend
+			 * 1100000 uV).
+			 */
+			vdd_11: LDO_REG3 {
+				regulator-name = "vdd_11";
+				regulator-min-microvolt = <1100000>;
+				regulator-max-microvolt = <1100000>;
+				regulator-always-on;
+				regulator-boot-on;
+				regulator-state-mem {
+					regulator-on-in-suspend;
+					regulator-suspend-microvolt = <1100000>;
+				};
+			};
+		};
+	};
+
+	/*
+	 * Board RTC as in the vendor DT (rtc@51, "nxp,pcf85063"), registered
+	 * as rtc0 and used to set the system clock. The vendor DT disables the
+	 * RK805 RTC; mainline has no DT switch for that MFD cell, so the board
+	 * kernel config fragment turns CONFIG_RTC_DRV_RK808 off and builds
+	 * PCF85063 in.
+	 */
+	rtc@51 {
+		compatible = "nxp,pcf85063";
+		reg = <0x51>;
+	};
+};
+
+&io_domains {
+	status = "okay";
+	vccio1-supply = <&vcc_io>;
+	vccio2-supply = <&vcc18_emmc>;
+	vccio3-supply = <&vcc_io>;
+	vccio4-supply = <&vcc_18>;
+	vccio5-supply = <&vcc_io>;
+	vccio6-supply = <&vcc_io>;
+	pmuio-supply = <&vcc_io>;
+};
+
+&pinctrl {
+	pmic {
+		pmic_int_l: pmic-int-l {
+			rockchip,pins = <2 RK_PA6 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+
+};
+
+/*
+ * Radio control lines held by gpio-hogs at boot:
+ *   gpio1 PC5 (gpio53) LTE BG96 powerkey  HIGH
+ *   gpio1 PC6 (gpio54) LTE BG96 powerctl  HIGH
+ *   gpio1 PD2 (gpio58) LTE BG96 reset     LOW (= run)
+ *   gpio1 PD1 (gpio57) rp_gpio/gpio1d1    HIGH (as the vendor rp_gpio)
+ *   gpio2 PA3 (gpio67) radio power        HIGH
+ * The vendor firmware drives these from userspace (bg96_powerup.sh,
+ * export_zigbee_zwave_ble_gpio.sh) and, for PD1, from rp_gpio. The hogs keep
+ * the radios powered without a userspace owner. A hogged line cannot be
+ * requested, so a userspace tool cannot pulse PWRKEY while the hog holds it;
+ * replacing the hogs by a userspace owner is a possible follow-up.
+ *
+ * Pad configuration is the SoC default, as in the vendor DT. A stronger
+ * 12 mA override is not needed once the GMAC-M1 route override is cleared
+ * (patches/linux/0005).
+ */
+&gpio1 {
+
+	bg96-powerctl-hog {
+		gpio-hog;
+		gpios = <RK_PC6 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "bg96-powerctl";
+	};
+	bg96-powerkey-hog {
+		gpio-hog;
+		gpios = <RK_PC5 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "bg96-powerkey";
+	};
+	bg96-reset-hog {
+		gpio-hog;
+		gpios = <RK_PD2 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "bg96-reset";
+	};
+	rp-gpio-pd1-hog {
+		gpio-hog;
+		gpios = <RK_PD1 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "rp-gpio1d1";
+	};
+	/*
+	 * No hog on RK_PC2: mmc-pwrseq-simple owns WL_REG_ON via reset-gpios,
+	 * and a hog would claim the line before the pwrseq probe.
+	 */
+};
+
+/*
+ * GPIO0_A2 driven HIGH at boot, as the vendor firmware does (rp_gpio node,
+ * gpio0a2 as an output with value 1). A gpio-hog is the mainline equivalent
+ * of that held output. On another board revision this pin is labelled
+ * "usb30drv" (USB3 VBUS drive, default on).
+ */
+&gpio0 {
+	rp-gpio-pa2-hog {
+		gpio-hog;
+		gpios = <RK_PA2 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "rp-gpio0a2";
+	};
+};
+
+&gpio2 {
+
+	ble-power-hog {
+		gpio-hog;
+		gpios = <RK_PA3 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "ble-power";
+	};
+};
+
+&sdmmc {
+	bus-width = <4>;
+	cap-mmc-highspeed;
+	cap-sd-highspeed;
+	disable-wp;
+	max-frequency = <150000000>;
+	pinctrl-names = "default";
+	/*
+	 * Pad drive 4 mA on all SD pins, as in the vendor DT (sdmmc0-clk
+	 * pull-none-4ma, sdmmc0-cmd/-bus4/-dectn pull-up-4ma). The mainline
+	 * groups use 8 mA on clk/cmd/bus4.
+	 */
+	pinctrl-0 = <&sdmmc0_clk_dusun &sdmmc0_cmd_dusun &sdmmc0_dectn &sdmmc0_bus4_dusun>;
+	/*
+	 * No vmmc-supply, as in the vendor DT. GPIO0_D6, which switches the
+	 * SD-card supply on a Rock64, is the bq25895 charger interrupt input on
+	 * this board.
+	 */
+	status = "okay";
+};
+
+&pinctrl {
+	charger {
+		charger_int: charger-int {
+			rockchip,pins = <0 RK_PD6 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+};
+
+&pinctrl {
+	sdmmc0 {
+		sdmmc0_clk_dusun: sdmmc0-clk-dusun {
+			rockchip,pins = <1 RK_PA6 1 &pcfg_pull_none_4ma>;
+		};
+		sdmmc0_cmd_dusun: sdmmc0-cmd-dusun {
+			rockchip,pins = <1 RK_PA4 1 &pcfg_pull_up_4ma>;
+		};
+		sdmmc0_bus4_dusun: sdmmc0-bus4-dusun {
+			rockchip,pins = <1 RK_PA0 1 &pcfg_pull_up_4ma>,
+					<1 RK_PA1 1 &pcfg_pull_up_4ma>,
+					<1 RK_PA2 1 &pcfg_pull_up_4ma>,
+					<1 RK_PA3 1 &pcfg_pull_up_4ma>;
+		};
+	};
+};
+
+/*
+ * UART0 (GPIO1_B1 TX / GPIO1_B0 RX) enabled, TX/RX only (no CTS/RTS), alias
+ * serial0, as in the vendor DT. Pulls as in the vendor uart0-xfer: TX (PB1)
+ * pull-up, RX (PB0) pull-none; the mainline group has them the other way
+ * round.
+ */
+&pinctrl {
+	uart0 {
+		uart0_xfer_dusun: uart0-xfer-dusun {
+			rockchip,pins = <1 RK_PB1 1 &pcfg_pull_up>,
+					<1 RK_PB0 1 &pcfg_pull_none>;
+		};
+	};
+};
+
+&uart0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart0_xfer_dusun>;
+	status = "okay";
+};
+
+/* UART1 = Z-Wave ZGM130S (SerialAPI @ 115200 8N1).
+ *
+ * Override mainline default which claims all 4 wires (TX+RX+CTS+RTS,
+ * PA4+PA5+PA6+PA7); DSGW-210 only has TX+RX wired. PA5/PA7 may be
+ * used for other functions on the PCB.
+ *
+ * Plus force SCLK_UART1 to 24 MHz from xin24m. Without this, the
+ * RK3328 cru leaves SCLK_UART1 stuck at clk_uart1_frac default of
+ * 153600 Hz (UART2 only works because the kernel-console code calls
+ * clk_set_rate when ttyS2 is registered). UART1 has no such
+ * auto-init — needs explicit assigned-clocks/rates here.
+ */
+/*
+ * Pulls as in the vendor uart1-xfer: GPIO3_A4 pull-up, GPIO3_A6 pull-none.
+ * The mainline group has them the other way round.
+ */
+&pinctrl {
+	uart1 {
+		uart1_xfer_dusun: uart1-xfer-dusun {
+			rockchip,pins = <3 RK_PA4 4 &pcfg_pull_up>,
+					<3 RK_PA6 4 &pcfg_pull_none>;
+		};
+	};
+};
+
+&uart1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart1_xfer_dusun>;
+	assigned-clocks = <&cru SCLK_UART1>;
+	assigned-clock-rates = <24000000>;
+	status = "okay";
+};
+
+/*
+ * SPI0 = LoRaWAN concentrator (Semtech SX1302) on an mPCIe slot wired as SPI.
+ *
+ * Pin mux = spi0m2 (gpio3 PA0=clk PA1=tx PA2=rx PB0=cs0), as in the vendor
+ * DT. That is also the rk3328.dtsi default; it is spelled out here so the
+ * choice is explicit.
+ *
+ * Userspace LoRa daemons (basicstation/packet_forwarder) talk to
+ * /dev/spidev0.0, exposed via a generic spidev binding.
+ */
+&spi0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&spi0m2_clk &spi0m2_tx &spi0m2_rx &spi0m2_cs0>;
+	max-frequency = <24000000>;
+	status = "okay";
+
+	/* SX1302 LoRa concentrator — using rohm,dh2228fv as a generic
+	 * spidev-compatible probe; the LoRa userspace tooling opens
+	 * /dev/spidev0.0 directly and speaks the SX1302 protocol. */
+	lora@0 {
+		compatible = "rohm,dh2228fv";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+	};
+};
+
+/* UART2 = debug / kernel console (Rockchip m1 pinmux, 0xff130000).
+ * Mainline default pinctrl: a custom pull-config override broke stty access
+ * on ttyS2.
+ */
+&uart2 {
+	status = "okay";
+};
+
+/*
+ * bq25895 INT (GPIO0_D6) as an input hog. The bootloader builds on the
+ * rock64 DT, which drives GPIO0_D6 as the vcc_sd switch, so the line arrives
+ * as an OUTPUT and gpiochip_lock_as_irq() refuses it. The pin mux alone does
+ * not change the direction; the hog makes it an input before the charger
+ * requests its IRQ.
+ */
+&gpio0 {
+	charger-int-hog {
+		gpio-hog;
+		gpios = <RK_PD6 GPIO_ACTIVE_HIGH>;
+		input;
+		line-name = "bq25895-int";
+	};
+};
+
+/*
+ * SARADC + adc-keys as in the vendor DT (saradc@ff280000, vref = RK805 LDO1
+ * "vdd_18"; adc-keys on channel 0, pressed < 18 mV, released at 1.8 V,
+ * linux,code 0x73). Kept because the reset/recovery button may sit on this
+ * ADC; with the node enabled the raw values are readable in /sys/bus/iio and
+ * a press shows up as an input event.
+ */
+&saradc {
+	vref-supply = <&vcc_18>;
+	status = "okay";
+};
+
+/ {
+	adc-keys {
+		compatible = "adc-keys";
+		io-channels = <&saradc 0>;
+		io-channel-names = "buttons";
+		poll-interval = <100>;
+		keyup-threshold-microvolt = <1800000>;
+
+		vol-up-key {
+			linux,code = <KEY_VOLUMEUP>;
+			label = "volume up";
+			press-threshold-microvolt = <18000>;
+		};
+	};
+};
+
+&tsadc {
+	rockchip,hw-tshut-mode = <0>;
+	rockchip,hw-tshut-polarity = <0>;
+	status = "okay";
+};
+
+&u2phy {
+	status = "okay";
+	u2phy_host: host-port { status = "okay"; };
+	u2phy_otg:  otg-port  { status = "okay"; };
+};
+
+/*
+ * USB OTG (USB-C connector). Kept in "otg" mode so the port can
+ * arbitrate host vs. peripheral at runtime. Our rootfs configures a
+ * CDC-ACM gadget for the Linux serial console when attached as a
+ * peripheral.
+ */
+&usb20_otg {
+	dr_mode = "otg";
+	status = "okay";
+};
+
+/* USB3 and legacy EHCI/OHCI stay host-mode for peripherals / radios. */
+&usbdrd3 {
+	dr_mode = "host";
+	status = "okay";
+};
+
+&usb_host0_ehci { status = "okay"; };
+&usb_host0_ohci { status = "okay"; };

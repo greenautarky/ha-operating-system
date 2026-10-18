@@ -1,0 +1,20 @@
+config BR2_PACKAGE_GA_WLAN_PLATDATA
+	bool "ga-wlan-platdata (RTL8821CS power-on/rescan OOT module)"
+	depends on BR2_LINUX_KERNEL
+	depends on BR2_aarch64
+	help
+	  Out-of-tree kernel module that mimics the Rockchip 4.4 BSP
+	  rfkill-wlan + rp_gpio behaviour against the mainline 6.x kernel.
+
+	  Binds to the `greenautarky,wlan-platdata` / `rockchip,wlan-platdata`
+	  device-tree node, drives WL_REG_ON LOW->HIGH with BSP-style timing,
+	  enables the RK805 32 kHz LPO ext_clock, and triggers an SDIO rescan
+	  on the parent mmc-host phandle.
+
+	  Required for RTL8821CS WiFi enumeration on the Dusun DSGW-210
+	  (RK3328) under mainline kernels. The chip is silent under mainline's
+	  stock dwmmc-rockchip + mmc-pwrseq-simple flow; the BSP-equivalent
+	  late-rescan path supplied by this module is the working substitute.
+
+comment "ga-wlan-platdata needs a Linux kernel + aarch64 toolchain"
+	depends on !BR2_LINUX_KERNEL || !BR2_aarch64

@@ -1,0 +1,118 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] mmc: dw_mmc-rockchip: clear GMAC-M1 route override bits
+ on SDIO host (opt-in)
+
+RK3328 SDIO and GMAC-M1 (Gigabit Ethernet MAC) share the physical pins
+GPIO1_PB3..PC1. GRF_SOC_CON34 (offset 0x50 in the GRF block) carries
+per-pin route override bits: when SET, the GMAC-M1 hardware path drives the
+pin REGARDLESS of what the IOMUX register says. Bits 2 (gmac-m1_rxd0 on PB3)
+and 10 (gmac-m1-optimized_rxd3 on PB6 = SDIO DAT0) take over the SDIO bus when
+left set.
+
+Mainline u-boot leaves both bits set; the vendor BSP u-boot leaves them
+clear. Linux pinctrl-rockchip has no mechanism to clear route bits left
+enabled by the bootloader: it only sets routes a pinctrl group references.
+
+On an RK3328 with an SDIO WLAN chip on that host the result is that DAT0..DAT3
+read low at the pad, STATUS.DATA_BUSY stays set, CMD_UPD_CLK never completes
+and the card fails to initialise.
+
+Clear bits 2 and 10 of GRF_SOC_CON34 at parse_dt time when the DT opts in via
+`rockchip,clear-gmac-m1-routes`. The property is opt-in so other RK3328
+boards that legitimately use GMAC-M1 are unaffected.
+
+Signed-off-by: GreenAutarky OS <noreply@greenautarky.invalid>
+---
+--- a/drivers/mmc/host/dw_mmc-rockchip.c
++++ b/drivers/mmc/host/dw_mmc-rockchip.c
+@@ -7,15 +7,37 @@
+ #include <linux/platform_device.h>
+ #include <linux/clk.h>
+ #include <linux/hw_bitfield.h>
++#include <linux/mfd/syscon.h>
+ #include <linux/mmc/host.h>
+ #include <linux/of_address.h>
+ #include <linux/mmc/slot-gpio.h>
+ #include <linux/pm_runtime.h>
++#include <linux/regmap.h>
+ #include <linux/slab.h>
+ 
+ #include "dw_mmc.h"
+ #include "dw_mmc-pltfm.h"
+ 
++/*
++ * RK3328 quirk: SDIO and GMAC-M1 share physical pins
++ * GPIO1_PB3..PC1. GRF_SOC_CON34 (0x50 inside the GRF block) has
++ * per-pin route override bits — when SET, the GMAC-M1 HW path
++ * drives the pin regardless of what dwmmc1's pinctrl writes to the
++ * IOMUX register. Bits 2 (gmac-m1_rxd0 on PB3) and 10
++ * (gmac-m1-optimized_rxd3 on PB6 = SDIO DAT0) are the ones that
++ * conflict with SDIO. Mainline u-boot leaves them SET; the route
++ * override stays sticky into Linux. Clear them here when the DT
++ * opts in via `rockchip,clear-gmac-m1-routes`.
++ *
++ * Each bit at GRF + 0x50 is HIWORD-masked (write bits 16..31 = mask).
++ * To clear bits 2 + 10: write 0x04040000.
++ */
++#define RK3328_GRF_SOC_CON34			0x50
++#define RK3328_GMAC_M1_ROUTE_RXD0_BIT		BIT(2)
++#define RK3328_GMAC_M1_ROUTE_RXD3_BIT		BIT(10)
++#define RK3328_GMAC_M1_SDIO_ROUTE_MASK		\
++	(RK3328_GMAC_M1_ROUTE_RXD0_BIT | RK3328_GMAC_M1_ROUTE_RXD3_BIT)
++
+ #define RK3288_CLKGEN_DIV		2
+ #define SDMMC_TIMING_CON0		0x130
+ #define SDMMC_TIMING_CON1		0x134
+@@ -458,6 +480,43 @@
+ 	return 0;
+ }
+ 
++/*
++ * Clear the GMAC-M1 route bits in GRF_SOC_CON34 that would
++ * otherwise hijack the SDIO data pins. Opt-in via DT property
++ * `rockchip,clear-gmac-m1-routes`.
++ */
++static void dw_mci_rockchip_clear_gmac_m1_routes(struct dw_mci *host)
++{
++	struct regmap *grf;
++	int ret;
++
++	if (!device_property_read_bool(host->dev,
++				       "rockchip,clear-gmac-m1-routes"))
++		return;
++
++	grf = syscon_regmap_lookup_by_phandle(host->dev->of_node,
++					      "rockchip,grf");
++	if (IS_ERR(grf)) {
++		dev_warn(host->dev,
++			 "rockchip,clear-gmac-m1-routes set but no rockchip,grf phandle: %ld\n",
++			 PTR_ERR(grf));
++		return;
++	}
++
++	/* HIWORD-mask write: upper 16 bits = which bits to update,
++	 * lower 16 bits = new value (zero for the masked bits).
++	 */
++	ret = regmap_write(grf, RK3328_GRF_SOC_CON34,
++			   (RK3328_GMAC_M1_SDIO_ROUTE_MASK << 16));
++	if (ret)
++		dev_warn(host->dev,
++			 "failed to clear GMAC-M1 SDIO route bits: %d\n",
++			 ret);
++	else
++		dev_info(host->dev,
++			 "cleared GMAC-M1 route bits in GRF_SOC_CON34 (SDIO pin owner restored to dwmmc1)\n");
++}
++
+ static int dw_mci_rk3288_parse_dt(struct dw_mci *host)
+ {
+ 	struct dw_mci_rockchip_priv_data *priv;
+@@ -479,6 +538,8 @@
+ 
+ 	priv->internal_phase = false;
+ 
++	dw_mci_rockchip_clear_gmac_m1_routes(host);
++
+ 	return 0;
+ }
+ 

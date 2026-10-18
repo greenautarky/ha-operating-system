@@ -1,0 +1,28 @@
+# DSGW-210 radio USB-serial stable names.
+#
+# Installed in /usr/lib/udev/rules.d (read-only erofs rootfs) — NOT in
+# /etc/udev/rules.d. On HAOS /etc/udev/rules.d is a persistent ext4
+# mount (the hassos-overlay partition): it is seeded once at first boot
+# and is NEVER refreshed by a subsequent OS deploy. A rule placed under
+# /etc would be frozen at its first-boot content. /usr is part of the
+# erofs and updates with every OS image.
+#
+#   /dev/zigbee     SiLabs EmberZNet NCP        (z2m adapter: ember, 115200)
+#   /dev/bluetooth  SiLabs Bluetooth Gecko NCP  (bflash -b 500000)
+#   /dev/lte-at     Quectel BG96 AT-command port      (USB interface 02)
+#   /dev/lte-ppp    Quectel BG96 PPP / modem data port (USB interface 03)
+
+# Onboard Zigbee + Bluetooth: CH340 USB-UART bridges (vid 1a86 pid 7523),
+# distinguished by USB hub port (a board-level constant on the DSGW-210).
+# NB: the vendor firmware labels these two the other way round; the names
+# here follow the chip actually behind each port.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", KERNELS=="4-1.3", SYMLINK+="zigbee"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", KERNELS=="4-1.2", SYMLINK+="bluetooth"
+
+# Quectel BG96 LTE modem (vid 2c7c pid 0296). Match ENV{} only — these
+# are set by the usb_id builtin via 60-serial.rules, which runs before
+# this file. A rule mixing ATTRS{idVendor} (USB device) with
+# ATTRS{bInterfaceNumber} (USB interface) can never match: all ATTRS{}
+# in one rule must resolve on the *same* parent device.
+SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="2c7c", ENV{ID_MODEL_ID}=="0296", ENV{ID_USB_INTERFACE_NUM}=="02", SYMLINK+="lte-at"
+SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="2c7c", ENV{ID_MODEL_ID}=="0296", ENV{ID_USB_INTERFACE_NUM}=="03", SYMLINK+="lte-ppp"

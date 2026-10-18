@@ -25,10 +25,17 @@ MIN_GO="1.26.9"
 # shellcheck source=../../../../scripts/lib/tree-paths.sh
 . "$REPO_ROOT/scripts/lib/tree-paths.sh"
 EXT="$REPO_ROOT/$GA_LAYER_DIR"
-IHOST="$REPO_ROOT/$GA_BOARD_DIR_ihost"
+# The board whose inputs are judged (scripts/lib/tree-paths.sh GA_BOARDS); CI runs
+# this once per board. The variable keeps its historical name IHOST.
+BOARD="${GOTC_BOARD:-ihost}"
+case " $GA_BOARDS " in *" $BOARD "*) ;; *) echo "  FAIL  GOTC-IN-00: board '$BOARD' is not in GA_BOARDS ($GA_BOARDS)"; exit 1 ;; esac
+IHOST="$REPO_ROOT/$(ga_board_var BOARD_DIR "$BOARD")"
+# The board external's name (external.desc) decides its BR2_EXTERNAL_<NAME>_PATH variable.
+EXT_NAME="$(sed -n 's/^name:[[:space:]]*//p' "$IHOST/external.desc" 2>/dev/null | head -n 1)"
+[ -n "$EXT_NAME" ] || { echo "  FAIL  GOTC-IN-00: no name in $IHOST/external.desc"; exit 1; }
 HAOS_EXT="$REPO_ROOT/$GA_HAOS_DIR/buildroot-external"
 BR="$REPO_ROOT/$GA_HAOS_DIR/buildroot"
-DEFCONFIG="$(basename "$GA_DEFCONFIG_ihost")"
+DEFCONFIG="$(basename "$(ga_board_var DEFCONFIG "$BOARD")")"
 pass=0 fail=0
 _pass() { echo "  PASS  $1"; pass=$((pass+1)); }
 _fail() { echo "  FAIL  $1"; fail=$((fail+1)); }
@@ -50,9 +57,9 @@ else
 fi
 
 # GOTC-IN-02: the defconfig loads local.mk, and local.mk loads go-floor.mk.
-if grep -qE '^BR2_PACKAGE_OVERRIDE_FILE="\$\(BR2_EXTERNAL_IHOST_PATH\)/local\.mk"' "$IHOST/configs/$DEFCONFIG" 2>/dev/null \
+if grep -qE "^BR2_PACKAGE_OVERRIDE_FILE=\"\\\$\(BR2_EXTERNAL_${EXT_NAME}_PATH\)/local\\.mk\"" "$IHOST/configs/$DEFCONFIG" 2>/dev/null \
    && grep -qE '^include .*go-floor\.mk' "$IHOST/local.mk" 2>/dev/null; then
-  _pass "GOTC-IN-02: $DEFCONFIG -> buildroot-ihost/local.mk -> go-floor.mk (included before package/*/*.mk)"
+  _pass "GOTC-IN-02: $DEFCONFIG -> $(ga_board_var BOARD_DIR "$BOARD")/local.mk -> go-floor.mk (included before package/*/*.mk)"
 else
   _fail "GOTC-IN-02: go-floor.mk is not reachable from $DEFCONFIG (BR2_PACKAGE_OVERRIDE_FILE / local.mk include) - the floor would never load"
 fi

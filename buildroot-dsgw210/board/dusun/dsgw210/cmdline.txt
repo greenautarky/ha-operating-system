@@ -1,0 +1,19 @@
+console=ttyS2,1500000 earlycon=uart8250,mmio32,0xff130000 log_buf_len=8M printk.devkmsg=on rtw88_core.disable_lps_deep_mode=1 rtw88_8821cs.disable_lps_deep_mode=1
+
+# NOTE: only line 1 above is the kernel command line. u-boot's `fileenv`
+# command reads this file and truncates at the first non-printable byte
+# (the newline), so everything below is ignored by the bootloader and
+# serves as documentation.
+#
+# The SoC watchdog (snps,dw-wdt) is enabled and fed by systemd
+# (RuntimeWatchdogSec, see 10-dsgw210-watchdog.conf), so a hung kernel
+# resets itself. Do not add `nowatchdog` or `systemd.watchdog_sec=0`.
+#
+# `rtw88_*.disable_lps_deep_mode=1` is currently a no-op on this rtw88
+# build ("unknown parameter ... ignored"); kept for when the parameter exists.
+#
+# There is deliberately no `console=ttyGS0`: as the last console it would
+# become /dev/console, and every close() of it by PID 1 then waits up to
+# GS_CLOSE_TIMEOUT (15 s, u_serial.c) for a host that is connected but not
+# reading, which stalls boot. The login on ttyGS0 is unaffected
+# (serial-getty@ttyGS0, started by ga-usb-gadget-serial.service).

@@ -1,0 +1,13 @@
+# DSGW-210 — extra target file permissions.
+#
+# A Buildroot "permission table" (makedevs format), applied during
+# target-finalize *after* the rootfs overlay is copied in.
+#
+# Why this exists: NetworkManager refuses to load a connection keyfile
+# unless it is mode 0600 — it logs "File permissions (100644) are
+# insecure" and ignores the file. The rootfs-overlay is tracked in git,
+# which can only carry 0644 or 0755, so the LTE gsm connection keyfile
+# would ship world-readable and be dropped. Its mode is forced here.
+#
+# Columns: <path> <type> <mode> <uid> <gid> <major> <minor> <start> <inc> <count>
+/usr/lib/NetworkManager/system-connections/dsgw210-lte.nmconnection	f	600	0	0	-	-	-	-	-

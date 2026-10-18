@@ -1,0 +1,15 @@
+[Unit]
+Description=Expose USB-C as CDC-ACM serial console gadget (DSGW-210)
+After=local-fs.target
+Before=getty.target
+ConditionPathIsDirectory=/sys/class/udc
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/ga-usb-gadget-serial
+# Start the console getty only once ttyGS0 exists.
+ExecStartPost=-/bin/systemctl --no-block start serial-getty@ttyGS0.service
+
+[Install]
+WantedBy=multi-user.target

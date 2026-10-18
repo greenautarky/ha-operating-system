@@ -1,0 +1,62 @@
+#!/bin/sh
+# ga-usb-gadget-serial — build a CDC-ACM USB gadget so the USB-C port
+# on the Dusun DSGW-210 exposes a serial console to a host.
+#
+# Result: a host (laptop) that plugs a USB-C DATA cable into the
+# gateway's USB-C port sees /dev/ttyACM0 (CDC-ACM) with a login prompt
+# (serial-getty@ttyGS0). Deliberately NOT a kernel `console=`: as
+# /dev/console it blocked PID1 15 s per close (see cmdline.txt).
+#
+# Uses configfs (mount -t configfs); depends on the kernel being built
+# with CONFIG_USB_CONFIGFS + CONFIG_USB_CONFIGFS_ACM + CONFIG_USB_F_ACM
+# (see buildroot-dsgw210/board/dusun/dsgw210/kernel.config).
+#
+# We read the UDC name dynamically from /sys/class/udc/; this works
+# regardless of which DWC controller is active on the board.
+
+set -e
+
+GADGET_DIR=/sys/kernel/config/usb_gadget/ga_serial
+UDC="$(ls /sys/class/udc/ 2>/dev/null | head -n1)"
+
+if [ -z "$UDC" ]; then
+    echo "ga-usb-gadget-serial: no UDC available — gadget disabled" >&2
+    exit 0
+fi
+
+# Serialnumber: MAC-derived, stable across reboots. Fall back to
+# machine-id if we have no Ethernet MAC (should not happen on DSGW-210).
+MAC="$(cat /sys/class/net/end0/address /sys/class/net/eth0/address 2>/dev/null | head -n1 | tr -d ':')"
+SERIAL="${MAC:-$(cat /etc/machine-id 2>/dev/null | cut -c1-12)}"
+
+# Pre-teardown (idempotency: safe to re-run).
+if [ -d "$GADGET_DIR" ]; then
+    echo "" > "$GADGET_DIR/UDC" 2>/dev/null || true
+    find "$GADGET_DIR/configs"/*/ -maxdepth 1 -type l -exec rm -f {} + 2>/dev/null || true
+    find "$GADGET_DIR" -depth -type d -not -path "$GADGET_DIR" -exec rmdir {} + 2>/dev/null || true
+    rmdir "$GADGET_DIR" 2>/dev/null || true
+fi
+
+mkdir -p "$GADGET_DIR"
+cd "$GADGET_DIR"
+
+# Linux Foundation CDC-ACM identifiers.
+echo 0x1d6b > idVendor
+echo 0x0104 > idProduct
+echo 0x0100 > bcdDevice
+echo 0x0200 > bcdUSB
+
+mkdir -p strings/0x409
+echo "GreenAutarky"           > strings/0x409/manufacturer
+echo "KiBu DSGW-210 Console"  > strings/0x409/product
+echo "$SERIAL"                > strings/0x409/serialnumber
+
+mkdir -p configs/c.1/strings/0x409
+echo "CDC-ACM Console" > configs/c.1/strings/0x409/configuration
+echo 250               > configs/c.1/MaxPower
+
+mkdir -p functions/acm.GS0
+ln -sfT functions/acm.GS0 configs/c.1/acm.GS0
+
+echo "$UDC" > UDC
+echo "ga-usb-gadget-serial: attached gadget to $UDC"

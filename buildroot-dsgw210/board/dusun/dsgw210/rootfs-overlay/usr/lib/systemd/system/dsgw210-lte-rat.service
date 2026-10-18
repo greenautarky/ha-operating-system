@@ -1,0 +1,18 @@
+[Unit]
+Description=DSGW-210 LTE — force Quectel BG96 to Cat-M1/LTE-M
+Documentation=file:/usr/bin/dsgw210-lte-rat.sh
+# The radio-gpio service powers the modem; this must finish before
+# ModemManager claims the modem's AT port (it holds it exclusively).
+After=dsgw210-radio-gpio.service
+Before=ModemManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/dsgw210-lte-rat.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# Pulled in as a prerequisite of ModemManager: whenever MM starts (incl.
+# D-Bus activation by NetworkManager), this runs first.
+WantedBy=ModemManager.service

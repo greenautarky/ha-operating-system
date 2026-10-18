@@ -1,0 +1,13 @@
+[Unit]
+Description=DSGW-210 status LED: OS booted (Solid Yellow)
+# OS is up but not yet fleet-connected (iHost semantics). ga_manager
+# takes the LED over later (starting / connected / error / off).
+Requires=dsgw-led.service
+After=dsgw-led.service multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/dsgw-led set "Solid Yellow"
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=DSGW-210 radio GPIO boot setup (Zigbee + BT + Z-Wave power/reset)
+DefaultDependencies=no
+After=systemd-modules-load.service local-fs.target
+Before=basic.target network.target docker.service haos-supervisor.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/dsgw210-radio-gpio-setup.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

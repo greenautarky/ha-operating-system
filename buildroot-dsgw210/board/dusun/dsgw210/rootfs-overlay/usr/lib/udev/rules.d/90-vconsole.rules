@@ -1,0 +1,12 @@
+# DSGW-210: replaces systemd's 90-vconsole.rules with an empty rule set.
+#
+# Upstream rule: on every vtconsole "add" uevent udev runs
+#   /usr/bin/systemctl --no-block restart systemd-vconsole-setup.service
+# The DSGW-210 is headless (no VOP/HDMI in its DT), so there is no console
+# to set up; the unit is masked next to this file (etc/systemd/system/).
+#
+# This file deliberately overrides the copy in /usr/lib rather than masking
+# it from /etc/udev/rules.d: on HAOS /etc/udev/rules.d is bind-mounted from
+# the overlay partition (etc-udev-rules.d.mount) and is wiped by haos-config
+# when CONFIG/udev exists, so an /etc override in the rootfs would vanish
+# from udev's view after that mount.
