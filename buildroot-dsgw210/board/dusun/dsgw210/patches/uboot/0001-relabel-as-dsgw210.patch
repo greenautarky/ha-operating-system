@@ -1,0 +1,83 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] rockchip: rk3328: DSGW-210 relabel + disable gmac2io
+
+Two changes for building u-boot for the Dusun DSGW-210 from the
+rock64-rk3328 defconfig and the upstream rk3328-rock64.dts:
+
+1. Relabel model and SMBIOS "Pine64 Rock64" -> "Dusun DSGW-210" (the boot
+   banner and SMBIOS should match the product).
+
+2. Disable &gmac2io. On the Rock64, gpio1_PC2 is the external RGMII PHY reset
+   and u-boot's gmac2io bring-up drives it high. On the DSGW-210, gpio1_PC2
+   is the RTL8821CS WL_REG_ON, so u-boot would power the Wi-Fi chip on far
+   too early: by the time the kernel's SDIO host first sets up the bus the
+   chip has been powered but uninitialised for seconds and holds DAT0 low,
+   which stalls the host controller. The board uses the on-chip RMII PHY
+   (gmac2phy), not gmac2io, and u-boot needs no network (it boots from
+   eMMC/SD), so disabling gmac2io is safe and leaves gpio1_PC2 in its reset
+   default (low = chip off) until the kernel powers it on.
+
+Signed-off-by: GreenAutarky OS <noreply@greenautarky.invalid>
+---
+--- a/arch/arm/dts/rk3328-rock64-u-boot.dtsi
++++ b/arch/arm/dts/rk3328-rock64-u-boot.dtsi
+@@ -7,23 +7,32 @@
+ #include "rk3328-sdram-lpddr3-1600.dtsi"
+ 
+ / {
++	/*
++	 * DSGW-210 relabel: this build runs on a Dusun DSGW-210, not a Pine64
++	 * Rock64. It reuses the rock64 defconfig and base DTS (same RK3328
++	 * SoC); DRAM init is done by the external rkbin TPL (DDR4 @ 333 MHz),
++	 * so the lpddr3-1600 sdram dtsi above is unused at runtime.
++	 */
++	model = "Dusun DSGW-210";
++	compatible = "dusun,dsgw210", "pine64,rock64", "rockchip,rk3328";
++
+ 	smbios {
+ 		compatible = "u-boot,sysinfo-smbios";
+ 
+ 		smbios {
+ 			system {
+-				manufacturer = "pine64";
+-				product = "rock64_rk3328";
++				manufacturer = "Dusun";
++				product = "DSGW-210";
+ 			};
+ 
+ 			baseboard {
+-				manufacturer = "pine64";
+-				product = "rock64_rk3328";
++				manufacturer = "Dusun";
++				product = "DSGW-210";
+ 			};
+ 
+ 			chassis {
+-				manufacturer = "pine64";
+-				product = "rock64_rk3328";
++				manufacturer = "Dusun";
++				product = "DSGW-210";
+ 			};
+ 		};
+ 	};
+@@ -63,3 +72,20 @@
+ &vcc_sd {
+ 	bootph-pre-ram;
+ };
++
++/*
++ * The upstream rk3328-rock64.dts has
++ *   &gmac2io { snps,reset-gpio = <&gpio1 RK_PC2 GPIO_ACTIVE_LOW>; ... }
++ * i.e. on the Rock64 gpio1_PC2 is the external RGMII PHY reset, which
++ * u-boot's gmac2io bring-up drives (assert low, deassert high) and leaves
++ * high.
++ *
++ * On the DSGW-210 gpio1_PC2 is the RTL8821CS WL_REG_ON, so that bring-up
++ * would power the Wi-Fi chip on too early (see the commit message). The
++ * board uses the on-chip RMII PHY (gmac2phy @ ff550000), and u-boot needs no
++ * network, so gmac2io is disabled: gpio1_PC2 stays in its reset default
++ * (input, pull-down -> low -> chip off) until the kernel powers the chip on.
++ */
++&gmac2io {
++	status = "disabled";
++};

@@ -1,0 +1,43 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] rockchip: boot_mode: enter rockusb on BOOT_LOADER
+
+Linux `reboot loader` writes BOOT_BL_DOWNLOAD (0x5242C301) to the rk3328
+boot-mode register (GRF + 0x5c8 = 0xff1005c8). Mainline setup_boot_mode() only
+handles BOOT_FASTBOOT and BOOT_UMS, so on a mainline u-boot the flag is
+cleared and the unit simply boots again.
+
+The DSGW-210 has no MaskROM button, so once this u-boot is on the eMMC a
+software path back to USB flashing has to live in u-boot itself. Map
+BOOT_LOADER to a preboot that serves rockusb on the OTG controller with the
+eMMC (mmc 0) as the backing device, so `rkdeveloptool wl` works as it does
+against the vendor loader.
+
+Only compiled in with CONFIG_CMD_ROCKUSB. Requires BOARD_LATE_INIT (caller of
+setup_boot_mode) and USE_PREBOOT.
+
+Signed-off-by: GreenAutarky OS <noreply@greenautarky.invalid>
+---
+--- a/arch/arm/mach-rockchip/boot_mode.c
++++ b/arch/arm/mach-rockchip/boot_mode.c
+@@ -105,6 +105,21 @@
+ 		debug("%s: enter UMS!\n", __func__);
+ 		env_set("preboot", "setenv preboot; ums mmc 0");
+ 		break;
++#if IS_ENABLED(CONFIG_CMD_ROCKUSB)
++	case BOOT_LOADER:
++		/*
++		 * Linux `reboot loader` (syscon-reboot-mode, mode-loader =
++		 * BOOT_BL_DOWNLOAD) lands here. Serve rockusb on the OTG
++		 * controller, exposing the eMMC (mmc 0 = emmc@ff520000 per
++		 * the rk3328 u-boot aliases), so rkdeveloptool can re-flash
++		 * the unit over USB-C. After 300 s without host traffic
++		 * (DSGW-210 patch 0004) preboot returns and the normal
++		 * bootcmd runs.
++		 */
++		printf("boot mode: loader -> rockusb 0 mmc 0 300\n");
++		env_set("preboot", "setenv preboot; echo DSGW210-ROCKUSB: boot-mode loader, entering rockusb 0 mmc 0 300; rockusb 0 mmc 0 300");
++		break;
++#endif
+ 	}
+ 
+ 	return 0;

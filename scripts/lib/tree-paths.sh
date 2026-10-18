@@ -24,11 +24,19 @@ GA_VERSION_FILE=version.yaml
 # applies: GA_HAOS_PATCH_DIR, then GA_LAYER_DIR/patches-haos.
 GA_HAOS_DIR=haos
 GA_HAOS_PATCH_DIR=patches/haos
-GA_BOARDS="ihost"
+GA_BOARDS="ihost dsgw210"
 
 GA_BOARD_DIR_ihost=buildroot-ihost
 GA_DEFCONFIG_ihost=buildroot-ihost/configs/ga_ihost_full_defconfig
 GA_ADDON_PINS_ihost=buildroot-external/package/hassio/addon-images.json
+
+# The DSGW-210 bakes no Supervisor and no add-ons yet (GA_HASSIO_SKIP_IMAGES in
+# its external.mk: no aarch64 GA images are published), so it has no pin list
+# of its own. The entry names the shared GA-layer file so the map stays total;
+# give the board its own file here when it gets an add-on set.
+GA_BOARD_DIR_dsgw210=buildroot-dsgw210
+GA_DEFCONFIG_dsgw210=buildroot-dsgw210/configs/dsgw210_defconfig
+GA_ADDON_PINS_dsgw210=buildroot-external/package/hassio/addon-images.json
 
 # ga_board_var KIND BOARD — print the value of GA_<KIND>_<BOARD> (KIND: BOARD_DIR,
 # DEFCONFIG, ADDON_PINS). Prints nothing and returns 1 when it is not defined,

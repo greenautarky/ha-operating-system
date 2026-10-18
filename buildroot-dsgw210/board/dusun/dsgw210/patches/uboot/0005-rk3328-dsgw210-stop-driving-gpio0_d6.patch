@@ -1,0 +1,43 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] rockchip: rk3328: DSGW-210 stop driving GPIO0_D6
+ (vcc_sd/vmmc-supply)
+
+On the Rock64, GPIO0_D6 switches the SD-card supply (vcc_sd, regulator-fixed,
+active low) and &sdmmc references it as vmmc-supply. On the DSGW-210 the same
+pin is the bq25895 charger INT line, an input. Because u-boot reuses the
+rock64 base DTS, the mmc driver enables vcc_sd and u-boot leaves GPIO0_D6
+configured as an output when it hands over to Linux.
+
+Drop vmmc-supply from &sdmmc and disable &vcc_sd (also removing the
+bootph-pre-ram that put it into the SPL DTB), so neither SPL nor u-boot proper
+binds the regulator or touches the pin.
+
+Signed-off-by: GreenAutarky OS <noreply@greenautarky.invalid>
+---
+diff --git a/arch/arm/dts/rk3328-rock64-u-boot.dtsi b/arch/arm/dts/rk3328-rock64-u-boot.dtsi
+index bea476a..5ebfb84 100644
+--- a/arch/arm/dts/rk3328-rock64-u-boot.dtsi
++++ b/arch/arm/dts/rk3328-rock64-u-boot.dtsi
+@@ -99,3 +99,22 @@
+ &gmac2io {
+ 	status = "disabled";
+ };
++
++/*
++ * DSGW-210: GPIO0_D6 is the bq25895 charger INT (an input), not the SD-card
++ * power switch it is on the Rock64. The upstream rk3328-rock64.dts declares
++ * vcc_sd as a regulator-fixed on <&gpio0 RK_PD6 GPIO_ACTIVE_LOW> and links it
++ * as &sdmmc vmmc-supply, so u-boot (SPL and proper) would probe the
++ * regulator and drive the pin as an OUTPUT. Keep u-boot from touching it:
++ * drop the vmmc-supply link (the only consumer of vcc_sd) and disable the
++ * fixed regulator itself, including the SPL copy that the bootph-pre-ram
++ * above requested.
++ */
++&sdmmc {
++	/delete-property/ vmmc-supply;
++};
++
++&vcc_sd {
++	status = "disabled";
++	/delete-property/ bootph-pre-ram;
++};

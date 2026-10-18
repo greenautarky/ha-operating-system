@@ -1,0 +1,38 @@
+# DSGW-210 LTE — Quectel BG96 cellular connection (ModemManager + NM).
+#
+# Vendor default, shipped read-only on the erofs rootfs. NetworkManager
+# reads connection keyfiles from /usr/lib/NetworkManager/system-connections
+# (this file), /run/... and /etc/NetworkManager/system-connections — the
+# last wins. So to change the APN in the field, drop an edited copy into
+#   /etc/NetworkManager/system-connections/dsgw210-lte.nmconnection
+# (persistent partition), or use HAOS's CONFIG/network/ boot-partition
+# mechanism, or `nmcli connection modify`. Any of those overrides this.
+#
+# To auto-detect the APN from the SIM operator instead of pinning it,
+# delete the `apn=` line and add `auto-config=true` under [gsm];
+# ModemManager then resolves it from the mobile-broadband-provider-info DB.
+
+[connection]
+id=DSGW-210 LTE
+uuid=b89ac5c9-23cd-4fa5-af32-0ed84fde155a
+type=gsm
+autoconnect=true
+# 0 = retry autoconnect forever (the modem can take a while to register).
+autoconnect-retries=0
+# Negative priority: prefer ethernet / Wi-Fi for autoconnect ordering.
+autoconnect-priority=-50
+
+[gsm]
+apn=internet.telekom
+
+[ipv4]
+method=auto
+# Fallback metric: end0 (~100) and wlan0 (~600) outrank this, so LTE is
+# the backup default route. The kernel fails over to it automatically
+# when the higher-priority WAN drops, and back when it returns.
+route-metric=700
+
+[ipv6]
+# No IPv6 PDP on the BG96/Telekom path here — skip IPV6CP entirely
+# (otherwise pppd burns ~30 s on an IPV6CP timeout at every dial).
+method=ignore

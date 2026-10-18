@@ -420,6 +420,10 @@ jobs:
           git submodule update --init --depth 1 haos
           git -C haos submodule update --init --depth 1 buildroot
           bash tests/ga_tests/build/go_toolchain/inputs_check.sh
+          # The same inputs for every other board in scripts/lib/tree-paths.sh:
+          # a board whose defconfig does not reach local.mk would build the
+          # Go packages on the submodule's Go with nothing else noticing.
+          GOTC_BOARD=dsgw210 bash tests/ga_tests/build/go_toolchain/inputs_check.sh
 
       - name: pkg-inputs rebuilds a package when our patches or configure options for it change
         # Buildroot looks at neither BR2_GLOBAL_PATCH_DIR nor <PKG>_CONF_OPTS once
@@ -941,6 +945,18 @@ jobs:
           set -eu
           git submodule update --init --depth 1 haos
           ./tests/gates/haos_patch_mirror/selftest.sh
+
+      # The DSGW-210 board lists buildroot-dsgw210/patches-haos/ as its global
+      # patch dir: a symlink per HAOS package patch dir, with docker-engine
+      # pointing at the iHost board's rebase for the 29.8.2 container floor.
+      # The self-test runs a copy of the live check over fixture mirrors; the
+      # second command holds the real tree to the same check.
+      - name: DSGW-210 HAOS patch mirror (docker-engine = the shared 29.8.2 rebase)
+        run: |
+          set -eu
+          git submodule update --init --depth 1 haos
+          ./tests/gates/dsgw_patch_mirror/selftest.sh
+          ./scripts/dsgw210/check-haos-patch-mirror.sh
 
       # HAOS 18.x names the Supervisor unit haos-supervisor.service; components
       # synced into the image and 1.5-era scripts name it hassos-supervisor.service

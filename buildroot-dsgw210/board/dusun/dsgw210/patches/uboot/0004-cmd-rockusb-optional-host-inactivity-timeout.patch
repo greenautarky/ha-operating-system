@@ -1,0 +1,152 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] cmd: rockusb: optional host-inactivity timeout
+
+`rockusb <ctrl> <devtype> <dev> [<timeout_s>]`: with a non-zero timeout_s the
+command returns CMD_RET_FAILURE once no rockusb command (CBW) and no
+upload/download data chunk has arrived for that many seconds. Without the
+argument (or with 0) it waits forever, exactly as before.
+
+Reason: the DSGW-210 recovery paths (preboot on BOOT_LOADER, the boot.scr
+no-slot fallback and the bootcmd fallback) all end in rockusb. Without a
+timeout a boot failure with no host attached would park the unit in rockusb
+and never retry the boot. With a timeout the caller falls through to `reset`
+and the unit retries on its own, while a host that is actually talking keeps
+the session alive (the clock is restarted on every CBW and every data chunk).
+
+The loop also calls schedule() so the watchdog is serviced while waiting.
+
+Signed-off-by: GreenAutarky OS <noreply@greenautarky.invalid>
+---
+diff --git a/arch/arm/include/asm/arch-rockchip/f_rockusb.h b/arch/arm/include/asm/arch-rockchip/f_rockusb.h
+index 9abb3b1..cb9b99f 100644
+--- a/arch/arm/include/asm/arch-rockchip/f_rockusb.h
++++ b/arch/arm/include/asm/arch-rockchip/f_rockusb.h
+@@ -132,4 +132,8 @@ struct f_rockusb {
+ 
+ /* init rockusb device, tell rockusb which device you want to read/write*/
+ void rockusb_dev_init(char *dev_type, int dev_index);
++/* get_timer() value of the last rockusb command or data chunk */
++ulong rockusb_last_activity(void);
++/* restart the inactivity clock */
++void rockusb_touch(void);
+ #endif /* _F_ROCKUSB_H_ */
+diff --git a/cmd/rockusb.c b/cmd/rockusb.c
+index 48497aa..d196269 100644
+--- a/cmd/rockusb.c
++++ b/cmd/rockusb.c
+@@ -7,6 +7,8 @@
+ #include <console.h>
+ #include <g_dnl.h>
+ #include <usb.h>
++#include <time.h>
++#include <u-boot/schedule.h>
+ #include <asm/arch-rockchip/f_rockusb.h>
+ 
+ static int do_rockusb(struct cmd_tbl *cmdtp, int flag, int argc,
+@@ -18,6 +20,7 @@ static int do_rockusb(struct cmd_tbl *cmdtp, int flag, int argc,
+ 	char *devtype;
+ 	char *devnum;
+ 	int ret;
++	ulong timeout_ms = 0;
+ 
+ 	if (argc < 2)
+ 		return CMD_RET_USAGE;
+@@ -31,6 +34,8 @@ static int do_rockusb(struct cmd_tbl *cmdtp, int flag, int argc,
+ 	} else {
+ 		return CMD_RET_USAGE;
+ 	}
++	if (argc >= 5)
++		timeout_ms = simple_strtoul(argv[4], NULL, 10) * 1000;
+ 	dev_index = simple_strtoul(devnum, NULL, 0);
+ 	rockusb_dev_init(devtype, dev_index);
+ 
+@@ -51,11 +56,20 @@ static int do_rockusb(struct cmd_tbl *cmdtp, int flag, int argc,
+ 		goto exit;
+ 	}
+ 
++	rockusb_touch();
+ 	while (1) {
+ 		if (g_dnl_detach())
+ 			break;
+ 		if (ctrlc())
+ 			break;
++		if (timeout_ms &&
++		    get_timer(rockusb_last_activity()) > timeout_ms) {
++			printf("rockusb: no host activity for %lu s, exit\n",
++			       timeout_ms / 1000);
++			ret = CMD_RET_FAILURE;
++			goto exit;
++		}
++		schedule();
+ 		dm_usb_gadget_handle_interrupts(udc);
+ 	}
+ 	ret = CMD_RET_SUCCESS;
+@@ -68,7 +82,10 @@ exit:
+ 	return ret;
+ }
+ 
+-U_BOOT_CMD(rockusb, 4, 1, do_rockusb,
++U_BOOT_CMD(rockusb, 5, 1, do_rockusb,
+ 	   "use the rockusb protocol",
+-	   "<USB_controller> <devtype> <dev[:part]>  e.g. rockusb 0 mmc 0\n"
++	   "<USB_controller> <devtype> <dev[:part]> [<timeout_s>]\n"
++	   "    e.g. rockusb 0 mmc 0 120\n"
++	   "    timeout_s: return after this many seconds without host traffic\n"
++	   "               (absent or 0 = wait forever)\n"
+ );
+diff --git a/drivers/usb/gadget/f_rockusb.c b/drivers/usb/gadget/f_rockusb.c
+index d679cda..90c2d04 100644
+--- a/drivers/usb/gadget/f_rockusb.c
++++ b/drivers/usb/gadget/f_rockusb.c
+@@ -12,6 +12,7 @@
+ #include <malloc.h>
+ #include <memalign.h>
+ #include <part.h>
++#include <time.h>
+ #include <linux/usb/ch9.h>
+ #include <linux/usb/gadget.h>
+ #include <linux/usb/composite.h>
+@@ -98,6 +99,18 @@ static struct usb_gadget_strings *rkusb_strings[] = {
+ };
+ 
+ static struct f_rockusb *rockusb_func;
++static ulong rockusb_activity;
++
++void rockusb_touch(void)
++{
++	rockusb_activity = get_timer(0);
++}
++
++ulong rockusb_last_activity(void)
++{
++	return rockusb_activity;
++}
++
+ static void rx_handler_command(struct usb_ep *ep, struct usb_request *req);
+ static int rockusb_tx_write_csw(u32 tag, int residue, u8 status, int size);
+ 
+@@ -433,6 +446,8 @@ static void tx_handler_ul_image(struct usb_ep *ep, struct usb_request *req)
+ 	struct usb_request *in_req = rockusb_func->in_req;
+ 	int ret;
+ 
++	rockusb_touch();
++
+ 	/* Print error status of previous transfer */
+ 	if (req->status)
+ 		debug("status: %d ep '%s' trans: %d len %d\n", req->status,
+@@ -492,6 +507,7 @@ static void rx_handler_dl_image(struct usb_ep *ep, struct usb_request *req)
+ 	const unsigned char *buffer = req->buf;
+ 	unsigned int buffer_size = req->actual;
+ 
++	rockusb_touch();
+ 	transfer_size = f_rkusb->dl_size - f_rkusb->dl_bytes;
+ 
+ 	if (req->status != 0) {
+@@ -899,6 +915,7 @@ static void rx_handler_command(struct usb_ep *ep, struct usb_request *req)
+ 	if (req->status || req->length == 0)
+ 		return;
+ 
++	rockusb_touch();
+ 	memcpy((char *)cbw, req->buf, USB_BULK_CB_WRAP_LEN);
+ #ifdef DEBUG
+ 	printcbw(req->buf);
