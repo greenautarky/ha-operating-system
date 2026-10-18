@@ -30,6 +30,8 @@ MIN="$(sed -n -E 's/^VERSION_MINOR="([^"]*)".*/\1/p' "$REPO/$GA_HAOS_DIR/buildro
 [ -n "$MAJ" ] && [ -n "$MIN" ] || { echo "  FAIL  cannot read VERSION_MAJOR/MINOR from upstream meta"; exit 1; }
 
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
+# release.sh commits in the sandbox repos; a runner has no git identity.
+export GIT_AUTHOR_NAME=selftest GIT_AUTHOR_EMAIL=selftest@invalid GIT_COMMITTER_NAME=selftest GIT_COMMITTER_EMAIL=selftest@invalid
 mkgit() { git -C "$1" init -q -b "$2" && git -C "$1" -c user.email=t@t -c user.name=t add -A && git -C "$1" -c user.email=t@t -c user.name=t commit -q -m init; }
 
 sandbox() { # $1 = dir
