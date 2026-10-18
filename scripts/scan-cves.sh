@@ -137,7 +137,7 @@ GA_DEFCONFIG="${GA_DEFCONFIG:-${REPO_ROOT}/buildroot-ihost/configs/ga_ihost_full
 # them enables is something GA adds. BASE_DEFCONFIG may name one file or several
 # (space-separated); an empty expansion is an error, never an empty base (an
 # empty base would call every package GA-added, a missing one none).
-BASE_DEFCONFIG="${BASE_DEFCONFIG:-$(ls "${REPO_ROOT}/haos/buildroot-external/configs/"*_defconfig 2>/dev/null | tr '\n' ' ')}"
+BASE_DEFCONFIG="${BASE_DEFCONFIG:-$({ ls "${REPO_ROOT}/haos/buildroot-external/configs/"*_defconfig 2>/dev/null || true; } | tr '\n' ' ')}"
 # Symbols the delta parser MUST find — if it stops seeing these, it has lost
 # its subject, and an empty delta would otherwise pass as "nothing to cover".
 readonly COVERAGE_MUST_SEE="FLUENT_BIT OPENSSH NFTABLES NETBIRD TELEGRAF"
