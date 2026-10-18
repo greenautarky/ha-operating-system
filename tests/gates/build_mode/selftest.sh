@@ -134,6 +134,8 @@ board_fail() { # board_fail <label> <stderr-regex> <args...>
 board_pass "no --board -> ihost (the bake's call shape)" update ihost update
 board_pass "'--board ihost update'"                      update ihost --board ihost update
 board_pass "'update --board=ihost'"                      update ihost update --board=ihost
+board_pass "'--board dsgw210 update'"                   update dsgw210 --board dsgw210 update
+board_pass "'full --board=dsgw210'"                     full dsgw210 full --board=dsgw210
 board_fail "unknown board"                               "Unknown board"   --board nosuchboard
 board_fail "--board without a value"                     "needs a board"   --board
 board_fail "duplicate --board"                           "Duplicate --board" --board ihost --board=ihost
