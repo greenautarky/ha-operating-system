@@ -20,8 +20,55 @@ GREEN='\033[0;32m' RED='\033[0;31m' YELLOW='\033[0;33m' RESET='\033[0m'
 [[ -t 1 ]] || { GREEN=''; RED=''; YELLOW=''; RESET=''; }
 
 _pass() { echo -e "${GREEN}  PASS${RESET}  $1"; pass=$((pass+1)); }
-_fail() { echo -e "${RED}  FAIL${RESET}  $1"; fail=$((fail+1)); }
 _skip() { echo -e "${YELLOW}  SKIP${RESET}  $1 ($2)"; skip=$((skip+1)); }
+
+# Per-board skips. A check that judges something only one board has (an iHost
+# device tree, the OpenStick helper) must not fail the other board's build, and
+# must not be silently dropped either. The table is tests/ga_tests/build_board_skips.tsv:
+#   board <TAB> condition <TAB> message glob <TAB> reason
+# A FAIL whose message matches a row of THIS board (GA_BOARD, exported by
+# ga_build.sh; a standalone run is the iHost) and whose condition holds is
+# reported as SKIP with the stated reason, and every such skip is listed again
+# at the end. A PASS is never touched. A row without a reason, an unknown
+# condition or a missing table skips nothing (fail closed);
+# tests/gates/build_board_skips/selftest.sh holds the table to this script.
+#   conditions:  -             always (the check is about hardware the board lacks)
+#                core-skipped  the board's external.mk declares it bakes no Core image
+#                no-addons     the board's external.mk names no add-on image list
+_RBT_BOARD="${GA_BOARD:-ihost}"
+_RBT_SKIP_TABLE="${GA_BUILD_BOARD_SKIPS:-$(dirname "${BASH_SOURCE[0]}")/build_board_skips.tsv}"
+_RBT_BOARD_MK="${_RBT_ROOT}/$(ga_board_var BOARD_DIR "$_RBT_BOARD" 2>/dev/null || echo __no_such_board__)/external.mk"
+_RBT_BOARD_SKIPPED=()
+_rbt_cond() {
+  case "$1" in
+    -) return 0 ;;
+    core-skipped) sed -n 's/^GA_HASSIO_SKIP_IMAGES[[:space:]]*=[[:space:]]*//p' "$_RBT_BOARD_MK" 2>/dev/null | grep -qw core ;;
+    no-addons) [[ -r "$_RBT_BOARD_MK" ]] && ! grep -q '^HASSIO_ADDON_IMAGES_JSON' "$_RBT_BOARD_MK" ;;
+    *) return 1 ;;
+  esac
+}
+_rbt_skip_reason() {  # <fail message> -> the reason on stdout, rc 0 when this board skips it
+  local _b _c _g _why
+  [[ -r "$_RBT_SKIP_TABLE" ]] || return 1
+  while IFS=$'\t' read -r _b _c _g _why; do
+    [[ -z "$_b" || "$_b" == \#* || -z "$_why" ]] && continue
+    [[ "$_b" == "$_RBT_BOARD" ]] || continue
+    # shellcheck disable=SC2053  # the glob is the point
+    [[ "$1" == $_g ]] || continue
+    _rbt_cond "$_c" || continue
+    printf '%s' "$_why"; return 0
+  done < "$_RBT_SKIP_TABLE"
+  return 1
+}
+_fail() {
+  local _why
+  if _why="$(_rbt_skip_reason "$1")"; then
+    _skip "${1%%:*}" "not applicable to board ${_RBT_BOARD}: ${_why}"
+    _RBT_BOARD_SKIPPED+=("${1%%:*}")
+  else
+    echo -e "${RED}  FAIL${RESET}  $1"; fail=$((fail+1))
+  fi
+}
 
 # _missing_in_image ID WHAT -- an artefact the image must carry is absent:
 # FAIL when there is a rootfs to look in, SKIP in a source-only run (no target/).
@@ -4976,6 +5023,9 @@ fi
 
 echo ""
 total=$((pass + fail + skip))
+if (( ${#_RBT_BOARD_SKIPPED[@]} > 0 )); then
+  echo "Board skips applied for ${_RBT_BOARD} (build_board_skips.tsv): ${_RBT_BOARD_SKIPPED[*]}"
+fi
 echo "=== Build tests: ${pass} passed, ${fail} failed, ${skip} skipped (${total} total) ==="
 echo "{\"suite\":\"build\",\"pass\":${pass},\"fail\":${fail},\"skip\":${skip}}"
 echo ""

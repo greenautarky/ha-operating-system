@@ -525,6 +525,17 @@ jobs:
         # board files existed (10 of 23 cases flip).
         run: sh tests/ga_tests/board_conf/test.sh
 
+      - name: build tests - per-board skips (table held to the live runner)
+        # tests/ga_tests/build_board_skips.tsv turns a FAIL into a SKIP with a
+        # stated reason for one board. The gate checks every row against the live
+        # runner (the glob matches a real failure message, the condition is true
+        # for the board) and drives the runner on a fixture: skipped on its board
+        # with the reason, still FAIL on the iHost and for unlisted checks, and
+        # nothing skipped for a row without a reason, an unknown condition or a
+        # missing table. Red-proven with a runner that ignores the board and a
+        # table with a mistyped glob.
+        run: bash tests/gates/build_board_skips/selftest.sh
+
       - name: uplink ladder (fallback staircase decisions)
         # Drives the real ladder script against a stub NetworkManager: healthy
         # devices cost no probe traffic, three confirmed strikes switch, the

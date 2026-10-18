@@ -1,0 +1,17 @@
+# Per-board skips of tests/ga_tests/run_build_tests.sh (see the header there).
+# board<TAB>condition<TAB>message glob (matched against the FAIL text)<TAB>reason
+# A reason is mandatory: a row without one skips nothing.
+#
+# Hardware the board does not have
+dsgw210	-	CFG-30*	ga-openstick-autoconnect serves the iHost external LTE stick; the DSGW-210 has an on-board modem and no stick
+dsgw210	-	DT-0*	compare the iHost device tree (rv1126) with its reference and expect its USB host nodes; the DSGW-210 has its own device tree
+dsgw210	-	WIFI-13*	the runtime-PM udev rule is for the iHost rtw88_8723ds chip; the DSGW-210 has a different Wi-Fi chip, whether it needs one is not evaluated
+dsgw210	-	WIFI-08*	the GreenAutarky-Install Wi-Fi profile (hook 85, needs a PSK secret) is the iHost field-install network; whether the DSGW-210 gets one is an open decision
+#
+# Container images the board does not bake (GA_HASSIO_SKIP_IMAGES / no add-on list in its external.mk)
+dsgw210	core-skipped	BLD: Core tag*	the board bakes no Core image (GA_HASSIO_SKIP_IMAGES), so there is no Core tag to check
+dsgw210	core-skipped	VER-02*	the board bakes no Core image, version.json carries a placeholder Core
+dsgw210	core-skipped	VER-11*	the board bakes no Core image, there is no Core tar to compare
+dsgw210	core-skipped	XVER-06*	the board bakes no Core image, version.json carries a placeholder Core
+dsgw210	no-addons	VER-10*	the board names no add-on image list yet (open product decision), so no pinned add-on is baked
+dsgw210	no-addons	GAMCAP-01*	no ga_manager image is baked on this board (no add-on list)
