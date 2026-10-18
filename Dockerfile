@@ -60,7 +60,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # GreenAutarky: the build environment is upstream HAOS 18.x's (Debian trixie,
 # haos/Dockerfile at the pinned commit) plus the block below. Keep the rest in
-# step with haos/Dockerfile when the HAOS pin moves.
+# step with haos/Dockerfile when the HAOS pin moves. (The blocks marked
+# GreenAutarky are GA's; everything else is upstream's.)
 
 # CVE scanners, pinned to an exact release and verified against the SHA-256
 # published with that release (never "whatever main's install script fetches
@@ -92,6 +93,16 @@ RUN set -eu; \
     trivy --version | grep -qx "Version: ${TRIVY_VERSION}"; \
     syft version | grep -q "^Version: *${SYFT_VERSION}$"; \
     grype version | grep -q "^Version: *${GRYPE_VERSION}$"
+
+# GreenAutarky: Buildroot's CVE tooling (support/scripts/cve-check, cve.py)
+# imports distutils, which Python 3.12 removed (trixie ships 3.13); setuptools
+# provides the module again. Without it the build's NVD enrichment crashes and
+# the OS CVE gate refuses the image (2026-10-17, first 18.3 build). Asserted
+# here so the image cannot be built without it.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3-setuptools \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -c "import distutils.version"
 
 # Init entry
 COPY scripts/entry.sh /usr/sbin/
