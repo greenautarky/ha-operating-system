@@ -668,7 +668,7 @@ _hsup=$(grep -rlE '^[^#]*hassio-supervisor\.service' "${TARGET}/etc/systemd" "${
 _UR_LINT="${_RBT_ROOT}/scripts/check-unit-refs.py"
 _UR_SYNCED="${_RBT_ROOT}/${GA_LAYER_DIR}/rootfs-overlay/etc/systemd/system/ga-bootstrap.service"
 if [[ ! -f "$_UR_SYNCED" ]]; then
-  _fail "UNITREF-02: the synced ga-bootstrap.service is not in ${GA_LAYER_DIR}/rootfs-overlay -- the lint would not see any synced unit (sync-components.sh not run?)"
+  _missing_in_image "UNITREF-02" "the synced ga-bootstrap.service is not in ${GA_LAYER_DIR}/rootfs-overlay -- the lint would not see any synced unit (sync-components.sh not run?)"
 elif [[ ! -x "$_UR_LINT" ]]; then
   _fail "UNITREF-01: ${_UR_LINT} missing or not executable -- the synced units are unlinted"
 else
