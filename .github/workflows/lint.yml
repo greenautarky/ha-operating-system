@@ -915,6 +915,20 @@ jobs:
           git submodule update --init --depth 1 haos
           git -C haos submodule update --init --depth 1 buildroot
           CONTAINER_FLOOR_REQUIRE_LIVE=1 ./tests/gates/container_floor/selftest.sh
+      # The signing certificate must chain to the pinned OTA root. A cert that
+      # does not used to be appended to the device keyring as a second anchor
+      # and left to the end-of-build audit; patch 0110 now stops the build at
+      # the point the keyring is written. The self-test drives the LIVE
+      # install_rauc_certs() (exported as the build sees it) over fixture certs:
+      # a chained signer passes with exactly one anchor, a self-signed one and
+      # one from another root fail with no keyring left behind, and the old
+      # append behaviour is rebuilt as a mutant that the cases would flag.
+      # Red-proven against the pre-fix patch.
+      - name: RAUC signing cert that does not chain to the root stops the build
+        run: |
+          set -eu
+          git submodule update --init --depth 1 haos
+          ./tests/gates/rauc_signer_chain/selftest.sh
 
       # HAOS 18.x names the Supervisor unit haos-supervisor.service; components
       # synced into the image and 1.5-era scripts name it hassos-supervisor.service
