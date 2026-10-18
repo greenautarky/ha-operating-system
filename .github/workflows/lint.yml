@@ -457,6 +457,16 @@ jobs:
           # Go packages on the submodule's Go with nothing else noticing.
           GOTC_BOARD=dsgw210 bash tests/ga_tests/build/go_toolchain/inputs_check.sh
 
+      - name: netbird is built for the board's target arch (iHost arm/7, DSGW-210 arm64)
+        # Asks Buildroot for NETBIRD_GO_ENV on each board's defconfig against
+        # pinned expectations. Red-proven against the hard-coded GOARCH=arm
+        # (the DSGW-210 row fails).
+        run: |
+          set -eu
+          git submodule update --init --depth 1 haos
+          git -C haos submodule update --init --depth 1 buildroot
+          tests/gates/netbird_goarch/check.sh
+
       - name: pkg-inputs rebuilds a package when our patches or configure options for it change
         # Buildroot looks at neither BR2_GLOBAL_PATCH_DIR nor <PKG>_CONF_OPTS once
         # a package has its stamps, so on a reused (`update`) output tree the

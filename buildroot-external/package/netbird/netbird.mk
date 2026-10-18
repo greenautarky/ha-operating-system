@@ -1,5 +1,5 @@
 ################################################################################
-# netbird (v0.80.0) — ARMv7 build for Buildroot with systemd service
+# netbird (v0.80.0) — build for Buildroot with systemd service (target arch from Buildroot)
 ################################################################################
 
 # Pin the IMMUTABLE commit SHA of v0.80.0, not the mutable tag: a git checkout
@@ -22,10 +22,13 @@ NETBIRD_LICENSE_FILES = LICENSE
 NETBIRD_GOMOD         = github.com/netbirdio/netbird
 NETBIRD_DL_SUBDIR     = netbird
 
-# ---------------- Go env (ARMv7) ----------------
+# ---------------- Go env (target arch from Buildroot) ----------------
+# GOARCH and GOARM come from Buildroot's go infrastructure (GO_GOARCH,
+# GO_GOARM): armv7 -> arm/7 (iHost), aarch64 -> arm64 (DSGW-210). Hard-coding
+# arm/7 would build a 32-bit binary into an aarch64 rootfs.
 NETBIRD_GO_ENV       += GOOS=linux
-NETBIRD_GO_ENV       += GOARCH=arm
-NETBIRD_GO_ENV       += GOARM=7
+NETBIRD_GO_ENV       += GOARCH=$(GO_GOARCH)
+NETBIRD_GO_ENV       += $(if $(GO_GOARM),GOARM=$(GO_GOARM))
 NETBIRD_GO_ENV       += CGO_ENABLED=0
 NETBIRD_GO_ENV       += GOPROXY=https://proxy.golang.org,direct
 # Build with buildroot's host-go and nothing else. Since v0.73 upstream go.mod
