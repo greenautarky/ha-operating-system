@@ -4870,10 +4870,24 @@ fi
 echo ""
 echo "--- USB + MAC posture (ADR-0029 D3/D6) ---"
 
-_CMDLINE="${SRC:-.}/buildroot-ihost/board/sonoff/ihost/cmdline.txt"
+# The BOARD's own files (until WP4b this read the iHost's cmdline.txt whatever
+# board was built, so on another board it judged a file that board does not ship).
+_BOARD_BASE="${SRC:-.}/$(ga_board_var BOARD_BASE "$_RBT_BOARD" 2>/dev/null || echo __no_such_board__)"
+_CMDLINE="${_BOARD_BASE}/cmdline.txt"
 grep -qE 'usbcore\.authorized_default=0' "$_CMDLINE" 2>/dev/null \
   && _pass "USB-01: cmdline closes the host data path (usbcore.authorized_default=0)" \
   || _fail "USB-01: cmdline missing usbcore.authorized_default=0 — host port open by default"
+
+# USB-01b: the boot script sets it and appends it AFTER ${cmdline} in BOTH slots'
+# bootargs (the kernel keeps the last occurrence, so a device-side cmdline.txt
+# cannot reopen the port). Both boards do this; the DSGW-210 does it ONLY here.
+_USH="${_BOARD_BASE}/uboot-boot.ush"
+if grep -qE '^setenv bootargs_ga "usbcore\.authorized_default=0"' "$_USH" 2>/dev/null \
+   && [[ "$(grep -cE 'rauc\.slot=[AB] \$\{cmdline\} \$\{bootargs_ga\}"' "$_USH" 2>/dev/null)" == 2 ]]; then
+  _pass "USB-01b: the boot script closes the host data path in both slots (bootargs_ga after cmdline)"
+else
+  _fail "USB-01b: the boot script (${_USH##*/}) does not append usbcore.authorized_default=0 after cmdline in both slots"
+fi
 
 if [[ -x "${TARGET}/usr/libexec/ga-usb-authorize" ]]; then
   _pass "USB-02: ga-usb-authorize helper present + executable"

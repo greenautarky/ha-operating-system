@@ -15,3 +15,4 @@ dsgw210	core-skipped	VER-11*	the board bakes no Core image, there is no Core tar
 dsgw210	core-skipped	XVER-06*	the board bakes no Core image, version.json carries a placeholder Core
 dsgw210	no-addons	VER-10*	the board names no add-on image list yet (open product decision), so no pinned add-on is baked
 dsgw210	no-addons	GAMCAP-01*	no ga_manager image is baked on this board (no add-on list)
+dsgw210	-	USB-01: *	the board closes the host ports in its boot script (uboot-boot.ush, appended after cmdline.txt), not in cmdline.txt; USB-01b checks that
