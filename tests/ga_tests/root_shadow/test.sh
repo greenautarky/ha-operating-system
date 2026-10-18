@@ -48,7 +48,7 @@ EN=enabled
 run_test "RSD-01" "ga-root-shadow is installed and $EN" \
 	"[ -x /usr/libexec/ga-root-shadow ] && [ \"\$(systemctl is-enabled $U 2>/dev/null)\" = $EN ]"
 run_test_show "RSD-02" "ordered before sysinit.target, after the overlay" \
-	"systemctl show -p Before --value $U | tr ' ' '\n' | grep -qx sysinit.target && systemctl show -p After --value $U | tr ' ' '\n' | grep -qx hassos-overlay.service"
+	"systemctl show -p Before --value $U | tr ' ' '\n' | grep -qx sysinit.target && systemctl show -p After --value $U | tr ' ' '\n' | grep -qx haos-overlay.service"
 run_test_show "RSD-03" "ran on this boot and succeeded" \
 	"[ \"\$(systemctl show -p Result --value $U)\" = success ] && [ \"\$(systemctl show -p ActiveState --value $U)\" = active ]"
 for u in emergency rescue; do

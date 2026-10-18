@@ -2,7 +2,7 @@
 # Ethernet force-marker: the shipping gate.
 #
 # Provisioning runs over Ethernet via /mnt/boot/ga-ethernet-force. Since #298 the
-# IMAGE BUILD writes it (board hassos-hook.sh), so every freshly flashed card
+# IMAGE BUILD writes it (board haos-hook.sh), so every freshly flashed card
 # carries it — an earlier version of this comment said it came from
 # `verify-sd.sh --flash --ethernet-force`, which is now only the way to re-add it
 # after an OTA has dropped it.

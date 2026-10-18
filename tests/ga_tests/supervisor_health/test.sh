@@ -144,17 +144,26 @@ run_test "SUP-12" "ga-bootstrap.service has journal entries (≥ 1 line)" \
 # SUP-13 — Reverse check: the systemd unit declares After=/Requires= on
 # the CORRECT supervisor unit name. Reads the unit file directly so this
 # catches the hassio/hassos typo even on an offline / un-converged device.
-# Accept either spelling for backward compat with old rootfs ga-bootstrap.
+# HAOS 18.x names the unit haos-supervisor.service; hassos-supervisor.service
+# is kept as an alias for ga-bootstrap units that still say it (the 16.x name).
+# hassio-supervisor.service (the old typo) is NOT accepted: no such unit exists.
 run_test "SUP-13" "ga-bootstrap.service Requires= the real supervisor unit" \
   "systemctl cat ga-bootstrap.service 2>/dev/null \
-    | grep -qE '^(After|Requires)=.*hass(io|os)-supervisor\\.service'"
+    | grep -qE '^(After|Requires)=.*ha(ss)?os-supervisor\\.service'"
 
 # SUP-14 — Reverse-reverse: confirm the named supervisor unit ACTUALLY
 # exists on disk. systemd does not warn about a missing Requires= target
 # until something tries to depend on it; this test screams early if a
 # future HAOS upstream rename strands all our Tier-2 services.
-run_test "SUP-14" "Supervisor systemd unit (hassos-supervisor.service) exists" \
-  "systemctl list-unit-files hassos-supervisor.service 2>/dev/null | grep -q hassos-supervisor"
+run_test "SUP-14" "Supervisor systemd unit (haos-supervisor.service) exists" \
+  "systemctl list-unit-files haos-supervisor.service 2>/dev/null | grep -q haos-supervisor"
+
+# SUP-14b — the 16.x name still RESOLVES. A fielded ga-bootstrap unit says
+# Requires=hassos-supervisor.service; on a device where that name is not
+# loadable systemd drops the start job and the first-boot orchestrator never
+# runs (SUP-11 class). LoadState is the loader's verdict, not a file listing.
+run_test "SUP-14b" "hassos-supervisor.service alias loads (LoadState=loaded)" \
+  "[ \"\$(systemctl show -p LoadState --value hassos-supervisor.service 2>/dev/null)\" = loaded ]"
 
 # SUP-12/13 — the SEAM between host and containers.
 #
