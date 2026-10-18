@@ -148,7 +148,7 @@ run_test "TENV-21" "telegraf env, resolver missing → GA_ENV=unknown + WARNING"
 
 # --- static seams -------------------------------------------------------------
 U1="$R/buildroot-external/package/fluent-bit-config/fluent-bit.service"
-U0="$R/buildroot-ihost/rootfs-overlay/etc/systemd/system/fluent-bit-tier0.service"
+U0="$R/buildroot-external/rootfs-overlay/etc/systemd/system/fluent-bit-tier0.service"
 U2="$R/buildroot-external/package/telegraf/telegraf.service"
 run_test "TENV-30" "unit fallbacks say GA_ENV=unknown in all three units" \
   "grep -q '^Environment=GA_ENV=unknown ' '$U1' && grep -q '^Environment=GA_ENV=unknown ' '$U0' && grep -q '^Environment=GA_ENV=unknown ' '$U2' && ! grep -qE '^Environment=.*GA_ENV=(dev|prod)' '$U1' '$U0' '$U2'"

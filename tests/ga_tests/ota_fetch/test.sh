@@ -31,7 +31,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 EXT="$ROOT/buildroot-external/rootfs-overlay"
 IHOST="$ROOT/buildroot-ihost/rootfs-overlay"
-RESOLVER="$IHOST/usr/sbin/ga-resolve-ota"
+RESOLVER="$EXT/usr/sbin/ga-resolve-ota"
 INSTALLER="$EXT/usr/sbin/ga-rauc-install"
 BAKED_CONF="$EXT/etc/ga-services.conf"
 # Pinned here, not derived from the tree under test (working-method rule 7).
@@ -159,9 +159,9 @@ sbx() {  # <cmd...>
     --setenv GA_SERVICES_CONF_LIB /mnt/.ext/usr/libexec/ga-services-conf.sh \
     "$@"
 }
-resolve() { sbx sh /mnt/.ihost/usr/sbin/ga-resolve-ota > "$C/out" 2>&1; echo $? > "$C/rc"; }
+resolve() { sbx sh /mnt/.ext/usr/sbin/ga-resolve-ota > "$C/out" 2>&1; echo $? > "$C/rc"; }
 run_installer() {
-  sbx env GA_RESOLVE_OTA_BIN=/mnt/.ihost/usr/sbin/ga-resolve-ota \
+  sbx env GA_RESOLVE_OTA_BIN=/mnt/.ext/usr/sbin/ga-resolve-ota \
     sh /mnt/.ext/usr/sbin/ga-rauc-install "$@" > "$C/out" 2>&1
   echo $? > "$C/rc"
 }

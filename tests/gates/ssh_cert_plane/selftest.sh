@@ -17,7 +17,7 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
-HOOK="$ROOT/buildroot-ihost/board/sonoff/ihost/post-build.d/87-ssh-cert-plane.sh"
+HOOK="$ROOT/buildroot-external/scripts/post-build.d/87-ssh-cert-plane.sh"
 RUNNER="$ROOT/tests/ga_tests/run_build_tests.sh"
 OVL="$ROOT/buildroot-external/rootfs-overlay"
 LEGACY_KEY="$ROOT/tests/gates/ssh_posture/legacy-fleet-key.pub"
@@ -128,7 +128,7 @@ expect_gate FAIL "$m" SSH-10 "break-glass key on the revocation list"
 echo "── the hook refuses a revocation list that has lost the pre-cut key ──"
 # The LIVE hook, copied verbatim into a board-shaped dir so its committed
 # revocation list (../ssh-revoked-keys) can be swapped for a fixture.
-REVOKED_LIVE="$ROOT/buildroot-ihost/board/sonoff/ihost/ssh-revoked-keys"
+REVOKED_LIVE="$ROOT/buildroot-external/scripts/ssh-revoked-keys"
 [[ -s "$REVOKED_LIVE" ]] || { echo "FATAL: $REVOKED_LIVE missing"; exit 1; }
 hook_with_list() {  # <name> <list-content|-> -> runs the hook copy on a fresh 1.4 target; rc
   local b="$W/board-$1"; mkdir -p "$b/post-build.d"; cp "$HOOK" "$b/post-build.d/"

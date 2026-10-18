@@ -21,9 +21,12 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-OVL="$ROOT/buildroot-ihost/rootfs-overlay"
+# The GA layer overlay: the shared uplink units live here, for every board.
+OVL="$ROOT/buildroot-external/rootfs-overlay"
 UNITS="$OVL/etc/systemd/system"
 SBIN="$OVL/usr/sbin"
+# ga-wifi-fallback-restore is OpenStick/iHost-specific and stays in the board tree.
+IOVL="$ROOT/buildroot-ihost/rootfs-overlay"
 WORK="$(mktemp -d -t uplink-units-XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -84,7 +87,7 @@ fi
 
 # --- 3. LTE: the fallback never disables itself in silence ------------------
 echo "--- LTE fallback is never silent ---"
-OUT="$(KEY_FILE=/nonexistent sh -c 'sed "s#^KEY_FILE=.*#KEY_FILE=/nonexistent/openstick.key#" "$1" > "$2/stick.sh"; sh "$2/stick.sh" 2>&1' _ "$SBIN/ga-openstick-autoconnect" "$WORK")"
+OUT="$(KEY_FILE=/nonexistent sh -c 'sed "s#^KEY_FILE=.*#KEY_FILE=/nonexistent/openstick.key#" "$1" > "$2/stick.sh"; sh "$2/stick.sh" 2>&1' _ "$IOVL/usr/sbin/ga-openstick-autoconnect" "$WORK")"
 if echo "$OUT" | grep -qi "NO SHARED KEY"; then
     PASS "missing shared key is announced, not swallowed"
 else
@@ -103,7 +106,7 @@ chmod +x "$WORK/nmcli"
 : > "$WORK/nmcli.log"
 GA_WIFI_DEFAULT="$WORK/share-wifi/GreenAutarky-Install.nmconnection" \
 GA_NM_DIR="$WORK/nm" GA_NMCLI="$WORK/nmcli" NMCLI_LOG="$WORK/nmcli.log" \
-  sh "$SBIN/ga-wifi-fallback-restore" >/dev/null 2>&1
+  sh "$IOVL/usr/sbin/ga-wifi-fallback-restore" >/dev/null 2>&1
 if [ -f "$WORK/nm/GreenAutarky-Install.nmconnection" ] && grep -q "connection reload" "$WORK/nmcli.log"; then
     PASS "a wiped fallback profile is restored and NetworkManager reloaded"
 else
@@ -113,18 +116,18 @@ fi
 : > "$WORK/nmcli.log"
 GA_WIFI_DEFAULT="$WORK/share-wifi/GreenAutarky-Install.nmconnection" \
 GA_NM_DIR="$WORK/nm" GA_NMCLI="$WORK/nmcli" NMCLI_LOG="$WORK/nmcli.log" \
-  sh "$SBIN/ga-wifi-fallback-restore" >/dev/null 2>&1
+  sh "$IOVL/usr/sbin/ga-wifi-fallback-restore" >/dev/null 2>&1
 if [ -s "$WORK/nmcli.log" ]; then
     FAIL "an intact device is left alone" "NetworkManager was reloaded for nothing"
 else
     PASS "an intact device is left alone (no reload, no churn)"
 fi
-if grep -qE "^After=.*haos-config\.service" "$UNITS/ga-wifi-fallback-restore.service"; then
+if grep -qE "^After=.*haos-config\.service" "$IOVL/etc/systemd/system/ga-wifi-fallback-restore.service"; then
     PASS "restore runs after the import that wipes"
 else
     FAIL "restore runs after haos-config" "wrong order — the restore would be wiped again"
 fi
-if [ -L "$UNITS/multi-user.target.wants/ga-wifi-fallback-restore.service" ]; then
+if [ -L "$IOVL/etc/systemd/system/multi-user.target.wants/ga-wifi-fallback-restore.service" ]; then
     PASS "restore unit is enabled"
 else
     FAIL "restore unit is enabled" "no multi-user.target.wants symlink"

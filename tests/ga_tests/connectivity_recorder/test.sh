@@ -10,7 +10,7 @@ suite_start "Connectivity Flight Recorder"
 
 # Locate the recorder script: installed path on device, overlay path in-repo.
 REC="/usr/sbin/ga-connectivity-recorder"
-[ -x "$REC" ] || REC="$SCRIPT_DIR/../../../buildroot-ihost/rootfs-overlay/usr/sbin/ga-connectivity-recorder"
+[ -x "$REC" ] || REC="$SCRIPT_DIR/../../../buildroot-external/rootfs-overlay/usr/sbin/ga-connectivity-recorder"
 
 run_test "CFR-01" "recorder script present + executable" \
   "test -x '$REC'"

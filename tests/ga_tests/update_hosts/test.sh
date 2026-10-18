@@ -31,7 +31,7 @@ export GA_SERVICES_CONF_LIB="${GA_SERVICES_CONF_LIB:-$SCRIPT_DIR/../../../buildr
 suite_start "ga-update-hosts (Supervisor name resolution)"
 
 REPO="$SCRIPT_DIR/../../.."
-UH="${GA_UPDATE_HOSTS:-$REPO/buildroot-ihost/rootfs-overlay/usr/sbin/ga-update-hosts}"
+UH="${GA_UPDATE_HOSTS:-$REPO/buildroot-external/rootfs-overlay/usr/sbin/ga-update-hosts}"
 # The Supervisor launcher: upstream HAOS's haos-supervisor + GA patch 0130,
 # exported from haos/ as the build sees it (scripts/apply-haos-patches.sh).
 if [ -z "${HASSOS_SUPERVISOR:-}" ]; then

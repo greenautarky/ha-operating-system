@@ -330,16 +330,10 @@ fi
 # here, in seconds, with the same script in --check mode so the two cannot
 # disagree.
 #
-# The hook lives in the iHost board's post-build.d/ today. A board without its
-# own copy (the DSGW-210, until the shared hooks move into the GA layer) has no
-# hook to ask and no hook to install the key: the image then does NOT
-# self-register on the mesh. That is announced here, loudly, and never for the
-# iHost, where a missing hook stays a failure.
-GA_NB_KEY_HOOK="${BOARD_BASE_DIR}/post-build.d/88-netbird-setup-key.sh"
-if [[ ! -e "$GA_NB_KEY_HOOK" && "$BOARD" != ihost ]]; then
-  echo "WARN: board '$BOARD' has no NetBird setup-key hook (${GA_NB_KEY_HOOK##*/build/}):" >&2
-  echo "      this image will NOT join the NetBird mesh on first boot." >&2
-elif ! bash "$GA_NB_KEY_HOOK" --check; then
+# The hook lives in the GA layer (buildroot-external/scripts/post-build.d/), so
+# every board runs it; a missing hook is a failure for every board.
+GA_NB_KEY_HOOK="/build/${GA_LAYER_DIR}/scripts/post-build.d/88-netbird-setup-key.sh"
+if ! bash "$GA_NB_KEY_HOOK" --check; then
   echo "FAIL: NetBird setup key missing or empty — see the line above." >&2
   PREFLIGHT_FAIL=1
 fi
@@ -509,17 +503,16 @@ export GA_BUILD_TIMESTAMP GA_RELEASE
 # PUBLIC keys from the secrets mount. The post-build hook refuses without them
 # too, but only after the rootfs is built — ask here, in seconds. Below the cut
 # this is a no-op. Same script, --check mode, so the two cannot disagree.
-GA_SSH_CERT_HOOK="${BOARD_BASE_DIR}/post-build.d/87-ssh-cert-plane.sh"
-if [[ ! -e "$GA_SSH_CERT_HOOK" && "$BOARD" != ihost ]]; then
-  echo "WARN: board '$BOARD' has no SSH certificate-plane hook (${GA_SSH_CERT_HOOK##*/build/}):" >&2
-  echo "      this image will NOT carry the ADR-0019 user CA." >&2
-elif [[ -x "$GA_SSH_CERT_HOOK" ]]; then
-  GA_SECRETS_DIR="$GA_SECRETS_DIR" "$GA_SSH_CERT_HOOK" --check "$GA_RELEASE" || {
-    echo "FAIL: $GA_RELEASE is on the SSH certificate plane (ADR-0019) but its keys are not in ${GA_SECRETS_DIR}/ssh/." >&2
-    echo "      Put ga_user_ca.pub + ga_breakglass.pub there (key ceremony runbook) and re-run." >&2
-    exit 1
-  }
+GA_SSH_CERT_HOOK="/build/${GA_LAYER_DIR}/scripts/post-build.d/87-ssh-cert-plane.sh"
+if [[ ! -x "$GA_SSH_CERT_HOOK" ]]; then
+  echo "FAIL: SSH certificate-plane hook missing or not executable: ${GA_SSH_CERT_HOOK##*/build/}" >&2
+  exit 1
 fi
+GA_SECRETS_DIR="$GA_SECRETS_DIR" "$GA_SSH_CERT_HOOK" --check "$GA_RELEASE" || {
+  echo "FAIL: $GA_RELEASE is on the SSH certificate plane (ADR-0019) but its keys are not in ${GA_SECRETS_DIR}/ssh/." >&2
+  echo "      Put ga_user_ca.pub + ga_breakglass.pub there (key ceremony runbook) and re-run." >&2
+  exit 1
+}
 
 assert_ga_release_stamped() {
   # Post-bake guard: confirm /etc/ga-release in the produced rootfs matches

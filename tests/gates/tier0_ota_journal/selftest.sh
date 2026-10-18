@@ -49,8 +49,8 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-UNIT="$ROOT/buildroot-ihost/rootfs-overlay/etc/systemd/system/fluent-bit-tier0.service"
-OVERLAY_ETC="$ROOT/buildroot-ihost/rootfs-overlay/etc/fluent-bit"
+UNIT="$ROOT/buildroot-external/rootfs-overlay/etc/systemd/system/fluent-bit-tier0.service"
+OVERLAY_ETC="$ROOT/buildroot-external/rootfs-overlay/etc/fluent-bit"
 PARSERS="$ROOT/buildroot-external/package/fluent-bit-config/parsers.conf"
 VERSION_YAML="$ROOT/version.yaml"
 FB_MK="$ROOT/buildroot/package/fluent-bit/fluent-bit.mk"

@@ -32,9 +32,9 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-APPLY="$ROOT/buildroot-ihost/rootfs-overlay/usr/sbin/ga-telemetry-profile-apply"
-T0_UNIT="$ROOT/buildroot-ihost/rootfs-overlay/etc/systemd/system/fluent-bit-tier0.service"
-OVERLAY_ETC="$ROOT/buildroot-ihost/rootfs-overlay/etc/fluent-bit"
+APPLY="$ROOT/buildroot-external/rootfs-overlay/usr/sbin/ga-telemetry-profile-apply"
+T0_UNIT="$ROOT/buildroot-external/rootfs-overlay/etc/systemd/system/fluent-bit-tier0.service"
+OVERLAY_ETC="$ROOT/buildroot-external/rootfs-overlay/etc/fluent-bit"
 PKG_FB="$ROOT/buildroot-external/package/fluent-bit-config"
 TG_CONF="$ROOT/buildroot-external/package/telegraf/telegraf.conf"
 VERSION_YAML="$ROOT/version.yaml"
@@ -326,7 +326,7 @@ chk "the next run heals it: restarted, applied=normal" '[ "$(rb .applied)" = nor
 
 # --- units: the .path must start a unit NOT ordered before a shipper, and a unit
 # that IS ordered before one must run the script with --boot.
-U="$ROOT/buildroot-ihost/rootfs-overlay/etc/systemd/system"
+U="$ROOT/buildroot-external/rootfs-overlay/etc/systemd/system"
 PU="$(sed -n 's/^Unit=//p' "$U/ga-telemetry-profile.path")"
 [ -f "$U/$PU" ] || die2 "the .path names $PU, which does not exist"
 if grep -qE '^Before=.*(fluent-bit|telegraf)' "$U/$PU"; then
