@@ -110,7 +110,7 @@ ota() {
   printf '%s\n' "$2" > "$W/mnt-boot/cmdline.txt"
   printf 'OLD BOOT SCRIPT\n' > "$W/mnt-boot/boot.scr"
   cp "$ROOT/buildroot-ihost/board/sonoff/ihost/boot-env.txt" "$W/mnt-boot/haos-config.txt"
-  # the bundle's boot image: what hassos-hook.sh puts there
+  # the bundle's boot image: what haos-hook.sh puts there
   cp "$CMDLINE" "$d/bundle/cmdline.txt"
   cp "$3" "$d/bundle/boot.scr"
   cp "$ROOT/buildroot-ihost/board/sonoff/ihost/boot-env.txt" "$d/bundle/haos-config.txt"

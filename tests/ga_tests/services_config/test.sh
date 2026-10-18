@@ -149,10 +149,10 @@ echo "--- Service ordering ---"
 # unit text: the text used to say Before=hassio-supervisor.service, a unit the
 # image does not ship, and the old text grep was green on that no-op.
 run_test "SVC-27" "ga-update-hosts runs before supervisor" \
-  "systemctl show -p After --value hassos-supervisor.service 2>/dev/null | tr ' ' '\\n' | grep -qx 'ga-update-hosts.service'"
+  "systemctl show -p After --value haos-supervisor.service 2>/dev/null | tr ' ' '\\n' | grep -qx 'ga-update-hosts.service'"
 
 run_test "SVC-28" "ga-update-hosts runs after overlay mount" \
-  "systemctl cat ga-update-hosts 2>/dev/null | grep -q 'After=.*hassos-overlay'"
+  "systemctl cat ga-update-hosts 2>/dev/null | grep -q 'After=.*haos-overlay'"
 
 # =========================================================================
 # Integration: cross-file consistency (SVC-30..36)

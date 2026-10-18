@@ -9,7 +9,7 @@
 #   ConditionFileNotEmpty=/root/.ssh/authorized_keys
 # /root/.ssh is bind-mounted from /mnt/overlay/root/.ssh (the overlay
 # partition, empty on a freshly-flashed device). Without the seed step
-# in /usr/libexec/hassos-overlay, the server NEVER starts on first boot
+# in /usr/libexec/haos-overlay, the server NEVER starts on first boot
 # and the device is unreachable except via serial.
 #
 # Discovered live on KIB-SON-31 2026-05-27 — device looked healthy, had
@@ -38,7 +38,7 @@ run_test "SSH-D-02" "baked authorized_keys non-empty with at least one OpenSSH p
   "grep -cE '^(ssh-rsa|ssh-ed25519|ssh-dss|ecdsa-sha2-) ' $ROOTFS_AK 2>/dev/null | awk '\$1 > 0 {exit 0} {exit 1}'"
 
 # =========================================================================
-# Overlay seed — hassos-overlay copied the baked file on first boot
+# Overlay seed — haos-overlay copied the baked file on first boot
 # =========================================================================
 
 run_test "SSH-D-03" "overlay seed present at /mnt/overlay/root/.ssh/authorized_keys" \
