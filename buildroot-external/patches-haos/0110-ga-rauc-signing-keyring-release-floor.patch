@@ -327,7 +327,7 @@ index 963718ddb..2bf092586 100755
      fi
  }
  
-@@ -30,21 +84,44 @@ function write_rauc_config() {
+@@ -30,21 +84,46 @@ function write_rauc_config() {
  
  
  function install_rauc_certs() {
@@ -350,14 +350,18 @@ index 963718ddb..2bf092586 100755
 -    # Add local self-signed certificate (if not trusted by the dev or release
 -    # certificate it is a self-signed certificate, dev-ca.pem contains both)
 -    if ! openssl verify -CAfile "${BR2_EXTERNAL_HAOS_PATH}/ota/dev-ca.pem" -no-CApath "${cert}"; then
-+    # The signing cert must chain to the root. If it does not, it used to be
-+    # appended as a second anchor; KEYRING-02 now fails any keyring that holds
-+    # more than the pinned root, so a non-chaining cert is caught at the end of
-+    # the build. Appending is kept (rather than failing here) so that audit
-+    # sees — and names — exactly what a mis-issued cert would have shipped.
+-        echo "Adding self-signed certificate to keyring."
+-        openssl x509 -in "${cert}" -text >> "${TARGET_DIR}/etc/rauc/keyring.pem"
++    # The signing cert must chain to the root, and a cert that does not stops
++    # the build HERE. This script never adds a second anchor to the keyring:
++    # a non-chaining signer used to be appended and left to the end-of-build
++    # audit (KEYRING-02), i.e. after a full build, and only if that audit ran.
++    # tests/gates/rauc_signer_chain drives this function over fixture certs.
 +    if ! openssl verify -CAfile "${base_ca}" -no-CApath "${cert}"; then
-         echo "Adding self-signed certificate to keyring."
-         openssl x509 -in "${cert}" -text >> "${TARGET_DIR}/etc/rauc/keyring.pem"
++        echo "FATAL: the signing certificate ${cert} does not chain to the OTA root ${base_ca};" >&2
++        echo "       refusing to build an image whose keyring would need a second trust anchor." >&2
++        rm -f "${TARGET_DIR}/etc/rauc/keyring.pem"
++        exit 1
      fi
 +
 +    # The retired pre-2026-03-27 ("F13") signing CA is DELETED, not gated.
