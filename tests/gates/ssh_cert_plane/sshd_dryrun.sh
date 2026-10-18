@@ -44,7 +44,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
 OVL="$ROOT/buildroot-external/rootfs-overlay"
-HOOK="$ROOT/buildroot-ihost/board/sonoff/ihost/post-build.d/87-ssh-cert-plane.sh"
+HOOK="$ROOT/buildroot-external/scripts/post-build.d/87-ssh-cert-plane.sh"
 SIGN="$ROOT/scripts/ops/ga-sign-ssh-cert.sh"
 SSHD="${SSHD:-/usr/sbin/sshd}"
 VERBOSE=0; [[ "${1:-}" == "-v" ]] && VERBOSE=1

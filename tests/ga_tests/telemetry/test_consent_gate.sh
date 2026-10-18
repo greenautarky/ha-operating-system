@@ -9,7 +9,7 @@
 
 set -u
 
-GATE="${GATE:-$(dirname "$0")/../../../buildroot-ihost/rootfs-overlay/usr/sbin/ga-telemetry-gate}"
+GATE="${GATE:-$(dirname "$0")/../../../buildroot-external/rootfs-overlay/usr/sbin/ga-telemetry-gate}"
 WORK="$(mktemp -d -t consent-gate-XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -159,7 +159,7 @@ assert_exit $? 0 "GA_TELEMETRY_FORCE=1 bypasses missing store + policy bump"
 # record what it was asked. Asserted on the RECORDED verbs, both directions.
 # ---------------------------------------------------------------------------
 echo "--- ga-telemetry-consent-apply (start/stop decisions) ---"
-APPLY="${APPLY:-$(dirname "$0")/../../../buildroot-ihost/rootfs-overlay/usr/sbin/ga-telemetry-consent-apply}"
+APPLY="${APPLY:-$(dirname "$0")/../../../buildroot-external/rootfs-overlay/usr/sbin/ga-telemetry-consent-apply}"
 if [ ! -f "$APPLY" ]; then
     FAIL "apply script present" "not found at $APPLY"
 else
@@ -209,7 +209,7 @@ fi
 # "active" (RemainAfterExit) — a .path cannot re-trigger an active unit — and
 # it must watch the store, not the marker dir the gate writes into.
 echo "--- ga-telemetry-consent-refresh units ---"
-UNITS="$(dirname "$0")/../../../buildroot-ihost/rootfs-overlay/etc/systemd/system"
+UNITS="$(dirname "$0")/../../../buildroot-external/rootfs-overlay/etc/systemd/system"
 if [ -f "$UNITS/ga-telemetry-consent-refresh.service" ] && ! grep -q "RemainAfterExit" "$UNITS/ga-telemetry-consent-refresh.service"; then
     PASS "refresh service has no RemainAfterExit (re-triggerable)"
 else

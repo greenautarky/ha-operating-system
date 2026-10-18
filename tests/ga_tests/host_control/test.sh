@@ -37,6 +37,8 @@ EXT="$ROOT/buildroot-external/rootfs-overlay"
 IHOST="$ROOT/buildroot-ihost/rootfs-overlay"
 EXT_UNITS="$EXT/usr/lib/systemd/system"
 IHOST_UNITS="$IHOST/etc/systemd/system"
+# Units that moved into the GA layer (every board): ethernet retire, resolve-ota, ...
+EXT_ETC_UNITS="$EXT/etc/systemd/system"
 # Pinned here, not derived from the tree under test (working-method rule 7).
 GM_HOST=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager
 SHARE_HOST=/mnt/data/supervisor/share
@@ -55,12 +57,12 @@ unit_key() {  # <unit file> <key> -> value(s)
 v=$(unit_key "$EXT_UNITS/ga-rauc-install.path" PathChanged)
 ok "HCTL-01 ga-rauc-install.path watches $GM_HOST/ga-rauc-install-request" \
    "[ '$v' = '$GM_HOST/ga-rauc-install-request' ]" "watches '$v'"
-v=$(unit_key "$IHOST_UNITS/ga-ethernet-retire.path" PathExists)
+v=$(unit_key "$EXT_ETC_UNITS/ga-ethernet-retire.path" PathExists)
 ok "HCTL-02 ga-ethernet-retire.path watches $GM_HOST/.ga_converged" \
    "[ '$v' = '$GM_HOST/.ga_converged' ]" "watches '$v'"
 share_watchers=""
 n_units=0
-for u in "$EXT_UNITS"/*.path "$IHOST_UNITS"/*.path; do
+for u in "$EXT_UNITS"/*.path "$EXT_ETC_UNITS"/*.path "$IHOST_UNITS"/*.path; do
   [ -f "$u" ] || continue
   n_units=$((n_units+1))
   if grep -qE "^Path(Exists|ExistsGlob|Changed|Modified|DirectoryNotEmpty)=$SHARE_HOST" "$u"; then
@@ -256,7 +258,7 @@ ok "HCTL-24 mode raw in ga_manager's data directory is applied" \
 
 # ── Ethernet override retirement ────────────────────────────────────────────
 echo "--- Ethernet override retirement ---"
-RET_SVC="$IHOST_UNITS/ga-ethernet-retire.service"
+RET_SVC="$EXT_ETC_UNITS/ga-ethernet-retire.service"
 
 fresh eth-share
 : > "$C/boot/ga-ethernet-force"

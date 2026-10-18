@@ -41,3 +41,20 @@ if [ -n "${GA_RELEASE:-}" ]; then
     printf '%s\n' "${GA_RELEASE}" > "${TARGET_DIR}/etc/ga-release"
     chmod 0644 "${TARGET_DIR}/etc/ga-release"
 fi
+
+# The GA layer's build-input hooks (SSH certificate plane, NetBird setup key),
+# from this directory's post-build.d/: every board gets them. The board's own
+# post-build.sh runs afterwards and adds its board-specific ones. A hook that
+# is not executable fails the build: skipping it would ship an image without
+# what the hook installs, and nothing else would notice. A directory without
+# a single hook fails too, so a layout change cannot make this loop inspect
+# nothing and pass.
+hook_dir="$(cd "$(dirname "$0")" && pwd)/post-build.d"
+shopt -s nullglob
+hooks=("${hook_dir}"/*.sh)
+[ "${#hooks[@]}" -gt 0 ] || { echo "ga-haos post-build: FAIL: no hooks in ${hook_dir}" >&2; exit 1; }
+for s in "${hooks[@]}"; do
+    [ -x "$s" ] || { echo "ga-haos post-build: FAIL: $s is not executable" >&2; exit 1; }
+    echo "ga-haos post-build: running $(basename "$s")"
+    "$s" "${TARGET_DIR}"
+done

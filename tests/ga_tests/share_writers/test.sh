@@ -29,7 +29,8 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 IHOST="$ROOT/buildroot-ihost/rootfs-overlay"
-OVL=/mnt/.ihost   # where the sandbox sees $IHOST
+OVL=/mnt/.ihost   # where the sandbox sees $IHOST (board-specific scripts)
+GAOVL=/mnt/.ext   # where the sandbox sees the GA layer overlay (scripts every board ships)
 LIBEXEC="$ROOT/buildroot-external/rootfs-overlay/usr/libexec"
 
 pass=0; fail=0
@@ -121,7 +122,7 @@ sbx() {
     --tmpfs /mnt --bind "$C/data" /mnt/data --bind "$C/boot" /mnt/boot \
     --bind "$C/run" /run --bind "$C/tmp" /tmp \
     --ro-bind "$LIBEXEC" /usr/libexec --ro-bind "$STUBS" /mnt/.stubs \
-    --ro-bind "$IHOST" /mnt/.ihost \
+    --ro-bind "$IHOST" /mnt/.ihost --ro-bind "$ROOT/buildroot-external/rootfs-overlay" /mnt/.ext \
     ${BBDIR:+--ro-bind "$BBDIR" /mnt/.busybox} \
     --tmpfs /sys --dir /sys/bus/sdio/devices/mmc1:0001:1 --dir /sys/class/net/wlan0 \
     --setenv PATH "$_pfx/mnt/.stubs:/usr/sbin:/usr/bin:/sbin:/bin" \
@@ -152,23 +153,23 @@ run_cases() {  # <label> <PATH prefix>
 
   echo "── [$L] ga-uplink-ladder ──"
   fresh ladder; ln -s /mnt/data/other-file "$SHARE/ga-uplink.json"
-  sbx "$P" sh "$OVL/usr/sbin/ga-uplink-ladder" >"$C/out" 2>&1
+  sbx "$P" sh "$GAOVL/usr/sbin/ga-uplink-ladder" >"$C/out" 2>&1
   check "SW-01[$L]" "ladder status (symlink at the file)" ga-uplink.json '"rung":"none"'
 
   echo "── [$L] ga-wifi-watchdog ──"
   fresh wd-tmp; ln -s /mnt/data/other-file "$SHARE/ga-wifi-health.json.tmp"
-  sbx "$P" sh "$OVL/usr/sbin/ga-wifi-watchdog" >"$C/out" 2>&1
+  sbx "$P" sh "$GAOVL/usr/sbin/ga-wifi-watchdog" >"$C/out" 2>&1
   check "SW-02[$L]" "watchdog health (symlink at the .tmp name)" ga-wifi-health.json '"iface": "wlan0"'
   fresh wd-dir; ln -s /mnt/data/other-dir "$SHARE/ga-wifi-health.json"
-  sbx "$P" sh "$OVL/usr/sbin/ga-wifi-watchdog" >"$C/out" 2>&1
+  sbx "$P" sh "$GAOVL/usr/sbin/ga-wifi-watchdog" >"$C/out" 2>&1
   check "SW-03[$L]" "watchdog health (symlink to a directory at the file)" ga-wifi-health.json '"iface": "wlan0"' dir
 
   echo "── [$L] ga-firewall-gate ──"
   fresh fw-tmp; ln -s /mnt/data/other-file "$SHARE/ga-firewall-status.json.tmp.2"
-  sbx "$P" sh "$OVL/usr/libexec/ga-firewall-gate" >"$C/out" 2>&1
+  sbx "$P" sh "$GAOVL/usr/libexec/ga-firewall-gate" >"$C/out" 2>&1
   check "SW-04[$L]" "firewall status (symlink at the .tmp.<pid> name)" ga-firewall-status.json '"ruleset_loaded": true'
   fresh fw-dir; ln -s /mnt/data/other-dir "$SHARE/ga-firewall-status.json"
-  sbx "$P" sh "$OVL/usr/libexec/ga-firewall-gate" >"$C/out" 2>&1
+  sbx "$P" sh "$GAOVL/usr/libexec/ga-firewall-gate" >"$C/out" 2>&1
   check "SW-05[$L]" "firewall status (symlink to a directory at the file)" ga-firewall-status.json '"ruleset_loaded": true' dir
 
   echo "── [$L] ga-bluetooth-status ──"
@@ -178,7 +179,7 @@ run_cases() {  # <label> <PATH prefix>
 
   echo "── [$L] ga-manage-ethernet ──"
   fresh eth-tmp; ln -s /mnt/data/other-file "$SHARE/ga-ethernet-status.json.tmp.2"
-  sbx "$P" sh "$OVL/usr/sbin/ga-manage-ethernet" apply >"$C/out" 2>&1
+  sbx "$P" sh "$GAOVL/usr/sbin/ga-manage-ethernet" apply >"$C/out" 2>&1
   check "SW-07[$L]" "ethernet status (symlink at the .tmp.<pid> name)" ga-ethernet-status.json '"source": "default"'
 
   echo "── [$L] ga-wlan0-deauth ──"
@@ -251,7 +252,7 @@ echo "share_writers — status files in the shared directory ($BWRAP, $(id -un))
 # The sandbox must see the scripts, the helper, and the STUBS in front of the
 # real tools — otherwise every "unchanged" check would pass over nothing.
 fresh probe
-if ! sbx "" sh -c '[ -r /mnt/.ihost/usr/sbin/ga-uplink-ladder ] && [ -x /usr/libexec/ga-share-publish ] \
+if ! sbx "" sh -c '[ -r /mnt/.ext/usr/sbin/ga-uplink-ladder ] && [ -r /mnt/.ihost/usr/sbin/ga-wlan0-deauth ] && [ -x /usr/libexec/ga-share-publish ] \
       && [ "$(command -v nft)" = /mnt/.stubs/nft ] && [ "$(command -v ip)" = /mnt/.stubs/ip ]'; then
   echo "FATAL: the sandbox does not see the scripts under test or the stubs" >&2; exit 1
 fi

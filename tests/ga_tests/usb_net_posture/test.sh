@@ -11,9 +11,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$SCRIPT_DIR/../../.."
 
 CMDLINE="$REPO/buildroot-ihost/board/sonoff/ihost/cmdline.txt"
-RULE="$REPO/buildroot-ihost/rootfs-overlay/usr/lib/udev/rules.d/80-ga-usb-authorize.rules"
-HELPER="$REPO/buildroot-ihost/rootfs-overlay/usr/libexec/ga-usb-authorize"
-ALLOW="$REPO/buildroot-ihost/rootfs-overlay/usr/share/ga-usb-allowlist"
+RULE="$REPO/buildroot-external/rootfs-overlay/usr/lib/udev/rules.d/80-ga-usb-authorize.rules"
+HELPER="$REPO/buildroot-external/rootfs-overlay/usr/libexec/ga-usb-authorize"
+ALLOW="$REPO/buildroot-external/rootfs-overlay/usr/share/ga-usb-allowlist"
 NMCONF="$REPO/buildroot-external/rootfs-overlay/etc/NetworkManager/NetworkManager.conf"
 
 suite_start "USB + MAC posture (build)"

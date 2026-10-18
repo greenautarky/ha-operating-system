@@ -66,7 +66,7 @@ run_test "LAY-10" "sweep found the consumers ($n; floor 5, fail closed on zero)"
 # Any script that names the conf paths or a *_CONF_OVERRIDE variable and `.`-sources
 # a conf variable directly (outside the loader) is a hand-rolled reader.
 bad=""
-for f in $(grep -rIlE 'ga-services\.conf' "$EXT/usr" "$IHOST/usr" "$IHOST/etc/systemd" 2>/dev/null | grep -v 'ga-services-conf.sh$'); do
+for f in $(grep -rIlE 'ga-services\.conf' "$EXT/usr" "$EXT/etc/systemd" "$IHOST/usr" "$IHOST/etc/systemd" 2>/dev/null | grep -v 'ga-services-conf.sh$'); do
   if grep -nE '^[[:space:]]*(\[ -[fr] [^]]*\] *&& *)?\. +"?\$\{?(CONF_(DEFAULT|OVERRIDE)|OVERRIDE|BAKED)\}?"?' "$f" >/dev/null 2>&1; then
     bad="$bad $f"
   fi

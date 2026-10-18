@@ -15,7 +15,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-LADDER="$ROOT/buildroot-ihost/rootfs-overlay/usr/sbin/ga-uplink-ladder"
+LADDER="$ROOT/buildroot-external/rootfs-overlay/usr/sbin/ga-uplink-ladder"
 WORK="$(mktemp -d -t uplink-ladder-XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 

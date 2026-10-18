@@ -2801,7 +2801,7 @@ if [[ -n "$SRC" ]]; then
     fi
 
     # INT-06: ga-update-hosts script references all hostnames from ga-services.conf
-    _UH="${SRC}/buildroot-ihost/rootfs-overlay/usr/sbin/ga-update-hosts"
+    _UH="${SRC}/buildroot-external/rootfs-overlay/usr/sbin/ga-update-hosts"
     if [[ -f "$_UH" ]]; then
       _uh_ok=true
       for _var in "GA_INFLUX_HOST" "GA_LOKI_HOST" "GA_OTA_HOST"; do

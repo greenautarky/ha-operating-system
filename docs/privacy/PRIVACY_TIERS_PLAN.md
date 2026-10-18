@@ -159,7 +159,7 @@ requests detailed diagnostics for issue #1234. Active until
 
 **Touch points**:
 - `buildroot-ihost/rootfs-overlay/etc/systemd/system/` — new service unit
-- `buildroot-ihost/rootfs-overlay/usr/sbin/ga-telemetry-gate` — remove
+- `buildroot-external/rootfs-overlay/usr/sbin/ga-telemetry-gate` — remove
   Tier 0 from consent check, or split into multiple gate scripts
 - `buildroot-external/rootfs-overlay/etc/fluent-bit/` — Tier-0 config
 
@@ -183,7 +183,7 @@ requests detailed diagnostics for issue #1234. Active until
 - `homeassisant_core/homeassistant/components/greenautarky_onboarding/consent_page.html`
 - `homeassisant_core/homeassistant/components/greenautarky_telemetry/__init__.py`
   (defaults)
-- `buildroot-ihost/rootfs-overlay/usr/sbin/ga-telemetry-gate`
+- `buildroot-external/rootfs-overlay/usr/sbin/ga-telemetry-gate`
 
 **Effort**: ~1-2h
 
@@ -232,7 +232,7 @@ version > accepted version).
   (storage schema)
 - `homeassisant_core/homeassistant/components/greenautarky_onboarding/consent.py`
   (re-prompt logic)
-- `buildroot-ihost/rootfs-overlay/usr/sbin/ga-telemetry-gate`
+- `buildroot-external/rootfs-overlay/usr/sbin/ga-telemetry-gate`
 - New: privacy policy doc with version + change-log
 
 **Effort**: ~2h

@@ -2,7 +2,7 @@
 # ga-mesh-watchdog — the LIVE script, run for real against stub commands and a
 # movable clock. No device, no network.
 #
-# The subject is buildroot-ihost/rootfs-overlay/usr/sbin/ga-mesh-watchdog
+# The subject is buildroot-external/rootfs-overlay/usr/sbin/ga-mesh-watchdog
 # itself, never a copy of its rules. `curl`, `netbird`, `systemctl`, `ip`,
 # `busctl` and `date` are stubs on a private PATH: the test decides what
 # ga-tools answers, whether the NetBird cloud is reachable, whether an OS
@@ -26,7 +26,7 @@ export GA_SERVICES_CONF_LIB="${GA_SERVICES_CONF_LIB:-$SCRIPT_DIR/../../../buildr
 suite_start "ga-mesh-watchdog ladder (live script, stub commands)"
 
 ROOT="$SCRIPT_DIR/../../.."
-WD="${GA_MESH_WATCHDOG_BIN:-$ROOT/buildroot-ihost/rootfs-overlay/usr/sbin/ga-mesh-watchdog}"
+WD="${GA_MESH_WATCHDOG_BIN:-$ROOT/buildroot-external/rootfs-overlay/usr/sbin/ga-mesh-watchdog}"
 PUB="$ROOT/buildroot-external/rootfs-overlay/usr/libexec/ga-share-publish"
 
 run_test "MWD-00" "the watchdog script exists and is executable" "test -x '$WD'"
