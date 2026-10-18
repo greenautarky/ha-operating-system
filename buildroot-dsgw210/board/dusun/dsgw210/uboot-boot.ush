@@ -41,6 +41,14 @@ fi
 # Load extraargs
 fileenv ${devtype} ${devnum}:${boot_partnum} ${ramdisk_addr_r} cmdline.txt cmdline
 
+# USB host ports are closed by default (ADR-0029 D3). Appended AFTER ${cmdline}
+# on every boot: cmdline.txt belongs to the device, this script is replaced by
+# every update, and for a kernel parameter the last occurrence wins. The
+# on-board devices are authorised by port path (/usr/share/ga-usb-port-allowlist)
+# through 80-ga-usb-authorize.rules. Set after haos-config.txt is imported, so a
+# device-side file cannot override it.
+setenv bootargs_ga "usbcore.authorized_default=0"
+
 # Load device tree
 setenv fdtfile rk3328-dsgw210.dtb
 echo "Loading standard device tree ${fdtfile}"
@@ -70,7 +78,7 @@ for BOOT_SLOT in "${BOOT_ORDER}"; do
       echo "Trying to boot slot A, ${BOOT_A_LEFT} attempts remaining. Loading kernel ..."
       part number ${devtype} ${devnum} hassos-kernel0 kernel_partnum
       if load ${devtype} ${devnum}:${kernel_partnum} ${kernel_addr_r} Image; then
-          setenv bootargs "${bootargs_haos} ${bootargs_a} rauc.slot=A ${cmdline}"
+          setenv bootargs "${bootargs_haos} ${bootargs_a} rauc.slot=A ${cmdline} ${bootargs_ga}"
       fi
     fi
   elif test "x${BOOT_SLOT}" = "xB"; then
@@ -79,7 +87,7 @@ for BOOT_SLOT in "${BOOT_ORDER}"; do
       echo "Trying to boot slot B, ${BOOT_B_LEFT} attempts remaining. Loading kernel ..."
       part number ${devtype} ${devnum} hassos-kernel1 kernel_partnum
       if load ${devtype} ${devnum}:${kernel_partnum} ${kernel_addr_r} Image; then
-          setenv bootargs "${bootargs_haos} ${bootargs_b} rauc.slot=B ${cmdline}"
+          setenv bootargs "${bootargs_haos} ${bootargs_b} rauc.slot=B ${cmdline} ${bootargs_ga}"
       fi
     fi
   fi

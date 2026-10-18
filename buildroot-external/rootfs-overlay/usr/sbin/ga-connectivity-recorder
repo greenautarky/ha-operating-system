@@ -35,7 +35,12 @@ PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
 SYS_NET="${GA_CR_SYS_NET:-/sys/class/net}"
 INTERVAL="${GA_CR_INTERVAL:-20}"       # seconds between polls
 MAX_LINES="${GA_CR_MAX_LINES:-2000}"   # tail-truncate retention
-IFACES="${GA_CR_IFACES:-eth0 wlan0 usb0}"  # link rungs we track
+# Link rungs we track. A board names its own in /usr/share/ga-board.conf
+# (GA_CR_IFACES); an explicit environment value wins over both.
+GA_BOARD_CONF="${GA_BOARD_CONF:-/usr/share/ga-board.conf}"
+# shellcheck disable=SC1090
+[ -r "$GA_BOARD_CONF" ] && . "$GA_BOARD_CONF"
+IFACES="${GA_CR_IFACES:-eth0 wlan0 usb0}"
 
 BOOT_ID="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)"
 

@@ -123,7 +123,12 @@ REMOTE_FORCE="$GM_DATA_DIR/ga-ethernet-force"
 LABEL_FILE="${GA_LABEL_FILE:-/mnt/data/ga-device-label}"
 IDENTITY_FILE="$GM_DATA_DIR/ga-identity.json"
 LEGACY_KEY="GA_ETHERNET_DISABLED"
-ETH_IFACE="eth0"
+# The wired interface's name is board data: /usr/share/ga-board.conf (GA_ETH_IFACE)
+# on a board whose NIC is not eth0; the iHost ships no file and keeps eth0.
+GA_BOARD_CONF="${GA_BOARD_CONF:-/usr/share/ga-board.conf}"
+# shellcheck disable=SC1090
+[ -r "$GA_BOARD_CONF" ] && . "$GA_BOARD_CONF"
+ETH_IFACE="${GA_ETH_IFACE:-eth0}"
 
 # Find the NM connection name for eth0 (active or inactive)
 find_eth_connection() {

@@ -1,0 +1,18 @@
+# ga-usb-port-allowlist — USB port paths (the sysfs device name) authorized on
+# this board, one per line. With usbcore.authorized_default=0 (set in
+# uboot-boot.ush) a device binds to a driver only if /usr/libexec/ga-usb-authorize
+# finds it here or in /usr/share/ga-usb-allowlist (VID:PID).
+#
+# These are the board's internal devices behind the on-board hub. A port path
+# is fixed by the board wiring: plugging an adapter into an external port can
+# not give it one of these names, whatever IDs the adapter reports. External
+# ports stay closed; an external device needs a VID:PID declaration.
+#
+#   3-1     the on-board hub
+#   3-1.1   the cellular modem
+#   3-1.2   on-board serial radio
+#   3-1.3   on-board serial radio
+3-1
+3-1.1
+3-1.2
+3-1.3

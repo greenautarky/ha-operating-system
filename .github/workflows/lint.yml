@@ -516,6 +516,15 @@ jobs:
         # any one of the four fixes flags exactly its own check.
         run: sh tests/ga_tests/uplink_units/test.sh
 
+      - name: per-board values of the shared scripts (firewall, Ethernet policy, recorder, USB ports)
+        # Runs the real scripts against the real DSGW-210 board files and
+        # against no board file (the iHost): golden ruleset / rungs / profile
+        # for the iHost, end0 / wlan0 / ppp0 and the internal USB ports for the
+        # DSGW, an external port with a known VID:PID that stays closed, and
+        # mutations that must flip. Red-proven against the scripts before the
+        # board files existed (10 of 23 cases flip).
+        run: sh tests/ga_tests/board_conf/test.sh
+
       - name: uplink ladder (fallback staircase decisions)
         # Drives the real ladder script against a stub NetworkManager: healthy
         # devices cost no probe traffic, three confirmed strikes switch, the
