@@ -11,12 +11,23 @@ TARGET="${OUT}/target"
 
 pass=0 fail=0 skip=0
 
+# Where the GA layer and upstream HAOS live (the one path map, WP0).
+_RBT_ROOT="${SRC:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+# shellcheck source=../../scripts/lib/tree-paths.sh
+. "${_RBT_ROOT}/scripts/lib/tree-paths.sh"
+
 GREEN='\033[0;32m' RED='\033[0;31m' YELLOW='\033[0;33m' RESET='\033[0m'
 [[ -t 1 ]] || { GREEN=''; RED=''; YELLOW=''; RESET=''; }
 
 _pass() { echo -e "${GREEN}  PASS${RESET}  $1"; pass=$((pass+1)); }
 _fail() { echo -e "${RED}  FAIL${RESET}  $1"; fail=$((fail+1)); }
 _skip() { echo -e "${YELLOW}  SKIP${RESET}  $1 ($2)"; skip=$((skip+1)); }
+
+# _missing_in_image ID WHAT -- an artefact the image must carry is absent:
+# FAIL when there is a rootfs to look in, SKIP in a source-only run (no target/).
+_missing_in_image() {
+  if [[ -d "${TARGET}/usr" ]]; then _fail "$1: $2"; else _skip "$1" "source-only run (no target/ under $OUT)"; fi
+}
 
 echo ""
 echo "=== Build-time verification tests ==="
@@ -465,7 +476,7 @@ if [[ -d "${OUT}/images/boot" ]]; then
 else
   # Fall back to the hook source so a target-only run still says something.
   if grep -q 'BOOT_DATA}/ga-ethernet-force' \
-       "$(dirname "${BASH_SOURCE[0]}")/../../buildroot-ihost/board/sonoff/ihost/hassos-hook.sh" 2>/dev/null; then
+       "$(dirname "${BASH_SOURCE[0]}")/../../buildroot-ihost/board/sonoff/ihost/haos-hook.sh" 2>/dev/null; then
     _pass "CFG-49a: board hook writes the ethernet-force marker (source check — no boot artifact in this run)"
   else
     _fail "CFG-49a: board hook does not write the ethernet-force marker"
@@ -635,15 +646,16 @@ grep -q 'ConditionPathExists=.*ga-consent-error_logs' "$FB_SVC_TEL" 2>/dev/null 
   || _fail "TEL-BLD-05: ga-telemetry-consent.service NOT found"
 
 # TEL-BLD-06: no unit in the image names hassio-supervisor.service. The image
-# ships hassos-supervisor.service; an After=/Before=/Wants= on the other name is
+# ships haos-supervisor.service (HAOS 18.x name; hassos-supervisor.service stays
+# as an alias for fielded ga-bootstrap units); an After=/Before=/Wants= on the other name is
 # a silent no-op (this check used to ASSERT the consent unit's After= on it, so
 # it was green on an ordering that never existed). The source tree is linted by
 # scripts/check-unit-refs.py; this is the same question asked of the built
 # rootfs, which also holds units installed by packages.
 _hsup=$(grep -rlE '^[^#]*hassio-supervisor\.service' "${TARGET}/etc/systemd" "${TARGET}/usr/lib/systemd" 2>/dev/null | head -5)
-[[ -f "${TARGET}/usr/lib/systemd/system/hassos-supervisor.service" && -z "$_hsup" ]] \
-  && _pass "TEL-BLD-06: hassos-supervisor.service shipped, no unit names hassio-supervisor.service" \
-  || _fail "TEL-BLD-06: hassos-supervisor.service missing or units name hassio-supervisor.service: ${_hsup:-<none>}"
+[[ -f "${TARGET}/usr/lib/systemd/system/haos-supervisor.service" && -z "$_hsup" ]] \
+  && _pass "TEL-BLD-06: haos-supervisor.service shipped, no unit names hassio-supervisor.service" \
+  || _fail "TEL-BLD-06: haos-supervisor.service missing or units name hassio-supervisor.service: ${_hsup:-<none>}"
 
 # TEL-BLD-07: ga-telemetry-gate checks GA_TELEMETRY_FORCE override
 grep -q 'GA_TELEMETRY_FORCE' "${TARGET}/usr/sbin/ga-telemetry-gate" 2>/dev/null \
@@ -716,7 +728,7 @@ done
   || _fail "SVC-06b: ga-supervisor-hosts-check.service NOT enabled or not running --verify-supervisor"
 
 # SVC-07: ga-update-hosts runs before supervisor
-grep -qE '^Before=.*hassos-supervisor\.service' "${TARGET}/etc/systemd/system/ga-update-hosts.service" 2>/dev/null \
+grep -qE '^Before=.*haos-supervisor\.service' "${TARGET}/etc/systemd/system/ga-update-hosts.service" 2>/dev/null \
   && _pass "SVC-07: ga-update-hosts ordered before supervisor" \
   || _fail "SVC-07: ga-update-hosts NOT ordered before supervisor"
 
@@ -730,8 +742,21 @@ fi
 echo ""
 echo "--- NetworkManager WiFi defaults ---"
 
-NM_CONF="${TARGET}/etc/NetworkManager/NetworkManager.conf"
-if [[ -f "$NM_CONF" ]]; then
+# NetworkManager reads NetworkManager.conf and then conf.d/*.conf in name order.
+# Since HAOS 18.x the main file is upstream's (unmodified) and GA's settings are
+# the drop-in conf.d/50-ga.conf, so every check below reads the EFFECTIVE
+# configuration: the main file plus the drop-ins, comment lines removed (a
+# value that only appears in a comment must not satisfy a check).
+NM_DIR="${TARGET}/etc/NetworkManager"
+NM_MAIN="${NM_DIR}/NetworkManager.conf"
+NM_CONF="$(mktemp)"
+if [[ -f "$NM_MAIN" ]]; then
+  # shellcheck disable=SC2046  # conf.d names have no spaces; glob order = NM's order
+  cat "$NM_MAIN" $(ls "${NM_DIR}"/conf.d/*.conf 2>/dev/null) | grep -vE '^[[:space:]]*[#;]' > "$NM_CONF"
+else
+  rm -f "$NM_CONF"
+fi
+if [[ -s "$NM_CONF" ]]; then
   # WIFI-01: MAC randomization disabled for scanning
   grep -q 'wifi.scan-rand-mac-address=no' "$NM_CONF" 2>/dev/null \
     && _pass "WIFI-01: scan MAC randomization disabled" \
@@ -747,10 +772,19 @@ if [[ -f "$NM_CONF" ]]; then
     && _pass "WIFI-03: cloned-mac-address set to permanent" \
     || _fail "WIFI-03: cloned-mac-address NOT set to permanent"
 
-  # WIFI-04: Infinite autoconnect retries
-  grep -q 'connection.autoconnect-retries=0' "$NM_CONF" 2>/dev/null \
-    && _pass "WIFI-04: infinite autoconnect retries (0)" \
-    || _fail "WIFI-04: autoconnect-retries NOT set to 0"
+  # WIFI-04: autoconnect retries are BOUNDED. This used to assert
+  # connection.autoconnect-retries=0 (retry forever); that wedged the Supervisor
+  # at 100 % CPU on a link-less eth0 (Odoo #753), so the global default is now 4
+  # and NO [connection] override may cancel it. (The old grep stayed green on
+  # master only because the explanatory comment contains the old string; the
+  # effective config has the comments stripped.)
+  _nm_retries="$(grep -E '^[[:space:]]*autoconnect-retries-default[[:space:]]*=' "$NM_CONF" | tail -n 1 | cut -d= -f2 | tr -d '[:space:]')"
+  if [[ "$_nm_retries" =~ ^[1-9][0-9]*$ ]] \
+     && ! grep -qE '^[[:space:]]*connection\.autoconnect-retries[[:space:]]*=[[:space:]]*0' "$NM_CONF"; then
+    _pass "WIFI-04: autoconnect retries bounded (autoconnect-retries-default=${_nm_retries}, no connection.autoconnect-retries=0 override)"
+  else
+    _fail "WIFI-04: autoconnect retries NOT bounded (autoconnect-retries-default='${_nm_retries}', or a connection.autoconnect-retries=0 override cancels it)"
+  fi
 
   # WIFI-05: Hidden SSID scanning enabled
   grep -q 'wifi.hidden=true' "$NM_CONF" 2>/dev/null \
@@ -767,7 +801,7 @@ if [[ -f "$NM_CONF" ]]; then
     && _pass "WIFI-07: WiFi defaults scoped to type:wifi" \
     || _fail "WIFI-07: WiFi defaults NOT scoped to type:wifi"
 else
-  _skip "WIFI-01..07" "NetworkManager.conf not found"
+  _missing_in_image "WIFI-01..07" "${NM_MAIN} missing or empty -- the image has no NetworkManager configuration"
 fi
 
 # WIFI-08: GreenAutarky-Install fallback WiFi connection
@@ -901,8 +935,17 @@ fi
   && _pass "OVL-02: GA DNS config in /etc/ga-services.conf (safe from overlay)" \
   || _fail "OVL-02: ga-services.conf missing or has no GA_SERVICES_IP"
 
-# OVL-03: GA timesyncd.conf not in overlaid path (upstream Buildroot default is OK)
-if grep -q 'greenautarky\|time.cloudflare.com' "${TARGET}/etc/systemd/timesyncd.conf" 2>/dev/null; then
+# OVL-03: GA timesyncd.conf not in overlaid path (upstream's own default is OK).
+# Upstream HAOS 18.x ships FallbackNTP=time.cloudflare.com in /etc/systemd/
+# timesyncd.conf itself, so that string no longer identifies a GA file. A GA
+# file in that path is recognised by (a) the GA layer shipping one in its
+# rootfs-overlay, (b) the image's copy differing from upstream's, (c) GA naming.
+_ovl03_up="${_RBT_ROOT}/${GA_HAOS_DIR:-}/buildroot-external/rootfs-overlay/etc/systemd/timesyncd.conf"
+_ovl03_ga="${_RBT_ROOT}/${GA_LAYER_DIR}/rootfs-overlay/etc/systemd/timesyncd.conf"
+_ovl03_img="${TARGET}/etc/systemd/timesyncd.conf"
+if [[ -f "$_ovl03_ga" ]] \
+   || grep -q 'greenautarky' "$_ovl03_img" 2>/dev/null \
+   || { [[ -f "$_ovl03_up" && -f "$_ovl03_img" ]] && ! cmp -s "$_ovl03_up" "$_ovl03_img"; }; then
   _fail "OVL-03: GA timesyncd.conf in /etc/systemd/ — will be hidden by HAOS overlay! Use /usr/share/ga-defaults/"
 else
   _pass "OVL-03: GA timesyncd.conf not in overlaid path (safe)"
@@ -941,10 +984,10 @@ fi
 # checks shared one ID. Moving it into the AUD-* namespace resolves that.)
 
 # CFG-26: NM connectivity check configured
-grep -q 'checkonline.greenautarky.com' "${TARGET}/etc/NetworkManager/NetworkManager.conf" 2>/dev/null \
+grep -q 'checkonline.greenautarky.com' "$NM_CONF" 2>/dev/null \
   && _pass "CFG-26a: NM connectivity check URI configured" \
   || _fail "CFG-26a: NM connectivity check URI missing"
-grep -q 'response=NetworkManager is online' "${TARGET}/etc/NetworkManager/NetworkManager.conf" 2>/dev/null \
+grep -q 'response=NetworkManager is online' "$NM_CONF" 2>/dev/null \
   && _pass "CFG-26b: NM connectivity check response string set" \
   || _fail "CFG-26b: NM connectivity check response string missing"
 
@@ -1530,26 +1573,51 @@ fi
 echo ""
 echo "--- Registry consistency ---"
 
-# REG-04: hassos-supervisor uses greenautarky image
-HSUP="${TARGET}/usr/sbin/hassos-supervisor"
+# The Supervisor launcher. HAOS 18.x names it haos-supervisor (16.x: hassos-
+# supervisor). The image must carry it: a missing launcher is a FAIL, not a
+# skip -- 7 checks below were skipped, unnoticed, on the first 18.3 build
+# because they looked for the old name.
+HSUP="${TARGET}/usr/sbin/haos-supervisor"
+
+# _sup_image_is_ga FILE -- true when the launcher pulls the Supervisor from the
+# GA registry. The 18.x launcher names the registry once
+# (GA_SUPERVISOR_REGISTRY="ghcr.io/greenautarky") and builds
+# SUPERVISOR_IMAGE="${GA_SUPERVISOR_REGISTRY}/<arch>-hassio-supervisor" from it;
+# a literal ghcr.io/greenautarky/ image is accepted too. A registry variable
+# that does not resolve to the GA registry is NOT GA.
+_sup_image_is_ga() {
+  local _f="$1" _line _reg
+  _line="$(grep -E '^[[:space:]]*SUPERVISOR_IMAGE=' "$_f" 2>/dev/null | head -n 1)"
+  [[ -n "$_line" ]] || return 1
+  if [[ "$_line" =~ SUPERVISOR_IMAGE=\"ghcr\.io/greenautarky/ ]]; then
+    return 0
+  fi
+  if [[ "$_line" =~ SUPERVISOR_IMAGE=\"\$\{([A-Z_]+)\}/ ]]; then
+    _reg="$(sed -nE "s/^${BASH_REMATCH[1]}=\"([^\"]+)\"[[:space:]]*$/\\1/p" "$_f" | head -n 1)"
+    [[ "$_reg" == "ghcr.io/greenautarky" ]] && return 0
+  fi
+  return 1
+}
+
+# REG-04: haos-supervisor uses greenautarky image
 if [[ -f "$HSUP" ]]; then
-  grep -q 'SUPERVISOR_IMAGE="ghcr.io/greenautarky/' "$HSUP" \
-    && _pass "REG-04: hassos-supervisor SUPERVISOR_IMAGE is greenautarky" \
-    || _fail "REG-04: hassos-supervisor SUPERVISOR_IMAGE is NOT greenautarky"
+  _sup_image_is_ga "$HSUP" \
+    && _pass "REG-04: haos-supervisor SUPERVISOR_IMAGE is greenautarky" \
+    || _fail "REG-04: haos-supervisor SUPERVISOR_IMAGE is NOT greenautarky"
 
   # REG-05: fallback URL uses greenautarky
   grep -q 'greenautarky/haos-version' "$HSUP" \
-    && _pass "REG-05: hassos-supervisor fallback URL is greenautarky" \
-    || _fail "REG-05: hassos-supervisor fallback URL is NOT greenautarky"
+    && _pass "REG-05: haos-supervisor fallback URL is greenautarky" \
+    || _fail "REG-05: haos-supervisor fallback URL is NOT greenautarky"
 
   # REG-06: no oliverc7 or iHost-Open-Source references
   if grep -qE 'oliverc7|iHost-Open-Source' "$HSUP" 2>/dev/null; then
-    _fail "REG-06: hassos-supervisor has stale upstream refs"
+    _fail "REG-06: haos-supervisor has stale upstream refs"
   else
-    _pass "REG-06: hassos-supervisor has no stale upstream refs"
+    _pass "REG-06: haos-supervisor has no stale upstream refs"
   fi
 else
-  _skip "REG-04/05/06: hassos-supervisor" "not found in target"
+  _missing_in_image "REG-04/05/06" "${HSUP} missing -- the Supervisor launcher is not in the image"
 fi
 
 # REG-07: Supervisor image tar uses greenautarky (only after full build)
@@ -1855,7 +1923,9 @@ if "${_RBT_REPO}/scripts/apply-haos-patches.sh" --export "$_RBT_HAOS_EXP" \
      buildroot-external/rootfs-overlay/usr/sbin/haos-supervisor \
      buildroot-external/meta buildroot-external/scripts/rauc.sh \
      buildroot-external/genimage/partitions-os-gpt.cfg \
-     buildroot-external/genimage/partitions-os-mbr.cfg >/dev/null 2>"$_RBT_HAOS_EXP.err"; then
+     buildroot-external/genimage/partitions-os-mbr.cfg \
+     buildroot-external/genimage/image-raucb-nospl.cfg \
+     buildroot-external/genimage/image-raucb-spl.cfg >/dev/null 2>"$_RBT_HAOS_EXP.err"; then
   HAOS_EXT_SRC="$_RBT_HAOS_EXP/buildroot-external"
   _pass "SRC-HAOS-01: upstream HAOS sources with the GA patch set exported (haos @ $(git -C "${_RBT_REPO}/haos" rev-parse --short HEAD 2>/dev/null || echo '?'))"
 else
@@ -1926,7 +1996,7 @@ if [[ -n "$SRC" ]]; then
     _skip "SRC-03/04" "dind-import-containers.sh not found"
   fi
 
-  # SRC-05: hassos-supervisor source matches dind-import tag prefix
+  # SRC-05: haos-supervisor source matches dind-import tag prefix
   HSUP_SRC="${HAOS_EXT_SRC}/rootfs-overlay/usr/sbin/haos-supervisor"
   if [[ -f "$HSUP_SRC" ]] && [[ -f "$DIND" ]]; then
     # Extract the image prefix from both files and compare
@@ -1938,9 +2008,9 @@ if [[ -n "$SRC" ]]; then
     fi
     DIND_PREFIX="$(grep 'docker tag.*hassio-supervisor' "$DIND" | head -1 | sed 's/.*"\(.*\)\/.*/\1/')"
     if [[ "$HSUP_PREFIX" == "$DIND_PREFIX" ]] && [[ -n "$HSUP_PREFIX" ]]; then
-      _pass "SRC-05: hassos-supervisor and dind-import use same prefix: $HSUP_PREFIX"
+      _pass "SRC-05: haos-supervisor and dind-import use same prefix: $HSUP_PREFIX"
     else
-      _fail "SRC-05: prefix mismatch: hassos-supervisor='$HSUP_PREFIX' vs dind-import='$DIND_PREFIX'"
+      _fail "SRC-05: prefix mismatch: haos-supervisor='$HSUP_PREFIX' vs dind-import='$DIND_PREFIX'"
     fi
   else
     _skip "SRC-05" "source files not found"
@@ -2233,15 +2303,22 @@ if [[ -n "$SRC" ]]; then
   #
   # Checkable without a build, which is the point: a literal here is invisible
   # in a green build and only shows up on hardware.
-  _gi_bad=""
-  for _cfg in "${SRC:-.}"/buildroot-external/genimage/image-raucb-*.cfg; do
+  # The configs are upstream files since HAOS 18.x (the GA signing delta is a
+  # patch), so they are read as the build sees them: the exported, patched copy.
+  # A loop over a glob that matches nothing passes -- after the lift it matched
+  # nothing for a while, unnoticed -- so the number inspected is asserted.
+  _gi_bad=""; _gi_n=0
+  for _cfg in "${HAOS_EXT_SRC:-/nonexistent}"/genimage/image-raucb-*.cfg; do
     [[ -f "$_cfg" ]] || continue
+    _gi_n=$((_gi_n+1))
     if grep -qE '^[[:space:]]*(key|cert)[[:space:]]*=[[:space:]]*"/' "$_cfg"; then
       _gi_bad+="$(basename "$_cfg") "
     fi
   done
-  if [[ -z "$_gi_bad" ]]; then
-    _pass "SRC-22: raucb genimage configs take the signing material from the build mode, not a literal path"
+  if (( _gi_n < 2 )); then
+    _fail "SRC-22: inspected ${_gi_n} raucb genimage config(s), expected 2 (nospl + spl) -- a check over nothing is not a pass"
+  elif [[ -z "$_gi_bad" ]]; then
+    _pass "SRC-22: ${_gi_n} raucb genimage configs take the signing material from the build mode, not a literal path"
   else
     _fail "SRC-22: hardcoded signing key/cert path in: ${_gi_bad}— a dev build would sign with production material"
   fi
@@ -2256,19 +2333,19 @@ if [[ -n "$SRC" ]]; then
   # add-on doing HTTPS to a GA name got a TLS failure, and the only trace was
   # one INFO line.
   #
-  # The mount is one line in hassos-supervisor and easy to lose in a rebase, so
+  # The mount is one line in haos-supervisor and easy to lose in a rebase, so
   # it gets a guard. SRC- prefix: GitHub CI gates on these, so it cannot be
   # dropped from a PR.
-  _SUP_LAUNCH="${TARGET}/usr/sbin/hassos-supervisor"
+  _SUP_LAUNCH="${TARGET}/usr/sbin/haos-supervisor"
   if [[ -f "$_SUP_LAUNCH" ]]; then
     if grep -q 'GA_SERVICES_MOUNT' "$_SUP_LAUNCH" && \
        grep -q '/etc/ga-services.conf:/etc/ga-services.conf:ro' "$_SUP_LAUNCH"; then
       _pass "SRC-20: Supervisor container gets /etc/ga-services.conf mounted (read-only)"
     else
-      _fail "SRC-20: hassos-supervisor does NOT mount /etc/ga-services.conf — the DNS plugin will silently use its hardcoded fallback IP"
+      _fail "SRC-20: haos-supervisor does NOT mount /etc/ga-services.conf — the DNS plugin will silently use its hardcoded fallback IP"
     fi
   else
-    _skip "SRC-20: Supervisor ga-services.conf mount" "hassos-supervisor not in target tree"
+    _missing_in_image "SRC-20" "${_SUP_LAUNCH} missing -- the Supervisor launcher is not in the image"
   fi
 
   # SRC-19: nothing may be written into target/ after the rootfs is sealed.
@@ -2534,7 +2611,7 @@ if [[ -n "$SRC" ]]; then
   # `hassos-` typo in some checkouts.
   _bootstrap_svc_path="$(_find_unit ga-bootstrap.service)"
   if [[ -n "${_bootstrap_svc_path}" ]]; then
-    grep -qE '(After|Requires)=.*(hassio|hassos)-supervisor' "${_bootstrap_svc_path}" 2>/dev/null \
+    grep -qE '(After|Requires)=.*(hassio|hassos|haos)-supervisor' "${_bootstrap_svc_path}" 2>/dev/null \
       && _pass "GAOS-07: ga-bootstrap.service ordered after hassio-supervisor (${_bootstrap_svc_path#${SRC}/})" \
       || _fail "GAOS-07: ga-bootstrap.service NOT ordered after hassio-supervisor — addon install will race the Supervisor"
   else
@@ -2908,7 +2985,7 @@ if [[ -n "$SRC" ]]; then
   # The create command, from `docker container create` to the image argument.
   _gvu_create="$(awk '/docker container create/{on=1} on{print} on && /SUPERVISOR_IMAGE\}:latest"/{exit}' "$_GVU_LAUNCH" 2>/dev/null)"
   if [[ -z "$_gvu_create" ]]; then
-    _fail "XVER-10: no 'docker container create' block found in hassos-supervisor — the check lost its subject"
+    _fail "XVER-10: no 'docker container create' block found in haos-supervisor — the check lost its subject"
   elif ! grep -qF '${GA_VERSION_URL_MOUNT}' <<<"$_gvu_create"; then
     _fail "XVER-10: the Supervisor container is created without \${GA_VERSION_URL_MOUNT} — /etc/ga-version-url never reaches the Supervisor"
   elif ! grep -qE '^[[:space:]]*GA_VERSION_URL_MOUNT="\$\(ga_version_url_mount\)"' "$_GVU_LAUNCH"; then
@@ -2941,11 +3018,11 @@ fi
 # but SSH doesn't work after fresh flash".
 #
 # Source of truth: buildroot-external/rootfs-overlay/usr/share/ga-ssh/authorized_keys
-# Seeded to:       /mnt/overlay/root/.ssh/authorized_keys (by hassos-overlay)
+# Seeded to:       /mnt/overlay/root/.ssh/authorized_keys (by haos-overlay)
 # Bind-mounted to: /root/.ssh/authorized_keys (by root-.ssh.mount)
 
 GA_SSH_AK="${TARGET}/usr/share/ga-ssh/authorized_keys"
-HASSOS_OVERLAY_SH="${TARGET}/usr/libexec/hassos-overlay"
+HASSOS_OVERLAY_SH="${TARGET}/usr/libexec/haos-overlay"
 
 # SSH-01: baked authorized_keys file present on rootfs.
 if [[ -f "$GA_SSH_AK" ]]; then
@@ -2977,24 +3054,24 @@ if [[ -f "$GA_SSH_AK" ]]; then
   esac
 fi
 
-# SSH-04: hassos-overlay copies the file into /mnt/overlay/root/.ssh on first boot.
+# SSH-04: haos-overlay copies the file into /mnt/overlay/root/.ssh on first boot.
 # Guarded by `[ ! -f ... ]` (idempotent — preserves operator edits).
 if [[ -f "$HASSOS_OVERLAY_SH" ]]; then
   if grep -q '/usr/share/ga-ssh/authorized_keys' "$HASSOS_OVERLAY_SH" 2>/dev/null \
      && grep -q '/mnt/overlay/root/.ssh/authorized_keys' "$HASSOS_OVERLAY_SH" 2>/dev/null; then
-    _pass "SSH-04: hassos-overlay seeds /mnt/overlay/root/.ssh/authorized_keys"
+    _pass "SSH-04: haos-overlay seeds /mnt/overlay/root/.ssh/authorized_keys"
   else
-    _fail "SSH-04: hassos-overlay missing the SSH-key seed block"
+    _fail "SSH-04: haos-overlay missing the SSH-key seed block"
   fi
   # SSH-04b: the copy is guarded (idempotent) — never clobbers operator additions.
   if grep -B1 '/mnt/overlay/root/.ssh/authorized_keys' "$HASSOS_OVERLAY_SH" 2>/dev/null \
        | grep -q '!\s*-f' ; then
-    _pass "SSH-04b: hassos-overlay seed is guarded (never overwrites existing)"
+    _pass "SSH-04b: haos-overlay seed is guarded (never overwrites existing)"
   else
-    _fail "SSH-04b: hassos-overlay seed missing the [ ! -f ] guard (will overwrite operator edits on every boot)"
+    _fail "SSH-04b: haos-overlay seed missing the [ ! -f ] guard (will overwrite operator edits on every boot)"
   fi
 else
-  _fail "SSH-04: hassos-overlay script missing at $HASSOS_OVERLAY_SH"
+  _fail "SSH-04: haos-overlay script missing at $HASSOS_OVERLAY_SH"
 fi
 
 # =========================================================================
@@ -3482,11 +3559,11 @@ if [[ -f "$HA_INIT_SCRIPT" ]]; then
     || _fail "HA-INIT-03: ga-ha-init missing marker guard — would re-run on every boot"
 fi
 
-# HA-INIT-04: unit ordering — after hassos-supervisor (we hit its API).
+# HA-INIT-04: unit ordering — after haos-supervisor (we hit its API).
 if [[ -f "$HA_INIT_UNIT" ]]; then
-  grep -q 'After=hassos-supervisor.service' "$HA_INIT_UNIT" \
-    && _pass "HA-INIT-04: ga-ha-init.service ordered After=hassos-supervisor.service" \
-    || _fail "HA-INIT-04: ga-ha-init.service missing After=hassos-supervisor.service ordering"
+  grep -q 'After=haos-supervisor.service' "$HA_INIT_UNIT" \
+    && _pass "HA-INIT-04: ga-ha-init.service ordered After=haos-supervisor.service" \
+    || _fail "HA-INIT-04: ga-ha-init.service missing After=haos-supervisor.service ordering"
 fi
 
 # HA-INIT-05: Restart=on-failure (handles slow first boot).
@@ -3596,7 +3673,7 @@ fi
 # GVU-01..03: the version URL the Supervisor polls, as BAKED into this rootfs.
 # XVER-09 proves the recipe on the source; these read the artefact of a real
 # bake. GA Supervisor >= 2025.11.5.6 reads /etc/ga-version-url (bind-mounted
-# read-only by hassos-supervisor) and falls back to main when it is absent.
+# read-only by haos-supervisor) and falls back to main when it is absent.
 # =========================================================================
 echo ""
 echo "--- Version URL (/etc/ga-version-url) ---"
@@ -3690,34 +3767,34 @@ fi
 # Supervisor fork from anywhere but greenautarky. The one real
 # channel-drift vector is SUPERVISOR_DEV=1 forcing DEV on every boot
 # (supervisor bootstrap.py); the image + feed are otherwise hardcoded
-# to GA in usr/sbin/hassos-supervisor.
+# to GA in usr/sbin/haos-supervisor.
 # =========================================================================
 echo "--- Supervisor channel + fork invariants ---"
 
-SUPERVISOR_LAUNCH="${TARGET}/usr/sbin/hassos-supervisor"
+SUPERVISOR_LAUNCH="${TARGET}/usr/sbin/haos-supervisor"
 
 # SUP-CHANNEL-01: the supervisor launch script must NOT set SUPERVISOR_DEV.
 # If it did, the supervisor bootstrap would force channel=DEV every boot
 # -> the device fetches dev.json instead of stable.json.
 if [[ -f "$SUPERVISOR_LAUNCH" ]]; then
   if grep -qE 'SUPERVISOR_DEV' "$SUPERVISOR_LAUNCH"; then
-    _fail "SUP-CHANNEL-01: hassos-supervisor references SUPERVISOR_DEV (= forces DEV channel every boot)"
+    _fail "SUP-CHANNEL-01: haos-supervisor references SUPERVISOR_DEV (= forces DEV channel every boot)"
   else
-    _pass "SUP-CHANNEL-01: hassos-supervisor does not set SUPERVISOR_DEV (channel stays stable)"
+    _pass "SUP-CHANNEL-01: haos-supervisor does not set SUPERVISOR_DEV (channel stays stable)"
   fi
 else
-  _skip "SUP-CHANNEL-01: SUPERVISOR_DEV guard" "hassos-supervisor not at ${SUPERVISOR_LAUNCH}"
+  _missing_in_image "SUP-CHANNEL-01" "SUPERVISOR_DEV guard -- ${SUPERVISOR_LAUNCH} missing, the Supervisor launcher is not in the image"
 fi
 
 # SUP-CHANNEL-02: the Supervisor image must be pulled from the GA fork.
 if [[ -f "$SUPERVISOR_LAUNCH" ]]; then
-  if grep -qE 'SUPERVISOR_IMAGE=.*ghcr\.io/greenautarky/' "$SUPERVISOR_LAUNCH"; then
+  if _sup_image_is_ga "$SUPERVISOR_LAUNCH"; then
     _pass "SUP-CHANNEL-02: Supervisor image pinned to ghcr.io/greenautarky fork"
   else
     _fail "SUP-CHANNEL-02: Supervisor image is NOT pinned to ghcr.io/greenautarky (fork drift risk)"
   fi
 else
-  _skip "SUP-CHANNEL-02: Supervisor image pin" "hassos-supervisor not at ${SUPERVISOR_LAUNCH}"
+  _missing_in_image "SUP-CHANNEL-02" "Supervisor image pin -- ${SUPERVISOR_LAUNCH} missing, the Supervisor launcher is not in the image"
 fi
 
 # SUP-CHANNEL-03: the bootstrap version-feed fallback in the launch
@@ -3725,7 +3802,9 @@ fi
 # version.home-assistant.io.
 if [[ -f "$SUPERVISOR_LAUNCH" ]]; then
   if grep -qE 'greenautarky/haos-version' "$SUPERVISOR_LAUNCH"; then
-    if grep -qE 'version\.home-assistant\.io/(stable|beta|dev)\.json' "$SUPERVISOR_LAUNCH"; then
+    # Code lines only: the 18.x launcher's header comment says, in words, that it
+    # never asks version.home-assistant.io -- that sentence is not a reference.
+    if grep -vE '^[[:space:]]*#' "$SUPERVISOR_LAUNCH" | grep -qE 'version\.home-assistant\.io/(stable|beta|dev)\.json'; then
       _fail "SUP-CHANNEL-03: launch script also references upstream version feed (fallback drift risk)"
     else
       _pass "SUP-CHANNEL-03: version-feed fallback uses greenautarky/haos-version only"
@@ -3734,7 +3813,7 @@ if [[ -f "$SUPERVISOR_LAUNCH" ]]; then
     _skip "SUP-CHANNEL-03: version-feed fallback" "no feed URL in launch script (relies on supervisor const.py)"
   fi
 else
-  _skip "SUP-CHANNEL-03: version-feed fallback" "hassos-supervisor not at ${SUPERVISOR_LAUNCH}"
+  _missing_in_image "SUP-CHANNEL-03" "version-feed fallback -- ${SUPERVISOR_LAUNCH} missing, the Supervisor launcher is not in the image"
 fi
 
 # =========================================================================
@@ -4704,13 +4783,14 @@ else
   _fail "USB-04: allowlist missing or non-empty by default"
 fi
 
-_NM="${TARGET}/etc/NetworkManager/NetworkManager.conf"
+_NM="$NM_CONF"
 grep -qE '^\s*wifi\.cloned-mac-address\s*=\s*permanent' "$_NM" 2>/dev/null \
   && _pass "MAC-01: NetworkManager pins the permanent WiFi MAC" \
   || _fail "MAC-01: NetworkManager.conf does not pin wifi.cloned-mac-address=permanent"
 grep -qE '^\s*wifi\.scan-rand-mac-address\s*=\s*no' "$_NM" 2>/dev/null \
   && _pass "MAC-02: scan-time MAC randomization disabled" \
   || _fail "MAC-02: NetworkManager.conf does not set wifi.scan-rand-mac-address=no"
+rm -f "$NM_CONF"
 
 # =========================================================================
 # Go toolchain consistency (GOTC)
@@ -4733,8 +4813,8 @@ elif [[ ! -f "$_gotc_lib" ]]; then
 else
   # shellcheck source=../../scripts/lib/go-toolchain.sh
   . "$_gotc_lib"
-  _gotc_br="${BUILDROOT_DIR:-${SRC:+${SRC}/buildroot}}"
-  _gotc_ext="${BR2EXT_NETBIRD:-${SRC:-$(cd "$(dirname "$0")/../.." && pwd)}/buildroot-external}"
+  _gotc_br="${BUILDROOT_DIR:-${_RBT_ROOT}/${GA_HAOS_DIR:-.}/buildroot}"
+  _gotc_ext="${BR2EXT_NETBIRD:-${_RBT_ROOT}/${GA_LAYER_DIR}}"
   _gotc_exp="$(ga_go_expected_version "$_gotc_br" "$_gotc_ext" 2>/dev/null || true)"
   if [[ -n "$_gotc_exp" ]]; then
     _pass "GOTC-01: the build's Go version is ${_gotc_exp} (GO_VERSION in ${_gotc_br}/package/go/go.mk, raised to GA_GO_VERSION_FLOOR in ${_gotc_ext}/go-floor.mk)"
