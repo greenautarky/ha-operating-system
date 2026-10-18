@@ -269,6 +269,22 @@ jobs:
         # print prod instead of unknown (TENV-03, TENV-04 each go red).
         run: sh tests/ga_tests/telemetry_env/test.sh
 
+      - name: Install busybox (the device shell) for the ga-addon-prime test
+        uses: ./.github/actions/apt-install
+        with:
+          packages: busybox-static
+
+      - name: ga-addon-prime works on both ha CLI generations (addons / apps)
+        # Drives the REAL script against a stub hassio_cli in three flavours
+        # (2025.11.x: addons only; 2026.10+: apps, with the addons deprecation
+        # notice on stderr; an old CLI that answers an unknown word with its
+        # root help). Red-proven against the previous script (8 of 17 fail).
+        # Run under busybox sh as well, which is what the device has.
+        run: |
+          set -eu
+          sh tests/ga_tests/addon_prime/test.sh
+          GA_T_SHELL="busybox sh" sh tests/ga_tests/addon_prime/test.sh
+
       - name: HW-02b reads the kernel log it can actually see
         # HW-02 was one check over a VOLATILE source and went red on a healthy
         # K31 whose logs had aged past boot. Split into a durable half

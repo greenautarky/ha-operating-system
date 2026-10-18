@@ -5,7 +5,7 @@
 # Why: Supervisor preserves the running addon container across an OS
 # slot-swap (= /mnt/data/supervisor persists), so even though the OS
 # image bakes a newer addon image tag, the previous version keeps
-# running until an explicit `ha addons update` fires.
+# running until an explicit `ha addons|apps update` (CLI generation: see below) fires.
 #
 # Reads `/etc/ga-addon-prime.conf` (one slug per line, '#' comments OK),
 # runs `docker exec hassio_cli ha store reload` once, then `ha addons
@@ -19,10 +19,65 @@
 
 set -eu
 
-PRIME_CONF="/etc/ga-addon-prime.conf"
-MARKER="/mnt/data/.ga-addon-primed"
+# GA_PRIME_CONF / GA_PRIME_MARKER: test hooks (tests/ga_tests/addon_prime), never set on a device.
+PRIME_CONF="${GA_PRIME_CONF:-/etc/ga-addon-prime.conf}"
+MARKER="${GA_PRIME_MARKER:-/mnt/data/.ga-addon-primed}"
 
 log() { echo "[ga-addon-prime] $*"; }
+
+# --- ha CLI generations -------------------------------------------------------
+# Supervisor 2025.11.x (iHost today): the CLI knows only `ha addons ...`.
+# Supervisor 2026.10+ (DSGW-210, later iHost): `ha apps ...`; `ha addons ...`
+# still works as an alias but prints "The use of 'addons' is deprecated, please
+# use 'apps' instead!" on STDERR. The old code merged stderr into the text it
+# classified and logged only its first line, so on 2026.10 every failure was
+# logged as that notice and the real error was hidden.
+#
+# Two rules, both needed:
+#   1. detect which word this CLI has (capability, not a version compare);
+#   2. keep stdout and stderr apart, drop the deprecation notice from what is
+#      classified, and log the real error (the last meaningful line).
+# On a 2026.10 CLI `ha apps --help` returns rc 0 and lists the subcommands
+# incl. "update"; `ha bogus --help` returns rc 1 "unknown command".
+APPS_CMD=addons
+detect_apps_cmd() {
+    set +e
+    HELP_OUT=$(docker exec hassio_cli ha apps --help 2>&1)
+    HELP_RC=$?
+    set -e
+    # rc 0 AND an `update` subcommand line: an old CLI that answered an unknown
+    # word with its root help (rc 0) must not be taken for an apps CLI.
+    if [ "$HELP_RC" -eq 0 ] && echo "$HELP_OUT" | grep -qE '^[[:space:]]+update[[:space:]]'; then
+        APPS_CMD=apps
+    fi
+    log "ha CLI generation: using 'ha $APPS_CMD' (apps --help rc=$HELP_RC)"
+}
+
+# run_ha <ha args...> — runs `ha` in hassio_cli. Sets RUN_RC, RUN_OUT (stdout)
+# and RUN_ERR (stderr without the deprecation notice). Never trips set -e.
+RUN_ERRF="${TMPDIR:-/tmp}/ga-addon-prime.$$.err"
+trap 'rm -f "$RUN_ERRF"' EXIT
+run_ha() {
+    set +e
+    RUN_OUT=$(docker exec hassio_cli ha "$@" 2>"$RUN_ERRF")
+    RUN_RC=$?
+    set -e
+    RUN_ERR=$(grep -viE "is deprecated, please use" "$RUN_ERRF" 2>/dev/null || true)
+    return 0
+}
+
+# log_full <text> — the whole captured output (first 20 non-empty lines, 200
+# chars each) under a failure, so the journal keeps the full trail and not only
+# the summary line.
+log_full() {
+    printf '%s\n' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' | head -n 20 | \
+    while IFS= read -r _l; do log "     | $(printf '%s' "$_l" | cut -c1-200)"; done
+}
+
+# last_line <text> — last non-empty line, whitespace trimmed, max 160 chars.
+last_line() {
+    printf '%s\n' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' | tail -n 1 | cut -c1-160
+}
 
 if [ ! -f "$PRIME_CONF" ]; then
     log "no prime conf at $PRIME_CONF — nothing to do"
@@ -84,6 +139,7 @@ if [ "$SUP_READY" -ne 1 ]; then
     exit 1
 fi
 # Store-reload already succeeded as the probe — no need to re-call.
+detect_apps_cmd
 log "addon store cache refreshed (= /store/reload OK during readiness probe)"
 
 # Registry-credential preflight (2026-07-29).
@@ -124,11 +180,13 @@ while IFS= read -r SLUG; do
     [ -z "$SLUG" ] && continue
 
     log "priming addon: $SLUG"
-    # set +e / -e bracket: see Supervisor-readiness probe above for rationale.
-    set +e
-    UPDATE_OUT=$(docker exec hassio_cli ha addons update "$SLUG" 2>&1)
-    UPDATE_RC=$?
-    set -e
+    run_ha "$APPS_CMD" update "$SLUG"
+    UPDATE_RC=$RUN_RC
+    # Classify on the real output only: stdout + stderr minus the deprecation
+    # notice (a 2026.10 CLI writes its errors to stderr, behind the notice
+    # when called as `addons`).
+    UPDATE_OUT="$RUN_OUT
+$RUN_ERR"
     if [ "$UPDATE_RC" -eq 0 ]; then
         log "  → $SLUG: primed OK"
         PRIMED_OK=1
@@ -142,6 +200,19 @@ while IFS= read -r SLUG; do
         # has the trail.
         log "  → $SLUG: already at pinned version (no-op)"
         PRIMED_OK=1
+    # Registry auth is classified BEFORE "does not exist": docker's own denial
+    # reads "pull access denied for X, repository does not exist or may require
+    # authorization" and would otherwise be taken for "add-on not installed yet".
+    elif echo "$UPDATE_OUT" | grep -qiE 'unauthorized|authentication required|denied|pull access'; then
+        # Private image + no registry credentials. Distinct from a generic
+        # failure because the fix is an ops action (push creds), not a retry —
+        # and the marker stays unwritten, so the prime self-heals on the next
+        # boot once the credentials land.
+        log "  → $SLUG: FAILED (registry auth: $(last_line "$UPDATE_OUT")) — private image, Supervisor has no credentials"
+        log "     run ga_manager jobs 'ghcr-creds-write' + 'docker-registry-ensure' on this device"
+        log_full "$UPDATE_OUT"
+        FAIL=$((FAIL + 1))
+        PRIMED_OK=0
     elif echo "$UPDATE_OUT" | grep -qiE 'does not exist|not installed'; then
         # FRESH SD FLASH. Measured on K31, 2026-07-30: this service primes at
         # T+0:10 and ga-bootstrap installs the add-on at T+0:33 — 22 seconds
@@ -164,17 +235,11 @@ while IFS= read -r SLUG; do
         log "  → $SLUG: not installed yet (ga-bootstrap installs it later this boot) — nothing to prime, skipping"
         SKIPPED=$((SKIPPED + 1))
         PRIMED_OK=0
-    elif echo "$UPDATE_OUT" | grep -qiE 'unauthorized|authentication required|denied|pull access'; then
-        # Private image + no registry credentials. Distinct from a generic
-        # failure because the fix is an ops action (push creds), not a retry —
-        # and the marker stays unwritten, so the prime self-heals on the next
-        # boot once the credentials land.
-        log "  → $SLUG: FAILED (registry auth) — private image, Supervisor has no credentials"
-        log "     run ga_manager jobs 'ghcr-creds-write' + 'docker-registry-ensure' on this device"
-        FAIL=$((FAIL + 1))
-        PRIMED_OK=0
     else
-        log "  → $SLUG: FAILED — $(echo "$UPDATE_OUT" | head -1 | cut -c1-120)"
+        # The LAST meaningful line is the error ("Error: ..."); the first line
+        # used to be logged and was the deprecation notice on 2026.10.
+        log "  → $SLUG: FAILED (rc=$UPDATE_RC) — $(last_line "$UPDATE_OUT")"
+        log_full "$UPDATE_OUT"
         FAIL=$((FAIL + 1))
         PRIMED_OK=0
     fi
@@ -189,10 +254,8 @@ while IFS= read -r SLUG; do
     # addons may be intentionally stopped (= protected user override) +
     # we don't want a benign start failure to fail the prime gate.
     if [ "$PRIMED_OK" -eq 1 ]; then
-        set +e
-        docker exec hassio_cli ha addons start "$SLUG" >/dev/null 2>&1
-        START_RC=$?
-        set -e
+        run_ha "$APPS_CMD" start "$SLUG"
+        START_RC=$RUN_RC
         if [ "$START_RC" -eq 0 ]; then
             log "  → $SLUG: defensive start OK"
         else
