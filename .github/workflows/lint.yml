@@ -930,6 +930,18 @@ jobs:
           git submodule update --init --depth 1 haos
           ./tests/gates/rauc_signer_chain/selftest.sh
 
+      # The iHost board lists buildroot-ihost/patches-haos/ as its global patch
+      # dir: one symlink per HAOS package patch dir, and real dirs where the
+      # HAOS patch does not fit what the iHost builds (uboot 2024.01; docker-engine
+      # 29.8.2 from the container floor). The self-test runs a copy of the live
+      # check over fixture mirrors. Red-proven: against the check before the
+      # docker-engine rule, the rebased mirror is refused.
+      - name: iHost HAOS patch mirror (replaced dirs hold exactly the rebased patch)
+        run: |
+          set -eu
+          git submodule update --init --depth 1 haos
+          ./tests/gates/haos_patch_mirror/selftest.sh
+
       # HAOS 18.x names the Supervisor unit haos-supervisor.service; components
       # synced into the image and 1.5-era scripts name it hassos-supervisor.service
       # (ga-bootstrap.service Requires= it, and a Requires= on a missing unit

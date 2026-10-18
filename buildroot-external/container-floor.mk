@@ -12,8 +12,10 @@
 # package's own plain assignment, and the version is fixed before the package
 # infrastructure bakes it into build-dir names and stamp rules. The tarball
 # hashes are in patches/<pkg>/<pkg>.hash (BR2_GLOBAL_PATCH_DIR hash files).
-# The upstream HAOS bridge-subnet patch (docker-engine/0001) still applies to
-# 29.8.2 (one hunk with fuzz 1; the build applies it).
+# HAOS's bridge-subnet patch for docker-engine (0001, written for 29.7.2) does
+# NOT apply to 29.8.2 without fuzz, and buildroot applies patches with none:
+# buildroot-ihost/patches-haos/docker-engine/ carries the same patch rebased
+# onto 29.8.2 (scripts/ihost/check-haos-patch-mirror.sh pins the upstream one).
 #
 # It is a FLOOR, not a pin: when the submodule moves to a version >= the floor
 # the override switches itself off (sort -V), so a submodule bump can never
