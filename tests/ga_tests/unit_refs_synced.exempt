@@ -1,0 +1,9 @@
+# Known findings of scripts/check-unit-refs.py in components SYNCED into the image
+# (they live in a sibling repo, not here), each pinned to the finding it covers,
+# with an expiry. tests/ga_tests/run_build_tests.sh (UNITREF-01) removes exactly
+# the matching finding lines and nothing else; an exemption that expired, or that
+# no longer matches any finding (fixed upstream: delete the line), FAILS the build.
+#
+# path (relative, as the lint prints it) | key the finding names | expires | reason
+buildroot-external/rootfs-overlay/etc/systemd/system/ga-bootstrap.service|StartLimitBurst=|2026-11-30|ga-bootstrap 1.2.9 declares its start limit in [Service]; belongs in [Unit] (greenautarky/ga-bootstrap). Inert here: RestartSec=180 never reaches the 10 s default interval.
+buildroot-external/rootfs-overlay/etc/systemd/system/ga-bootstrap.service|StartLimitIntervalSec=|2026-11-30|same unit, same fix

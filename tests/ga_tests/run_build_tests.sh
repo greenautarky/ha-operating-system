@@ -657,6 +657,49 @@ _hsup=$(grep -rlE '^[^#]*hassio-supervisor\.service' "${TARGET}/etc/systemd" "${
   && _pass "TEL-BLD-06: haos-supervisor.service shipped, no unit names hassio-supervisor.service" \
   || _fail "TEL-BLD-06: haos-supervisor.service missing or units name hassio-supervisor.service: ${_hsup:-<none>}"
 
+# UNITREF-01/02: the unit-reference lint, over the tree AS SYNCED. CI lints the
+# source tree, where the components scripts/sync-components.sh pulls in at build
+# time (ga-bootstrap's units, ...) do not exist, so a name those units order
+# against that no longer resolves is invisible there. 18.x renamed
+# hassos-supervisor.service to haos-supervisor.service; ga-bootstrap.service
+# (synced) still Requires= the old name and, without the alias, would have lost
+# its start job on every fresh device (SUP-11 class) with a green CI. This runs
+# the same lint after the sync, in the build tree, so the synced units are read.
+_UR_LINT="${_RBT_ROOT}/scripts/check-unit-refs.py"
+_UR_SYNCED="${_RBT_ROOT}/${GA_LAYER_DIR}/rootfs-overlay/etc/systemd/system/ga-bootstrap.service"
+if [[ ! -f "$_UR_SYNCED" ]]; then
+  _fail "UNITREF-02: the synced ga-bootstrap.service is not in ${GA_LAYER_DIR}/rootfs-overlay -- the lint would not see any synced unit (sync-components.sh not run?)"
+elif [[ ! -x "$_UR_LINT" ]]; then
+  _fail "UNITREF-01: ${_UR_LINT} missing or not executable -- the synced units are unlinted"
+else
+  _pass "UNITREF-02: the synced ga-bootstrap.service is in the linted tree"
+  _ur_out="$("$_UR_LINT" 2>&1)"; _ur_rc=$?
+  # Pinned, expiring exemptions for findings in synced components (sibling
+  # repos). Each removes only the finding lines that name its path AND key; an
+  # expired one, or one that matches nothing any more, is itself a failure.
+  _ur_ex="${_RBT_ROOT}/tests/ga_tests/unit_refs_synced.exempt"
+  _ur_left="$_ur_out" _ur_exn=0 _ur_bad=""
+  if [[ -f "$_ur_ex" ]]; then
+    while IFS='|' read -r _ex_path _ex_key _ex_exp _ex_why; do
+      [[ -z "$_ex_path" || "$_ex_path" == \#* ]] && continue
+      _ex_hits="$(grep -F -- "$_ex_path" <<<"$_ur_left" | grep -cF -- " ${_ex_key}" || true)"
+      if [[ "$_ex_exp" < "$(date +%F)" ]]; then _ur_bad+="[expired ${_ex_exp}: ${_ex_path} ${_ex_key}] "; fi
+      if [[ "${_ex_hits:-0}" -eq 0 ]]; then _ur_bad+="[stale, matches nothing: ${_ex_path} ${_ex_key} - delete it] "; continue; fi
+      _ur_left="$(grep -vF -- "$_ex_path" <<<"$_ur_left"; grep -F -- "$_ex_path" <<<"$_ur_left" | grep -vF -- " ${_ex_key}" || true)"
+      _ur_exn=$((_ur_exn + _ex_hits))
+    done < "$_ur_ex"
+  fi
+  # What is left, minus the lint's own summary line, is a finding.
+  _ur_findings="$(grep -vE '^check-unit-refs: ' <<<"$_ur_left" | grep -v '^$' || true)"
+  if [[ "$_ur_rc" -gt 1 ]]; then
+    _fail "UNITREF-01: unit-reference lint could not judge (rc=${_ur_rc}): $(head -n 3 <<<"$_ur_out" | tr '\n' ' ')"
+  elif [[ -n "$_ur_findings" || -n "$_ur_bad" ]]; then
+    _fail "UNITREF-01: unit-reference lint over the synced tree: ${_ur_bad}$(head -n 5 <<<"$_ur_findings" | tr '\n' ' ')"
+  else
+    _pass "UNITREF-01: every unit name the shipped units (synced overlays included) refer to resolves ($(grep -E '^check-unit-refs: ' <<<"$_ur_out" | head -n1 | sed 's/^check-unit-refs: //'); ${_ur_exn} finding(s) under a pinned exemption)"
+  fi
+fi
+
 # TEL-BLD-07: ga-telemetry-gate checks GA_TELEMETRY_FORCE override
 grep -q 'GA_TELEMETRY_FORCE' "${TARGET}/usr/sbin/ga-telemetry-gate" 2>/dev/null \
   && _pass "TEL-BLD-07: ga-telemetry-gate supports FORCE override" \
