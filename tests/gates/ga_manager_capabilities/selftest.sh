@@ -12,8 +12,12 @@
 # shipped but never registered, a capability deleted again by a later layer
 # (whiteout), an image whose own version disagrees with the pin, and no tar at
 # all. must-pass: the capability present (also with gzip layers and with the
-# file overridden in a later layer). cannot-judge (exit 2): no pin, a tar that
-# is not a docker-archive. A gate that flags everything is overridden by reflex
+# file overridden in a later layer). The same cases are run on an OCI layout
+# (index.json -> manifest -> blobs/sha256, what HAOS 18.x's skopeo oci-archive
+# bake writes) next to the docker-archive of the 16.x line: both formats must be
+# judged, and judged the same. cannot-judge (exit 2): no pin, a tar that is
+# neither format, an OCI index with two manifests, a zstd layer without a
+# decompressor. A gate that flags everything is overridden by reflex
 # — must-pass is not padding.
 set -uo pipefail
 
@@ -32,21 +36,21 @@ command -v python3 >/dev/null || { echo "FATAL: python3 required"; exit 1; }
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# mk <dir> <pinned-version> <image-version> <layers-spec> [gzip]
+# mk <dir> <pinned-version> <image-version> <layers-spec> [gzip] [oci|oci-two|oci-zstd]
 # layers-spec: ';'-separated layers, each ','-separated path=content entries
 # (content tokens: CAP = the full ha_influxdb module text, REG = the registry
 # line, DF = the dataflow constant, VER = source-config with <image-version>,
 # OLD = a module without the capability, WH = a whiteout entry).
 mk() {
-  local dir="$1" pin="$2" imgver="$3" spec="$4" gz="${5:-}"
+  local dir="$1" pin="$2" imgver="$3" spec="$4" gz="${5:-}" fmt="${6:-docker}"
   mkdir -p "$dir/images"
   cat > "$dir/pins.json" <<JSON
 {"addons": {"ga_manager": {"image": "ghcr.io/greenautarky/ga_manager-{arch}", "version": "$pin"},
             "mosquitto": {"image": "ghcr.io/greenautarky/ga_mosquitto-{arch}", "version": "7.2.4"}}}
 JSON
-  python3 - "$dir/images" "$pin" "$imgver" "$spec" "$gz" <<'PY'
-import io, json, sys, tarfile
-out, pin, imgver, spec, gz = sys.argv[1:6]
+  python3 - "$dir/images" "$pin" "$imgver" "$spec" "$gz" "$fmt" <<'PY'
+import hashlib, io, json, sys, tarfile
+out, pin, imgver, spec, gz, fmt = sys.argv[1:7]
 TEXT = {
     "CAP": 'DATABASE = "ga_homeassistant_db"\nUSERNAME = "ga_ha_influx_user"\nasync def reconcile(sup): ...\n',
     "REG": 'RECONCILERS = [\n    Reconciler(\n        name="ha_influxdb",\n    ),\n]\n',
@@ -67,13 +71,30 @@ def layer(entries):
     return buf.getvalue()
 layers = [layer([e for e in l.split(",") if e]) for l in spec.split(";")]
 name = f"ghcr.io_greenautarky_ga_manager-armv7_{pin}@sha256_{'1'*64}.tar"
+def add(t, n, data):
+    ti = tarfile.TarInfo(n); ti.size = len(data); t.addfile(ti, io.BytesIO(data))
+def sha(b): return "sha256:" + hashlib.sha256(b).hexdigest()
 with tarfile.open(f"{out}/{name}", "w") as t:
-    names = []
-    for i, data in enumerate(layers):
-        n = f"{i:064x}.tar"; names.append(n)
-        ti = tarfile.TarInfo(n); ti.size = len(data); t.addfile(ti, io.BytesIO(data))
-    m = json.dumps([{"Config": "cfg.json", "RepoTags": [], "Layers": names}]).encode()
-    ti = tarfile.TarInfo("manifest.json"); ti.size = len(m); t.addfile(ti, io.BytesIO(m))
+    if fmt == "docker":
+        names = []
+        for i, data in enumerate(layers):
+            n = f"{i:064x}.tar"; names.append(n); add(t, n, data)
+        add(t, "manifest.json", json.dumps([{"Config": "cfg.json", "RepoTags": [], "Layers": names}]).encode())
+    else:
+        # OCI layout as skopeo `oci-archive:` writes it
+        mt = "application/vnd.oci.image.layer.v1.tar" + ("+zstd" if fmt == "oci-zstd" else "+gzip" if gz else "")
+        descs = []
+        for data in layers:
+            add(t, "blobs/" + sha(data).replace(":", "/"), data)
+            descs.append({"mediaType": mt, "digest": sha(data), "size": len(data)})
+        cfg = b"{}"; add(t, "blobs/" + sha(cfg).replace(":", "/"), cfg)
+        man = json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                          "config": {"mediaType": "application/vnd.oci.image.config.v1+json", "digest": sha(cfg), "size": 2},
+                          "layers": descs}).encode()
+        add(t, "blobs/" + sha(man).replace(":", "/"), man)
+        entry = {"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": sha(man), "size": len(man)}
+        add(t, "index.json", json.dumps({"schemaVersion": 2, "manifests": [entry, entry] if fmt == "oci-two" else [entry]}).encode())
+        add(t, "oci-layout", b'{"imageLayoutVersion":"1.0.0"}')
 # an unrelated add-on tar, as in a real bake — must not be mistaken for ga_manager
 open(f"{out}/ghcr.io_greenautarky_ga_mosquitto-armv7_7.2.4@sha256_{'2'*64}.tar", "wb").close()
 PY
@@ -125,6 +146,26 @@ mk "$WORK/override-later"    0.222.0 0.222.0 "$RC2;$GOOD"
 expect override-later 0 "core_influxdb present in the baked image"
 expect override-later 0 "pin ga_manager 0.222.0 >= 0.221.0" --pin-only
 
+echo "=== OCI layout (HAOS 18.x bake): the same verdicts ==="
+mk "$WORK/oci-rc2-pin-0219"  0.219.0 0.219.0 "$RC2" "" oci
+expect oci-rc2-pin-0219 1 "core_influxdb not in the baked image — usr/bin/ga_manager/ha_influxdb.py absent"
+mk "$WORK/oci-image-old"     0.221.0 0.220.0 "$RC2" "" oci
+expect oci-image-old 1 "the image says it is ga_manager 0.220.0, the pin says 0.221.0"
+mk "$WORK/oci-module-not-registered" 0.221.0 0.221.0 "$G/ha_influxdb.py=CAP,$G/desired_state.py=OLDREG,$G/healthchecks/dataflow.py=DF,$BASE" "" oci
+expect oci-module-not-registered 1 "lacks 'name=\"ha_influxdb\"'"
+mk "$WORK/oci-whiteout"      0.221.0 0.221.0 "$GOOD;$G/.wh.ha_influxdb.py=WH" "" oci
+expect oci-whiteout 1 "usr/bin/ga_manager/ha_influxdb.py absent"
+mk "$WORK/oci-fixed"         0.221.0 0.221.0 "$GOOD" "" oci
+expect oci-fixed 0 "core_influxdb present in the baked image"
+mk "$WORK/oci-fixed-gzip"    0.221.0 0.221.0 "$GOOD" gz oci
+expect oci-fixed-gzip 0 "core_influxdb present in the baked image"
+mk "$WORK/oci-override"      0.222.0 0.222.0 "$RC2;$GOOD" "" oci
+expect oci-override 0 "core_influxdb present in the baked image"
+mk "$WORK/oci-two-manifests" 0.221.0 0.221.0 "$GOOD" "" oci-two
+expect oci-two-manifests 2 "index.json lists 2 manifests, expected exactly 1"
+mk "$WORK/oci-zstd"          0.221.0 0.221.0 "$GOOD" "" oci-zstd
+expect oci-zstd 2 "zstd"
+
 echo "=== cannot judge ==="
 mkdir -p "$WORK/no-pin/images"; echo '{"addons": {}}' > "$WORK/no-pin/pins.json"
 expect no-pin 2 "CANNOT JUDGE: no ga_manager pin readable"
@@ -133,6 +174,6 @@ printf 'not a tar' > "$WORK/not-an-archive/images/$(ls "$WORK/not-an-archive/ima
 expect not-an-archive 2 "CANNOT JUDGE"
 
 echo
-if [[ "$ran" -lt 13 ]]; then echo "FAIL: only $ran cases ran — coverage dropped"; exit 1; fi
+if [[ "$ran" -lt 22 ]]; then echo "FAIL: only $ran cases ran — coverage dropped"; exit 1; fi
 if [[ "$fails" -gt 0 ]]; then echo "ga_manager capability gate selftest: $fails/$ran FAILED"; exit 1; fi
 echo "ga_manager capability gate selftest: $ran/$ran as expected"

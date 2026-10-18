@@ -1530,6 +1530,22 @@ if [[ -f "$VER_JSON" ]]; then
   # label still loops the Supervisor. The old ga-frontend-version-file
   # gate is dropped (the GA frontend fork is retired — T3); the check now
   # depends only on the built Core image tar.
+  # _image_config_json TAR -- the image config JSON of an image archive, for both
+  # formats the bake can write: docker-archive (manifest.json -> .[0].Config; the
+  # 16.x line and any digest-named file reused from an older download cache) and
+  # OCI layout (HAOS 18.x skopeo oci-archive: index.json -> image manifest ->
+  # .config.digest -> blobs/<alg>/<hex>). Prints nothing when neither parses.
+  _image_config_json() {
+    local t="$1" cfg dg
+    cfg="$(tar -xOf "$t" manifest.json 2>/dev/null | jq -r '.[0].Config // empty' 2>/dev/null || true)"
+    if [[ -n "$cfg" ]]; then tar -xOf "$t" "$cfg" 2>/dev/null; return; fi
+    dg="$(tar -xOf "$t" index.json 2>/dev/null | jq -r 'if (.manifests|length)==1 then .manifests[0].digest else empty end' 2>/dev/null || true)"
+    [[ "$dg" =~ ^sha256:[a-f0-9]{64}$ ]] || return 0
+    dg="$(tar -xOf "$t" "blobs/sha256/${dg#sha256:}" 2>/dev/null | jq -r '.config.digest // empty' 2>/dev/null || true)"
+    [[ "$dg" =~ ^sha256:[a-f0-9]{64}$ ]] || return 0
+    tar -xOf "$t" "blobs/sha256/${dg#sha256:}" 2>/dev/null
+  }
+
   if [[ -d "$IMAGES_DIR" ]]; then
     # By image name + tag (see VER-07): *homeassistant*.tar never matched the
     # GA armv7 image, so this check skipped instead of running.
@@ -1537,9 +1553,9 @@ if [[ -f "$VER_JSON" ]]; then
     CORE_TAG_V11="$(jq -r '.homeassistant."'${MACHINE:-tinker}'" // .core' "$VER_JSON" 2>/dev/null)"
     CORE_TAR_V11="$(ls "$IMAGES_DIR"/"${CORE_REF_V11//[:\/]/_}_${CORE_TAG_V11}"@*.tar 2>/dev/null | head -n 1 || true)"
     if [[ -n "$CORE_TAR_V11" ]]; then
-      CONFIG_PATH_V11=$(tar -xOf "$CORE_TAR_V11" manifest.json 2>/dev/null | jq -r '.[0].Config // empty' || true)
-      if [[ -n "$CONFIG_PATH_V11" ]]; then
-        LABEL_VERSION=$(tar -xOf "$CORE_TAR_V11" "$CONFIG_PATH_V11" 2>/dev/null | jq -r '.config.Labels."io.hass.version" // "unknown"' || true)
+      CONFIG_JSON_V11="$(_image_config_json "$CORE_TAR_V11")"
+      if [[ -n "$CONFIG_JSON_V11" ]]; then
+        LABEL_VERSION=$(printf '%s' "$CONFIG_JSON_V11" | jq -r '.config.Labels."io.hass.version" // "unknown"' || true)
         EXPECTED_VERSION="$(jq -r '.homeassistant."'${MACHINE:-tinker}'" // .core' "$VER_JSON" 2>/dev/null)"
         if [[ "$LABEL_VERSION" == "$EXPECTED_VERSION" ]]; then
           _pass "VER-11: Core io.hass.version label ($LABEL_VERSION) matches version.json"
@@ -1549,7 +1565,9 @@ if [[ -f "$VER_JSON" ]]; then
           _fail "VER-11: Core io.hass.version ($LABEL_VERSION) != version.json ($EXPECTED_VERSION)"
         fi
       else
-        _skip "VER-11" "could not parse core image manifest"
+        # A Core tar that is there but unreadable is a finding, not a skip: the
+        # label is what keeps the Supervisor from looping on a wrong Core.
+        _fail "VER-11: cannot read the image config of $(basename "$CORE_TAR_V11") (neither docker-archive manifest.json nor an OCI index.json -> manifest -> config)"
       fi
     else
       # The images dir exists, so this is a full build: a missing Core tar is
@@ -1655,7 +1673,10 @@ _layer_list() { tar -tf "$1" 2>/dev/null | grep -E 'layer\.tar$|^blobs/|^[a-f0-9
 _archive_contains() {
   local arch_tar="$1" rx="$2" layer
   for layer in $(_layer_list "$arch_tar"); do
-    if tar -xf "$arch_tar" --to-stdout "$layer" 2>/dev/null | tar -tf - 2>/dev/null | grep -qE "$rx"; then
+    # gzip -dcf: OCI layers (HAOS 18.x oci-archive) are gzip blobs and `tar -tf -`
+    # does not sniff compression on a pipe (it lists nothing, so every path would
+    # read as "absent"); docker-archive layers are plain tars and pass through.
+    if tar -xf "$arch_tar" --to-stdout "$layer" 2>/dev/null | gzip -dcf 2>/dev/null | tar -tf - 2>/dev/null | grep -qE "$rx"; then
       return 0
     fi
   done

@@ -18,10 +18,12 @@ WHAT IT INSPECTS
    the release that introduced each capability below. Cheap, and it runs on a
    source-only checkout too.
 2. The ARTEFACT: the ga_manager image tar the bake actually wrote
-   (``fetch-container-image.sh`` -> ``skopeo copy … docker-archive:``). The tar
+   (``fetch-container-image.sh`` -> ``skopeo copy … oci-archive:`` on HAOS 18.x,
+   ``docker-archive:`` on the 16.x line; both are read). The tar
    is found by the exact name derived from the pin — the same derivation
    ``check-baked-addon-images.sh`` uses — and its layers are read in the order
-   ``manifest.json`` lists them, last writer wins, whiteouts honoured. Each
+   the archive's manifest lists them (``manifest.json``, or ``index.json`` ->
+   image manifest for an OCI layout), last writer wins, whiteouts honoured. Each
    capability names files and the text they must contain. The version the
    image says it is (``/opt/ga-manager/source-config.yaml``) is compared with
    the pin as well: two sources for one fact are compared, not reported side
@@ -83,26 +85,102 @@ def _norm(name: str) -> str:
     return name[2:] if name.startswith("./") else name.lstrip("/")
 
 
+def _decompress_layer(data: bytes, media_type: str) -> bytes:
+    """Layer bytes as a plain tar. gzip and plain are stdlib; zstd needs a
+    decompressor module and is a loud error without one (never a skipped layer)."""
+    if media_type.endswith("+zstd") or data[:4] == b"\x28\xb5\x2f\xfd":
+        try:
+            try:
+                import zstandard  # type: ignore[import-not-found]
+                return zstandard.ZstdDecompressor().stream_reader(io.BytesIO(data)).read()
+            except ImportError:
+                pass
+            try:
+                from compression import zstd  # type: ignore[import-not-found]  # Python >= 3.14
+                return zstd.decompress(data)
+            except ImportError:
+                raise ValueError("zstd-compressed layer and no zstd decompressor available") from None
+        except ValueError:
+            raise
+        except Exception as e:  # a decompressor's own error type (ZstdError, ...)
+            raise ValueError(f"zstd layer not decodable ({e.__class__.__name__})") from None
+    return data
+
+
+def _layer_blobs_docker(outer: tarfile.TarFile) -> list[bytes]:
+    try:
+        manifest = json.load(outer.extractfile("manifest.json"))  # type: ignore[arg-type]
+    except (KeyError, TypeError, ValueError) as e:
+        raise ValueError(f"no readable manifest.json ({e.__class__.__name__})") from None
+    layers = (manifest[0] or {}).get("Layers") if isinstance(manifest, list) and manifest else None
+    if not layers:
+        raise ValueError("manifest.json lists no layers")
+    out = []
+    for layer in layers:
+        member = outer.extractfile(layer)
+        if member is None:
+            raise ValueError(f"layer {layer} missing from the archive")
+        out.append(member.read())
+    return out
+
+
+def _json_member(outer: tarfile.TarFile, name: str) -> object:
+    try:
+        f = outer.extractfile(name)
+        if f is None:
+            raise KeyError(name)
+        return json.load(f)
+    except (KeyError, TypeError, ValueError) as e:
+        raise ValueError(f"no readable {name} ({e.__class__.__name__})") from None
+
+
+def _blob_path(digest: object) -> str:
+    if not isinstance(digest, str) or not re.fullmatch(r"[a-z0-9]+:[A-Za-z0-9=_-]+", digest):
+        raise ValueError(f"bad blob digest {digest!r}")
+    alg, hexd = digest.split(":", 1)
+    return f"blobs/{alg}/{hexd}"
+
+
+def _layer_blobs_oci(outer: tarfile.TarFile) -> list[bytes]:
+    """OCI image layout (skopeo ``oci-archive:``): index.json -> image manifest
+    -> layers in order. One manifest only: skopeo writes the single platform it
+    was asked for; several would mean guessing which one the device runs."""
+    index = _json_member(outer, "index.json")
+    descs = index.get("manifests") if isinstance(index, dict) else None
+    if not isinstance(descs, list) or len(descs) != 1:
+        raise ValueError(f"index.json lists {len(descs) if isinstance(descs, list) else 'no'} manifests, expected exactly 1")
+    manifest = _json_member(outer, _blob_path(descs[0].get("digest")))
+    if isinstance(manifest, dict) and isinstance(manifest.get("manifests"), list):
+        raise ValueError("index.json points at a multi-platform index, not an image manifest")
+    layers = manifest.get("layers") if isinstance(manifest, dict) else None
+    if not layers:
+        raise ValueError("the image manifest lists no layers")
+    out = []
+    for desc in layers:
+        member = outer.extractfile(_blob_path(desc.get("digest")))
+        if member is None:
+            raise ValueError(f"layer {desc.get('digest')} missing from the archive")
+        out.append(_decompress_layer(member.read(), str(desc.get("mediaType", ""))))
+    return out
+
+
 def read_layered(tar_path: Path, wanted: set[str]) -> dict[str, bytes | None]:
     """The final content of each wanted path across the image's layers.
 
     None for a path no layer provides (or a later layer deleted). Raises
-    ValueError when the archive is not a docker-archive this can read.
+    ValueError when the archive is neither a docker-archive nor an OCI layout
+    this can read.
     """
     out: dict[str, bytes | None] = {w: None for w in wanted}
     with tarfile.open(tar_path, "r:*") as outer:
-        try:
-            manifest = json.load(outer.extractfile("manifest.json"))  # type: ignore[arg-type]
-        except (KeyError, TypeError, ValueError) as e:
-            raise ValueError(f"no readable manifest.json ({e.__class__.__name__})") from None
-        layers = (manifest[0] or {}).get("Layers") if isinstance(manifest, list) and manifest else None
-        if not layers:
-            raise ValueError("manifest.json lists no layers")
-        for layer in layers:
-            member = outer.extractfile(layer)
-            if member is None:
-                raise ValueError(f"layer {layer} missing from the archive")
-            data = member.read()
+        names = set(outer.getnames())
+        if "manifest.json" in names:
+            blobs = _layer_blobs_docker(outer)
+        elif "index.json" in names:
+            blobs = _layer_blobs_oci(outer)
+        else:
+            raise ValueError("neither manifest.json (docker-archive) nor index.json (OCI layout) in the archive")
+        for data in blobs:
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as lt:
                 for m in lt.getmembers():
                     name = _norm(m.name)
