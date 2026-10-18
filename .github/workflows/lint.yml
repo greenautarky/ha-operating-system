@@ -284,6 +284,14 @@ jobs:
           set -eu
           sh tests/ga_tests/addon_prime/test.sh
           GA_T_SHELL="busybox sh" sh tests/ga_tests/addon_prime/test.sh
+      - name: iHost root-password bake hook is wired (ADR-0039 start password)
+        # Same checks as the DSGW-210 suite for the iHost board: the defconfig
+        # points at the post-fakeroot script and the board post-build runner,
+        # the live scripts write ROOT_PW_HASH into root's shadow field and
+        # nothing else, unset or malformed hashes stop the build with the
+        # shadow untouched. Red-proven by deleting the defconfig line (3 of 8
+        # fail).
+        run: sh tests/ga_tests/ihost_root_password/test.sh
 
       - name: HW-02b reads the kernel log it can actually see
         # HW-02 was one check over a VOLATILE source and went red on a healthy
