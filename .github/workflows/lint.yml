@@ -900,6 +900,22 @@ jobs:
       - name: Rootfs fits the system slot (pinned limit, exactly one image)
         run: ./tests/gates/rootfs_size/selftest.sh
 
+      # HAOS 18.3's buildroot ships older docker-engine / docker-cli / containerd
+      # than the security releases master runs. container-floor.mk (included by
+      # the board's local.mk, like the Go floor) lifts them; patches/<pkg>/ hold
+      # the tarball hashes. scripts/check-container-floor.sh evaluates the
+      # EFFECTIVE versions with make against pinned minimums and holds floor,
+      # hash entries and the local.mk include together. The self-test drives the
+      # live gate over fixture trees and, mandatory here, the real pinned
+      # submodule. Red-proven: lowering a floor, dropping a hash file or the
+      # local.mk include each turns exactly its cases red.
+      - name: Container runtime floor (docker-engine, docker-cli, containerd)
+        run: |
+          set -eu
+          git submodule update --init --depth 1 haos
+          git -C haos submodule update --init --depth 1 buildroot
+          CONTAINER_FLOOR_REQUIRE_LIVE=1 ./tests/gates/container_floor/selftest.sh
+
       # HAOS 18.x names the Supervisor unit haos-supervisor.service; components
       # synced into the image and 1.5-era scripts name it hassos-supervisor.service
       # (ga-bootstrap.service Requires= it, and a Requires= on a missing unit

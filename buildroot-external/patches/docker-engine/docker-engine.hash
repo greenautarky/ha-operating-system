@@ -1,0 +1,5 @@
+# GA carry of docker-engine 29.8.2 (see GA_CONTAINER_FLOORS in ../../container-floor.mk).
+# Same values the HAOS 16.x line builds with (buildroot pin de217236); the go2 tarball is
+# the vendored archive buildroot's download helper produces.
+sha256  5ed520023fe6600579e5c910733814a5ddb7100db41bc3672682a5b50146f6bd  docker-engine-29.8.2-go2.tar.gz
+sha256  7c87873291f289713ac5df48b1f2010eb6963752bbd6b530416ab99fc37914a8  LICENSE
