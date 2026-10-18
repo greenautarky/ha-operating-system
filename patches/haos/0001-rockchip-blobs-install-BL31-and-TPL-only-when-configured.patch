@@ -1,0 +1,46 @@
+From: GreenAutarky DSGW-210 port
+Subject: [PATCH] rockchip-blobs: install BL31 and TPL only when configured
+
+Why: DSGW-210 (RK3328) builds ARM Trusted Firmware from source
+(BR2_TARGET_ARM_TRUSTED_FIRMWARE_BL31=y) because rkbin ships no BL31 blob
+we use for RK3328, and takes only the DDR TPL from rkbin. With
+BR2_PACKAGE_ROCKCHIP_BLOBS_ATF="" the unconditional install line expands
+to `install $(@D)/ .../bl31.elf` and fails with "omitting directory".
+U-Boot's NEEDS_TPL/NEEDS_ATF_BL31 hooks in HAOS's buildroot depend on
+rockchip-blobs, so the package cannot simply be left out.
+
+Why a patch and not an override: a second external cannot redefine a
+package that HAOS's external already defines, and pointing _ATF at a real
+rkbin file would make rockchip-blobs and arm-trusted-firmware race for
+$(BINARIES_DIR)/bl31.elf.
+
+Upstream: candidate. No behaviour change for boards that set both
+options (every in-tree HAOS board today); fixes any board that builds ATF
+from source.
+
+---
+diff --git a/buildroot-external/package/rockchip-blobs/rockchip-blobs.mk b/buildroot-external/package/rockchip-blobs/rockchip-blobs.mk
+index 6119b1bee..3d2a01e7b 100644
+--- a/buildroot-external/package/rockchip-blobs/rockchip-blobs.mk
++++ b/buildroot-external/package/rockchip-blobs/rockchip-blobs.mk
+@@ -10,9 +10,18 @@ ROCKCHIP_BLOBS_SITE = https://github.com/rockchip-linux/rkbin/archive
+ ROCKCHIP_BLOBS_LICENSE = PROPRIETARY
+ ROCKCHIP_BLOBS_INSTALL_IMAGES = YES
+ 
++# The rkbin tarball ships prebuilt ATF (BL31) only for some Rockchip SoCs
++# (e.g. bin/rk35/rk3568_bl31_*.elf for RK3568). For SoCs without a prebuilt
++# blob (e.g. RK3328), the board defconfig builds ATF from source via
++# BR2_TARGET_ARM_TRUSTED_FIRMWARE_BL31=y and leaves
++# BR2_PACKAGE_ROCKCHIP_BLOBS_ATF empty. Make the ATF install conditional so
++# such boards don't fail with "install: omitting directory" when the path
++# expands to "$(@D)/".
+ define ROCKCHIP_BLOBS_INSTALL_IMAGES_CMDS
+-	$(INSTALL) -D -m 0644 $(@D)/$(BR2_PACKAGE_ROCKCHIP_BLOBS_ATF) $(BINARIES_DIR)/bl31.elf
+-	$(INSTALL) -D -m 0644 $(@D)/$(BR2_PACKAGE_ROCKCHIP_BLOBS_TPL) $(BINARIES_DIR)/ram_init.bin
++	$(if $(call qstrip,$(BR2_PACKAGE_ROCKCHIP_BLOBS_ATF)),\
++		$(INSTALL) -D -m 0644 $(@D)/$(call qstrip,$(BR2_PACKAGE_ROCKCHIP_BLOBS_ATF)) $(BINARIES_DIR)/bl31.elf)
++	$(if $(call qstrip,$(BR2_PACKAGE_ROCKCHIP_BLOBS_TPL)),\
++		$(INSTALL) -D -m 0644 $(@D)/$(call qstrip,$(BR2_PACKAGE_ROCKCHIP_BLOBS_TPL)) $(BINARIES_DIR)/ram_init.bin)
+ endef
+ 
+ $(eval $(generic-package))
