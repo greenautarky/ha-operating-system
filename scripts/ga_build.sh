@@ -2830,7 +2830,7 @@ fi
 build_tests="/build/tests/ga_tests/run_build_tests.sh"
 if [[ -x "$build_tests" ]]; then
   log_build_step "Build-time test suite"
-  "$build_tests" "$OUT" 2>&1 | tee -a "$BUILD_LOG"
+  GA_BOARD="$BOARD" "$build_tests" "$OUT" 2>&1 | tee -a "$BUILD_LOG"
 else
   echo "Build test suite not found at $build_tests (skipping)"
 fi
