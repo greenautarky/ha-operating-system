@@ -462,11 +462,11 @@ run_crash_panic_test() {
 
     # CRASH-04c: Previous boot logs accessible
     # shellcheck disable=SC2086
-    if ssh $SSH_OPTS "$SSH_TARGET" "journalctl -b -1 2>/dev/null | head -1 | grep -q ." 2>/dev/null; then
-        printf "\033[0;32m  PASS\033[0m  CRASH-04c: Previous boot logs accessible after panic\n"
+    if ssh $SSH_OPTS "$SSH_TARGET" "f=\$(ls -1 /mnt/data/journal-dump/dump-*.log.gz 2>/dev/null | tail -1); [ -n \"\$f\" ] && zcat \"\$f\" | head -1 | grep -q ." 2>/dev/null; then
+        printf "\033[0;32m  PASS\033[0m  CRASH-04c: Failure-trail dump readable after panic\n"
         pass=$((pass + 1))
     else
-        printf "\033[0;31m  FAIL\033[0m  CRASH-04c: Previous boot logs not available after panic\n"
+        printf "\033[0;31m  FAIL\033[0m  CRASH-04c: No readable failure-trail dump after panic\n"
         fail=$((fail + 1))
     fi
 

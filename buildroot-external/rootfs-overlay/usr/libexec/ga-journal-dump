@@ -1,0 +1,139 @@
+#!/bin/sh
+# ga-journal-dump <reason> - persist a bounded failure trail of the RAM journal.
+#
+# WHY
+#   journald runs Storage=volatile (etc/systemd/journald.conf): the journal
+#   lives in /run and is gone after a reboot. That removes the largest single
+#   writer on the SD card (about 57 % of all writes on an idle bench device,
+#   Odoo #1256). What it must not remove is the evidence of WHY a device went
+#   down or failed an update. This script writes that evidence, small and
+#   bounded, to the data partition:
+#
+#     triggers (each one calls this script, a gate checks the wiring):
+#       shutdown        ga-journal-dump-shutdown.service, ExecStop on a clean
+#                       shutdown/reboot
+#       rauc-install    ga-rauc-install, right before `rauc install`
+#       bootcheck-unclean   ga-boot-check, when the previous boot ended unclean
+#
+#   content, current boot only, in this order of importance (each section has
+#   its own cap, so a chatty application cannot push system evidence out):
+#     1 boot/RAUC/self-heal units, every priority
+#     2 kernel: warnings and above, plus OOM / watchdog / storage / thermal /
+#       reset lines at any priority
+#     3 PID 1: unit failures (warnings and above)
+#     4 everything else at warning and above
+#     5 pstore records of a previous crash, if any
+#   Application chatter (INFO) is never dumped; it stays in RAM only.
+#
+#   bounds: the uncompressed text never exceeds MAX_BYTES (2 MiB), it is stored
+#   gzip-compressed, and only the newest KEEP dumps are kept.
+#
+#   read after reboot:  zcat /mnt/data/journal-dump/dump-*.log.gz | less
+#
+# This script never fails its caller: every error ends in exit 0 after a
+# message on stderr. A failure trail must not turn into a second failure.
+#
+# Test hooks (host tests only; nothing on a device sets them): GA_JD_DIR,
+# GA_JD_JOURNALCTL, GA_JD_PSTORE, GA_JD_BOOT_ID, GA_JD_TS, GA_JD_MIN_FREE_KB.
+# The bounds are deliberately NOT overridable.
+
+MAX_BYTES=2097152
+KEEP=5
+CAP_BOOT=262144
+CAP_KERN=524288
+CAP_PID1=131072
+CAP_WARN=917504
+CAP_PSTORE=131072
+CAP_HDR=4096
+
+DIR="${GA_JD_DIR:-/mnt/data/journal-dump}"
+JCTL="${GA_JD_JOURNALCTL:-journalctl}"
+PSTORE="${GA_JD_PSTORE:-/sys/fs/pstore}"
+MIN_FREE_KB="${GA_JD_MIN_FREE_KB:-20480}"
+
+REASON="$(printf '%s' "${1:-manual}" | tr -c 'a-z0-9-' '-' | head -c 24)"
+[ -n "$REASON" ] || REASON=manual
+BOOT_ID="${GA_JD_BOOT_ID:-$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)}"
+BOOT8="$(printf '%s' "$BOOT_ID" | tr -d '-' | head -c 8)"
+TS="${GA_JD_TS:-$(date '+%Y%m%dT%H%M%S' 2>/dev/null || echo 00000000T000000)}"
+
+warn() { echo "ga-journal-dump: $*" >&2; }
+
+mkdir -p "$DIR" 2>/dev/null || { warn "cannot create $DIR"; exit 0; }
+
+free_kb="$(df -Pk "$DIR" 2>/dev/null | awk 'NR==2 {print $4}')"
+if [ -n "$free_kb" ] && [ "$free_kb" -lt "$MIN_FREE_KB" ] 2>/dev/null; then
+    warn "only ${free_kb} KB free on $DIR (< ${MIN_FREE_KB}) - no dump written"
+    exit 0
+fi
+
+TMP="$DIR/.tmp.$$"
+trap 'rm -f "$TMP" "$TMP.gz"' EXIT
+
+T=""
+command -v timeout >/dev/null 2>&1 && T="timeout 20"
+
+section() { # section <title> <cap>  (stdin -> newest <cap> bytes)
+    printf '\n===== %s =====\n' "$1"
+    tail -c "$2"
+}
+
+{
+    {
+        echo "ga-journal-dump"
+        echo "reason:   $REASON"
+        echo "written:  $TS"
+        echo "boot_id:  $BOOT_ID"
+        echo "release:  $(cat /etc/ga-release 2>/dev/null | head -1)"
+        echo "kernel:   $(uname -r 2>/dev/null)"
+        echo "uptime_s: $(cut -d' ' -f1 /proc/uptime 2>/dev/null)"
+        echo "journal:  $($T $JCTL --disk-usage 2>&1 | head -1)"
+        echo "scope:    current boot only; sections are capped separately; newest lines kept"
+    } | head -c "$CAP_HDR"
+
+    $T $JCTL -b --no-pager -o short-precise \
+        -u rauc.service -u ga-rauc-install.service -u ga-rauc-install.path \
+        -u ga-boot-check.service -u ga-crash-marker.service \
+        -u ga-rtw-recover.service -u ga-wifi-watchdog.service \
+        -u ga-disk-guard.service -u ga-journal-dump-shutdown.service 2>&1 \
+        | section "boot / RAUC / self-heal units (all priorities)" "$CAP_BOOT"
+
+    $T $JCTL -k -b --no-pager -o short-precise 2>&1 \
+        | grep -iE 'warn|err|crit|alert|emerg|fail|oom|out of memory|killed process|watchdog|mmc|ext4|i/o error|thermal|overheat|panic|oops|hung task|lockup|reset|brownout|under-?voltage|usb.*(disconnect|error)|link is down|rtw|firmware' \
+        | section "kernel (warnings and above; OOM/watchdog/storage/thermal/reset at any priority)" "$CAP_KERN"
+
+    $T $JCTL -b --no-pager -o short-precise -p warning _PID=1 2>&1 \
+        | section "PID 1: unit failures (warning and above)" "$CAP_PID1"
+
+    $T $JCTL -b --no-pager -o short-precise -p warning 2>&1 \
+        | section "all units, warning and above" "$CAP_WARN"
+
+    if [ -d "$PSTORE" ] && [ -n "$(ls -A "$PSTORE" 2>/dev/null)" ]; then
+        for f in "$PSTORE"/*; do
+            [ -f "$f" ] || continue
+            printf '\n--- %s ---\n' "$(basename "$f")"
+            head -c "$CAP_PSTORE" "$f" 2>/dev/null
+        done | section "pstore (previous crash records)" "$CAP_PSTORE"
+    fi
+} 2>/dev/null | head -c "$MAX_BYTES" | gzip -c > "$TMP.gz" 2>/dev/null
+
+if [ ! -s "$TMP.gz" ]; then
+    warn "empty dump - nothing written"
+    exit 0
+fi
+
+# Same boot + same reason replaces its earlier dump instead of adding another.
+for old in "$DIR"/dump-*-"$BOOT8"-"$REASON".log.gz; do
+    [ -e "$old" ] && rm -f "$old"
+done
+OUT="$DIR/dump-$TS-$BOOT8-$REASON.log.gz"
+mv "$TMP.gz" "$OUT" 2>/dev/null || { warn "cannot write $OUT"; exit 0; }
+echo "ga-journal-dump: wrote $OUT ($(stat -c%s "$OUT" 2>/dev/null) bytes compressed)"
+
+# Rotation: keep the newest KEEP dumps (names sort by timestamp).
+n=0
+for f in $(ls -1r "$DIR"/dump-*.log.gz 2>/dev/null); do
+    n=$((n + 1))
+    [ "$n" -gt "$KEEP" ] && rm -f "$f"
+done
+exit 0
