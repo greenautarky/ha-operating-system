@@ -6,7 +6,6 @@
 dsgw210	-	CFG-30*	ga-openstick-autoconnect serves the iHost external LTE stick; the DSGW-210 has an on-board modem and no stick
 dsgw210	-	DT-0*	compare the iHost device tree (rv1126) with its reference and expect its USB host nodes; the DSGW-210 has its own device tree
 dsgw210	-	WIFI-13*	the runtime-PM udev rule is for the iHost rtw88_8723ds chip; the DSGW-210 has a different Wi-Fi chip, whether it needs one is not evaluated
-dsgw210	-	WIFI-08*	the GreenAutarky-Install Wi-Fi profile (hook 85, needs a PSK secret) is the iHost field-install network; whether the DSGW-210 gets one is an open decision
 #
 # Container images the board does not bake (GA_HASSIO_SKIP_IMAGES / no add-on list in its external.mk)
 dsgw210	core-skipped	BLD: Core tag*	the board bakes no Core image (GA_HASSIO_SKIP_IMAGES), so there is no Core tag to check

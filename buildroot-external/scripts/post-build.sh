@@ -42,7 +42,7 @@ if [ -n "${GA_RELEASE:-}" ]; then
     chmod 0644 "${TARGET_DIR}/etc/ga-release"
 fi
 
-# The GA layer's build-input hooks (SSH certificate plane, NetBird setup key),
+# The GA layer's build-input hooks (Wi-Fi install PSK, SSH certificate plane, NetBird setup key),
 # from this directory's post-build.d/: every board gets them. The board's own
 # post-build.sh runs afterwards and adds its board-specific ones. A hook that
 # is not executable fails the build: skipping it would ship an image without
