@@ -59,5 +59,7 @@ printf '%s\n' "$WANT" > "$TOKEN.tmp.$$"
 mv -f "$TOKEN.tmp.$$" "$TOKEN"
 
 echo "[ga-rauc-install-older] installing $BUNDLE ($WANT) on an operator override"
+# Persist the bounded failure trail of the RAM-only journal first (never fails).
+[ -x /usr/libexec/ga-journal-dump ] && { /usr/libexec/ga-journal-dump rauc-install-older || true; }
 rauc install "$BUNDLE"
 echo "[ga-rauc-install-older] installed. Not rebooting — run 'reboot' to switch to it."

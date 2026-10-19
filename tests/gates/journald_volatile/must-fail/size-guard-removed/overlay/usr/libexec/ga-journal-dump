@@ -1,0 +1,3 @@
+MAX_BYTES=2097152
+KEEP=5
+[ "$n" -gt "$KEEP" ] && rm -f "$f"

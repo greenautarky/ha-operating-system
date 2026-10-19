@@ -1,0 +1,4 @@
+[Unit]
+After=local-fs.target systemd-journald.service
+[Service]
+ExecStop=/usr/libexec/ga-journal-dump shutdown

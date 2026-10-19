@@ -33,7 +33,7 @@ log_crash() {
         echo "Possible causes: kernel panic, watchdog reset, power loss, or forced reboot"
         echo ""
         echo "To investigate, run:"
-        echo "  journalctl -b -1    # Previous boot logs"
+        echo "  zcat /mnt/data/journal-dump/dump-*.log.gz   # failure trail (the journal is RAM-only)"
         echo "  dmesg | head -50    # Current boot kernel messages"
         echo "=========================================="
         echo ""
@@ -63,6 +63,12 @@ main() {
         } | /usr/libexec/ga-share-publish "$VERDICT_FILE"
         # Remove the stale marker (new one will be created by ga-crash-marker.service)
         rm -f "$MARKER_FILE"
+        # The journal is RAM-only: the crashed boot's journal is gone, so keep
+        # what this boot knows (kernel messages, pstore records) next to the
+        # verdict. Bounded, never fails.
+        if [ -x /usr/libexec/ga-journal-dump ]; then
+            /usr/libexec/ga-journal-dump bootcheck-unclean || true
+        fi
     else
         echo "Clean boot - previous shutdown was graceful"
         rm -f "$VERDICT_FILE"

@@ -3724,6 +3724,39 @@ PKG_TG="${GA_SRC:+${GA_SRC}/buildroot-external/package/telegraf}"
 RAUC_INSTALL="${TARGET}/usr/sbin/ga-rauc-install"
 [[ -f "$RAUC_INSTALL" ]] || RAUC_INSTALL="${OVL}/usr/sbin/ga-rauc-install"
 
+# --- Volatile journal + bounded failure trail (Odoo #1256, option C) ---
+# Source-level counterpart of tests/gates/journald_volatile/selftest.sh (which
+# runs over fixtures and the live script); this block checks the BUILT tree.
+_jd_root="${TARGET}"
+# A populated build has ga-boot-check; a bare/partial target dir must not
+# mask a missing file by silently testing the source instead.
+[[ -f "${_jd_root}/usr/libexec/ga-boot-check" ]] || _jd_root="${OVL}"
+if [[ -f "${_jd_root}/etc/systemd/journald.conf" ]]; then
+  [[ "$(grep -E '^[[:space:]]*Storage=' "${_jd_root}/etc/systemd/journald.conf" | tail -1 | tr -d '[:space:]')" == "Storage=volatile" ]] \
+    && _pass "JD-B01: journald.conf has the effective Storage=volatile" \
+    || _fail "JD-B01: journald.conf is not Storage=volatile (journald is the largest SD writer when persistent)"
+  grep -qE '^RuntimeMaxUse=[0-9]+M$' "${_jd_root}/etc/systemd/journald.conf" \
+    && _pass "JD-B02: journald.conf bounds the RAM journal (RuntimeMaxUse)" \
+    || _fail "JD-B02: RuntimeMaxUse missing - the RAM journal is unbounded"
+  if [[ -x "${_jd_root}/usr/libexec/ga-journal-dump" ]]; then
+    _pass "JD-B03: ga-journal-dump present and executable"
+    grep -qE '^MAX_BYTES=2097152$' "${_jd_root}/usr/libexec/ga-journal-dump" \
+      && _pass "JD-B04: dump bound is 2 MiB" || _fail "JD-B04: MAX_BYTES is not 2097152"
+  else
+    _fail "JD-B03: ga-journal-dump missing or not executable"
+  fi
+  { grep -q 'ExecStop=/usr/libexec/ga-journal-dump' "${_jd_root}/usr/lib/systemd/system/ga-journal-dump-shutdown.service" 2>/dev/null \
+    && [[ -L "${_jd_root}/etc/systemd/system/sysinit.target.wants/ga-journal-dump-shutdown.service" ]]; } \
+    && _pass "JD-B05: shutdown dump unit runs the script on stop and is enabled" \
+    || _fail "JD-B05: shutdown dump unit missing, without ExecStop, or not enabled"
+  grep -q 'ga-journal-dump' "${_jd_root}/usr/sbin/ga-rauc-install" 2>/dev/null \
+    && _pass "JD-B06: ga-rauc-install dumps before the install" || _fail "JD-B06: ga-rauc-install does not call ga-journal-dump"
+  grep -q 'ga-journal-dump' "${_jd_root}/usr/libexec/ga-boot-check" 2>/dev/null \
+    && _pass "JD-B07: ga-boot-check dumps on an unclean previous boot" || _fail "JD-B07: ga-boot-check does not call ga-journal-dump"
+else
+  _fail "JD-B01..07: no journald.conf in ${TARGET} or ${OVL}"
+fi
+
 if [[ -f "$RAUC_INSTALL" ]]; then
   _pass "RAUC-01: ga-rauc-install helper present"
 
