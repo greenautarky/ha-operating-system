@@ -3981,6 +3981,26 @@ else
 fi
 
 # =========================================================================
+# SRC-BC-01: the build container is reproducible (Odoo #1288)
+# =========================================================================
+# Debian 11's LTS ended 2026-08-31: the live mirror listed packages that 404, so
+# an unpinned `apt-get install` could no longer build the container and the only
+# copy was one cached image on the builder. The Dockerfile therefore pins the
+# base image by digest, apt to an exact snapshot.debian.org timestamp, and
+# docker-ce / docker-ce-cli / containerd.io by version + SHA-256. The checker is
+# scripts/check-build-container.sh (self-tested in CI, tests/gates/build_container).
+_bc_gate="${SRC}/scripts/check-build-container.sh"
+if [[ -f "${SRC}/Dockerfile" && -x "$_bc_gate" ]]; then
+  if _bc_out="$("$_bc_gate" "${SRC}/Dockerfile" 2>&1)"; then
+    _pass "SRC-BC-01: build container pinned (base digest, exact apt snapshot, docker debs by version+sha256)"
+  else
+    _fail "SRC-BC-01: ${_bc_out}"
+  fi
+else
+  _skip "SRC-BC-01: build container pinned" "no Dockerfile / checker in the source root"
+fi
+
+# =========================================================================
 # RAUC keyring CONTENTS — what actually shipped, not what rauc.sh intended
 # =========================================================================
 # Runs the audit over ${TARGET}/etc/rauc/keyring.pem. The audit compares every

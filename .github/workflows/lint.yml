@@ -581,6 +581,13 @@ jobs:
       - name: Gate self-tests (each pattern fires on known-bad, stays quiet on known-good)
         run: ./tests/gates/run_gate_selftests.sh
 
+      # The build container's reproducibility gate (Odoo #1288): digest-pinned
+      # base, exact apt snapshot, docker debs by version + SHA-256. Red against
+      # the unpinned feat/1.6-haos18 Dockerfile and nine mutations of the live
+      # one (each must name ITS finding), green on the pinned one.
+      - name: build container pinning gate (red on drift, green on pinned)
+        run: ./tests/gates/build_container/selftest.sh
+
       # The apt-install action, proven against the failure it was written for: a
       # hung mirror. Runs here rather than in version-check because it must run
       # even when version-check itself cannot — which was the situation on
