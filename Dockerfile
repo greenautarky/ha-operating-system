@@ -1,27 +1,64 @@
-FROM debian:trixie
+# GreenAutarky build container, reproducible by construction (Odoo #1288).
+# Every external input is pinned to something that cannot move:
+#   - the base image, by dated tag AND content digest (trixie-20261005 = Debian 13.7)
+#   - every Debian package, by an exact snapshot.debian.org timestamp (the apt
+#     sources below are the ONLY ones; deb.debian.org / security.debian.org are
+#     never referenced, so a rebuild next year resolves the same package set)
+#   - docker-ce, docker-ce-cli and containerd.io, by exact version AND the
+#     SHA-256 of each .deb (download.docker.com is not snapshotted; no apt repo
+#     of Docker's is configured)
+#   - the CVE scanners (trivy, syft, grype), by release AND SHA-256 (below)
+# scripts/check-build-container.sh asserts all of it (build test SRC-BC-01).
+# Bumping any pin is a deliberate edit of this file; never "latest".
+FROM debian:trixie-20261005@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5
 
 # Set shell
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Docker
+# apt: exact archive snapshot. Check-Valid-Until is off because the signed
+# Release files of a frozen snapshot are, by definition, old.
+ARG DEBIAN_SNAPSHOT=20261019T060000Z
+RUN set -eu; \
+    rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*; \
+    printf '%s\n' \
+        "deb http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ trixie main" \
+        "deb http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ trixie-updates main" \
+        "deb http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/ trixie-security main" \
+        > /etc/apt/sources.list; \
+    printf '%s\n' 'Acquire::Check-Valid-Until "false";' 'Acquire::Retries "5";' \
+        > /etc/apt/apt.conf.d/99snapshot
+
+# Docker: the three .debs from download.docker.com, version- and SHA-256-pinned
+# per architecture (the same two as the scanners below); their dependencies
+# (iptables, ...) come from the snapshot above.
+ARG DOCKER_VERSION=5:29.9.1-1~debian.13~trixie
+ARG CONTAINERD_VERSION=2.4.2-2~debian.13~trixie
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
-    && install -m 0755 -d /etc/apt/keyrings \
-    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
-    && chmod a+r /etc/apt/keyrings/docker.asc \
-    && . /etc/os-release \
-    && printf '%s\n' \
-        'Types: deb' \
-        'URIs: https://download.docker.com/linux/debian' \
-        "Suites: $VERSION_CODENAME" \
-        'Components: stable' \
-        "Architectures: $(dpkg --print-architecture)" \
-        'Signed-By: /etc/apt/keyrings/docker.asc' \
-        > /etc/apt/sources.list.d/docker.sources \
-    && apt-get update && apt-get install -y --no-install-recommends \
-        docker-ce \
-    && rm -rf /var/lib/apt/lists/*
+    && set -eu; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) d_sum=b33133205350e2765df0cc382f5a3ee44c2cfd4cdc3dc6ba32eca40839ac3574; \
+             c_sum=c89d977d8073de91e7afcd099c82e16cef5506e4d446d006b240e77f78ba4b7d; \
+             k_sum=a3e696cb98baafbb63895dc18b53f143088a2ead95c57820ac90dc5e1d61b05d ;; \
+      arm64) d_sum=0e92412b105738c532b7b918ab2fa6b00fa195c346dcf493c0c048d318556f32; \
+             c_sum=20b15fb2db59de70cc2172ba1a3cf01b2ab6a2258af20c286b15be2ceca13ecf; \
+             k_sum=ec62600bdae178642eb3a6bc9817ff9ccd95a5891b6c3076ffbba11f3b4d1da6 ;; \
+      *) echo "no pinned Docker checksums for $arch"; exit 1 ;; \
+    esac; \
+    mkdir /tmp/docker-debs; cd /tmp/docker-debs; \
+    base=https://download.docker.com/linux/debian/dists/trixie/pool/stable/${arch}; \
+    for spec in "docker-ce:${DOCKER_VERSION}:${d_sum}" "docker-ce-cli:${DOCKER_VERSION}:${c_sum}" "containerd.io:${CONTAINERD_VERSION}:${k_sum}"; do \
+      name="${spec%%:*}"; rest="${spec#*:}"; sum="${rest##*:}"; ver="${rest%:*}"; \
+      f="${name}_${ver#5:}_${arch}.deb"; \
+      curl -sfL --retry 5 -o "$f" "${base}/${f}"; \
+      echo "${sum}  ${f}" | sha256sum -c -; \
+    done; \
+    apt-get install -y --no-install-recommends ./docker-ce_*.deb ./docker-ce-cli_*.deb ./containerd.io_*.deb; \
+    cd /; rm -rf /tmp/docker-debs /var/lib/apt/lists/*; \
+    dpkg-query -W -f='${Version}\n' docker-ce | grep -qx "${DOCKER_VERSION}"; \
+    dpkg-query -W -f='${Version}\n' containerd.io | grep -qx "${CONTAINERD_VERSION}"
 
 # Build tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
