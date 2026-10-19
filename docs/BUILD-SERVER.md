@@ -118,7 +118,16 @@ There is no build workflow in this repository. The productive OS build is
 `bake.yml` in `ga-ops` (`workflow_dispatch`, input `ga_release`; there is no
 build mode since ADR-0027 D9); it reuses the builder's clone at
 `/home/builder/ha-operating-system`, runs `scripts/sync-components.sh`, then
-`ga_build.sh` inside the `hassos:local` container. The legacy `build-os.yml`
+`ga_build.sh` inside the build container. The container is built from this tree's
+`Dockerfile` (Debian 13 trixie, same as feat/1.6-haos18) and is reproducible by
+construction (Odoo #1288): base image by dated tag + digest, every Debian package from an
+exact snapshot.debian.org timestamp (`ARG DEBIAN_SNAPSHOT`), docker-ce / docker-ce-cli /
+containerd.io as version- and SHA-256-pinned `.deb` files, the CVE scanners by
+release + SHA-256. `scripts/check-build-container.sh` asserts it (build test SRC-BC-01;
+CI self-test `tests/gates/build_container`). Build a new container with
+`docker build -t <new-tag> .` and select it with the `build_image` input of the ga-ops
+bake; never retag over `hassos:local`. Bumping a pin is a deliberate edit of the
+`Dockerfile`. The legacy `build-os.yml`
 that used to live here was removed in 2026-07 — it addressed the bare
 `self-hosted` label, so it never landed on this builder.
 
