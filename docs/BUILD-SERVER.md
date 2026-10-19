@@ -118,7 +118,11 @@ There is no build workflow in this repository. The productive OS build is
 `bake.yml` in `ga-ops` (`workflow_dispatch`, input `ga_release`; there is no
 build mode since ADR-0027 D9); it reuses the builder's clone at
 `/home/builder/ha-operating-system`, runs `scripts/sync-components.sh`, then
-`ga_build.sh` inside the `hassos:local` container. The legacy `build-os.yml`
+`ga_build.sh` inside the `hassos:local` container (built from this tree's
+`Dockerfile`; on release/1.5 the Dockerfile pins the Debian 11 base image by digest
+and apt to an exact snapshot.debian.org timestamp, because Debian 11 LTS ended
+2026-08-31 and the live mirror can no longer build it - Odoo #1288. Build it with
+`docker build -t <new-tag> .`; never retag over the working image). The legacy `build-os.yml`
 that used to live here was removed in 2026-07 — it addressed the bare
 `self-hosted` label, so it never landed on this builder.
 

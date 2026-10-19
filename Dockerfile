@@ -1,7 +1,27 @@
-FROM debian:bullseye
+# Debian 11 (bullseye) LTS ended 2026-08-31: its live security index lists
+# packages that 404, so `apt-get update && install` against deb.debian.org no
+# longer builds (Odoo #1288). release/1.5 keeps its bullseye build environment
+# by (a) pinning the base image to the dated tag + digest it was built on and
+# (b) pointing apt at an exact snapshot.debian.org timestamp - the state of the
+# archive when the builder image hassos:local got its package layers
+# (2026-04-14 07:37 UTC). Same inputs, forever; no dependence on the live mirror.
+FROM debian:bullseye-20260406@sha256:bf53effcacca31b60ce97dabc67578f37e43075d716dc90804d3da3a80d2996c
 
 # Set shell
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# apt: exact archive snapshot (see the note at the top). Valid-Until is off
+# because the signed Release files of a frozen snapshot are, by definition, old.
+ARG DEBIAN_SNAPSHOT=20260414T073700Z
+RUN set -eu; \
+    rm -f /etc/apt/sources.list.d/*; \
+    printf '%s\n' \
+        "deb http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ bullseye main" \
+        "deb http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ bullseye-updates main" \
+        "deb http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/ bullseye-security main" \
+        > /etc/apt/sources.list; \
+    printf '%s\n' 'Acquire::Check-Valid-Until "false";' 'Acquire::Retries "5";' \
+        > /etc/apt/apt.conf.d/99snapshot
 
 # Docker
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -16,7 +36,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/trusted.gpg.d/docker.gpg] \
         https://download.docker.com/linux/debian $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list \
     && apt-get update && apt-get install -y --no-install-recommends \
-        docker-ce \
+        docker-ce=5:29.4.0-1~debian.11~bullseye \
+        docker-ce-cli=5:29.4.0-1~debian.11~bullseye \
+        containerd.io=2.2.2-1~debian.11~bullseye \
     && rm -rf /var/lib/apt/lists/*
 
 # Build tools

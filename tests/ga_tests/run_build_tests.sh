@@ -3981,6 +3981,32 @@ else
 fi
 
 # =========================================================================
+# SRC-BC-01: the build container is reproducible (Odoo #1288)
+# =========================================================================
+# release/1.5's container is Debian 11, whose LTS ended 2026-08-31: the live
+# mirror lists packages that 404, so an unpinned `apt-get install` can no longer
+# build it, and the only copy was one cached image on the builder. The Dockerfile
+# therefore pins (a) the base image by digest and (b) apt to an exact
+# snapshot.debian.org timestamp. This asserts both stay: a FROM by tag alone, or
+# apt back on the live mirror, is the 2026-10-17 failure waiting for its next
+# rebuild.
+_bc_df="${SRC}/Dockerfile"
+if [[ -f "$_bc_df" ]]; then
+  _bc_bad=""
+  grep -qE '^FROM [^ ]+@sha256:[0-9a-f]{64}' "$_bc_df" || _bc_bad+="FROM-not-digest-pinned "
+  grep -qE 'snapshot\.debian\.org/archive/debian/\$\{DEBIAN_SNAPSHOT\}' "$_bc_df" || _bc_bad+="apt-not-on-snapshot "
+  grep -qE '^ARG DEBIAN_SNAPSHOT=[0-9]{8}T[0-9]{6}Z$' "$_bc_df" || _bc_bad+="snapshot-timestamp-not-exact "
+  grep -v '^[[:space:]]*#' "$_bc_df" | grep -qE '(deb|security|ftp)\.debian\.org' && _bc_bad+="live-mirror-referenced "
+  if [[ -z "$_bc_bad" ]]; then
+    _pass "SRC-BC-01: build container pinned (base image digest + exact apt snapshot, no live mirror)"
+  else
+    _fail "SRC-BC-01: build container not reproducible: ${_bc_bad}"
+  fi
+else
+  _skip "SRC-BC-01: build container pinned" "no Dockerfile in the source root"
+fi
+
+# =========================================================================
 # RAUC keyring CONTENTS — what actually shipped, not what rauc.sh intended
 # =========================================================================
 # Runs the audit over ${TARGET}/etc/rauc/keyring.pem. The audit compares every
