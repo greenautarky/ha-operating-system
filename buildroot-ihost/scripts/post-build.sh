@@ -17,9 +17,9 @@ if [ "${BOARD_ID}" == "ihost" ]; then
     gadget_console
 fi
 
-# The board's build-input hooks (root password, Wi-Fi PSK, OpenStick key), from
+# The board's build-input hooks (root password, OpenStick key), from
 # this board's own directory — not from an absolute path inside one particular
-# build container. (The hooks every board runs, SSH certificate plane and
+# build container. (The hooks every board runs: Wi-Fi install PSK, SSH certificate plane and
 # NetBird setup key, are in the GA layer: buildroot-external/scripts/post-build.d/.) A hook that
 # is not executable fails the build: skipping it would ship an image without
 # what the hook installs, and nothing else would notice.
