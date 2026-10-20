@@ -13,7 +13,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.5.2-rc1  # marker baked into /etc/ga-release at build. BOSv1.5.2-rc1 = BOSv1.5.1 + ga_hmvapp_addon 2.6.1 ("Missing data" logged once per transition, Odoo #1225), z2m 2.12.1-10 (NWK guard log level, #1221), ga_manager 0.253.0 (Supervisor stats sweep every 300 s, Odoo #1203), onboarding 2.12.3 (Ethernet step records the chosen value), frontend bundle 1.23.6 (master card without full-site reset), suite preflight waits for Core API + InfluxDB (#803).
+gaos_release: BOSv1.5.2-rc2  # marker baked into /etc/ga-release at build. BOSv1.5.2-rc2 = rc1 + journald RAM-only with bounded persist-on-failure dump (#860), reproducible trixie build container (#862), HW-09 Zigbee UART (#864), boot-settle wait for TEL-10/NET-03 (#865), telegraf version stamp (#866), [AHMAD UI FIXES - bundle pin TBD]; built in FULL mode. rc1 = BOSv1.5.1 + ga_hmvapp_addon 2.6.1 ("Missing data" logged once per transition, Odoo #1225), z2m 2.12.1-10 (NWK guard log level, #1221), ga_manager 0.253.0 (Supervisor stats sweep every 300 s, Odoo #1203), onboarding 2.12.3 (Ethernet step records the chosen value), frontend bundle 1.23.6 (master card without full-site reset), suite preflight waits for Core API + InfluxDB (#803).
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
