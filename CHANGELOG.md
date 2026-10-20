@@ -16,28 +16,6 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 - **HW-09 asserts `/dev/ttyS4`.** Before: the test checked `/dev/ttyS3`, which is the LED MCU, so it stayed green on a device whose Zigbee UART (`ttyS4`, the port z2m is configured on, PROV-02) was missing. After: `[ -c /dev/ttyS4 ]`; `test_spec.md` updated. Test-only; no image content changes.
 
-## Unreleased (BOSv1.5.2): RAM-only journal with a bounded failure trail (Odoo #1256, option C)
-
-- **journald is `Storage=volatile` (`RuntimeMaxUse=64M`).** Before: the persistent journal was the largest single writer on the SD card (more than half of all writes on an idle device) and wrote many times what it stored. After: the journal lives in RAM; the writes are gone. Heating and UI are untouched.
-- **New `ga-journal-dump`: a bounded failure trail on the data partition.** It writes the current boot's evidence to `/mnt/data/journal-dump/dump-<time>-<boot>-<reason>.log.gz` (at most 2 MiB uncompressed, gzip, newest 5 kept): boot/RAUC/self-heal units at every priority, kernel warnings plus OOM/watchdog/storage/thermal/reset lines at any priority, PID 1 unit failures, all other warnings and above, and pstore records of a previous crash. Each section has its own cap, so application noise cannot push system evidence out. Application INFO chatter is never dumped.
-- **Three triggers:** clean shutdown/reboot (`ga-journal-dump-shutdown.service`, ExecStop), right before `rauc install` (`ga-rauc-install`, also `ga-rauc-install-older`), and when `ga-boot-check` finds the previous boot ended unclean. The script never fails its caller.
-- **Behaviour change for support:** `journalctl -b -1` no longer exists. Read the previous boot's trail with `zcat /mnt/data/journal-dump/dump-*.log.gz`. A crash with no network leaves no dump of the crashed boot (only pstore, and the next boot's `bootcheck-unclean` dump). Journal data written by earlier releases stays on the data partition untouched.
-- **Shippers:** the fluent-bit tier-0/tier-1 `systemd` inputs set no `Path`, so they read the live journal from `/run`; the new gate fails if any pins a systemd input to `/var/log/journal`. The tail not yet shipped at a crash is lost (flush interval).
-- **Tests:** gate `tests/gates/journald_volatile` (13 must-fail trees, 3 must-pass trees, the live script over an oversized fake journal, a mutant with the caps removed that must breach the bound), build tests JD-B01..07, device tests JD-01..04, CRASH-06 and CRASH-04c now read the dump. `collect_crash_bundle.sh` includes the dumps.
-- **Not yet proven on a device:** a 1 h A/B, the Loki arrival test and a clean-flash reboot/rollback test are separate packages. fluent-bit cursor behaviour across the boot-id change of a volatile journal is covered by those, not by CI.
-
-## BOSv1.5.2-rc1 (prepared 2026-10-16)
-
-Maintenance release on top of BOSv1.5.1, built from branch `release/1.5`. Pins only plus one test-only change; no OS code change.
-
-- `ga_hmvapp_addon` 2.6.0 -> 2.6.1: the heating add-on logs "Missing data" once per transition instead of every cycle (Odoo #1225); heating decisions unchanged. The #806 hold entry is removed.
-- `ga_zigbee2mqtt` 2.12.1-9 -> 2.12.1-10: the NWK frame-counter guard logs INFO for expected persistence lag and WARNING above 4096 (Odoo #1221).
-- `ga_manager` 0.252.0 -> 0.253.0: the Supervisor per-add-on stats sweep runs at most every 300 s (Odoo #1203, idle CPU); `resource_pressure_5min` now averages over one sample.
-- `greenautarky-site` 2.12.2 -> 2.12.3: the wizard Ethernet step records the value the resident chose.
-- `ga-frontend-bundle` 1.23.5 -> 1.23.6: the master card no longer offers the full-site reset.
-- Test-only (#803): the device-suite preflight waits for the Core API and InfluxDB `/ping`, not just container Up.
-- CI: pull-request checks also run on PRs into `release/**`.
-
 ## Unreleased (BOSv1.5.1 final fix)
 
 - **Open-work gate: knows which branch is being baked.** Before: `preflight-open-work.sh` counted every open pin PR regardless of target branch, so a bake of `release/1.5` would have been blocked by (or, the other way round, not told about) PRs for the wrong branch. After: with `BAKE_REF` set (ga-ops bake `ref` input) only PRs that target that branch count; unset keeps the old behaviour. Build-time tooling only, nothing changes on the device. Fixtures: `tests/gates/prebake_open_work/selftest.sh` PBO-11..14 (red on the old script: PBO-11).
