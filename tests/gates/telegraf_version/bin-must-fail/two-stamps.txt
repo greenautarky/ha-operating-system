@@ -1,0 +1,2 @@
+go1.25.7
+build	-ldflags="-X github.com/influxdata/telegraf/internal.Version=1.38.0 -X github.com/influxdata/telegraf/internal.Version=1.37.0"

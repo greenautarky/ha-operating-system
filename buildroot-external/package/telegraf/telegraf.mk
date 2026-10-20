@@ -26,6 +26,13 @@ TELEGRAF_GOMOD = github.com/influxdata/telegraf
 # Build the telegraf CLI
 TELEGRAF_BUILD_TARGETS = ./cmd/telegraf
 
+# Stamp the version into the binary. telegraf reads internal.Version, which is
+# "unknown" unless set at link time (Odoo #1219: `telegraf --version` and
+# inventory/CVE matching by version saw nothing). The expected value is
+# TELEGRAF_VERSION itself, so a bump moves binary and pin together;
+# TELEGRAF_GA_VERSION_GUARD below reads it back from the built binary.
+TELEGRAF_LDFLAGS += -X github.com/influxdata/telegraf/internal.Version=$(TELEGRAF_VERSION)
+
 # Optional but useful
 TELEGRAF_GO_ENV += GOPROXY=https://proxy.golang.org,direct
 
@@ -139,6 +146,13 @@ define TELEGRAF_GA_PLUGIN_GUARD
 		$(TARGET_DIR) $(@D) $(STAGING_DIR) $(TELEGRAF_GA_QEMU_ARCH)
 endef
 TELEGRAF_POST_INSTALL_TARGET_HOOKS += TELEGRAF_GA_PLUGIN_GUARD
+
+# The binary must carry the version this package pins (see TELEGRAF_LDFLAGS).
+define TELEGRAF_GA_VERSION_GUARD
+	$(BR2_EXTERNAL_HASSOS_PATH)/../scripts/telegraf-version-guard.sh \
+		$(TARGET_DIR)/usr/bin/telegraf $(TELEGRAF_VERSION)
+endef
+TELEGRAF_POST_INSTALL_TARGET_HOOKS += TELEGRAF_GA_VERSION_GUARD
 
 ################################################################################
 

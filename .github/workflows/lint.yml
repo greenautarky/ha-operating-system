@@ -785,6 +785,14 @@ jobs:
       - name: Every plugin the shipped fluent-bit configs name is built, the Forward plugins are not
         run: ./tests/gates/fluent_bit_plugins/selftest.sh
 
+      # Odoo #1219: telegraf reported version "unknown" (no internal.Version
+      # ldflag). The guard reads the stamp from the binary's build info and
+      # compares it with TELEGRAF_VERSION; fixtures cover no-ldflag, stale,
+      # "unknown" and two stamps; a mutant .mk without the ldflags line must be
+      # flagged. The real binary is checked by the build (TEL-VER-01) in the bake.
+      - name: telegraf binary is stamped with the version telegraf.mk pins
+        run: ./tests/gates/telegraf_version/selftest.sh
+
       # ADR-0027 D9: one build mode. `dev` must be refused however it is asked
       # for; every real mode and a leftover `prod` (accepted, loud) must work.
       - name: Build mode (dev refused, real modes and deprecated prod still build)
