@@ -2,6 +2,7 @@
 # Network configuration test suite - runs ON the device
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
+. "$SCRIPT_DIR/../lib/boot_settle.sh"
 
 suite_start "Network"
 
@@ -30,18 +31,18 @@ else
 fi
 
 if _consent_error_logs; then
-run_test "NET-03" "Fluent-Bit Loki output configured and delivering" \
+settled_run_test "NET-03" "Fluent-Bit Loki output configured and delivering" \
   "journalctl -u fluent-bit -b 0 --no-pager -q 2>/dev/null | grep -q 'loki.greenautarky.com' && ! journalctl -u fluent-bit --no-pager -q --since '5 min ago' 2>/dev/null | grep -qi 'no upstream connections\|connection refused'"
 else
   skip_test "NET-03" "Fluent-Bit (tier-1) Loki output (tier-1 error-log consent not given; tier-0 is covered by NET-03b)"
 fi
 
 # tier-0 is always on and is what a fresh device actually ships through
-run_test "NET-03b" "Fluent-Bit tier-0 active and delivering (no recent Loki errors)" \
+settled_run_test "NET-03b" "Fluent-Bit tier-0 active and delivering (no recent Loki errors)" \
   "systemctl is-active fluent-bit-tier0 >/dev/null 2>&1 && ! journalctl -u fluent-bit-tier0 --no-pager -q --since '5 min ago' 2>/dev/null | grep -qiE 'no upstream|broken connection|HTTP status=[45]'"
 
 if _consent_metrics && _consent_error_logs; then
-run_test "NET-04" "Telemetry services active with no recent errors" \
+settled_run_test "NET-04" "Telemetry services active with no recent errors" \
   "systemctl is-active telegraf >/dev/null 2>&1 && systemctl is-active fluent-bit >/dev/null 2>&1 && ! journalctl -u telegraf -u fluent-bit --no-pager -q --since '5 min ago' 2>/dev/null | grep -qi 'error.*output\|failed to flush\|connection refused'"
 else
   skip_test "NET-04" "telegraf + fluent-bit active (consent-gated tiers not enabled on this device)"
