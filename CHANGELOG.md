@@ -19,6 +19,11 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 - **TEL-10, NET-03, NET-03b and NET-04 wait for boot to settle, or skip with the reason.** Before: a suite started within ~10 min of boot (every post-OTA or fresh-flash run) read the shippers' boot-time connection errors in its "last 5 min" window as a regression, 2026-10-09 included. After: a new helper (`lib/boot_settle.sh`) lets the four checks judge once uptime >= 660 s; a younger device waits (bounded, `GA_SETTLE_WAIT`, default 720 s) and, if the bound is hit, the test SKIPS with the uptime and threshold in the reason. The assertions themselves are unchanged. Test-only; no image content changes.
 - **Gate:** `tests/ga_tests/lib/boot_settle_selftest.sh` in lint CI (red on the old suites: 8 of 12 checks).
+## Unreleased (BOSv1.5.2): telegraf reports its real version (Odoo #1219)
+
+- **telegraf is built with `-X .../internal.Version=$(TELEGRAF_VERSION)`.** Before: `telegraf --version` and anything matching by version (inventory, CVE) saw `unknown`. After: the binary carries the pinned version (1.38.0). The build fails if the built binary's stamp differs from the pin (`scripts/telegraf-version-guard.sh`, post-install hook), and build test TEL-VER-01 reads the same stamp from the target tree.
+- **Gate:** `tests/gates/telegraf_version/selftest.sh` in lint CI (fixtures: no ldflag, stale, "unknown", two stamps; a mutant `.mk` must be flagged). Red on the old `.mk`: 2 of 10.
+- **Not yet proven on a real binary:** the stamp is read from the Go build info of the baked binary; the first real proof is the BOSv1.5.2-rc2 bake (TEL-VER-01), and `telegraf --version` on a device after it.
 
 ## Unreleased (BOSv1.5.2): RAM-only journal with a bounded failure trail (Odoo #1256, option C)
 

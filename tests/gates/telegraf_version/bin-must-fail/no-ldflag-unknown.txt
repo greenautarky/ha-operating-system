@@ -1,0 +1,4 @@
+go1.25.7
+build	-ldflags="-s -w"
+build	-tags=custom,inputs.cpu
+unknown

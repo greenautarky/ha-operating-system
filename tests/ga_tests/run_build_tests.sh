@@ -4843,6 +4843,29 @@ else
   fi
 fi
 
+# TEL-VER-01: the shipped telegraf binary is stamped with the version telegraf.mk
+# pins (Odoo #1219: it reported "unknown"). Static read of the build info in the
+# binary (it is a target-arch binary; the build host cannot run it). The pin comes
+# from the .mk, the stamp from the binary: two independent sources, compared.
+TG_VER_MK=""
+for _d in "${GA_SRC_ROOT:-}" /build "${OUT}/.." "$(cd "$(dirname "$0")/../.." && pwd)"; do
+  [[ -n "$_d" && -f "$_d/buildroot-external/package/telegraf/telegraf.mk" ]] && { TG_VER_MK="$_d/buildroot-external/package/telegraf/telegraf.mk"; TG_VER_ROOT="$_d"; break; }
+done
+if [[ ! -f "${TARGET}/usr/bin/telegraf" ]]; then
+  _skip "TEL-VER-01" "no telegraf binary in this target"
+elif [[ -z "$TG_VER_MK" ]]; then
+  _fail "TEL-VER-01: telegraf.mk not found - cannot read the pinned version"
+else
+  _tg_pin=$(sed -n 's/^TELEGRAF_VERSION[[:space:]]*=[[:space:]]*//p' "$TG_VER_MK" | head -1)
+  if [[ -z "$_tg_pin" ]]; then
+    _fail "TEL-VER-01: no TELEGRAF_VERSION in $TG_VER_MK"
+  elif "$TG_VER_ROOT/scripts/telegraf-version-guard.sh" "${TARGET}/usr/bin/telegraf" "$_tg_pin" >/dev/null 2>&1; then
+    _pass "TEL-VER-01: telegraf binary is stamped with the pinned version ${_tg_pin} (not 'unknown')"
+  else
+    _fail "TEL-VER-01: telegraf binary is not stamped with the pinned version ${_tg_pin} (it will report 'unknown'; Odoo #1219)"
+  fi
+fi
+
 echo ""
 total=$((pass + fail + skip))
 echo "=== Build tests: ${pass} passed, ${fail} failed, ${skip} skipped (${total} total) ==="
