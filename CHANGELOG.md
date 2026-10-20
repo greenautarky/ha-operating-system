@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (BOSv1.5.2): HW-09 checks the Zigbee UART, not the LED MCU (Odoo #1134)
+
+- **HW-09 asserts `/dev/ttyS4`.** Before: the test checked `/dev/ttyS3`, which is the LED MCU, so it stayed green on a device whose Zigbee UART (`ttyS4`, the port z2m is configured on, PROV-02) was missing. After: `[ -c /dev/ttyS4 ]`; `test_spec.md` updated. Test-only; no image content changes.
+
 ## Unreleased (BOSv1.5.2): RAM-only journal with a bounded failure trail (Odoo #1256, option C)
 
 - **journald is `Storage=volatile` (`RuntimeMaxUse=64M`).** Before: the persistent journal was the largest single writer on the SD card (more than half of all writes on an idle device) and wrote many times what it stored. After: the journal lives in RAM; the writes are gone. Heating and UI are untouched.

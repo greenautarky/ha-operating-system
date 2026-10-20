@@ -25,7 +25,7 @@ regressions from kernel updates, device tree changes, and firmware issues.
 | HW-08a | USB host port disabled | `/sys/bus/usb/devices/usb*/authorized_default` is 0 on every root hub (ADR-0029 D3) |
 | HW-08a3 | USB host lock on the kernel command line | The LAST `usbcore.authorized_default` in `/proc/cmdline` is 0 — also on a device updated over the air |
 | HW-08b | USB gadget functional | Serial console gadget (dwc3 peripheral mode) working |
-| HW-09 | Zigbee serial device | Internal UART `/dev/ttyS3` (EFR32 at ff580000) |
+| HW-09 | Zigbee serial device | Internal UART `/dev/ttyS4` (EFR32; ttyS3 is the LED MCU) |
 | HW-10 | eMMC block device | `/dev/mmcblk*` present |
 | HW-11 | Root filesystem type | Reports mount type (squashfs/erofs expected) |
 | HW-12 | Kernel not tainted | `/proc/sys/kernel/tainted` == 0 |
@@ -67,6 +67,6 @@ Serial is the recommended transport for hardware tests because:
 ## Known issues
 
 - HW-04 (WiFi scan) may fail if no APs are nearby or if WiFi regulatory domain is not set
-- HW-09 (Zigbee) checks internal UART `/dev/ttyS3` only (EFR32 on iHost)
+- HW-09 (Zigbee) checks internal UART `/dev/ttyS4` only (EFR32 on iHost; ttyS3 is the LED MCU and must not satisfy it)
 - HW-13 excludes `rtw_8723ds` from the error grep to avoid false positives from the eFuse
   error that may appear briefly during driver retry

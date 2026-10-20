@@ -90,10 +90,10 @@ else
   skip_test "HW-08d" "USB RNDIS device detected (no USB modem plugged in)"
 fi
 
-# --- Zigbee (internal EFR32 on UART3) ---
+# --- Zigbee (internal EFR32 on UART4 = /dev/ttyS4; ttyS3 is the LED MCU) ---
 
 run_test "HW-09" "Zigbee serial device present (internal UART)" \
-  "[ -c /dev/ttyS3 ]"
+  "[ -c /dev/ttyS4 ]"
 
 # Zigbee dongle firmware version (from Z2M coordinator info)
 if command -v docker >/dev/null 2>&1; then
