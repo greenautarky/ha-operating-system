@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (BOSv1.5.2): HW-09 checks the Zigbee UART, not the LED MCU (Odoo #1134)
+
+- **HW-09 asserts `/dev/ttyS4`.** Before: the test checked `/dev/ttyS3`, which is the LED MCU, so it stayed green on a device whose Zigbee UART (`ttyS4`, the port z2m is configured on, PROV-02) was missing. After: `[ -c /dev/ttyS4 ]`; `test_spec.md` updated. Test-only; no image content changes.
+
 ## Unreleased (BOSv1.5.1 final fix)
 
 - **Open-work gate: knows which branch is being baked.** Before: `preflight-open-work.sh` counted every open pin PR regardless of target branch, so a bake of `release/1.5` would have been blocked by (or, the other way round, not told about) PRs for the wrong branch. After: with `BAKE_REF` set (ga-ops bake `ref` input) only PRs that target that branch count; unset keeps the old behaviour. Build-time tooling only, nothing changes on the device. Fixtures: `tests/gates/prebake_open_work/selftest.sh` PBO-11..14 (red on the old script: PBO-11).
