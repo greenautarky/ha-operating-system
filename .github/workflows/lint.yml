@@ -319,6 +319,14 @@ jobs:
         # fails the wiring checks.
         run: sh tests/ga_tests/lib/sample_window_selftest.sh
 
+      - name: TEL-10 / NET-03 / NET-03b / NET-04 wait for the boot noise to leave their 5-min window (lib/boot_settle.sh)
+        # Within ~10 min of boot the shippers log connection errors that the
+        # "last 5 min" checks read as a regression (Odoo #1222). The helper waits
+        # (bounded) or SKIPS with the stated uptime; the assertions are pinned
+        # unchanged. Red-proven: with the four suites on the old run_test the
+        # wiring and assertion checks fail (8 of 12).
+        run: sh tests/ga_tests/lib/boot_settle_selftest.sh
+
       - name: CFG-32..34 judge the HTTP config Core RUNS, not the YAML it ignores
         # Core 2026.8 imports a YAML `http:` block once and then ignores it, so
         # the old YAML greps were green while Core refused every proxied request.

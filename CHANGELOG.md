@@ -15,6 +15,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 ## Unreleased (BOSv1.5.2): HW-09 checks the Zigbee UART, not the LED MCU (Odoo #1134)
 
 - **HW-09 asserts `/dev/ttyS4`.** Before: the test checked `/dev/ttyS3`, which is the LED MCU, so it stayed green on a device whose Zigbee UART (`ttyS4`, the port z2m is configured on, PROV-02) was missing. After: `[ -c /dev/ttyS4 ]`; `test_spec.md` updated. Test-only; no image content changes.
+## Unreleased (BOSv1.5.2): device tests no longer false-red within ~10 min of boot (Odoo #1222)
+
+- **TEL-10, NET-03, NET-03b and NET-04 wait for boot to settle, or skip with the reason.** Before: a suite started within ~10 min of boot (every post-OTA or fresh-flash run) read the shippers' boot-time connection errors in its "last 5 min" window as a regression, 2026-10-09 included. After: a new helper (`lib/boot_settle.sh`) lets the four checks judge once uptime >= 660 s; a younger device waits (bounded, `GA_SETTLE_WAIT`, default 720 s) and, if the bound is hit, the test SKIPS with the uptime and threshold in the reason. The assertions themselves are unchanged. Test-only; no image content changes.
+- **Gate:** `tests/ga_tests/lib/boot_settle_selftest.sh` in lint CI (red on the old suites: 8 of 12 checks).
 
 ## Unreleased (BOSv1.5.2): RAM-only journal with a bounded failure trail (Odoo #1256, option C)
 

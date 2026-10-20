@@ -3,6 +3,7 @@
 # Tests service health, consent gating, and environment setup.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
+. "$SCRIPT_DIR/../lib/boot_settle.sh"
 
 suite_start "Telemetry"
 
@@ -81,7 +82,7 @@ run_test "TEL-08" "Fluent-Bit config on rootfs" \
 run_test "TEL-09" "Telegraf no persistent errors (last 5 min)" \
   "! journalctl -u telegraf --since '5 min ago' --no-pager -q 2>/dev/null | grep -qi 'error.*output\|failed to write'"
 
-run_test "TEL-10" "Fluent-Bit no persistent errors (last 5 min)" \
+settled_run_test "TEL-10" "Fluent-Bit no persistent errors (last 5 min)" \
   "! journalctl -u fluent-bit --since '5 min ago' --no-pager -q 2>/dev/null | grep -qi 'error.*output\|connection refused'"
 
 # The unit fallback for the env label is `unknown` (Odoo #1191): an env file
