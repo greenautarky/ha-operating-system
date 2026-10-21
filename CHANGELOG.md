@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## BOSv1.5.2-rc2 (marker)
+
+rc1 + RAM-only journal with bounded persist-on-failure dump (#860), reproducible trixie build container (#862), HW-09 Zigbee UART (#864), boot-settle wait for TEL-10/NET-03 (#865), telegraf version stamp (#866), frontend bundle 1.23.7 + ga-heating 0.13.7 — Services rebuild and "Urlaub as a plan" (bundle #55, heating #66; review follow-ups in Odoo #1316). Built in full mode.
+
 ## Unreleased (BOSv1.5.2): HW-09 checks the Zigbee UART, not the LED MCU (Odoo #1134)
 
 - **HW-09 asserts `/dev/ttyS4`.** Before: the test checked `/dev/ttyS3`, which is the LED MCU, so it stayed green on a device whose Zigbee UART (`ttyS4`, the port z2m is configured on, PROV-02) was missing. After: `[ -c /dev/ttyS4 ]`; `test_spec.md` updated. Test-only; no image content changes.
