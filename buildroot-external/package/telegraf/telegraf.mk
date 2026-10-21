@@ -152,7 +152,13 @@ define TELEGRAF_GA_VERSION_GUARD
 	$(BR2_EXTERNAL_HASSOS_PATH)/../scripts/telegraf-version-guard.sh \
 		$(TARGET_DIR)/usr/bin/telegraf $(TELEGRAF_VERSION)
 endef
-TELEGRAF_POST_INSTALL_TARGET_HOOKS += TELEGRAF_GA_VERSION_GUARD
+# NOT registered (BOSv1.5.2-rc2 bake 2026-10-21, ga-ops run 39617791567): the guard
+# greps the binary for the ldflags text from Go build info, and our build does
+# not record it (-trimpath/-buildvcs=false build; 0 matches on the rc1 binary
+# too), so it fails every real bake while saying nothing about the stamp. The
+# stamp is proven on the device (`telegraf version`); the guard is rebuilt to
+# exec the target binary under qemu in the Odoo #1219 follow-up.
+# TELEGRAF_POST_INSTALL_TARGET_HOOKS += TELEGRAF_GA_VERSION_GUARD
 
 ################################################################################
 
