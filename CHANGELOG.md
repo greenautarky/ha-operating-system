@@ -14,7 +14,7 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## BOSv1.5.2-rc2 (marker)
 
-rc1 + RAM-only journal with bounded persist-on-failure dump (#860), reproducible trixie build container (#862), HW-09 Zigbee UART (#864), boot-settle wait for TEL-10/NET-03 (#865), telegraf version stamp (#866), frontend UI fixes (bundle pin TBD). Built in full mode.
+rc1 + RAM-only journal with bounded persist-on-failure dump (#860), reproducible trixie build container (#862), HW-09 Zigbee UART (#864), boot-settle wait for TEL-10/NET-03 (#865), telegraf version stamp (#866), frontend bundle 1.23.7 + ga-heating 0.13.7 — Services rebuild and "Urlaub as a plan" (bundle #55, heating #66; review follow-ups in Odoo #1316). Built in full mode.
 
 ## Unreleased (BOSv1.5.2): HW-09 checks the Zigbee UART, not the LED MCU (Odoo #1134)
 
