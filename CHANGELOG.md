@@ -25,9 +25,9 @@ rc1 + RAM-only journal with bounded persist-on-failure dump (#860), reproducible
 - **Gate:** `tests/ga_tests/lib/boot_settle_selftest.sh` in lint CI (red on the old suites: 8 of 12 checks).
 ## Unreleased (BOSv1.5.2): telegraf reports its real version (Odoo #1219)
 
-- **telegraf is built with `-X .../internal.Version=$(TELEGRAF_VERSION)`.** Before: `telegraf --version` and anything matching by version (inventory, CVE) saw `unknown`. After: the binary carries the pinned version (1.38.0). The build fails if the built binary's stamp differs from the pin (`scripts/telegraf-version-guard.sh`, post-install hook), and build test TEL-VER-01 reads the same stamp from the target tree.
-- **Gate:** `tests/gates/telegraf_version/selftest.sh` in lint CI (fixtures: no ldflag, stale, "unknown", two stamps; a mutant `.mk` must be flagged). Red on the old `.mk`: 2 of 10.
-- **Not yet proven on a real binary:** the stamp is read from the Go build info of the baked binary; the first real proof is the BOSv1.5.2-rc2 bake (TEL-VER-01), and `telegraf --version` on a device after it.
+- **telegraf is built with `-X .../internal.Version=$(TELEGRAF_VERSION)`.** Before: `telegraf --version` and anything matching by version (inventory, CVE) saw `unknown`. After: the binary carries the pinned version (1.38.0) — **proven on devices:** K31 and K37 report `Telegraf 1.38.0` after the BOSv1.5.2-rc2 OTA (rc1 binary: `unknown`).
+- **The build-time guard was unhooked in rc2 (#869).** `scripts/telegraf-version-guard.sh` read the ldflags text from Go build info, which our `-trimpath` build does not record, so it failed every real bake (rc2 bake #1) without measuring the stamp. The ldflag stays; build test TEL-VER-01 is a reported SKIP with the reason. The guard is rebuilt to exec the target binary under qemu and compare `telegraf version` (Odoo #1219 follow-up).
+- **Gate:** `tests/gates/telegraf_version/selftest.sh` in lint CI still holds the ldflag stamp and the mutant check.
 
 ## Unreleased (BOSv1.5.2): RAM-only journal with a bounded failure trail (Odoo #1256, option C)
 
