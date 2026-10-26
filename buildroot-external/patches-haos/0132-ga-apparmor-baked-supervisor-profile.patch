@@ -1,0 +1,142 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] apparmor: load the baked, sha256-pinned Supervisor profile
+
+GA deltas for the Supervisor AppArmor profile (Odoo #1281, AA1 + AA2). The
+profile lives in the GA layer (buildroot-external/apparmor/hassio-supervisor)
+with its sha256 pinned in one place (hassio-supervisor.sha256);
+post-build.d/89-apparmor-profile.sh installs it in the rootfs at
+/usr/share/ga-apparmor/hassio-supervisor after checking the pin.
+
+- create-data-partition.sh: the data partition pre-seed copies the pinned
+  profile (checked by verify-apparmor-profile.sh, a mismatch stops the build)
+  instead of downloading apparmor_<channel>.txt at build time; the GA layer
+  path comes in as the 6th argument;
+- hassio.mk: passes $(BR2_EXTERNAL_GA_HAOS_PATH) as that argument;
+- haos-apparmor: loads hassio-supervisor from the baked rootfs copy on every
+  boot, never downloads it; the data copy is replaced by the baked one when it
+  differs (with a warning); a missing or unloadable baked profile exits 1.
+  Other profiles in the data directory (add-ons) load as before.
+---
+  .../package/hassio/create-data-partition.sh        | 13 ++++--
+  buildroot-external/package/hassio/hassio.mk        |  2 +-
+  .../rootfs-overlay/usr/libexec/haos-apparmor       | 50 ++++++++++++++--------
+  3 files changed, 42 insertions(+), 23 deletions(-)
+
+diff --git a/buildroot-external/package/hassio/create-data-partition.sh b/buildroot-external/package/hassio/create-data-partition.sh
+index 48c7add47..8e76d9742 100755
+--- a/buildroot-external/package/hassio/create-data-partition.sh
++++ b/buildroot-external/package/hassio/create-data-partition.sh
+@@ -8,12 +8,16 @@ docker_version=$4
+ # GA: build size of data.ext4 (BR2_PACKAGE_HASSIO_DATA_IMAGE_SIZE); shrunk to
+ # its content below, so a large value costs nothing in the image
+ data_image_size=${5:-1280M}
++# GA: the GA layer (BR2_EXTERNAL_GA_HAOS_PATH). The Supervisor AppArmor profile
++# is GA's pinned copy from there, never a download: a build that cannot verify
++# it against the pin stops here.
++ga_layer=${6:?GA layer path missing (6th argument, BR2_EXTERNAL_GA_HAOS_PATH)}
++ga_apparmor_profile="${ga_layer}/apparmor/hassio-supervisor"
++"${ga_layer}/scripts/verify-apparmor-profile.sh" "${ga_apparmor_profile}"
+ 
+ data_img="${dst_dir}/data.ext4"
+ data_dir="${build_dir}/data"
+ 
+-APPARMOR_URL="https://version.home-assistant.io/apparmor_${channel}.txt"
+-
+ # Make image
+ rm -f "${data_img}"
+ truncate --size="${data_image_size}" "${data_img}"
+@@ -38,9 +42,10 @@ sudo bash -ex <<EOF
+ # Indicator for docker-prepare.service to use the containerd snapshotter
+ touch "${data_dir}/.docker-use-containerd-snapshotter"
+ 
+-# Setup AppArmor
++# Setup AppArmor (GA: the pinned profile, verified above; the same bytes as
++# the rootfs copy /usr/share/ga-apparmor/hassio-supervisor that haos-apparmor loads)
+ mkdir -p "${data_dir}/supervisor/apparmor"
+-curl -fsL -o "${data_dir}/supervisor/apparmor/hassio-supervisor" "${APPARMOR_URL}"
++install -m 0644 "${ga_apparmor_profile}" "${data_dir}/supervisor/apparmor/hassio-supervisor"
+ 
+ EOF
+ 
+diff --git a/buildroot-external/package/hassio/hassio.mk b/buildroot-external/package/hassio/hassio.mk
+index dea7a0730..929c1e9bf 100644
+--- a/buildroot-external/package/hassio/hassio.mk
++++ b/buildroot-external/package/hassio/hassio.mk
+@@ -172,7 +172,7 @@ endef
+ HASSIO_INSTALL_IMAGES = YES
+ 
+ define HASSIO_INSTALL_IMAGES_CMDS
+-	$(BR2_EXTERNAL_HAOS_PATH)/package/hassio/create-data-partition.sh "$(@D)" "$(BINARIES_DIR)" "$(HASSIO_VERSION_CHANNEL)" "$(DOCKER_ENGINE_VERSION)" "$(BR2_PACKAGE_HASSIO_DATA_IMAGE_SIZE)"
++	$(BR2_EXTERNAL_HAOS_PATH)/package/hassio/create-data-partition.sh "$(@D)" "$(BINARIES_DIR)" "$(HASSIO_VERSION_CHANNEL)" "$(DOCKER_ENGINE_VERSION)" "$(BR2_PACKAGE_HASSIO_DATA_IMAGE_SIZE)" "$(BR2_EXTERNAL_GA_HAOS_PATH)"
+ endef
+ 
+ $(eval $(generic-package))
+diff --git a/buildroot-external/rootfs-overlay/usr/libexec/haos-apparmor b/buildroot-external/rootfs-overlay/usr/libexec/haos-apparmor
+index dbe16a733..af6a60329 100755
+--- a/buildroot-external/rootfs-overlay/usr/libexec/haos-apparmor
++++ b/buildroot-external/rootfs-overlay/usr/libexec/haos-apparmor
+@@ -1,32 +1,46 @@
+ #!/bin/sh
+ set -e
+ 
+-APPARMOR_URL="https://version.home-assistant.io/apparmor.txt"
++# GA: the Supervisor profile is the copy baked into the read-only rootfs
++# (sha256-pinned at build time, post-build.d/89-apparmor-profile.sh). It is
++# loaded from there on every boot and nothing is downloaded. The copy under
++# PROFILES_DIR is kept equal to it, because the Supervisor reads and rewrites
++# that directory, but it is never the copy loaded for hassio-supervisor.
++BAKED_PROFILE="/usr/share/ga-apparmor/hassio-supervisor"
+ PROFILES_DIR="/mnt/data/supervisor/apparmor"
+ CACHE_DIR="${PROFILES_DIR}/cache"
+ 
+-# Check for the Supervisor profile itself: the directory might exist while
+-# the profile is missing, e.g. when a previous download attempt failed.
+-if [ ! -f "${PROFILES_DIR}/hassio-supervisor" ]; then
+-    echo "[INFO]: AppArmor profile missing, downloading..."
+-    mkdir -p "${PROFILES_DIR}"
+-    systemctl start network-online.target
+-    # Download to a temporary file and move into place only on success, so
+-    # a partial download never ends up at the final location. The dot file
+-    # is also ignored by the profile loading below.
+-    if ! curl -fSsL --retry 5 --retry-delay 10 --retry-all-errors --max-time 30 \
+-            -o "${PROFILES_DIR}/.hassio-supervisor.tmp" "${APPARMOR_URL}"; then
++if [ ! -f "${BAKED_PROFILE}" ]; then
++    echo "[ERROR]: Baked AppArmor profile ${BAKED_PROFILE} missing!"
++    exit 1
++fi
++mkdir -p "${PROFILES_DIR}" "${CACHE_DIR}"
++
++# Keep the data copy equal to the baked one. Copy to a dot file and move into
++# place, so a failed copy never leaves a partial profile (dot files are also
++# ignored by the loading below). Best effort: the copy loaded below is the
++# baked one, so a full or read-only data partition must not stop it.
++if ! cmp -s "${BAKED_PROFILE}" "${PROFILES_DIR}/hassio-supervisor"; then
++    if [ -f "${PROFILES_DIR}/hassio-supervisor" ]; then
++        echo "[WARNING]: ${PROFILES_DIR}/hassio-supervisor differs from the baked profile, replacing it"
++    fi
++    if ! { cp "${BAKED_PROFILE}" "${PROFILES_DIR}/.hassio-supervisor.tmp" \
++            && mv "${PROFILES_DIR}/.hassio-supervisor.tmp" "${PROFILES_DIR}/hassio-supervisor"; }; then
+         rm -f "${PROFILES_DIR}/.hassio-supervisor.tmp"
+-        echo "[ERROR]: Failed to download AppArmor profile!"
+-        exit 1
++        echo "[WARNING]: Can't update ${PROFILES_DIR}/hassio-supervisor, loading the baked profile anyway"
+     fi
+-    mv "${PROFILES_DIR}/.hassio-supervisor.tmp" "${PROFILES_DIR}/hassio-supervisor"
+ fi
+-mkdir -p "${CACHE_DIR}"
+ 
+-# Load exists profiles
++# Load the Supervisor profile from the baked copy. Without it the Supervisor
++# must not start (haos-supervisor.service Requires= this unit).
++if ! apparmor_parser -r -W -L "${CACHE_DIR}" "${BAKED_PROFILE}"; then
++    echo "[ERROR]: Can't load the Supervisor profile ${BAKED_PROFILE}"
++    exit 1
++fi
++
++# Load the other existing profiles (add-ons; written by the Supervisor)
+ for profile in "${PROFILES_DIR}"/*; do
+-    if [ ! -f "${profile}" ]; then
++    if [ ! -f "${profile}" ] || [ "${profile}" = "${PROFILES_DIR}/hassio-supervisor" ]; then
+         continue
+     fi
+ 

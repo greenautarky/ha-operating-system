@@ -12,6 +12,13 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (BOSv1.6.0): the Supervisor AppArmor profile is baked with a pinned sha256 and loaded from the image (Odoo #1281, AA1 + AA2)
+
+- **Both boards (iHost, DSGW-210):** the profile lives in the GA layer (`buildroot-external/apparmor/hassio-supervisor`, the bytes 1.6 builds pre-seeded until now) with its sha256 in one file (`hassio-supervisor.sha256`). `post-build.d/89-apparmor-profile.sh` installs it at `/usr/share/ga-apparmor/hassio-supervisor`; the data partition pre-seed copies it instead of downloading `apparmor_<channel>.txt` (patch 0132). One verifier (`scripts/verify-apparmor-profile.sh`) for all of them: a profile that differs from the pin stops the build.
+- **`haos-apparmor` loads the baked copy on every boot** and downloads nothing. Before: it loaded `/mnt/data/supervisor/apparmor/hassio-supervisor` and downloaded it when missing. After: a data copy that differs is replaced by the baked one (warning), a missing or unloadable baked profile exits 1, a data copy that cannot be written (full or read-only data partition) is a warning and does not stop the load, add-on profiles load as before. `haos-supervisor.service` keeps upstream's soft `Wants=`/`After=` on `haos-apparmor.service`: a profile that fails to load is a loud error in `haos-apparmor`, but does not stop the Supervisor (and with it every add-on). The build check AA-PIN-03 fails on any hard dependency (`Requires=`/`BindsTo=`/`Requisite=`/`PartOf=`).
+- Not changed: the Supervisor's own profile update before a Supervisor self-update (separate item, Supervisor stream); it no longer outlives a reboot.
+- Fixtures: `tests/gates/apparmor_pin/selftest.sh` (29 cases: must-fail one rule added / no profile / no or two or malformed pins, hook and pre-seed refuse; must-pass the pinned profile; AA-PIN-01..03 red/green; the pin in exactly one tracked file). Red without patch 0132: 10 of 29. `tests/ga_tests/apparmor_profile` AAP-01..13 (red on the upstream script: 9 of 13). Device checks SUP-15a/b (profile enforced, data copy = baked).
+
 ## Unreleased (BOSv1.6.0): ga_manager pin follows release/1.5 (0.254.0)
 
 - `addon-images.json`: ga_manager 0.253.0 → 0.254.0, the version BOSv1.5.2-rc3 pins (#879) and the vibe_addons store already serves. check-versions requires the bake pin and the store to agree.
