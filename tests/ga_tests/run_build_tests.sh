@@ -3732,11 +3732,19 @@ _jd_root="${TARGET}"
 # mask a missing file by silently testing the source instead.
 [[ -f "${_jd_root}/usr/libexec/ga-boot-check" ]] || _jd_root="${OVL}"
 if [[ -f "${_jd_root}/etc/systemd/journald.conf" ]]; then
-  [[ "$(grep -E '^[[:space:]]*Storage=' "${_jd_root}/etc/systemd/journald.conf" | tail -1 | tr -d '[:space:]')" == "Storage=volatile" ]] \
-    && _pass "JD-B01: journald.conf has the effective Storage=volatile" \
-    || _fail "JD-B01: journald.conf is not Storage=volatile (journald is the largest SD writer when persistent)"
-  grep -qE '^RuntimeMaxUse=[0-9]+M$' "${_jd_root}/etc/systemd/journald.conf" \
-    && _pass "JD-B02: journald.conf bounds the RAM journal (RuntimeMaxUse)" \
+  # Effective values: the main file AND every journald.conf.d drop-in, in journald's
+  # order (a drop-in overriding Storage= undid option C once; see the gate).
+  if [[ -n "${GA_SRC:-}" && -f "${GA_SRC}/scripts/lib/journald-effective.sh" ]]; then
+    . "${GA_SRC}/scripts/lib/journald-effective.sh"
+  else
+    jd_effective() { printf 'HELPER-MISSING'; }   # fail closed: JD-B01/02 go red
+  fi
+  if [[ "${_jd_root}" == "${OVL}" ]]; then _jd_roots=("${OVL}" "${GA_SRC}/buildroot-ihost/rootfs-overlay"); else _jd_roots=("${_jd_root}"); fi
+  [[ "$(jd_effective Storage "${_jd_roots[@]}" | tr 'A-Z' 'a-z')" == "volatile" ]] \
+    && _pass "JD-B01: journald's effective Storage= is volatile (main file + drop-ins)" \
+    || _fail "JD-B01: journald's effective Storage= is '$(jd_effective Storage "${_jd_roots[@]}")', not volatile (journald is the largest SD writer when persistent)"
+  [[ "$(jd_effective RuntimeMaxUse "${_jd_roots[@]}")" =~ ^[0-9]+M$ ]] \
+    && _pass "JD-B02: journald bounds the RAM journal (effective RuntimeMaxUse)" \
     || _fail "JD-B02: RuntimeMaxUse missing - the RAM journal is unbounded"
   if [[ -x "${_jd_root}/usr/libexec/ga-journal-dump" ]]; then
     _pass "JD-B03: ga-journal-dump present and executable"

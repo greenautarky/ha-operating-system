@@ -42,6 +42,10 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 HERE="$ROOT/tests/gates/journald_volatile"
 OVL="$ROOT/buildroot-external/rootfs-overlay"
+# Overlay order of the iHost image (ga_ihost_full_defconfig BR2_ROOTFS_OVERLAY):
+# the board overlay comes after the GA one, so its journald drop-ins win.
+IHOST_OVL="$ROOT/buildroot-ihost/rootfs-overlay"
+. "$ROOT/scripts/lib/journald-effective.sh" || { echo "ERROR (could not check): journald-effective.sh missing" >&2; exit 2; }
 die2() { echo "ERROR (could not check): $*" >&2; exit 2; }
 pass=0 fail=0
 ok()  { pass=$((pass + 1)); echo "  ok    $1"; }
@@ -61,16 +65,19 @@ size_mb() {
   esac
 }
 
-# check_tree <overlay-root> <fluent-conf>... -> one TAG per failed check
+# check_tree <overlay-root>[:<overlay-root>...] <fluent-conf>... -> one TAG per failed check
+# STORAGE/RUNTIMEMAX read the EFFECTIVE journald value over all roots (main file
+# + drop-ins in journald's order); the other checks read the first root.
 check_tree() {
-  local o="$1"; shift
+  local roots="$1"; shift
+  local o="${roots%%:*}"; local -a rl; IFS=: read -r -a rl <<<"$roots"
   local jc="$o/etc/systemd/journald.conf" sc="$o/usr/libexec/ga-journal-dump"
   local unit="$o/usr/lib/systemd/system/ga-journal-dump-shutdown.service"
   local st rm n max keep l_h l_r
 
-  st="$(grep -E '^[[:space:]]*Storage=' "$jc" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '[:space:]' | tr 'A-Z' 'a-z')"
+  st="$(jd_effective Storage "${rl[@]}" | tr 'A-Z' 'a-z')"
   [ "$st" = volatile ] || echo STORAGE
-  rm="$(grep -E '^[[:space:]]*RuntimeMaxUse=' "$jc" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '[:space:]')"
+  rm="$(jd_effective RuntimeMaxUse "${rl[@]}")"
   n="$(size_mb "$rm")"
   { [ -n "$n" ] && [ "$n" -le 128 ]; } || echo RUNTIMEMAX
 
@@ -127,7 +134,8 @@ mapfile -t fb < <(find "$ROOT"/buildroot-*/rootfs-overlay/etc/fluent-bit "$ROOT/
 fb+=("$W/fluent-bit-tier0.conf")
 nsys="$(cat "${fb[@]}" | grep -ciE '^[[:space:]]*Name[[:space:]]+systemd[[:space:]]*$')"
 [ "$nsys" -ge 3 ] || die2 "the live scan saw only $nsys systemd inputs - layout changed"
-live="$(check_tree "$OVL" "${fb[@]}" | tr '\n' ' ')"
+[ -d "$IHOST_OVL" ] || die2 "no iHost board overlay at $IHOST_OVL - layout changed"
+live="$(check_tree "$OVL:$IHOST_OVL" "${fb[@]}" | tr '\n' ' ')"
 if [ -z "$live" ]; then ok "live tree clean ($nsys systemd inputs scanned)"; else bad "live tree fails: $live"; fi
 
 # --- behaviour: the real script over a fake, oversized journal -------------

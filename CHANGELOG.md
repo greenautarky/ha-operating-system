@@ -16,6 +16,12 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 rc2 + the rooms rename fix (Odoo #1336): ga_manager 0.254.0 and greenautarky_site 2.12.4. Built in FULL mode.
 
+## Unreleased (BOSv1.5.2): the journal is RAM-only on the iHost as intended (Odoo #1256)
+
+- **The option C setting did not take effect on the iHost.** `journald.conf` set `Storage=volatile`, but the iHost drop-in `journald.conf.d/ihost.conf` is read after it and set `Storage=auto` (plus `SystemMaxUse=200M`); with `/var/log/journal` on the data partition that kept the journal persistent. The drop-in now sets compression and rate limits only; Storage and the size bounds live in `journald.conf` alone.
+- **The checks read the effective value now.** New `scripts/lib/journald-effective.sh` resolves a journald key the way journald does (main file, then `journald.conf.d/*.conf` from `usr/lib` and `etc` sorted by name, later overlay wins, last assignment wins). The gate `tests/gates/journald_volatile` (STORAGE, RUNTIMEMAX) and the build checks JD-B01/JD-B02 use it over the iHost overlays in defconfig order.
+- Fixture: must-fail `dropin-overrides-volatile` (a drop-in setting `Storage=auto` after a volatile main file). Red on the previous tree (live tree: STORAGE; JD-B01: effective `auto`), green now.
+
 ## Unreleased (BOSv1.5.2): a room renamed in Home Assistant is no longer duplicated by the next rooms-sync (Odoo #1336)
 
 - **Before:** ga_manager's rooms-sync route dropped the room `ref`/`kind` that device-api and the fleet-manager send, so every room was installed by name. After a resident renamed a room in Home Assistant, the next sync created a second area (`<id>_2`), moved the room's sensors into it and left the heating plan on the empty original — measured on a field device.
