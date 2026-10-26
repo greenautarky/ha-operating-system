@@ -3576,9 +3576,18 @@ else
 fi
 
 if [[ -f "$NB_REG_UNIT" ]]; then
-  grep -q '^ConditionPathExists=/usr/share/ga-netbird/setup-key' "$NB_REG_UNIT" \
-    && _pass "NB-REG-02: ga-netbird-register.service has ConditionPathExists guard (skips when no key baked)" \
-    || _fail "NB-REG-02: ga-netbird-register.service missing ConditionPathExists guard"
+  # The key may come from the boot partition (/mnt/boot/ga-netbird-setup-key)
+  # or the baked path, so no ConditionPathExists on either: a skipped unit is
+  # silent, and "no key" must be loud (the script exits 78 at err priority,
+  # RestartPreventExitStatus=78 keeps that from looping). Host test of the
+  # script itself: tests/ga_tests/netbird_reg/selftest.sh.
+  if ! grep -q '^ConditionPathExists=' "$NB_REG_UNIT" \
+     && grep -qx 'RequiresMountsFor=/mnt/boot' "$NB_REG_UNIT" \
+     && grep -qx 'RestartPreventExitStatus=78' "$NB_REG_UNIT"; then
+    _pass "NB-REG-02: ga-netbird-register.service runs without a key-path condition, after /mnt/boot, no restart on 78 (no key)"
+  else
+    _fail "NB-REG-02: ga-netbird-register.service needs: no ConditionPathExists, RequiresMountsFor=/mnt/boot, RestartPreventExitStatus=78"
+  fi
   grep -qE '^Restart=on-failure' "$NB_REG_UNIT" \
     && _pass "NB-REG-03: ga-netbird-register.service has Restart=on-failure (handles slow-network first boot)" \
     || _fail "NB-REG-03: ga-netbird-register.service missing Restart=on-failure"

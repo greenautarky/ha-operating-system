@@ -617,6 +617,18 @@ jobs:
       - name: haos-apparmor (profile presence + atomic download)
         run: sh tests/ga_tests/apparmor_profile/test.sh
 
+      - name: ga-netbird-register (boot-partition setup key, deleted only after a confirmed join)
+        # Drives the LIVE script with a stub netbird / curl / sleep. Key on the
+        # boot partition + confirmed join -> file deleted; `up` failing, `up`
+        # exiting 0 while the daemon stays in NeedsLogin or has no NetBird IP,
+        # or a daemon not answering -> file kept, exit 1, err line; no key at
+        # all -> err line + exit 78, which the unit does not restart; no boot
+        # key -> the baked key still works. Red-proven: the pre-change script
+        # fails 16 of 21; mutants (trust `up`'s exit code, delete before the
+        # confirmation, exit 1 on no key, IP not required, key in a log line)
+        # each go red on their cases.
+        run: sh tests/ga_tests/netbird_reg/selftest.sh
+
       - name: ga-publish-services (services address -> /share bridge)
         run: sh tests/ga_tests/publish_services/test.sh
 
