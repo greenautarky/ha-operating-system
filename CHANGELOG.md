@@ -14,7 +14,7 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## BOSv1.5.2-rc3 (marker)
 
-rc2 + the rooms rename fix (Odoo #1336): ga_manager 0.254.0 and greenautarky_site 2.12.4. Built in FULL mode.
+rc2 + the rooms rename fix (Odoo #1336): ga_manager 0.254.0 and greenautarky_site 2.12.4; journald RAM-only is now effective on the iHost (the board drop-in overrode Storage=volatile in rc2, #882). Built in FULL mode.
 
 ## Unreleased (BOSv1.5.2): the journal is RAM-only on the iHost as intended (Odoo #1256)
 
