@@ -90,7 +90,7 @@ try_bad() { # <script> <value, "-" = unset>
 for bad in $BAD_HASHES; do try_bad "$FAKEROOT" "$bad"; try_bad "$HOOK" "$bad"; done
 show_verdict "IHPW-06" "fail closed: post-fakeroot and the 80- hook both reject unset, empty, plaintext, \$1\$, truncated or over-long \$6\$ values, a colon, a second line and trailing space; shadow untouched" "$fc" "$(cat "$W/fc.why" 2>/dev/null)"
 
-# Must-pass: real-format hashes made here, at test time (a random password that
+# Must-pass cases: well-formed hashes generated here, at test time (a random password that
 # is never stored; openssl is the generator ADR-0039 D3 names), plus the
 # rounds= form. Both scripts must accept each and land it in root's field.
 # No generator = FAIL, not skip: without it this check would pass on nothing.
