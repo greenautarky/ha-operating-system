@@ -12,6 +12,16 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## BOSv1.5.2-rc3 (marker)
+
+rc2 + the rooms rename fix (Odoo #1336): ga_manager 0.254.0 and greenautarky_site 2.12.4. Built in FULL mode.
+
+## Unreleased (BOSv1.5.2): a room renamed in Home Assistant is no longer duplicated by the next rooms-sync (Odoo #1336)
+
+- **Before:** ga_manager's rooms-sync route dropped the room `ref`/`kind` that device-api and the fleet-manager send, so every room was installed by name. After a resident renamed a room in Home Assistant, the next sync created a second area (`<id>_2`), moved the room's sensors into it and left the heating plan on the empty original — measured on a field device.
+- **After:** ga_manager 0.254.0 keeps `ref`/`kind`/`kind_name` (and refuses unknown fields with a 422 instead of dropping them); greenautarky_site 2.12.4 adopts a renamed room through the names it installed, keeps the resident's name and records the ref as an alias. Proven end to end on the staging canary (2026-10-26): rename → sync → re-sync, no duplicate area; after a (simulated) factory reset the rooms come back under their refs with the installer's names.
+- **Not in this release:** repair of a flat that is already split (one area per name must be merged by hand first, runbook in Odoo #1336); the real tenant-wipe path aborts at its verify phase (Odoo #1341).
+
 ## BOSv1.5.2-rc2 (marker)
 
 rc1 + RAM-only journal with bounded persist-on-failure dump (#860), reproducible trixie build container (#862), HW-09 Zigbee UART (#864), boot-settle wait for TEL-10/NET-03 (#865), telegraf version stamp (#866), frontend bundle 1.23.7 + ga-heating 0.13.7 — Services rebuild and "Urlaub as a plan" (bundle #55, heating #66; review follow-ups in Odoo #1316). Built in full mode.
