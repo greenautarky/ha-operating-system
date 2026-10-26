@@ -14,21 +14,31 @@ run_test "CRASH-01b" "ga-boot-check service enabled" \
 run_test "CRASH-02" "Crash marker file exists (active boot)" \
   "test -f /mnt/data/.ga_unclean_shutdown"
 
-# `journalctl --list-boots` prints a HEADER row ("IDX BOOT ID …") — counting
-# lines makes a once-booted device look like two boots (K31 rc19, 2026-09-02).
-# Count boot rows: they start with an (optionally negative) index.
-_boot_rows() { journalctl --list-boots 2>/dev/null | grep -cE '^\s*-?[0-9]+ '; }
-if [ "$(_boot_rows)" -ge 2 ]; then
-  run_test "CRASH-06" "Previous boot logs accessible" \
-    "journalctl -b -1 2>/dev/null | head -1 | grep -q ."
-else
-  skip_test "CRASH-06" "Previous boot logs accessible (device has booted once since flash — no previous boot exists)"
-fi
+# The journal is RAM-only since BOSv1.5.2 / BOSv1.6.0 (Storage=volatile, Odoo #1256), so
+# `journalctl -b -1` no longer exists. The previous boot's evidence is the
+# bounded dump ga-journal-dump wrote (clean shutdown / rauc install / unclean
+# boot detected). CRASH-06 therefore needs a dump from an EARLIER boot.
+# Judged by what journald has OPEN, not by a config file: on HAOS 18.x the
+# value comes from a drop-in and a later-sorting board drop-in can set it
+# back, which a grep of one file cannot see.
+run_test "JD-01" "Journal is volatile (journald writes only under /run/log/journal)" \
+  "p=\$(pidof systemd-journald); [ -n \"\$p\" ] && ls -l /proc/\$p/fd 2>/dev/null | grep -q '/run/log/journal/.*\\.journal' && ! ls -l /proc/\$p/fd 2>/dev/null | grep -qE '(/var/log/journal|/mnt/data/logs)/.*\\.journal'"
 
-if [ "$(_boot_rows)" -ge 2 ]; then
-  run_test "CRASH-07" "Multiple boots in journal" "true"
+run_test "JD-02" "Journal dump unit enabled" \
+  "systemctl is-enabled ga-journal-dump-shutdown.service && systemctl is-active ga-journal-dump-shutdown.service"
+
+run_test "JD-03" "Manual dump is written, readable and under 2 MiB" \
+  "/usr/libexec/ga-journal-dump jd-test >/dev/null 2>&1; f=\$(ls -1 /mnt/data/journal-dump/dump-*-jd-test.log.gz | tail -1); [ -n \"\$f\" ] && [ \$(zcat \"\$f\" | wc -c) -gt 0 ] && [ \$(zcat \"\$f\" | wc -c) -le 2097152 ]; rc=\$?; rm -f /mnt/data/journal-dump/dump-*-jd-test.log.gz; exit \$rc"
+
+run_test "JD-04" "At most 5 dumps kept" \
+  "[ \$(ls -1 /mnt/data/journal-dump/dump-*.log.gz 2>/dev/null | wc -l) -le 5 ]"
+
+_boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null | tr -d - | head -c 8)
+if ls /mnt/data/journal-dump/dump-*.log.gz 2>/dev/null | grep -qv -- "-${_boot_id}-"; then
+  run_test "CRASH-06" "Previous boot evidence readable (dump from an earlier boot)" \
+    "f=\$(ls -1 /mnt/data/journal-dump/dump-*.log.gz | grep -v -- '-${_boot_id}-' | tail -1); zcat \"\$f\" | head -1 | grep -q ."
 else
-  skip_test "CRASH-07" "Multiple boots in journal (device has booted once since flash — the old line-count passed on the header row)"
+  skip_test "CRASH-06" "Previous boot evidence readable (no dump from an earlier boot yet: first boot after flash, or no clean shutdown since)"
 fi
 
 run_test "CRASH-08" "Crash log under 100KB limit" \

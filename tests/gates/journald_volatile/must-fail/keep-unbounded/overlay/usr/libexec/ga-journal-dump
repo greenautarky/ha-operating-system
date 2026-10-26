@@ -1,0 +1,4 @@
+MAX_BYTES=2097152
+KEEP=500
+head -c "$MAX_BYTES"
+[ "$n" -gt "$KEEP" ] && rm -f "$f"

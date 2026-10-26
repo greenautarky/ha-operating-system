@@ -1,0 +1,3 @@
+#!/bin/sh
+# /usr/libexec/ga-journal-dump rauc-install
+if ! rauc install "$B"; then exit 5; fi

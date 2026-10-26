@@ -213,6 +213,14 @@ if ! rauc info "$BUNDLE" >/dev/null 2>&1; then
     exit 4
 fi
 
+# The journal is RAM-only (Storage=volatile): persist a bounded failure trail
+# BEFORE the install, so a failed or rolled-back update leaves evidence on the
+# data partition. Never blocks or fails the install (the script exits 0).
+JOURNAL_DUMP_BIN="${GA_JOURNAL_DUMP_BIN:-/usr/libexec/ga-journal-dump}"
+if [ -x "$JOURNAL_DUMP_BIN" ]; then
+    "$JOURNAL_DUMP_BIN" rauc-install || true
+fi
+
 echo "[ga-rauc-install] installing $BUNDLE"
 if ! rauc install "$BUNDLE"; then
     echo "[ga-rauc-install] FATAL: rauc install failed" >&2

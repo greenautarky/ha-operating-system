@@ -1,0 +1,4 @@
+[Unit]
+After=local-fs.target mnt-data.mount systemd-journald.service
+[Service]
+ExecStart=/usr/libexec/ga-journal-dump shutdown

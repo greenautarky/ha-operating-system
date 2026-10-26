@@ -550,6 +550,19 @@ jobs:
       - name: Frequent timers capped at notice (journal volume)
         run: ./tests/gates/frequent_timer_loglevel/selftest.sh
 
+      # The journal is RAM-only (Odoo #1256, option C): the persistent journal
+      # was more than half of all SD writes. The failure trail that replaces
+      # `journalctl -b -1` must stay wired to its three triggers (clean
+      # shutdown, before rauc install, ga-boot-check) and bounded at 2 MiB.
+      # HAOS 18.x: the value is the EFFECTIVE one over upstream's journald.conf
+      # and every drop-in of the GA layer and the board tree, per board in
+      # GA_BOARDS (a board drop-in sorting after the GA one used to set
+      # Storage=auto back). Fixtures: one must-fail tree per check, must-pass
+      # trees, plus the live script run over an oversized fake journal and a
+      # mutant that must breach the bound. Needs the haos/ submodule (above).
+      - name: Journal is volatile; failure trail wired to 3 triggers and bounded
+        run: ./tests/gates/journald_volatile/selftest.sh
+
       # expected.env is the DECLARATION side of the os_integrity suite: the
       # release marker and the baked add-on pins the flashed device is held
       # against. It is generated repo-side and committed — and nothing checked
