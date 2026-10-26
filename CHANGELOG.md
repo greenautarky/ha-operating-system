@@ -12,6 +12,11 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (BOSv1.6.0): the start-password bake accepts only a complete SHA-512 crypt hash (ADR-0039 D2)
+
+- **Both boards (iHost, DSGW-210):** `post-build.d/80-root-password.sh` and `post-fakeroot.sh` check `ROOT_PW_HASH` against the same pattern `ga-root-shadow` uses at runtime (`$6$`, optional `rounds=`, 1-16 salt characters, 86 hash characters, one line). Anything else stops the build before `/etc/shadow` is written. Build-time only; an image built from a well-formed secret is unchanged.
+- Fixtures: `ihost_root_password` IHPW-06 (must-fail: empty, plaintext, `$1$`, truncated / over-long `$6$`, `:`, two lines, trailing space, for both scripts), IHPW-10 (must-pass: an `openssl passwd -6` hash generated at test time and the `rounds=` form), IHPW-09 (the bake pattern equals the runtime pattern, read from both scripts); `dsgw_console` DCON-06/10/11 the same for the DSGW board.
+
 ## Unreleased (BOSv1.5.2): HW-09 checks the Zigbee UART, not the LED MCU (Odoo #1134)
 
 - **HW-09 asserts `/dev/ttyS4`.** Before: the test checked `/dev/ttyS3`, which is the LED MCU, so it stayed green on a device whose Zigbee UART (`ttyS4`, the port z2m is configured on, PROV-02) was missing. After: `[ -c /dev/ttyS4 ]`; `test_spec.md` updated. Test-only; no image content changes.
