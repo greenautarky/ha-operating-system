@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (BOSv1.6.0): ga_manager pin follows release/1.5 (0.254.0)
+
+- `addon-images.json`: ga_manager 0.253.0 → 0.254.0, the version BOSv1.5.2-rc3 pins (#879) and the vibe_addons store already serves. check-versions requires the bake pin and the store to agree.
+
 ## Unreleased (BOSv1.6.0): the device reads the NetBird setup key from the boot partition and deletes it after a confirmed join (Odoo #1280, step 1)
 
 - **Both boards (iHost, DSGW-210):** `ga-netbird-register` takes the setup key from `/mnt/boot/ga-netbird-setup-key` (written by the flasher; contract in `docs/NETBIRD-SETUP-KEY.md`) and falls back to the baked `/usr/share/ga-netbird/setup-key`. Before: only the baked key was read. The image still bakes the key; that stops in a later step, after the flasher writes the file.
