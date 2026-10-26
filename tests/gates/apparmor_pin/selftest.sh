@@ -34,14 +34,13 @@ PROFILE="$ROOT/buildroot-external/apparmor/hassio-supervisor"
 PIN="$ROOT/buildroot-external/apparmor/hassio-supervisor.sha256"
 RUNNER="$ROOT/tests/ga_tests/run_build_tests.sh"
 PATCHES="$ROOT/scripts/apply-haos-patches.sh"
-DROPIN="$ROOT/buildroot-external/rootfs-overlay/usr/lib/systemd/system/haos-supervisor.service.d/ga-apparmor.conf"
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; NC=$'\033[0m'
 [[ -t 1 ]] || { RED=''; GRN=''; NC=''; }
 fails=0; ran=0
 bad() { printf '  %sFAIL%s  %s\n' "$RED" "$NC" "$*"; fails=$((fails + 1)); }
 ok()  { printf '  %sok%s    %s\n' "$GRN" "$NC" "$*"; }
-for f in "$VERIFY" "$HOOK" "$PROFILE" "$PIN" "$RUNNER" "$PATCHES" "$DROPIN"; do
+for f in "$VERIFY" "$HOOK" "$PROFILE" "$PIN" "$RUNNER" "$PATCHES"; do
   [[ -r "$f" ]] || { echo "FATAL: $f missing"; exit 1; }
 done
 [[ -x "$HOOK" ]] || { echo "FATAL: $HOOK is not executable (post-build.sh refuses it)"; exit 1; }
@@ -95,13 +94,15 @@ fi
 
 # --- the image gate, AA-PIN-01..03 --------------------------------------------
 # Image tree = hook output + haos-apparmor as the build sees it + the drop-in.
-"$PATCHES" --export "$W/haos" buildroot-external/rootfs-overlay/usr/libexec/haos-apparmor >/dev/null 2>&1 \
+"$PATCHES" --export "$W/haos" buildroot-external/rootfs-overlay/usr/libexec/haos-apparmor buildroot-external/rootfs-overlay/usr/lib/systemd/system/haos-supervisor.service >/dev/null 2>&1 \
   || { echo "FATAL: apply-haos-patches.sh --export failed (haos/ checked out?)"; exit 1; }
 LIVE_AA="$W/haos/buildroot-external/rootfs-overlay/usr/libexec/haos-apparmor"
+LIVE_SUP="$W/haos/buildroot-external/rootfs-overlay/usr/lib/systemd/system/haos-supervisor.service"
+[[ -s "$LIVE_SUP" ]] || { echo "FATAL: upstream haos-supervisor.service not exported"; exit 1; }
 mk_image() { # <name> -> OUT dir of a complete, good image tree
   local d="$W/gate-$1"; mkdir -p "$d/target/usr/libexec" "$d/target/usr/lib/systemd/system/haos-supervisor.service.d"
   cp -a "$T2/usr" "$d/target/" ; cp "$LIVE_AA" "$d/target/usr/libexec/haos-apparmor"
-  cp "$DROPIN" "$d/target/usr/lib/systemd/system/haos-supervisor.service.d/"; printf '%s' "$d"; }
+  cp "$LIVE_SUP" "$d/target/usr/lib/systemd/system/"; printf '%s' "$d"; }
 verdict() { # <OUT> <id>
   local line; line="$(GA_SRC_ROOT="$ROOT" bash "$RUNNER" "$1" 2>&1 | grep -E "  (PASS|FAIL|SKIP)  $2:" | head -1)"
   case "$line" in *"  PASS  "*) echo PASS ;; *"  FAIL  "*) echo FAIL ;; *"  SKIP  "*) echo SKIP ;; *) echo ABSENT ;; esac
@@ -121,8 +122,10 @@ expect_gate FAIL "$B3" AA-PIN-02 "haos-apparmor downloads a profile"
 B4="$(mk_image datacopy)"; sed -i 's|-L "${CACHE_DIR}" "${BAKED_PROFILE}"; then|-L "${CACHE_DIR}" "${PROFILES_DIR}/hassio-supervisor"; then|' "$B4/target/usr/libexec/haos-apparmor"
 cmp -s "$LIVE_AA" "$B4/target/usr/libexec/haos-apparmor" && { echo "FATAL: data-copy mutant did not apply"; exit 1; }
 expect_gate FAIL "$B4" AA-PIN-02 "haos-apparmor loads the data copy instead of the baked one"
-B5="$(mk_image nodropin)"; rm -f "$B5/target/usr/lib/systemd/system/haos-supervisor.service.d/ga-apparmor.conf"
-expect_gate FAIL "$B5" AA-PIN-03 "no Requires= drop-in for haos-supervisor.service"
+B5="$(mk_image harddep)"; printf '[Unit]\nRequires=haos-apparmor.service\n' > "$B5/target/usr/lib/systemd/system/haos-supervisor.service.d/x.conf"
+expect_gate FAIL "$B5" AA-PIN-03 "a drop-in binds the Supervisor hard to haos-apparmor"
+B6="$(mk_image nowants)"; sed -i 's/ haos-apparmor\.service//' "$B6/target/usr/lib/systemd/system/haos-supervisor.service"
+expect_gate FAIL "$B6" AA-PIN-03 "the Supervisor unit no longer wants/orders after haos-apparmor"
 
 echo "── static: the data partition pre-seed and the one pin ──"
 CDP="$("$PATCHES" --cat buildroot-external/package/hassio/create-data-partition.sh 2>/dev/null)"

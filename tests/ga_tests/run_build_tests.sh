@@ -3646,12 +3646,17 @@ else
   _fail "AA-PIN-02: haos-apparmor does not load /usr/share/ga-apparmor/hassio-supervisor, or still downloads (patch 0132 missing?)"
 fi
 
-AA_DROPIN="${TARGET}/usr/lib/systemd/system/haos-supervisor.service.d/ga-apparmor.conf"
-if [[ -f "$AA_DROPIN" ]] && grep -qx 'Requires=haos-apparmor.service' "$AA_DROPIN" \
-   && grep -qx 'After=haos-apparmor.service' "$AA_DROPIN"; then
-  _pass "AA-PIN-03: haos-supervisor.service Requires= + After= haos-apparmor.service"
+# AA-PIN-03: a profile that fails to load must not take the Supervisor (and with
+# it every add-on, incl. the fleet agent) down: keep upstream's soft ordering.
+# Owner decision 2026-10-26: Wants= + a loud haos-apparmor error, no Requires=.
+AA_UNIT="${TARGET}/usr/lib/systemd/system/haos-supervisor.service"
+AA_HARD="$(cat "$AA_UNIT" "${TARGET}"/usr/lib/systemd/system/haos-supervisor.service.d/*.conf 2>/dev/null \
+  | grep -E '^(Requires|BindsTo|Requisite|PartOf)=.*haos-apparmor\.service' || true)"
+if [[ -f "$AA_UNIT" ]] && grep -qE '^Wants=.*haos-apparmor\.service' "$AA_UNIT" \
+   && grep -qE '^After=.*haos-apparmor\.service' "$AA_UNIT" && [[ -z "$AA_HARD" ]]; then
+  _pass "AA-PIN-03: haos-supervisor.service wants + orders after haos-apparmor.service, no hard dependency"
 else
-  _fail "AA-PIN-03: haos-supervisor.service does not require haos-apparmor.service (drop-in ga-apparmor.conf missing)"
+  _fail "AA-PIN-03: haos-supervisor.service must Wants=/After= haos-apparmor.service and must not Requires=/BindsTo= it (${AA_HARD:-Wants/After missing})"
 fi
 
 # =========================================================================
