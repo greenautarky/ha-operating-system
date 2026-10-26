@@ -1,0 +1,12 @@
+# The ONE pin of the Supervisor AppArmor profile baked into the image
+# (buildroot-external/apparmor/hassio-supervisor). sha256sum format.
+#
+# Read by buildroot-external/scripts/verify-apparmor-profile.sh, which every
+# consumer calls: post-build.d/89-apparmor-profile.sh (rootfs copy), the data
+# partition pre-seed (create-data-partition.sh, patch 0132) and the build test
+# AA-PIN-01. A profile that does not match fails the build.
+#
+# Source: https://version.home-assistant.io/apparmor_stable.txt, 1504 bytes,
+# fetched 2026-10-26 (= the copy 1.6 builds pre-seeded until then).
+# Re-pin = a reviewed PR that changes the profile AND this line together.
+3bc606f9ac727270534e6d270bfb107e89fe15a9b0e2c8a6517c54b8d395174d  hassio-supervisor

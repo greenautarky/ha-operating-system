@@ -1,30 +1,29 @@
 #!/bin/sh
-# hassos-apparmor regression suite.
+# haos-apparmor regression suite.
 #
-# Guards two failures the pre-2026-08-26 version had, both SILENT:
+# Since Odoo #1281 (AA1 + AA2, patch 0132) the Supervisor profile is the copy
+# baked into the read-only rootfs (/usr/share/ga-apparmor/hassio-supervisor,
+# sha256-pinned at build time) and haos-apparmor loads THAT file on every boot.
+# Nothing is downloaded. The copy in the data directory is kept equal to the
+# baked one, but it is never the copy loaded for hassio-supervisor.
 #
-#  1. It gated the download on the DIRECTORY existing, not on the profile file.
-#     A download that failed once left the directory behind, so every later boot
-#     skipped the download entirely and the Supervisor ran unconfined forever.
-#  2. curl ran without -f, so an HTTP error body (a 404 page) was written
-#     straight to the final profile path and the script exited 0. apparmor_parser
-#     then failed to load it, printed one line, and the script continued.
-#
-# Both are "a fallback must be loud" failures: the system kept running with no
-# AppArmor confinement and nothing went red. Ported from upstream HAOS
-# (hassos-* -> haos-* rename not followed; see KB #222).
+# Still guarded from the pre-2026-08-26 failures ("a fallback must be loud"):
+# a missing or unloadable Supervisor profile exits non-zero instead of letting
+# the Supervisor start unconfined, and a failed copy never leaves a partial
+# profile at the final path.
 #
 # Pure host-side. curl / systemctl / apparmor_parser are the ENVIRONMENT and are
-# stubbed; the subject under test — the script's decision logic and what lands
-# on disk — is never stubbed.
+# stubbed (curl only to prove it is never called); the subject under test — the
+# script's decision logic, what it loads and what lands on disk — is never
+# stubbed.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
 
-suite_start "haos-apparmor (profile presence + atomic download)"
+suite_start "haos-apparmor (loads the baked, pinned Supervisor profile)"
 
-# HAOS 18.x: haos-apparmor, upstream's (GA's earlier edit is upstream since 17.x).
+# HAOS 18.x: haos-apparmor with GA patch 0132.
 # In the repo: exported from haos/ as the build sees it (scripts/apply-haos-patches.sh).
-AA="/usr/libexec/haos-apparmor"
+AA="${GA_HAOS_APPARMOR_BIN:-/usr/libexec/haos-apparmor}"
 if [ ! -x "$AA" ]; then
   _AA_EXP="$(mktemp -d 2>/dev/null || echo /tmp/aap_exp_$$)"
   "$SCRIPT_DIR/../../../scripts/apply-haos-patches.sh" --export "$_AA_EXP" \
@@ -38,66 +37,90 @@ WORK="$(mktemp -d 2>/dev/null || echo /tmp/aap_$$)"
 BIN="$WORK/bin"; mkdir -p "$BIN"
 
 printf '#!/bin/sh\nexit 0\n' > "$BIN/systemctl"
-printf '#!/bin/sh\nexit 0\n' > "$BIN/apparmor_parser"
-# Mirrors real curl: without -f it writes the error body and still exits 0;
-# with -f it deletes the partial output and exits 22.
-cat > "$BIN/curl" <<'STUB'
+# apparmor_parser: records the profile file it was asked to load (last arg);
+# fails for a file whose first line is PARSE-ERROR.
+cat > "$BIN/apparmor_parser" <<STUB
 #!/bin/sh
-out=""; fflag=0
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -o) out="$2"; shift 2 ;;
-    -f*|--fail*) fflag=1; shift ;;
-    *) shift ;;
-  esac
-done
-if [ "${CURL_MODE}" = "ok" ]; then printf 'profile hassio-supervisor {}\n' > "$out"; exit 0; fi
-printf '<html>404 Not Found</html>\n' > "$out"
-[ "$fflag" = "1" ] && { rm -f "$out"; exit 22; }
+for a in "\$@"; do f="\$a"; done
+echo "\$f" >> "$WORK/parser.log"
+[ "\$(head -n1 "\$f" 2>/dev/null)" = PARSE-ERROR ] && exit 1
+exit 0
+STUB
+# curl: must never run. Records the call and "downloads" a different profile.
+cat > "$BIN/curl" <<STUB
+#!/bin/sh
+echo "curl \$*" >> "$WORK/curl.log"
+out=""; while [ \$# -gt 0 ]; do [ "\$1" = -o ] && out="\$2"; shift; done
+[ -n "\$out" ] && printf 'DOWNLOADED\n' > "\$out"
 exit 0
 STUB
 chmod +x "$BIN"/systemctl "$BIN"/apparmor_parser "$BIN"/curl
 
-# Run the real script against a sandboxed PROFILES_DIR.
-# $1 = state (missing|dir-only|present), $2 = curl mode. Echoes "<rc>|<first line>".
+# Run the real script against a sandboxed baked profile + PROFILES_DIR.
+# $1 = data copy state (missing|dir-only|same|differs), $2 = baked (ok|missing|bad)
+# Sets RC, GOT (first line of the data copy or ABSENT), LOADED (parser args,
+# one per line), CURLS (number of curl calls), OUT.
 aa_run() {
-  _d="$WORK/run$$_$(od -An -N2 -tu2 /dev/urandom 2>/dev/null | tr -d ' ' || echo $$)"
-  mkdir -p "$_d"; _prof="$_d/profiles"
+  _d="$WORK/run_$(od -An -N2 -tu2 /dev/urandom 2>/dev/null | tr -d ' ' || echo $$)"
+  rm -rf "$_d"; mkdir -p "$_d/rootfs"; _prof="$_d/profiles"; _baked="$_d/rootfs/hassio-supervisor"
+  case "$2" in
+    ok)  printf 'BAKED\nprofile hassio-supervisor {}\n' > "$_baked" ;;
+    bad) printf 'PARSE-ERROR\n' > "$_baked" ;;
+  esac
   case "$1" in
     dir-only) mkdir -p "$_prof" ;;
-    present)  mkdir -p "$_prof"; printf 'ORIGINAL\n' > "$_prof/hassio-supervisor" ;;
+    same)     mkdir -p "$_prof"; cp "$_baked" "$_prof/hassio-supervisor" ;;
+    differs)  mkdir -p "$_prof"; printf 'DOWNLOADED\nprofile hassio-supervisor {}\n' > "$_prof/hassio-supervisor" ;;
   esac
+  if [ -n "${3:-}" ]; then mkdir -p "$_prof"; printf 'profile addon_x {}\n' > "$_prof/addon_x"; printf 'tmp\n' > "$_prof/.hassio-supervisor.tmp"; fi
   _s="$_d/script"; cp "$AA" "$_s"
-  sed -i "s|^PROFILES_DIR=.*|PROFILES_DIR=\"$_prof\"|" "$_s"; chmod +x "$_s"
-  CURL_MODE="$2" PATH="$BIN:$PATH" "$_s" >/dev/null 2>&1; _rc=$?
-  _got="ABSENT"; [ -f "$_prof/hassio-supervisor" ] && _got=$(head -n1 "$_prof/hassio-supervisor")
-  echo "${_rc}|${_got}"
-  AA_LAST_DIR="$_prof"
+  sed -i -e "s|^PROFILES_DIR=.*|PROFILES_DIR=\"$_prof\"|" -e "s|^BAKED_PROFILE=.*|BAKED_PROFILE=\"$_baked\"|" "$_s"; chmod +x "$_s"
+  rm -f "$WORK/parser.log" "$WORK/curl.log"
+  OUT="$(PATH="$BIN:$PATH" "$_s" 2>&1)"; RC=$?
+  GOT="ABSENT"; [ -f "$_prof/hassio-supervisor" ] && GOT=$(head -n1 "$_prof/hassio-supervisor")
+  LOADED="$(cat "$WORK/parser.log" 2>/dev/null)"
+  CURLS=0; [ -f "$WORK/curl.log" ] && CURLS=$(wc -l < "$WORK/curl.log" | tr -d ' ')
+  AA_BAKED="$_baked"; AA_PROF="$_prof"
 }
 
-# --- the bug: directory present, profile missing -----------------------------
-R=$(aa_run dir-only ok)
-run_test "AAP-02" "re-downloads when the directory exists but the profile does not" \
-  "[ \"\${R#*|}\" = 'profile hassio-supervisor {}' ]"
+# --- the load path reads the baked copy --------------------------------------
+aa_run differs ok
+run_test "AAP-02" "a data copy that differs is NOT loaded; the baked copy is" \
+  "printf '%s\n' '$LOADED' | grep -qxF '$AA_BAKED' && ! printf '%s\n' '$LOADED' | grep -qxF '$AA_PROF/hassio-supervisor'"
+run_test "AAP-03" "a data copy that differs is replaced by the baked one (with a warning)" \
+  "[ '$GOT' = BAKED ] && printf '%s' '$OUT' | grep -q WARNING"
+run_test "AAP-04" "exits 0 when the baked profile loads" "[ '$RC' = 0 ]"
 
-# --- green proof: an existing profile is left alone --------------------------
-R=$(aa_run present ok)
-run_test "AAP-03" "existing profile is not re-downloaded or overwritten" \
-  "[ \"\${R#*|}\" = ORIGINAL ]"
-run_test "AAP-04" "exits 0 when the profile is already in place" \
-  "[ \"\${R%%|*}\" = 0 ]"
+aa_run missing ok
+run_test "AAP-05" "fresh device (no data copy): nothing downloaded, data copy = baked, baked loaded" \
+  "[ '$CURLS' = 0 ] && [ '$GOT' = BAKED ] && [ '$RC' = 0 ] && printf '%s\n' '$LOADED' | grep -qxF '$AA_BAKED'"
 
-# --- atomic download: a failed fetch must not install an error page ----------
-R=$(aa_run missing fail)
-run_test "AAP-05" "a failed download installs NOTHING at the profile path" \
-  "[ \"\${R#*|}\" = ABSENT ]"
-run_test "AAP-06" "a failed download exits NON-ZERO (loud, not silent)" \
-  "[ \"\${R%%|*}\" != 0 ]"
+aa_run dir-only ok
+run_test "AAP-06" "directory without profile: nothing downloaded, data copy = baked" \
+  "[ '$CURLS' = 0 ] && [ '$GOT' = BAKED ]"
 
-# --- happy path still works --------------------------------------------------
-R=$(aa_run missing ok)
-run_test "AAP-07" "fresh device downloads the profile and exits 0" \
-  "[ \"\${R#*|}\" = 'profile hassio-supervisor {}' ] && [ \"\${R%%|*}\" = 0 ]"
+aa_run same ok
+run_test "AAP-07" "an equal data copy is left alone (no warning), baked copy loaded" \
+  "[ '$RC' = 0 ] && ! printf '%s' '$OUT' | grep -q WARNING && printf '%s\n' '$LOADED' | grep -qxF '$AA_BAKED'"
+
+# --- loud failures -----------------------------------------------------------
+aa_run differs missing
+run_test "AAP-08" "baked profile missing: exits NON-ZERO, loads nothing, downloads nothing" \
+  "[ '$RC' != 0 ] && [ -z '$LOADED' ] && [ '$CURLS' = 0 ]"
+
+aa_run missing bad
+run_test "AAP-09" "baked profile does not load: exits NON-ZERO" "[ '$RC' != 0 ]"
+
+# --- add-on profiles keep loading --------------------------------------------
+aa_run same ok addons
+run_test "AAP-10" "other profiles in the data directory still load; dot files do not" \
+  "printf '%s\n' '$LOADED' | grep -qxF '$AA_PROF/addon_x' && ! printf '%s\n' '$LOADED' | grep -qF '.hassio-supervisor.tmp'"
+run_test "AAP-11" "the Supervisor profile is loaded exactly once (from the baked copy)" \
+  "[ \"\$(printf '%s\n' '$LOADED' | grep -c 'hassio-supervisor\$')\" = 1 ]"
+
+# --- static: the script as the build ships it --------------------------------
+run_test "AAP-12" "the shipped script names /usr/share/ga-apparmor/hassio-supervisor and has no URL" \
+  "grep -qx 'BAKED_PROFILE=\"/usr/share/ga-apparmor/hassio-supervisor\"' '$AA' && ! grep -qE 'curl|https?://' '$AA'"
 
 rm -rf "$WORK" 2>/dev/null
 

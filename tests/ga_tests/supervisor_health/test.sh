@@ -208,4 +208,14 @@ else
   skip_test "SUP-12..13" "Supervisor config visibility + resolution agreement" "hassio_supervisor not running"
 fi
 
+# SUP-15: the Supervisor AppArmor profile is the baked, pinned copy and is
+# enforced (Odoo #1281, AA1 + AA2). haos-apparmor loads
+# /usr/share/ga-apparmor/hassio-supervisor and keeps the data copy equal to it.
+# SUP-15b goes red when a Supervisor self-update wrote another profile there
+# since boot (the Supervisor-side fetch is a separate item, AA3).
+run_test "SUP-15a" "hassio-supervisor AppArmor profile loaded in enforce mode" \
+  "grep -qx 'hassio-supervisor (enforce)' /sys/kernel/security/apparmor/profiles"
+run_test "SUP-15b" "the Supervisor's data copy of the profile equals the baked one" \
+  "cmp -s /usr/share/ga-apparmor/hassio-supervisor /mnt/data/supervisor/apparmor/hassio-supervisor"
+
 suite_end

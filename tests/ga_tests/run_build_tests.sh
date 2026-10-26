@@ -3619,6 +3619,42 @@ else
 fi
 
 # =========================================================================
+# AA-PIN-01..03: the Supervisor AppArmor profile is baked, pinned, and loaded
+# from the baked copy (Odoo #1281, AA1 + AA2)
+# =========================================================================
+# The pin is buildroot-external/apparmor/hassio-supervisor.sha256 in the SOURCE
+# tree, never derived from the image. verify-apparmor-profile.sh is the one
+# rule (also used by hook 89 and the data partition pre-seed).
+# Self-test: tests/gates/apparmor_pin/selftest.sh
+AA_BAKED="${TARGET}/usr/share/ga-apparmor/hassio-supervisor"
+AA_VERIFY="${SRC:+$SRC/buildroot-external/scripts/verify-apparmor-profile.sh}"
+if [[ -z "$AA_VERIFY" || ! -x "$AA_VERIFY" ]]; then
+  _fail "AA-PIN-01: verify-apparmor-profile.sh not found in the source tree (SRC='${SRC}') — the pin cannot be checked"
+elif _aa_out="$("$AA_VERIFY" "$AA_BAKED" 2>&1)"; then
+  _pass "AA-PIN-01: baked Supervisor AppArmor profile matches the pinned sha256"
+else
+  _fail "AA-PIN-01: ${_aa_out}"
+fi
+
+AA_SCRIPT="${TARGET}/usr/libexec/haos-apparmor"
+if [[ -f "$AA_SCRIPT" ]] \
+   && grep -qx 'BAKED_PROFILE="/usr/share/ga-apparmor/hassio-supervisor"' "$AA_SCRIPT" \
+   && grep -qE '^if ! apparmor_parser -r -W -L "\$\{CACHE_DIR\}" "\$\{BAKED_PROFILE\}"' "$AA_SCRIPT" \
+   && ! grep -qE 'curl|https?://' "$AA_SCRIPT"; then
+  _pass "AA-PIN-02: haos-apparmor loads the Supervisor profile from the baked copy, downloads nothing"
+else
+  _fail "AA-PIN-02: haos-apparmor does not load /usr/share/ga-apparmor/hassio-supervisor, or still downloads (patch 0132 missing?)"
+fi
+
+AA_DROPIN="${TARGET}/usr/lib/systemd/system/haos-supervisor.service.d/ga-apparmor.conf"
+if [[ -f "$AA_DROPIN" ]] && grep -qx 'Requires=haos-apparmor.service' "$AA_DROPIN" \
+   && grep -qx 'After=haos-apparmor.service' "$AA_DROPIN"; then
+  _pass "AA-PIN-03: haos-supervisor.service Requires= + After= haos-apparmor.service"
+else
+  _fail "AA-PIN-03: haos-supervisor.service does not require haos-apparmor.service (drop-in ga-apparmor.conf missing)"
+fi
+
+# =========================================================================
 # HA-INIT-01..06: ga-ha-init first-boot HA configuration
 # =========================================================================
 # DNS off / watchdog on / weather Met.no Berlin / timezone Europe/Berlin /
