@@ -616,9 +616,9 @@ jobs:
 
       - name: haos-apparmor (loads the baked, pinned Supervisor profile; downloads nothing)
         # Drives haos-apparmor as the build ships it (patch 0132) with stub
-        # apparmor_parser / curl. Red-proven: the upstream script fails 8 of 12;
+        # apparmor_parser / curl. Red-proven: the upstream script fails 9 of 13;
         # mutants (load the data copy, ignore a failed load, keep a differing
-        # data copy, load the Supervisor profile twice) each go red.
+        # data copy, load the Supervisor profile twice, a failed data-copy update stops the load) each go red.
         run: sh tests/ga_tests/apparmor_profile/test.sh
 
       - name: ga-netbird-register (boot-partition setup key, deleted only after a confirmed join)

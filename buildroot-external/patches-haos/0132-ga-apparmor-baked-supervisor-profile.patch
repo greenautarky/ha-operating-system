@@ -19,8 +19,8 @@ post-build.d/89-apparmor-profile.sh installs it in the rootfs at
 ---
   .../package/hassio/create-data-partition.sh        | 13 ++++--
   buildroot-external/package/hassio/hassio.mk        |  2 +-
-  .../rootfs-overlay/usr/libexec/haos-apparmor       | 46 +++++++++++++---------
-  3 files changed, 38 insertions(+), 23 deletions(-)
+  .../rootfs-overlay/usr/libexec/haos-apparmor       | 50 ++++++++++++++--------
+  3 files changed, 42 insertions(+), 23 deletions(-)
 
 diff --git a/buildroot-external/package/hassio/create-data-partition.sh b/buildroot-external/package/hassio/create-data-partition.sh
 index 48c7add47..8e76d9742 100755
@@ -72,10 +72,10 @@ index dea7a0730..929c1e9bf 100644
  
  $(eval $(generic-package))
 diff --git a/buildroot-external/rootfs-overlay/usr/libexec/haos-apparmor b/buildroot-external/rootfs-overlay/usr/libexec/haos-apparmor
-index dbe16a733..3d0fafa9c 100755
+index dbe16a733..af6a60329 100755
 --- a/buildroot-external/rootfs-overlay/usr/libexec/haos-apparmor
 +++ b/buildroot-external/rootfs-overlay/usr/libexec/haos-apparmor
-@@ -1,32 +1,42 @@
+@@ -1,32 +1,46 @@
  #!/bin/sh
  set -e
  
@@ -100,9 +100,6 @@ index dbe16a733..3d0fafa9c 100755
 -    # is also ignored by the profile loading below.
 -    if ! curl -fSsL --retry 5 --retry-delay 10 --retry-all-errors --max-time 30 \
 -            -o "${PROFILES_DIR}/.hassio-supervisor.tmp" "${APPARMOR_URL}"; then
--        rm -f "${PROFILES_DIR}/.hassio-supervisor.tmp"
--        echo "[ERROR]: Failed to download AppArmor profile!"
--        exit 1
 +if [ ! -f "${BAKED_PROFILE}" ]; then
 +    echo "[ERROR]: Baked AppArmor profile ${BAKED_PROFILE} missing!"
 +    exit 1
@@ -111,13 +108,20 @@ index dbe16a733..3d0fafa9c 100755
 +
 +# Keep the data copy equal to the baked one. Copy to a dot file and move into
 +# place, so a failed copy never leaves a partial profile (dot files are also
-+# ignored by the loading below).
++# ignored by the loading below). Best effort: the copy loaded below is the
++# baked one, so a full or read-only data partition must not stop it.
 +if ! cmp -s "${BAKED_PROFILE}" "${PROFILES_DIR}/hassio-supervisor"; then
 +    if [ -f "${PROFILES_DIR}/hassio-supervisor" ]; then
 +        echo "[WARNING]: ${PROFILES_DIR}/hassio-supervisor differs from the baked profile, replacing it"
++    fi
++    if ! { cp "${BAKED_PROFILE}" "${PROFILES_DIR}/.hassio-supervisor.tmp" \
++            && mv "${PROFILES_DIR}/.hassio-supervisor.tmp" "${PROFILES_DIR}/hassio-supervisor"; }; then
+         rm -f "${PROFILES_DIR}/.hassio-supervisor.tmp"
+-        echo "[ERROR]: Failed to download AppArmor profile!"
+-        exit 1
++        echo "[WARNING]: Can't update ${PROFILES_DIR}/hassio-supervisor, loading the baked profile anyway"
      fi
-+    cp "${BAKED_PROFILE}" "${PROFILES_DIR}/.hassio-supervisor.tmp"
-     mv "${PROFILES_DIR}/.hassio-supervisor.tmp" "${PROFILES_DIR}/hassio-supervisor"
+-    mv "${PROFILES_DIR}/.hassio-supervisor.tmp" "${PROFILES_DIR}/hassio-supervisor"
  fi
 -mkdir -p "${CACHE_DIR}"
  

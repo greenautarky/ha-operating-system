@@ -118,6 +118,22 @@ run_test "AAP-10" "other profiles in the data directory still load; dot files do
 run_test "AAP-11" "the Supervisor profile is loaded exactly once (from the baked copy)" \
   "[ \"\$(printf '%s\n' '$LOADED' | grep -c 'hassio-supervisor\$')\" = 1 ]"
 
+# --- a data copy that cannot be updated does not stop the load ---------------
+if [ "$(id -u)" != 0 ]; then
+  aa_run differs ok
+  # same sandbox, a differing data copy again, directory read-only, run again
+  printf 'DOWNLOADED\nprofile hassio-supervisor {}\n' > "$AA_PROF/hassio-supervisor"; chmod 555 "$AA_PROF"
+  rm -f "$WORK/parser.log"
+  OUT="$(PATH="$BIN:$PATH" "$(dirname "$AA_PROF")/script" 2>&1)"; RC=$?
+  chmod 755 "$AA_PROF"
+  W13=""; printf '%s\n' "$OUT" | grep -q "Can't update" && W13=y
+  L13=""; grep -qxF "$AA_BAKED" "$WORK/parser.log" 2>/dev/null && L13=y
+  run_test "AAP-13" "read-only data directory: warning, baked profile still loaded, exit 0" \
+    "[ '$RC' = 0 ] && [ '$W13' = y ] && [ '$L13' = y ]"
+else
+  skip_test "AAP-13" "read-only data directory" "root ignores directory permissions"
+fi
+
 # --- static: the script as the build ships it --------------------------------
 run_test "AAP-12" "the shipped script names /usr/share/ga-apparmor/hassio-supervisor and has no URL" \
   "grep -qx 'BAKED_PROFILE=\"/usr/share/ga-apparmor/hassio-supervisor\"' '$AA' && ! grep -qE 'curl|https?://' '$AA'"
