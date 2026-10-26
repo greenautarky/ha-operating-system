@@ -4004,6 +4004,50 @@ PKG_TG="${GA_SRC:+${GA_SRC}/buildroot-external/package/telegraf}"
 RAUC_INSTALL="${TARGET}/usr/sbin/ga-rauc-install"
 [[ -f "$RAUC_INSTALL" ]] || RAUC_INSTALL="${OVL}/usr/sbin/ga-rauc-install"
 
+# --- Volatile journal + bounded failure trail (Odoo #1256, option C) ---
+# Source-level counterpart of tests/gates/journald_volatile/selftest.sh (which
+# runs over fixtures and the live script); this block checks the BUILT tree.
+# HAOS 18.x: upstream owns etc/systemd/journald.conf (Storage=auto); the GA
+# value comes from a journald.conf.d drop-in and a board drop-in sorts after
+# it, so the values are the EFFECTIVE ones over main file + all drop-ins
+# (scripts/lib/journald-effective.sh), never one file's.
+# shellcheck source=../../scripts/lib/journald-effective.sh
+. "${_RBT_ROOT}/scripts/lib/journald-effective.sh"
+_jd_roots=("${TARGET}")
+# A populated build has ga-boot-check; a bare/partial target dir must not
+# mask a missing file by silently testing the source instead. The source view
+# is this board's overlays in its defconfig order.
+if [[ ! -f "${TARGET}/usr/libexec/ga-boot-check" ]]; then
+  mapfile -t _jd_roots < <(GA_REPO_ROOT="${_RBT_ROOT}" ga_overlay_roots "$_RBT_BOARD")
+fi
+_jd_f() { ov_file "$1" "${_jd_roots[@]}" 2>/dev/null || echo "/nonexistent/$1"; }
+if [[ "${#_jd_roots[@]}" -gt 0 ]] && jd_files "${_jd_roots[@]}" >/dev/null 2>&1; then
+  _jd_st="$(jd_effective Storage "${_jd_roots[@]}")"
+  [[ "$_jd_st" == "volatile" ]] \
+    && _pass "JD-B01: journald's effective Storage= is volatile ($(jd_files "${_jd_roots[@]}" | wc -l) files)" \
+    || _fail "JD-B01: journald's effective Storage= is '${_jd_st}', not volatile (journald is the largest SD writer when persistent)"
+  [[ "$(jd_effective RuntimeMaxUse "${_jd_roots[@]}")" =~ ^[0-9]+M$ ]] \
+    && _pass "JD-B02: the RAM journal is bounded (effective RuntimeMaxUse)" \
+    || _fail "JD-B02: effective RuntimeMaxUse missing - the RAM journal is unbounded"
+  if [[ -x "$(_jd_f usr/libexec/ga-journal-dump)" ]]; then
+    _pass "JD-B03: ga-journal-dump present and executable"
+    grep -qE '^MAX_BYTES=2097152$' "$(_jd_f usr/libexec/ga-journal-dump)" \
+      && _pass "JD-B04: dump bound is 2 MiB" || _fail "JD-B04: MAX_BYTES is not 2097152"
+  else
+    _fail "JD-B03: ga-journal-dump missing or not executable"
+  fi
+  { grep -q 'ExecStop=/usr/libexec/ga-journal-dump' "$(_jd_f usr/lib/systemd/system/ga-journal-dump-shutdown.service)" 2>/dev/null \
+    && [[ -L "$(_jd_f etc/systemd/system/sysinit.target.wants/ga-journal-dump-shutdown.service)" ]]; } \
+    && _pass "JD-B05: shutdown dump unit runs the script on stop and is enabled" \
+    || _fail "JD-B05: shutdown dump unit missing, without ExecStop, or not enabled"
+  grep -q 'ga-journal-dump' "$(_jd_f usr/sbin/ga-rauc-install)" 2>/dev/null \
+    && _pass "JD-B06: ga-rauc-install dumps before the install" || _fail "JD-B06: ga-rauc-install does not call ga-journal-dump"
+  grep -q 'ga-journal-dump' "$(_jd_f usr/libexec/ga-boot-check)" 2>/dev/null \
+    && _pass "JD-B07: ga-boot-check dumps on an unclean previous boot" || _fail "JD-B07: ga-boot-check does not call ga-journal-dump"
+else
+  _fail "JD-B01..07: no journald.conf in ${TARGET} or the ${_RBT_BOARD} overlays (${_jd_roots[*]:-none resolved})"
+fi
+
 if [[ -f "$RAUC_INSTALL" ]]; then
   _pass "RAUC-01: ga-rauc-install helper present"
 

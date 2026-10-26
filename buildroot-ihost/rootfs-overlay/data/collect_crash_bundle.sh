@@ -180,6 +180,11 @@ if have journalctl; then
 
   run_sh "26_journal_crash_markers_prev1" \
     "journalctl -b -1 --no-pager -o short-precise 2>/dev/null | grep -i -E 'panic|oops|BUG:|watchdog|hung task|soft lockup|hard lockup|Out of memory|OOM|killed process|segfault|I/O error|mmc|ext4 error|btrfs error|reset|thermal|overheat' || true"
+
+  # The journal is RAM-only (Storage=volatile): the previous boot's evidence is
+  # the bounded dumps ga-journal-dump keeps on the data partition.
+  run_sh "27_journal_dumps" \
+    "for f in /mnt/data/journal-dump/dump-*.log.gz; do [ -f \"\$f\" ] || continue; echo \"=== \$f\"; zcat \"\$f\"; done"
 else
   log "[SKIP] journalctl not found; skipping journal collection."
 fi
