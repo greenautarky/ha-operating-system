@@ -3,7 +3,8 @@
 # Verifies the OS-baked `ga-netbird-register` service brought the
 # NetBird daemon out of `NeedsLogin` and into a real tunnel.
 #
-# Counterpart build tests: NB-REG-01..05 in run_build_tests.sh.
+# Counterpart build tests: NB-REG-01..05 in run_build_tests.sh; host test of
+# the script: selftest.sh (CI lint.yml host-suites).
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
 suite_start "NetBird auto-registration"
@@ -37,5 +38,11 @@ run_test "NB-REG-D-06" "netbird daemon has a NetBird IP" \
 # NB-REG-D-07: tunnel actually established (Management connected).
 run_test "NB-REG-D-07" "Management plane connected" \
   "/usr/bin/netbird --daemon-addr unix:///var/run/netbird.sock status 2>&1 | grep -qE 'Management:[[:space:]]+Connected'"
+
+# NB-REG-D-08: a joined device carries no setup key on its boot partition —
+# ga-netbird-register deletes /mnt/boot/ga-netbird-setup-key after a confirmed
+# join (Odoo #1280 step 1).
+run_test "NB-REG-D-08" "no setup key file left on the boot partition" \
+  "test ! -e /mnt/boot/ga-netbird-setup-key"
 
 suite_end
