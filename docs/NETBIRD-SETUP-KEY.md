@@ -23,7 +23,8 @@ update never carries the file forward.
 
 1. `netbird status` shows a confirmed join (Management connected and a NetBird
    IP): nothing to register; a leftover key file is deleted. Exit 0.
-2. Daemon in `NeedsLogin`: use the boot-partition key; without a usable one,
+2. Daemon needs a login (`NeedsLogin`, `LoginFailed` — e.g. after a rejected
+   key — or `SessionExpired`): use the boot-partition key; without a usable one,
    the key baked into the image at `/usr/share/ga-netbird/setup-key` (kept as a
    fallback until the image stops baking it, a later step).
 3. `netbird up --setup-key …`, then poll `netbird status` for up to 120 s. Only

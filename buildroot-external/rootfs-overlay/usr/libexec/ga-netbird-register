@@ -130,18 +130,21 @@ if is_joined "$status_out"; then
     exit 0
 fi
 case "$status_out" in
-    *NeedsLogin*)
-        log "daemon in NeedsLogin — attempting registration"
+    *NeedsLogin*|*LoginFailed*|*SessionExpired*)
+        # The three states the CLI reports as "Daemon status: <state>" with
+        # "Run UP command to log in". LoginFailed is what a rejected key leaves
+        # behind, so the retry must try `up` again rather than give up.
+        log "daemon needs a login ($(printf '%s\n' "$status_out" | sed -n 's/^Daemon status: //p' | head -1)) — attempting registration"
         ;;
     *)
-        # Not NeedsLogin, not confirmed either (daemon not answering yet,
+        # No login needed, not confirmed either (daemon not answering yet,
         # management still connecting). Without a waiting boot-partition key
         # this is the old "nothing to do"; with one, try again later so the
         # key is removed as soon as the join is confirmed.
         if [ -e "$BOOT_KEY_FILE" ]; then
             die "daemon neither needs a login nor shows a confirmed join yet; the setup key file $BOOT_KEY_FILE stays until it does — retrying"
         fi
-        log "daemon not in NeedsLogin — nothing to do"
+        log "daemon needs no login — nothing to do"
         exit 0
         ;;
 esac

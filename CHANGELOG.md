@@ -17,7 +17,7 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 - **Both boards (iHost, DSGW-210):** `ga-netbird-register` takes the setup key from `/mnt/boot/ga-netbird-setup-key` (written by the flasher; contract in `docs/NETBIRD-SETUP-KEY.md`) and falls back to the baked `/usr/share/ga-netbird/setup-key`. Before: only the baked key was read. The image still bakes the key; that stops in a later step, after the flasher writes the file.
 - **The key file is deleted only after a confirmed join** — `netbird status` shows Management connected and a NetBird IP — never on `netbird up`'s exit code alone. A failed or unconfirmed join keeps the file and retries (exit 1, every 60 s).
 - **No key is loud:** before, the unit was skipped (`ConditionPathExists`) and the script exited 0 with a warning. After: err-priority journal lines and exit 78; `RestartPreventExitStatus=78` keeps the unit failed instead of restarting it every minute. NB-REG-02 checks the new unit shape.
-- Fixtures: `tests/ga_tests/netbird_reg/selftest.sh` NBR-00..19 drives the live script with a stub `netbird` (CI host-suites). Red on the pre-change script and unit: 15 of 20. Device test NB-REG-D-08: no key file left on a joined device.
+- Fixtures: `tests/ga_tests/netbird_reg/selftest.sh` NBR-00..20 drives the live script with a stub `netbird` (CI host-suites). Red on the pre-change script and unit: 16 of 21. Device test NB-REG-D-08: no key file left on a joined device.
 
 ## Unreleased (BOSv1.6.0): the start-password bake accepts only a complete SHA-512 crypt hash (ADR-0039 D2)
 

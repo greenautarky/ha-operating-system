@@ -624,7 +624,7 @@ jobs:
         # or a daemon not answering -> file kept, exit 1, err line; no key at
         # all -> err line + exit 78, which the unit does not restart; no boot
         # key -> the baked key still works. Red-proven: the pre-change script
-        # fails 15 of 20; mutants (trust `up`'s exit code, delete before the
+        # fails 16 of 21; mutants (trust `up`'s exit code, delete before the
         # confirmation, exit 1 on no key, IP not required, key in a log line)
         # each go red on their cases.
         run: sh tests/ga_tests/netbird_reg/selftest.sh

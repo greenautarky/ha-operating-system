@@ -40,7 +40,7 @@ mkdir -p "$W/bin"
 BOOT_FAKE="00000000-0000-4000-8000-0000000000b0"    # not a real key
 BAKED_FAKE="00000000-0000-4000-8000-0000000000ba"   # not a real key
 
-# netbird stub. $W/state: needslogin | joined | connecting | down
+# netbird stub. $W/state: needslogin | loginfailed | joined | connecting | down
 #   status -> output shaped like the real CLI for that state
 #   up     -> records which fake key it was given, exits $W/up_rc, and moves
 #             the state to $W/after_up (what the daemon really did)
@@ -51,6 +51,7 @@ case "\$cmd" in
   status)
     case "\$(cat "$W/state")" in
       needslogin) printf 'Daemon status: NeedsLogin\n\nRun UP command to log in with SSO\n' ;;
+      loginfailed) printf 'Daemon status: LoginFailed\n\nRun UP command to log in with SSO\n' ;;
       joined)     printf 'Management: Connected\nSignal: Connected\nNetBird IP: 198.51.100.7/24\nPeers count: 0/1 Connected\n' ;;
       connecting) printf 'Management: Connected\nSignal: Disconnected\nNetBird IP: N/A\n' ;;
       down)       echo 'Error: failed to connect to daemon error: context deadline exceeded' >&2; exit 1 ;;
@@ -126,6 +127,10 @@ run_test "NBR-08" "up exits 0 but no NetBird IP: exit 1, key KEPT" \
 nb down 0 joined key none
 run_test "NBR-09" "daemon not answering + boot key: exit 1 (retry), key KEPT, no up" \
   "[ '$RC' = 1 ] && [ '$BOOT_LEFT' = yes ] && [ -z '$UPS' ]"
+
+nb loginfailed 0 joined key none
+run_test "NBR-20" "daemon in LoginFailed (an earlier key was rejected) + boot key: up is tried again, joins, key deleted" \
+  "[ '$RC' = 0 ] && [ '$UPS' = boot ] && [ '$BOOT_LEFT' = no ]"
 
 if [ "$(id -u)" != 0 ]; then
   # Join confirmed, but the boot partition refuses the delete -> loud, exit 1.
