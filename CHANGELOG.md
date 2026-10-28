@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## BOSv1.5.2-rc4 (marker)
+
+The first BOSv1.5.2 final bake (2026-10-28) was refused by the CVE gate: CVE-2026-115557 (Python 3.14.8, published after the rc3 bake) in three unchanged add-on images. They are rebuilt with Python 3.14.10 and no code change: ga_manager 0.255.1 (from the 0.255.0 source), ga_default_addon 2.1.6, ga_hmvapp_addon 2.6.2. Independently scanned (trivy, armv7): the CVE is absent, 0 fixable CRITICAL.
+
 ## BOSv1.5.2 — final (prepared 2026-10-28)
 
 Maintenance release on top of BOSv1.5.1. It contains every section below up to the BOSv1.5.1 release heading.
