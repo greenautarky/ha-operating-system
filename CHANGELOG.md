@@ -12,6 +12,18 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## BOSv1.5.2 — final (prepared 2026-10-28)
+
+Maintenance release on top of BOSv1.5.1. It contains every section below up to the BOSv1.5.1 release heading.
+Identical in content to BOSv1.5.2-rc3: same pins, same expected.env apart from the release name; the haos-version
+channel is promoted label-only. Headline changes: the journal is RAM-only on the iHost with a bounded failure trail
+(#1256), a room renamed in Home Assistant is no longer duplicated (#1336), a tenant-wipe passes its verify phase
+(ga_manager 0.255.0, #1341), frontend bundle 1.23.7 + ga-heating 0.13.7, hmvapp 2.6.1, z2m 2.12.1-10.
+
+Upgrade path (N61): no one-way migration in this release — Supervisor (2025.11.5.9) and Core (2026.8.2.1) are
+unchanged from BOSv1.5.1. Not included, ships with BOSv1.5.3: ga-bootstrap 1.2.10 (first-boot store recovery,
+#1337) and ga_manager 0.256.0+.
+
 ## BOSv1.5.2-rc3 (marker)
 
 rc2 + the rooms rename fix (Odoo #1336): ga_manager 0.255.0 and greenautarky_site 2.12.4; journald RAM-only is now effective on the iHost (the board drop-in overrode Storage=volatile in rc2, #882); a factory reset (tenant-wipe) passes its verify phase again (ga_manager 0.255.0, Odoo #1341). Built in FULL mode.
