@@ -16,6 +16,18 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 The first BOSv1.5.2 final bake (2026-10-28) was refused by the CVE gate: CVE-2026-115557 (Python 3.14.8, published after the rc3 bake) in three unchanged add-on images. They are rebuilt with Python 3.14.10 and no code change: ga_manager 0.255.1 (from the 0.255.0 source), ga_default_addon 2.1.6, ga_hmvapp_addon 2.6.2. Independently scanned (trivy, armv7): the CVE is absent, 0 fixable CRITICAL.
 
+## BOSv1.5.3-rc1 (marker)
+
+First candidate of BOSv1.5.3 ("security + customers", cut 2026-10-28), on top of BOSv1.5.2:
+
+- ga_manager 0.264.0: its own watchdog is on and the sidebar entry is admin-only; a missing watchdog is reported to the fleet-manager; a Zigbee "Request superseded" is no longer counted as a refused command; health checks for the home location and the outdoor sensors; converge records the Zigbee firmware before/after (#1375). **Known:** the first reconcile after the update restarts Home Assistant Core once (recorder settings, Odoo #1371).
+- Frontend bundle 1.23.8: outdoor temperature/humidity on every room view (#1374); boost lasts 15 min; badge icons and maintenance view.
+- ga-heating 0.13.8.
+- greenautarky_site 2.12.6 (includes 2.12.5): the console Admin button always opens the admin session (logged); "log in as resident" only on staging canaries.
+- ga-bootstrap 1.2.10: first boot recovers when the add-on store clone was interrupted (#1337).
+
+Upgrade path (N61): the ga_manager jump 0.255 → 0.264 changes the recorder default (retention unlimited) and the job-model contract; Supervisor and Core are unchanged. Release set (N62): all image pins in this commit.
+
 ## BOSv1.5.2 — final (2026-10-28)
 
 Maintenance release on top of BOSv1.5.1. It contains every section below up to the BOSv1.5.1 release heading.
