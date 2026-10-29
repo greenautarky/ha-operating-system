@@ -194,6 +194,16 @@ run_cases() {  # <label> <PATH prefix>
   else
     FAIL "SW-09[$L] deauth leaves nothing but its status file in the shared dir" "$(ls -A "$SHARE" | tr '\n' ' ')"
   fi
+  # SW-14: a boot with NO deauth is the everyday case and was never tested.
+  # `grep -c` prints 0 AND exits 1, so a trailing `|| echo 0` emitted "0\n0"
+  # and the status file became invalid JSON (seen in the field 2026-10-29).
+  mkdir -p "$C/fakebin"; printf '#!/bin/sh\necho "wlan0: authenticated"\n' > "$C/fakebin/journalctl"; chmod +x "$C/fakebin/journalctl"
+  seed_out="$(PATH="$C/fakebin:$PATH" sh -c 'GA_DEAUTH_TEST=1 . "$0"; seed_from_journal' "$IHOST/usr/sbin/ga-wlan0-deauth" 2>&1)"
+  if [ "$seed_out" = "0" ]; then
+    PASS "SW-14[$L] deauth seed with no deauth in the journal is exactly 0"
+  else
+    FAIL "SW-14[$L] deauth seed with no deauth in the journal is exactly 0" "got: $(printf '%s' "$seed_out" | tr '\n' '|')"
+  fi
   # The marks read: the status path itself is a link to a file that happens to
   # contain the marks field. Nothing from that file may reach the output.
   fresh deauth-read
