@@ -131,7 +131,7 @@ publish_counter() {
 seed_from_journal() {
     if command -v journalctl >/dev/null 2>&1; then
         journalctl -k -b 0 --no-pager -o cat 2>/dev/null \
-          | grep -c "$IFACE: deauthenticated.*Reason: 3" 2>/dev/null || echo 0
+          | grep -c "$IFACE: deauthenticated.*Reason: 3" 2>/dev/null || true
     else
         echo 0
     fi

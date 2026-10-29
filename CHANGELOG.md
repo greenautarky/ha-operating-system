@@ -16,6 +16,17 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 The first BOSv1.5.2 final bake (2026-10-28) was refused by the CVE gate: CVE-2026-115557 (Python 3.14.8, published after the rc3 bake) in three unchanged add-on images. They are rebuilt with Python 3.14.10 and no code change: ga_manager 0.255.1 (from the 0.255.0 source), ga_default_addon 2.1.6, ga_hmvapp_addon 2.6.2. Independently scanned (trivy, armv7): the CVE is absent, 0 fixable CRITICAL.
 
+## BOSv1.5.3-rc2 (marker)
+
+BOSv1.5.3-rc1 + ga-heating 0.13.9:
+
+- In a room with two or more radiators, turning the dial on one of them now brings the others to the same setpoint (outside AI). Only the value is mirrored; the room's mode and manual clock stay as they are. Not mirrored during boost, absence or an open window, when the room is off, or to radiators that are off, unreachable or still settling (ga-heating#69).
+
+- The WiFi-hop flapping check (`lte.wifi_hop_flapping`) works again: on a boot with no deauthentication the counter file was written as invalid JSON (`grep -c … || echo 0` printed "0" twice), so the check stayed "unknown" on every dongle device. New test SW-14 covers the zero case.
+- NTP: the Home Assistant default servers (time1–4.google.com) stay first; `time.cloudflare.com` is added as the last fallback, shipped as an image drop-in (`/usr/lib/systemd/timesyncd.conf.d/`) so it reaches existing devices too.
+
+Upgrade path (N61): no persisted state or schema change; the NTP drop-in is image-owned, the overlay `/etc/systemd/timesyncd.conf` is untouched. Release set (N62): all other pins unchanged from rc1.
+
 ## BOSv1.5.3-rc1 (marker)
 
 First candidate of BOSv1.5.3 ("security + customers", cut 2026-10-28), on top of BOSv1.5.2:
