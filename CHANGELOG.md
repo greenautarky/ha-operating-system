@@ -16,6 +16,12 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 The first BOSv1.5.2 final bake (2026-10-28) was refused by the CVE gate: CVE-2026-115557 (Python 3.14.8, published after the rc3 bake) in three unchanged add-on images. They are rebuilt with Python 3.14.10 and no code change: ga_manager 0.255.1 (from the 0.255.0 source), ga_default_addon 2.1.6, ga_hmvapp_addon 2.6.2. Independently scanned (trivy, armv7): the CVE is absent, 0 fixable CRITICAL.
 
+## BOSv1.5.3 — final (prepared 2026-10-30)
+
+Identical in content to BOSv1.5.3-rc2: same pins, same expected.env apart from the release name. It contains every section below up to the BOSv1.5.2 final heading: ga_manager 0.264.0 (watchdog on, admin-only sidebar, outdoor sensors and location checks), frontend bundle 1.23.8, ga-heating 0.13.9 (dial mirrored across a room's radiators), greenautarky_site 2.12.6, ga-bootstrap 1.2.10 (first-boot store recovery), the WiFi-hop flapping check fixed (SW-14) and time.cloudflare.com as the last NTP fallback.
+
+Upgrade path (N61): no one-way migration — Supervisor and Core are unchanged from BOSv1.5.2; jump test from BOSv1.5.0-rc5 to BOSv1.5.3-rc2 passed on a canary. Not included, ships with BOSv1.6: ga_manager 0.265.0+ (status LED indicators and re-send, heating_plan override, fm tag grammar), greenautarky_site 2.12.7 (admin console login skips the wizard).
+
 ## BOSv1.5.3-rc2 (marker)
 
 BOSv1.5.3-rc1 + ga-heating 0.13.9:
