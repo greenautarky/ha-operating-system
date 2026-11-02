@@ -12,6 +12,17 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): add-on pins in lockstep with the store
+
+ga_manager 0.264.0, ga_default_addon 2.1.6, ga_hmvapp_addon 2.6.2 via `scripts/repin-addons.py` (check-versions was red on the branch: pins lagged the vibe_addons store).
+
+## Unreleased (BOSv1.6.0): the 1.6 line has its own channel path and a bakeable label (WP8)
+
+- **The image reads its Supervisor/Core/plugin set from `haos-version/main/line/1.6/`** (patch 0131 default `HASSIO_VERSION_URL`), not from `main/`. `main/` keeps serving every 1.5.x device; only a 1.6 image carries the new `/etc/ga-version-url`. The channel files and their lint live in haos-version (`line/1.6/`, `scripts/check_line_channel.py`).
+- **`scripts/check-version-url-scope.sh`** accepts the line path for BOSv1.6.N releases (finals included, the path is permanent) and refuses it for any other release, and refuses a BOSv1.6 release that carries `main/`. Fixtures: 7 new cases in `tests/gates/version_url_scope/`.
+- **Marker `BOSv1.6.0-dev1`** (version.yaml, expected.env regenerated) so the ga-ops bake of this branch passes its "merge first, then bake" label check; **DSGW-210 defconfig declares its channel** (`BR2_PACKAGE_HASSIO_CHANNEL_STABLE=y`, same value the Kconfig default gave) because the bake guard refuses an undeclared one.
+- Not an OTA or device release: the first CI bake of this branch, both boards, stays on the builder.
+
 ## Unreleased (BOSv1.6.0): RAM-only journal with a bounded failure trail, both boards (Odoo #1256, option C; forward-port of #860)
 
 - **journald is `Storage=volatile` (`RuntimeMaxUse=64M`) on the iHost and the DSGW-210.** On HAOS 18.x upstream owns `/etc/systemd/journald.conf` (`Storage=auto`, and it bind-mounts `/var/log/journal` onto the data partition, so `auto` means persistent). The GA value sits in the drop-in `journald.conf.d/00-ga.conf`. Before: the board drop-ins `ihost.conf` / `dsgw210.conf` sort after it and set `Storage=auto`, so the effective journal was persistent on both boards, whatever the GA drop-in said. After: the board drop-ins set only compression and rate limits; the effective value is volatile on both boards.
