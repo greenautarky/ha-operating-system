@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): add-on pins in lockstep with the store
+
+ga_manager 0.264.0, ga_default_addon 2.1.6, ga_hmvapp_addon 2.6.2 via `scripts/repin-addons.py` (check-versions was red on the branch: pins lagged the vibe_addons store).
+
 ## Unreleased (BOSv1.6.0): the 1.6 line has its own channel path and a bakeable label (WP8)
 
 - **The image reads its Supervisor/Core/plugin set from `haos-version/main/line/1.6/`** (patch 0131 default `HASSIO_VERSION_URL`), not from `main/`. `main/` keeps serving every 1.5.x device; only a 1.6 image carries the new `/etc/ga-version-url`. The channel files and their lint live in haos-version (`line/1.6/`, `scripts/check_line_channel.py`).
