@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): hold ga_manager 0.264.0 for the BOSv1.6.0-dev1 bench bake
+
+The store lock-step gate wants the store's 0.264.0, the source-drift gate refuses a pin behind the published 0.268.0 unless declared. Declared hold until 2026-11-13: 0.265.0-0.268.0 enter the store with the BOSv1.6 store cut (the store is what field devices pull).
+
 ## Unreleased (feat/1.6-haos18): add-on pins in lockstep with the store
 
 ga_manager 0.264.0, ga_default_addon 2.1.6, ga_hmvapp_addon 2.6.2 via `scripts/repin-addons.py` (check-versions was red on the branch: pins lagged the vibe_addons store).
