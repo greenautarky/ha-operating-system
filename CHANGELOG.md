@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): the image CVE scan reads HAOS 18.x OCI archives
+
+HAOS 18.x bakes container images as OCI archives (`skopeo … oci-archive:`), 16.x as docker-archive, under the same file name. `scan-cves.sh` handed every tarball to trivy as docker-archive, so all 15 images of the first BOSv1.6.0-dev1 bake came back "unable to initialize archive image" and the gate (correctly) refused. The format is now read from the archive content; an OCI archive is extracted to a layout directory, scanned, removed. An unrecognised archive is counted unscannable, never guessed. Self-test `scan-cves-image-format-fixtures.sh` reads the live function.
+
 ## Unreleased (feat/1.6-haos18): hold ga_manager 0.264.0 for the BOSv1.6.0-dev1 bench bake
 
 The store lock-step gate wants the store's 0.264.0, the source-drift gate refuses a pin behind the published 0.268.0 unless declared. Declared hold until 2026-11-13: 0.265.0-0.268.0 enter the store with the BOSv1.6 store cut (the store is what field devices pull).
