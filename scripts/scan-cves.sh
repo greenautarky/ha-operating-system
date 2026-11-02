@@ -409,6 +409,25 @@ grype_policy() {
 }
 
 # scan_one_image <label> <syft-source> <trivy target args...>
+# image_tar_format <tar> -> "docker-archive" | "oci-layout" | "unknown"
+# HAOS 16.x writes the baked container images as docker-archive (manifest.json);
+# HAOS 18.x writes them with `skopeo copy … oci-archive:` (index.json + oci-layout).
+# The file NAME is the same in both, so the format is read from the content.
+# trivy cannot open an OCI archive TAR as --input ("unable to initialize archive
+# image"), but it reads the extracted OCI layout DIRECTORY. "unknown" is never
+# guessed into a format: the caller counts it as unscannable.
+image_tar_format() {
+  local list
+  list="$(tar -tf "$1" 2>/dev/null)" || { echo unknown; return 0; }
+  if grep -qxE '(\./)?index\.json' <<<"$list" && grep -qxE '(\./)?oci-layout' <<<"$list"; then
+    echo oci-layout
+  elif grep -qxE '(\./)?manifest\.json' <<<"$list"; then
+    echo docker-archive
+  else
+    echo unknown
+  fi
+}
+
 scan_one_image() {
   local label="$1" syft_src="$2"; shift 2
   local report pkgs n s b state base
@@ -577,7 +596,27 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
       SCAN_BROKEN=true
     fi
     for _t in ${_tars[@]+"${_tars[@]}"}; do
-      scan_one_image "$(basename "$_t" .tar)" "docker-archive:${_t}" --input "$_t"
+      _lbl="$(basename "$_t" .tar)"
+      case "$(image_tar_format "$_t")" in
+        docker-archive)
+          scan_one_image "$_lbl" "docker-archive:${_t}" --input "$_t" ;;
+        oci-layout)
+          # One image extracted at a time, removed right after: 15 images never
+          # sit unpacked side by side.
+          _oci="$(mktemp -d "${OUTPUT_DIR}/oci-layout.XXXXXX")"
+          if tar -xf "$_t" -C "$_oci"; then
+            scan_one_image "$_lbl" "oci-dir:${_oci}" --input "$_oci"
+          else
+            echo "  ERROR: could not extract OCI archive ${_lbl} — NOT scanned, not clean"
+            img_unscannable=$((img_unscannable + 1)); UNSCANNABLE_NAMES+=("$_lbl")
+            jq -cn --arg i "$_lbl" '{image:$i, state:"unscannable"}' >> "$IMG_LIST_FILE"
+          fi
+          rm -rf "$_oci" ;;
+        *)
+          echo "  ERROR: ${_lbl} is neither a docker-archive nor an OCI layout — NOT scanned, not clean"
+          img_unscannable=$((img_unscannable + 1)); UNSCANNABLE_NAMES+=("$_lbl")
+          jq -cn --arg i "$_lbl" '{image:$i, state:"unscannable"}' >> "$IMG_LIST_FILE" ;;
+      esac
     done
   else
     echo "=== Scanning Container Images ==="
