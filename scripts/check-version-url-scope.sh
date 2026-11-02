@@ -19,12 +19,19 @@
 # install recipe (scripts/probe-ga-version-url.sh) and judges the file the image
 # would carry, not only the make variable.
 #
+# The BOSv1.6 line is the exception to "a final carries main": it has a PERMANENT
+# path of its own, main/line/1.6/, so that 1.5.x devices (which poll main) never
+# read a 1.6 channel. A 1.6 release (BOSv1.6.N[-rcN|-devN]) must carry exactly
+# that path, and no other release may carry it.
+#
 # Rules (fail closed — anything unreadable is a failure, never a pass):
 #   * the URL is greenautarky/haos-version on raw.githubusercontent.com, ending in /
 #   * the image carries /etc/ga-version-url, exactly one line
 #   * a FINAL release (gaos_release without -rc<N>): /etc/ga-version-url is main
 #   * /etc/ga-version-url equals HASSIO_VERSION_URL (one source, not two)
-#   * branch `main`               -> any release
+#   * branch `main`               -> any release except a 1.6 one
+#   * branch `main/line/1.6`      -> only a BOSv1.6.N[-rcN|-devN] release, any of them
+#                                    (finals included: the line path is permanent)
 #   * branch `candidate/<name>`   -> only a gaos_release ending in -rc<N>
 #   * any other branch            -> refused (a stale WIP pointer outlived a
 #                                    release once: release/v1.2-rebuild)
@@ -67,13 +74,22 @@ GVU="$PROBE/etc/ga-version-url"
 [ -f "$GVU" ] || fail "the image would carry no /etc/ga-version-url (hassio.mk HASSIO_INSTALL_TARGET_CMDS does not write it) — the Supervisor would poll main whatever this image was baked from"
 [ "$(wc -l < "$GVU")" = 1 ] || fail "/etc/ga-version-url is not exactly one line"
 FILE_URL="$(cat "$GVU")"
-if [[ ! "$REL" =~ -rc[0-9]+$ ]] && [ "$FILE_URL" != "${PREFIX}main/" ]; then
+LINE16_RE='^BOSv1\.6\.[0-9]+(-(rc|dev)[0-9]+)?$'
+if [[ ! "$REL" =~ -rc[0-9]+$ ]] && [ "$FILE_URL" != "${PREFIX}main/" ] \
+   && ! { [[ "$REL" =~ $LINE16_RE ]] && [ "$FILE_URL" = "${PREFIX}main/line/1.6/" ]; }; then
   fail "$REL is a final release but its /etc/ga-version-url is '$FILE_URL'. A final release must carry ${PREFIX}main/ — devices poll this file at runtime."
 fi
 [ "$FILE_URL" = "$URL" ] || fail "/etc/ga-version-url '$FILE_URL' differs from HASSIO_VERSION_URL '$URL' — the image would poll another branch than it was baked from"
 
 case "$BRANCH" in
+  main/line/1.6)
+    [[ "$REL" =~ $LINE16_RE ]] \
+      || fail "$REL is not a BOSv1.6 release but bakes from the 1.6 line path $BRANCH — a 1.5.x image on it would poll the 1.6 channel"
+    echo "version-url-scope: OK: $REL bakes from $BRANCH (the 1.6 line's own path; 1.5.x devices poll main)"
+    ;;
   main)
+    [[ ! "$REL" =~ $LINE16_RE ]] \
+      || fail "$REL is a BOSv1.6 release but bakes from main — a 1.6 image must carry ${PREFIX}main/line/1.6/, main serves the 1.5.x fleet"
     echo "version-url-scope: OK: $REL bakes from main (what the fleet polls)"
     ;;
   candidate/?*)

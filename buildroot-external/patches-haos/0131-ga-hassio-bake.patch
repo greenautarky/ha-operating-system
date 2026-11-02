@@ -258,9 +258,9 @@ index 4f73167e0..4c9b6043f 100644
 +# compiled into it, haos-version/main/{channel}.json. The channel itself stays
 +# in updater.json (seeded by dind-import-containers.sh).
 +#
-+# 1.6 (HAOS 18.x): this still carries the BOSv1.5 fleet value. A 1.6 image
-+# must not poll the 1.5 fleet's channel once 1.6 ships; the own 1.6 channel
-+# path is WP8 of the 1.6 plan, and patch 0130 reads the same file.
++# 1.6 (HAOS 18.x): the 1.6 line has its own channel path, main/line/1.6/
++# (haos-version scripts/check_line_channel.py); a 1.5.x device keeps polling
++# main/ and never sees it. Patch 0130 reads the same file.
 +#
 +# The exception (ADR-0037, decided 2026-10-06, "variant A"): the stable-channel
 +# dress rehearsal BOSv1.4.0-rc5 bakes the CANDIDATE stable.json from the
@@ -282,7 +282,7 @@ index 4f73167e0..4c9b6043f 100644
 +# the baked file — do not use one for an image that ships.
 +# 2026-10-12, BOSv1.5.0 (final): back at main/. haos-version #25 promoted main
 +# stable/beta/dev identical to candidate/stable-1.5 (merged before this bake).
-+HASSIO_VERSION_URL ?= "https://raw.githubusercontent.com/greenautarky/haos-version/main/"
++HASSIO_VERSION_URL ?= "https://raw.githubusercontent.com/greenautarky/haos-version/main/line/1.6/"
  ifeq ($(BR2_PACKAGE_HASSIO_CHANNEL_STABLE),y)
  HASSIO_VERSION_CHANNEL = "stable"
  else ifeq ($(BR2_PACKAGE_HASSIO_CHANNEL_BETA),y)
