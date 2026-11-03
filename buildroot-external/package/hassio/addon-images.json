@@ -10,7 +10,11 @@
     },
     "ga_influxdbv1": {
       "image": "ghcr.io/greenautarky/ga_influxdbv1-{arch}",
-      "version": "0.0.21"
+      "version": "0.0.21",
+      "hold": {
+        "reason": "0.0.22 is the Odoo #1431 libbrotli rebuild (influxDBv1 #37, published 2026-11-03); the pin follows the vibe_addons store (0.0.21) and moves to 0.0.22 with the BOSv1.6 store cut, not before (store = what field devices pull)",
+        "until": "2026-11-13"
+      }
     },
     "ga_zigbee2mqtt": {
       "image": "ghcr.io/greenautarky/ga_zigbee2mqtt-{arch}",
