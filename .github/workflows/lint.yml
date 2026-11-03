@@ -1042,7 +1042,7 @@ jobs:
 
       # The iHost board lists buildroot-ihost/patches-haos/ as its global patch
       # dir: one symlink per HAOS package patch dir, and real dirs where the
-      # HAOS patch does not fit what the iHost builds (uboot 2024.01; docker-engine
+      # HAOS patch does not fit what the iHost builds (uboot 2026.10; docker-engine
       # 29.8.2 from the container floor). The self-test runs a copy of the live
       # check over fixture mirrors. Red-proven: against the check before the
       # docker-engine rule, the rebased mirror is refused.

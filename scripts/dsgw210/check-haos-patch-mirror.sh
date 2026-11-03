@@ -8,7 +8,7 @@
 # points at the same directory so there is one copy to maintain. Every other
 # HAOS patch dir is mirrored as a symlink. U-Boot is 2026.04 here, the version
 # HAOS's own uboot patch is written for, so uboot/ is a plain symlink (the
-# iHost stays on 2024.01 and carries a rebase).
+# iHost builds 2026.10, where the patch needs a fuzz-free rebase, and carries it).
 #
 # This check keeps the mirror honest on every configure (fails, never skips):
 #   * every package dir HAOS has must be mirrored (a new upstream patch dir
