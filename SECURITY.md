@@ -2,10 +2,18 @@
 
 ## Supported Versions
 
+Security fixes are provided for **the current final release and the one before
+it**. In addition, every final release keeps security support for **at least
+12 months from its first shipment**, even if two newer releases appear within
+that time.
+
 | Version | Supported |
 |---------|-----------|
-| Latest build (master) | Yes |
-| Older builds | Best effort |
+| Current final release | Yes |
+| Previous final release | Yes |
+| Older final release, less than 12 months after its first shipment | Yes |
+| Older final release, 12 months or more after its first shipment | No — update to a supported release |
+| Release candidates and development builds | No — superseded by the next build |
 
 ## Reporting a Vulnerability
 
