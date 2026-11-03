@@ -15,6 +15,12 @@ that time.
 | Older final release, 12 months or more after its first shipment | No — update to a supported release |
 | Release candidates and development builds | No — superseded by the next build |
 
+**Per device.** Every device placed on the market from **11 December 2027**
+receives security updates for **at least five years** from the day it is placed
+on the market, in line with Regulation (EU) 2024/2847 (Cyber Resilience Act),
+Article 13(8). The release rule above says *which* releases carry those fixes;
+a device stays covered by being updated to a supported release.
+
 ## Reporting a Vulnerability
 
 If you discover a security vulnerability in GA OS or any of its components,
