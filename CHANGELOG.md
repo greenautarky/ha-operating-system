@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): iHost U-Boot 2024.01 -> v2026.10 (DRAFT, bench proof pending)
+
+The iHost bootloader moves to the current upstream release. Upstream now carries the board, its device trees, the DDR4 timing tables, the RAM-disk address and `SPL_OPTEE_IMAGE`, so GA patches 0001-0005 are dropped; the three that upstream does not have (vendor OP-TEE calling convention, preloader ATAGS, `cpucode#` environment variable) are ported, and the HAOS `fileenv` patch is rebased for the iHost mirror. `BR2_TARGET_UBOOT_NEEDS_OPENSSL` is declared. The bootloader is rewritten on every OS OTA and has no A/B slot: this must not ship before the bench proof in the PR description (ADR-0047 section 6).
+
 ## Unreleased (feat/1.6-haos18): the image CVE scan reads HAOS 18.x OCI archives
 
 HAOS 18.x bakes container images as OCI archives (`skopeo … oci-archive:`), 16.x as docker-archive, under the same file name. `scan-cves.sh` handed every tarball to trivy as docker-archive, so all 15 images of the first BOSv1.6.0-dev1 bake came back "unable to initialize archive image" and the gate (correctly) refused. The format is now read from the archive content; an OCI archive is extracted to a layout directory, scanned, removed. An unrecognised archive is counted unscannable, never guessed. Self-test `scan-cves-image-format-fixtures.sh` reads the live function.
