@@ -66,29 +66,37 @@ log_crash() {
 #                   RK817_OFF_SOURCE_REG in linux include/linux/mfd/rk808.h;
 #                   rk809 shares the rk817 regmap). Bit meaning is in the
 #                   datasheet, which is not in the tree: logged RAW only.
-# Overridable for the host-side test (tests/gates/ihost_crash_evidence).
-CRU_RST_ST_ADDR="${GA_CRU_RST_ST_ADDR:-0xff490404}"
-DEVMEM="${GA_DEVMEM:-/dev/mem}"
+# MMIO needs mmap: read() on /dev/mem only works for RAM on ARM ("Bad address"),
+# so the register is read with the busybox `devmem` applet (CONFIG_DEVMEM in
+# buildroot-external/busybox-ga.fragment). The address is passed through as a
+# STRING: this target's shell arithmetic is 32-bit signed, so 0xff490404 is
+# negative there (measured: $((0xff490404)) = -11992060). Never compute with it.
+CRU_RST_ST_ADDR=0xff490404
+DEVMEM_BIN="${GA_DEVMEM_BIN:-devmem}"
 PMIC_REGS="${GA_PMIC_REGS:-/sys/kernel/debug/regmap/0-0020/registers}"
 PSTORE_DIR="${GA_PSTORE_DIR:-/sys/fs/pstore}"
 
 read_cru_rst_st() {
-    # one 32-bit little-endian word at the physical address, via /dev/mem
-    local off
-    off=$(( CRU_RST_ST_ADDR ))
-    [ -r "$DEVMEM" ] || return 1
-    dd if="$DEVMEM" bs=4 skip=$(( off / 4 )) count=1 2>/dev/null | od -An -tx4 | tr -d ' \n'
+    local v
+    command -v "$DEVMEM_BIN" >/dev/null 2>&1 || return 1
+    v=$("$DEVMEM_BIN" "$CRU_RST_ST_ADDR" 32 2>/dev/null) || return 1
+    v=${v#0x}; v=${v#0X}
+    case "$v" in ""|*[!0-9a-fA-F]*) return 1 ;; esac
+    while [ "${#v}" -lt 8 ]; do v="0$v"; done
+    printf '%s' "$v"
 }
 
-decode_cru_rst_st() {  # $1 = hex word without 0x
-    local v=$(( 0x$1 )) out=""
-    [ "$v" -eq 0 ] && { echo "power-on"; return; }
+decode_cru_rst_st() {  # $1 = 8 hex digits; only bits 0..5 are defined
+    local v out=""
+    v=$(( 0x${1#??????} ))   # last byte only: stays far below 2^31
+    [ "$1" = "00000000" ] && { echo "power-on"; return; }
     [ $(( v & 1 )) -ne 0 ]  && out="$out first-global-reset"
     [ $(( v & 2 )) -ne 0 ]  && out="$out second-global-reset"
     [ $(( v & 4 )) -ne 0 ]  && out="$out first-tsadc-thermal"
     [ $(( v & 8 )) -ne 0 ]  && out="$out second-tsadc-thermal"
     [ $(( v & 16 )) -ne 0 ] && out="$out first-wdt"
     [ $(( v & 32 )) -ne 0 ] && out="$out second-wdt"
+    [ -n "$out" ] || out=" no-defined-bit-set"
     echo "${out# }"
 }
 

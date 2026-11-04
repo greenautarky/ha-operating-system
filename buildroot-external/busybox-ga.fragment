@@ -4,3 +4,7 @@ CONFIG_LOGIN=y
 CONFIG_FEATURE_SHADOWPASSWDS=y
 CONFIG_PASSWD=y
 CONFIG_GETTY=y
+
+# GA_HAOS: `devmem` (mmap) so ga-boot-check can read the SoC reset-status
+# register; read() on /dev/mem fails for MMIO on ARM.
+CONFIG_DEVMEM=y

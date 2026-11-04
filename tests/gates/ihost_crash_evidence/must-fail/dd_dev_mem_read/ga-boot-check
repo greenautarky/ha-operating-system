@@ -1,0 +1,155 @@
+#!/bin/sh
+# ga-boot-check - Check for unclean shutdown and log crash events
+#
+# This script runs early at boot to detect if the previous boot was unclean
+# (crash, power loss, watchdog reset, kernel panic, etc.)
+
+MARKER_FILE="/mnt/data/.ga_unclean_shutdown"
+CRASH_LOG="/mnt/data/crash_history.log"
+MAX_LOG_SIZE=102400  # 100KB max log size
+# Per-boot verdict for the ga_manager addon (reads /share = supervisor/share).
+# The live marker itself is useless to the addon: ga-crash-marker re-creates
+# it right after us, so it exists during ALL normal runtime. Only this file
+# says what the LAST boot actually was.
+VERDICT_FILE="/mnt/data/supervisor/share/.ga_last_boot_unclean"
+
+log_crash() {
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local boot_id
+    boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo "unknown")
+
+    # Log to journal (echo goes to journal via systemd service stdout).
+    # `<4>` = warning priority so it passes fluent-bit's PRIORITY [0-4] filter
+    # and reaches Loki (fleet-central crash visibility), not just on-device.
+    echo "<4>WARNING: UNCLEAN SHUTDOWN DETECTED - previous boot did not complete cleanly"
+
+    # Append to persistent crash log
+    {
+        echo "=========================================="
+        echo "UNCLEAN SHUTDOWN DETECTED"
+        echo "Detected at: ${timestamp}"
+        echo "Current boot ID: ${boot_id}"
+        echo "Possible causes: kernel panic, watchdog reset, power loss, or forced reboot"
+        echo ""
+        echo "To investigate, run:"
+        echo "  zcat /mnt/data/journal-dump/dump-*.log.gz   # failure trail (the journal is RAM-only)"
+        echo "  dmesg | head -50    # Current boot kernel messages"
+        echo "=========================================="
+        echo ""
+    } >> "$CRASH_LOG"
+
+    # Rotate log if too large
+    if [ -f "$CRASH_LOG" ]; then
+        log_size=$(stat -c%s "$CRASH_LOG" 2>/dev/null || echo 0)
+        if [ "$log_size" -gt "$MAX_LOG_SIZE" ]; then
+            tail -c "$MAX_LOG_SIZE" "$CRASH_LOG" > "${CRASH_LOG}.tmp"
+            mv "${CRASH_LOG}.tmp" "$CRASH_LOG"
+        fi
+    fi
+}
+
+# --- Reset reason (unclean boots only) --------------------------------------
+# Why the SoC / PMIC says the last boot ended. Raw values are always logged;
+# decoding is only done where a source exists.
+#   CRU_GLB_RST_ST  RV1126 CRU base 0xff490000 (rv1126.dtsi "cru") + 0x404.
+#                   0x404 = RV1126_GLB_SRST_FST (0x408, linux
+#                   drivers/clk/rockchip/clk.h) minus one word: u-boot
+#                   arch-rockchip/cru_rv1126.h orders glb_cnt_th, glb_rst_st,
+#                   glb_srst_fst. Bits as in u-boot arch-rockchip/cru.h:
+#                   0 first-global-reset 1 second-global-reset 2 first-tsadc
+#                   3 second-tsadc 4 first-wdt 5 second-wdt; 0 = power-on.
+#                   NOT checked against the RV1126 TRM (not in the tree); the
+#                   register may also have been cleared by the boot loader,
+#                   so 0 does not prove power loss on its own.
+#   RK809 ON/OFF_SOURCE  i2c0 0x20, registers 0xf5 / 0xf6 (RK817_ON_SOURCE_REG,
+#                   RK817_OFF_SOURCE_REG in linux include/linux/mfd/rk808.h;
+#                   rk809 shares the rk817 regmap). Bit meaning is in the
+#                   datasheet, which is not in the tree: logged RAW only.
+# MMIO needs mmap: read() on /dev/mem only works for RAM on ARM ("Bad address"),
+# so the register is read with the busybox `devmem` applet (CONFIG_DEVMEM in
+# buildroot-external/busybox-ga.fragment). The address is passed through as a
+# STRING: this target's shell arithmetic is 32-bit signed, so 0xff490404 is
+# negative there (measured: $((0xff490404)) = -11992060). Never compute with it.
+CRU_RST_ST_ADDR=0xff490404
+DEVMEM_BIN="${GA_DEVMEM_BIN:-devmem}"
+PMIC_REGS="${GA_PMIC_REGS:-/sys/kernel/debug/regmap/0-0020/registers}"
+PSTORE_DIR="${GA_PSTORE_DIR:-/sys/fs/pstore}"
+
+read_cru_rst_st() {
+    local v
+    command -v "$DEVMEM_BIN" >/dev/null 2>&1 || return 1
+    v=$(dd if=/dev/mem bs=4 count=1 2>/dev/null | od -An -tx4 | tr -d " ") || return 1
+    v=${v#0x}; v=${v#0X}
+    case "$v" in ""|*[!0-9a-fA-F]*) return 1 ;; esac
+    while [ "${#v}" -lt 8 ]; do v="0$v"; done
+    printf '%s' "$v"
+}
+
+decode_cru_rst_st() {  # $1 = 8 hex digits; only bits 0..5 are defined
+    local v out=""
+    v=$(( 0x${1#??????} ))   # last byte only: stays far below 2^31
+    [ "$1" = "00000000" ] && { echo "power-on"; return; }
+    [ $(( v & 1 )) -ne 0 ]  && out="$out first-global-reset"
+    [ $(( v & 2 )) -ne 0 ]  && out="$out second-global-reset"
+    [ $(( v & 4 )) -ne 0 ]  && out="$out first-tsadc-thermal"
+    [ $(( v & 8 )) -ne 0 ]  && out="$out second-tsadc-thermal"
+    [ $(( v & 16 )) -ne 0 ] && out="$out first-wdt"
+    [ $(( v & 32 )) -ne 0 ] && out="$out second-wdt"
+    [ -n "$out" ] || out=" no-defined-bit-set"
+    echo "${out# }"
+}
+
+pmic_reg() {  # $1 = register as two hex digits
+    [ -r "$PMIC_REGS" ] || return 1
+    sed -n "s/^$1: *\([0-9a-fA-F][0-9a-fA-F]*\).*/\1/p" "$PMIC_REGS" | head -n 1
+}
+
+log_reset_reason() {
+    local raw dec on off n line
+    raw=$(read_cru_rst_st) || raw=""
+    if [ -n "$raw" ]; then
+        dec=$(decode_cru_rst_st "$raw")
+        line="cru_glb_rst_st=0x${raw} (${dec})"
+    else
+        line="cru_glb_rst_st=unreadable"
+    fi
+    on=$(pmic_reg f5) || on=""
+    off=$(pmic_reg f6) || off=""
+    line="$line pmic_on_source=${on:-unreadable} pmic_off_source=${off:-unreadable}"
+    n=$(ls -A "$PSTORE_DIR" 2>/dev/null | wc -l)
+    # pstore: records present = warm reset (panic/watchdog), none = power loss
+    # or a hang that never reached the panic path
+    line="$line pstore_records=${n}"
+    echo "<4>WARNING: RESET REASON: ${line}"
+    echo "Reset reason: ${line}" >> "$CRASH_LOG"
+}
+
+main() {
+    mkdir -p "$(dirname "$VERDICT_FILE")"
+    # Check if marker exists from previous boot
+    if [ -f "$MARKER_FILE" ]; then
+        log_crash
+        log_reset_reason
+        # $VERDICT_FILE is in the container-writable /share bridge — publish
+        # symlink-safe so a `> "$VERDICT_FILE"` cannot be redirected by an
+        # addon-planted symlink to an arbitrary root-owned file.
+        {
+            echo "detected_at=$(date '+%Y-%m-%d %H:%M:%S')"
+            echo "boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)"
+        } | /usr/libexec/ga-share-publish "$VERDICT_FILE"
+        # Remove the stale marker (new one will be created by ga-crash-marker.service)
+        rm -f "$MARKER_FILE"
+        # The journal is RAM-only: the crashed boot's journal is gone, so keep
+        # what this boot knows (kernel messages, pstore records) next to the
+        # verdict. Bounded, never fails.
+        if [ -x /usr/libexec/ga-journal-dump ]; then
+            /usr/libexec/ga-journal-dump bootcheck-unclean || true
+        fi
+    else
+        echo "Clean boot - previous shutdown was graceful"
+        rm -f "$VERDICT_FILE"
+    fi
+}
+
+main "$@"

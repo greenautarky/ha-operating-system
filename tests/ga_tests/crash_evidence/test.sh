@@ -47,7 +47,7 @@ warn_test "CE-05" "OPEN: >=1 thermal zone with a plausible temperature (0..110 C
   "n=0; for z in /sys/class/thermal/thermal_zone*; do [ -r \"\$z/temp\" ] || continue; t=\$(cat \"\$z/temp\"); [ \"\$t\" -gt 0 ] && [ \"\$t\" -lt 110000 ] && n=\$((n+1)); done; [ \"\$n\" -ge 1 ]"
 
 # The SoC reset-status register must be readable (ga-boot-check logs it).
-run_test "CE-06" "CRU_GLB_RST_ST readable via /dev/mem (ga-boot-check input)" \
-  "[ -n \"\$(dd if=/dev/mem bs=4 skip=\$((0xff490404/4)) count=1 2>/dev/null | od -An -tx4 | tr -d ' \\n')\" ]"
+run_test "CE-06" "CRU_GLB_RST_ST readable via devmem (mmap; read() on /dev/mem fails for MMIO)" \
+  "v=\$(devmem 0xff490404 32) && echo \"\$v\" | grep -Eq '^0x[0-9a-fA-F]{8}\$'"
 
 suite_end
