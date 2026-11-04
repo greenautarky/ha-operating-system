@@ -110,6 +110,10 @@ define TELEGRAF_INSTALL_INIT_SYSTEMD
 	$(INSTALL) -D -m 0755 $(TELEGRAF_PKGDIR)/ga-telegraf-override-check \
 		$(TARGET_DIR)/usr/libexec/ga-telegraf-override-check
 
+	# Corrupt-WAL guard: quarantines a torn disk buffer before telegraf loads it
+	$(INSTALL) -D -m 0755 $(TELEGRAF_PKGDIR)/ga-telegraf-buffer-check \
+		$(TARGET_DIR)/usr/libexec/ga-telegraf-buffer-check
+
 	# Install systemd service unit
 	$(INSTALL) -D -m 0644 $(TELEGRAF_PKGDIR)/telegraf.service \
 		$(TARGET_DIR)/etc/systemd/system/telegraf.service
