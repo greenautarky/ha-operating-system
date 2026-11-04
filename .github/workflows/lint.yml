@@ -400,6 +400,25 @@ jobs:
         # cooldown, refused=dead, RECOVERED at info) each go red on their cases.
         run: sh tests/ga_tests/mesh_watchdog/selftest.sh
 
+      # A torn disk-buffer WAL (hard reset) made telegraf panic at config load on
+      # every start ("failed to open wal file: log corrupt") and the device sent
+      # no metrics for days. Runs the LIVE ga-telegraf-buffer-check against the
+      # REAL pinned telegraf release (amd64 build of the version telegraf.mk
+      # bakes): corrupt WAL -> quarantined + telegraf loads, bounded to 2;
+      # healthy WAL / unrelated config error / empty buffer -> untouched.
+      # Red-proven with GUARD=/bin/true: 6 of 18 cases fail.
+      - name: Telegraf corrupt-WAL guard (real telegraf, must-flag + must-not-flag)
+        run: |
+          set -euo pipefail
+          ver=$(sed -n 's/^TELEGRAF_VERSION = //p' buildroot-external/package/telegraf/telegraf.mk)
+          [ "$ver" = "1.38.0" ] || { echo "telegraf.mk is at $ver: re-pin the sha256 below and re-check the guard against it"; exit 1; }
+          d=$(mktemp -d)
+          curl -fsSL -o "$d/t.tgz" "https://dl.influxdata.com/telegraf/releases/telegraf-${ver}_linux_amd64.tar.gz"
+          echo "57e6d733de44335127c06d9d9099c9dee7307beff992783438ce38b9ba1b8e5e  $d/t.tgz" | sha256sum -c -
+          tar -xzf "$d/t.tgz" -C "$d"
+          TELEGRAF_BIN="$(find "$d" -path '*/usr/bin/telegraf' -type f | head -1)" \
+            bash tests/ga_tests/telegraf_buffer_guard/selftest.sh
+
       - name: OS-04 counts any row of the WiFi scan
         # The pre-fix check read only the first SSID, and the strongest BSS
         # (first row) can be a hidden network with an empty SSID. Drives the

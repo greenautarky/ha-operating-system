@@ -26,6 +26,11 @@ ExecStartPre=/usr/libexec/ga-telegraf-env
 # an override. See the header of ga-telegraf-override-check.
 ExecStartPre=-/usr/libexec/ga-telegraf-override-check
 
+# A torn disk-buffer WAL (hard reset) makes telegraf panic at config load on
+# every start. Move a corrupt buffer aside and start empty; a healthy buffer is
+# never touched. Never blocks the start. See the header of ga-telegraf-buffer-check.
+ExecStartPre=-/usr/libexec/ga-telegraf-buffer-check
+
 # Safe defaults (EnvironmentFile is read BEFORE ExecStartPre, so first boot needs these)
 Environment=GA_ENV=unknown DEVICE_UUID=unknown GATEWAY_IP=unknown DEVICE_LABEL=unknown GA_BUILD_TIMESTAMP=unknown
 

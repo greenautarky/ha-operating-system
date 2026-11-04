@@ -1,0 +1,98 @@
+#!/bin/sh
+# ga-telegraf-buffer-check -- ExecStartPre of telegraf.service: quarantine a
+# corrupt disk buffer so telegraf can start.
+#
+# Why
+# ---
+# telegraf.conf uses buffer_strategy = "disk_write_through" with
+# buffer_disk_sync = false (SD wear, PR #752). After a hard reset (power loss,
+# watchdog) the tail of the write-ahead log can be torn, and telegraf 1.38 then
+# PANICS while loading the config, on every start:
+#     panic: failed to open wal file: log corrupt   (models/running_output.go)
+# systemd gives up after StartLimitBurst starts and the device sends no metrics,
+# silently, until someone logs in. Measured on a field device (2026-11-04).
+#
+# What
+# ----
+# Run the exact load that panics (`telegraf config check` builds every output,
+# so it opens the WAL) against the config telegraf will use. Only when its
+# output carries the WAL-corruption panic is the buffer moved aside to
+# buffer.corrupt-<UTC timestamp> and replaced by an empty directory. A healthy
+# buffer, and any other failure (a bad override config is ga-telegraf-override-
+# check's job), is left untouched. At most KEEP quarantines are kept (oldest
+# removed), so a device that corrupts its buffer repeatedly cannot fill the
+# disk. After a quarantine the check is repeated ONCE; if it still fails the
+# script logs that loudly and exits -- it never loops and never moves anything
+# a second time.
+#
+# Scope: only paths under $TG_DIR (/mnt/data/telegraf). Always exits 0: this
+# guard must never be the reason telegraf does not start.
+#
+# Logging: "<4>" is the syslog WARNING prefix; the journal records it as
+# priority 4, which the fluent-bit PRIORITY [0-4] filter ships to Loki.
+
+set -u
+
+TG_DIR="${GA_TELEGRAF_DIR:-/mnt/data/telegraf}"
+BIN="${GA_TELEGRAF_BIN:-/usr/bin/telegraf}"
+OVR="$TG_DIR/override.conf"
+CONF="${GA_TELEGRAF_CONF:-}"
+KEEP="${GA_TELEGRAF_QUARANTINE_KEEP:-2}"
+TAG=ga-telegraf-buffer-check
+BUF="$TG_DIR/buffer"
+
+warn() { echo "<4>$TAG: $*"; }
+err()  { echo "<3>$TAG: $*"; }
+
+if [ -z "$CONF" ]; then
+    if [ -f "$OVR" ]; then CONF="$OVR"; else CONF=/etc/telegraf/telegraf.conf; fi
+fi
+
+[ -d "$BUF" ] || exit 0
+[ -f "$CONF" ] || exit 0
+# Nothing buffered yet: nothing to corrupt, skip the (slow) config load.
+[ -n "$(ls -A "$BUF" 2>/dev/null)" ] || exit 0
+
+run_check() {
+    # EXEC_PREFIX is a command prefix (qemu-user on a build host) by design.
+    # shellcheck disable=SC2086
+    if command -v timeout >/dev/null 2>&1; then
+        ${GA_TELEGRAF_EXEC_PREFIX:-} timeout 60 "$BIN" config check --config "$CONF" 2>&1
+    else
+        ${GA_TELEGRAF_EXEC_PREFIX:-} "$BIN" config check --config "$CONF" 2>&1
+    fi
+}
+
+is_wal_corrupt() {
+    printf '%s\n' "$1" | grep -qE 'panic: failed to open wal file|log corrupt'
+}
+
+out=$(run_check)
+is_wal_corrupt "$out" || exit 0
+
+ts=$(date -u +%Y%m%dT%H%M%SZ)
+dest="$TG_DIR/buffer.corrupt-$ts"
+n=1
+while [ -e "$dest" ]; do dest="$TG_DIR/buffer.corrupt-$ts-$n"; n=$((n + 1)); done
+
+if ! mv "$BUF" "$dest"; then
+    err "disk buffer $BUF is CORRUPT but could not be moved aside -- telegraf will crash-loop and this device sends NO metrics"
+    exit 0
+fi
+mkdir -p "$BUF"
+warn "disk buffer $BUF was CORRUPT (telegraf: 'failed to open wal file: log corrupt', typically after a hard reset) -- moved to $dest, starting telegraf with an EMPTY buffer; metrics still buffered at the time of the reset are lost"
+logger -t "$TAG" -p daemon.warning "corrupt telegraf disk buffer quarantined to $dest" 2>/dev/null || true
+
+# Bound the quarantines: keep the newest KEEP (names sort by UTC timestamp).
+i=0
+for q in $(ls -d "$TG_DIR"/buffer.corrupt-* 2>/dev/null | LC_ALL=C sort -r); do
+    i=$((i + 1))
+    [ "$i" -le "$KEEP" ] && continue
+    rm -rf "$q" && warn "removed old quarantine $q (keeping the newest $KEEP)"
+done
+
+out=$(run_check)
+if is_wal_corrupt "$out"; then
+    err "telegraf STILL reports a corrupt WAL after the buffer was replaced by an empty one -- giving up, not touching anything else; this device sends NO metrics"
+fi
+exit 0
