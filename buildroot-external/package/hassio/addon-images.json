@@ -2,11 +2,19 @@
   "addons": {
     "mosquitto": {
       "image": "ghcr.io/greenautarky/ga_mosquitto-{arch}",
-      "version": "7.2.5"
+      "version": "7.2.5",
+      "hold": {
+        "reason": "mosquitto 7.2.6 brotli rebuild (Odoo #1431) published 2026-11-03; the pin follows the vibe_addons store, which moves with the BOSv1.6-rc1 store cut on Thu 05.11 (one release set, N62)",
+        "until": "2026-11-13"
+      }
     },
     "ga_ihosthardwarecontrol": {
       "image": "ghcr.io/greenautarky/ga_ihosthardwarecontrol-{arch}",
-      "version": "1.2.1"
+      "version": "1.2.1",
+      "hold": {
+        "reason": "ga_ihosthardwarecontrol 1.2.2 brotli rebuild (Odoo #1431) published 2026-11-03; the pin follows the vibe_addons store, which moves with the BOSv1.6-rc1 store cut on Thu 05.11 (one release set, N62)",
+        "until": "2026-11-13"
+      }
     },
     "ga_influxdbv1": {
       "image": "ghcr.io/greenautarky/ga_influxdbv1-{arch}",
@@ -18,7 +26,11 @@
     },
     "ga_zigbee2mqtt": {
       "image": "ghcr.io/greenautarky/ga_zigbee2mqtt-{arch}",
-      "version": "2.12.1-10"
+      "version": "2.12.1-10",
+      "hold": {
+        "reason": "ga_zigbee2mqtt 2.12.1-11 brotli rebuild (Odoo #1431) published 2026-11-03; the pin follows the vibe_addons store, which moves with the BOSv1.6-rc1 store cut on Thu 05.11 (one release set, N62)",
+        "until": "2026-11-13"
+      }
     },
     "sonoff_dongle_flasher": {
       "image": "ghcr.io/greenautarky/ga_dongle_flasher-{arch}",
