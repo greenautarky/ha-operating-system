@@ -1,0 +1,41 @@
+--- a/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dts
++++ b/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dts
+@@ -30,4 +30,36 @@
+ 
+ &wdt {
+ 	status = "okay";
+-};
+\ No newline at end of file
++};
++
++/*
++ * Crash evidence: a ramoops region that survives a WARM reset (panic,
++ * watchdog) so the previous boot's kernel log is readable in /sys/fs/pstore.
++ * After a power loss the DRAM content is gone and pstore is empty; that
++ * difference is the discriminator.
++ *
++ * 1 MiB at 0x0b000000 (176 MiB). The window from 0x0b000000 up is not used by
++ * the boot chain: the U-Boot env loads the kernel at 0x02008000, the DTB at
++ * 0x08300000 and uses 0x0a400000 as scratch, with OP-TEE at 0x08400000 below
++ * that; U-Boot itself relocates to the TOP of DRAM. The address is below the
++ * smallest DRAM U-Boot supports (>128 MiB). NOT verified on hardware: the
++ * panic drill test is what proves it.
++ */
++/ {
++	reserved-memory {
++		#address-cells = <1>;
++		#size-cells = <1>;
++		ranges;
++
++		ramoops@b000000 {
++			compatible = "ramoops";
++			reg = <0x08400000 0x00100000>;
++			no-map;
++			/* 256 KiB console log + 6 x 128 KiB kmsg records */
++			console-size = <0x00040000>;
++			record-size = <0x00020000>;
++			/* oopses and panics (oops escalates via panic_on_oops) */
++			max-reason = <2>;
++		};
++	};
++};
