@@ -4,3 +4,7 @@ CONFIG_LOGIN=y
 CONFIG_FEATURE_SHADOWPASSWDS=y
 CONFIG_PASSWD=y
 CONFIG_GETTY=y
+# ga-journal-dump compresses the failure trail with gzip. Upstream HAOS builds
+# busybox without the gzip applet (zcat only), and the image has no other gzip;
+# without it every dump was empty (tests/gates/journal_dump).
+CONFIG_GZIP=y
