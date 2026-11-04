@@ -145,11 +145,19 @@ grep -q "I/O error" "$W/live.err" && bad "stderr shows an I/O error: $(grep 'I/O
 # --- C2: gzip missing: loud fallback, evidence kept ----------------------------
 echo "C2 gzip missing from the tool set:"
 mktools "$W/tools-nogz" gzip > /dev/null
-run_dump nogz "$W/tools-nogz"
-files=("$W"/nogz.dir/dump-*)
-if [ "${#files[@]}" = 1 ] && [ -s "${files[0]}" ]; then ok "dump still written without gzip: $(basename "${files[0]}")"
-else bad "no dump without gzip (evidence silently lost): $(tr '\n' '|' < "$W/nogz.err")"; fi
-grep -qi "uncompressed\|gzip" "$W/nogz.err" && ok "the substitution is announced on stderr" || bad "gzip fallback is silent"
+# Some busybox builds resolve applets inside ash even without a symlink
+# (a static busybox), so "no gzip in PATH" cannot be built with that binary.
+# Say so loudly instead of passing or failing on a fixture that did not happen;
+# C0 (the config has the applet) still guards the real image.
+if [ -n "$(env -i PATH="$W/tools-nogz" "$W/tools-nogz/sh" -c 'command -v gzip' 2>/dev/null)" ]; then
+  echo "  SKIP  C2 not exercisable: this busybox resolves gzip internally ($BB); fallback path NOT covered by this run"
+else
+  run_dump nogz "$W/tools-nogz"
+  files=("$W"/nogz.dir/dump-*)
+  if [ "${#files[@]}" = 1 ] && [ -s "${files[0]}" ]; then ok "dump still written without gzip: $(basename "${files[0]}")"
+  else bad "no dump without gzip (evidence silently lost): $(tr '\n' '|' < "$W/nogz.err")"; fi
+  grep -qi "uncompressed\|gzip" "$W/nogz.err" && ok "the substitution is announced on stderr" || bad "gzip fallback is silent"
+fi
 
 # --- C3: nothing to dump ---------------------------------------------------------
 echo "C3 empty journal:"
