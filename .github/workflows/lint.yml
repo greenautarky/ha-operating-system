@@ -582,6 +582,13 @@ jobs:
       - name: Journal is volatile; failure trail wired to 3 triggers and bounded
         run: ./tests/gates/journald_volatile/selftest.sh
 
+      # A systemd input with Read_From_Tail true skips everything journald held
+      # before fluent-bit started: ga-boot-check's UNCLEAN SHUTDOWN line never
+      # reached Loki. Every shipped systemd input must read from the start with
+      # a cursor DB, or carry a `# tail-ok: <reason>`. Fixtures + live configs.
+      - name: Shipped journal inputs do not skip boot-time lines
+        run: ./tests/gates/fluent_bit_boot_evidence/selftest.sh
+
       # The failure trail must exist after a crash. ga-journal-dump piped into
       # `gzip -c 2>/dev/null`; the image's busybox (upstream HAOS config) has no
       # gzip applet, so every dump on a device was empty (`head: standard
