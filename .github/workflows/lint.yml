@@ -407,6 +407,14 @@ jobs:
       # bakes): corrupt WAL -> quarantined + telegraf loads, bounded to 2;
       # healthy WAL / unrelated config error / empty buffer -> untouched.
       # Red-proven with GUARD=/bin/true (see PR).
+      # TGW-03 could never pass on a device: it parsed systemd's timestamp with
+      # busybox `date -d`, which rejects it. Runs the LIVE TGW-02/03 helpers under
+      # busybox sh with the real device strings as fixtures.
+      - name: Telegraf liveness helpers work with the device's real strings
+        run: |
+          sudo apt-get install -y --no-install-recommends busybox-static
+          ./tests/ga_tests/telegraf_buffer_guard/liveness_selftest.sh
+
       - name: Telegraf corrupt-WAL guard (real telegraf, must-flag + must-not-flag)
         run: |
           set -euo pipefail
