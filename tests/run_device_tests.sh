@@ -68,6 +68,9 @@ usage() {
     echo "Available suites:"
     echo "  crash_detection health telemetry environment network ping boot_timing disk_guard watchdog config_verify stress idle_perf onboarding tailscale hardware"
     echo "  crash_panic (host-side: triggers kernel panic, waits for reboot, verifies detection)"
+    echo "  unclean_reset (host-side, reboots: sysrq-b reset, then asserts crash log, UNCLEAN journal line,"
+    echo "                 verdict file, journal dump, telegraf, Loki - one assertion each)"
+    echo "  clean_reboot  (host-side, reboots: the must-not-flag counterpart of unclean_reset)"
     exit 1
 }
 
@@ -385,6 +388,21 @@ run_ssh() {
     if echo "$SUITES" | grep -qw "crash_panic"; then
         run_crash_panic_test
     fi
+
+    # Reset drills (opt-in, destructive: reboot the device). Each asserts every
+    # crash-evidence mechanism on its own; see tests/host_drills/reset_drill.sh.
+    # Loki (assertion f) is queried only when LOKI_QUERY_URL is set.
+    local drill_rc=0
+    for _mode in unclean clean; do
+        _suite="${_mode}_reset"; [ "$_mode" = clean ] && _suite="clean_reboot"
+        if echo "$SUITES" | grep -qw "$_suite"; then
+            local _key=()
+            [[ -n "$SSH_KEY" ]] && _key=(--key "$SSH_KEY")
+            "$SCRIPT_DIR/host_drills/reset_drill.sh" --ssh "$SSH_TARGET" --port "$SSH_PORT" \
+                "${_key[@]}" --mode "$_mode" --i-know-this-reboots-the-device || drill_rc=$?
+            [[ "$drill_rc" -ne 0 && "$run_rc" -eq 0 ]] && run_rc=$drill_rc
+        fi
+    done
 
     if [[ "$run_rc" -ne 0 ]]; then
         echo ""

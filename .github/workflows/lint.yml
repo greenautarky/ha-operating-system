@@ -582,6 +582,12 @@ jobs:
       - name: Journal is volatile; failure trail wired to 3 triggers and bounded
         run: ./tests/gates/journald_volatile/selftest.sh
 
+      # The reset drill is device-only, but its verdict logic is not: the LIVE
+      # script runs against a stubbed transport and must go red on each missing
+      # crash-evidence mechanism and green on a healthy / clean-reboot device.
+      - name: Reset drill assertions go red on each defect, green when healthy
+        run: ./tests/gates/reset_drill/selftest.sh
+
       # A systemd input with Read_From_Tail true skips everything journald held
       # before fluent-bit started: ga-boot-check's UNCLEAN SHUTDOWN line never
       # reached Loki. Every shipped systemd input must read from the start with
