@@ -34,29 +34,25 @@ fi
 
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 
+SHIPPED="$HERE/../../../buildroot-external/package/telegraf/telegraf.conf"
+# The SHIPPED config (its hash decides the WAL dir), only the buffer dir and the
+# unreachable influx URL rewritten; env as ga-telegraf-env provides it.
+export INFLUX_USER=u INFLUX_PASSWORD=p DEVICE_LABEL=x DEVICE_UUID=y GA_ENV=staging \
+       GATEWAY_IP=1.1.1.1 GA_BUILD_TIMESTAMP=z GA_TELEMETRY_ENV=staging
 write_conf() { # <file> <bufdir>
-    cat > "$1" <<EOF
-[agent]
-  interval = "1s"
-  flush_interval = "1s"
-  metric_buffer_limit = 1000
-  buffer_strategy = "disk_write_through"
-  buffer_directory = "$2"
-  buffer_disk_sync = false
-[[inputs.cpu]]
-[[outputs.influxdb]]
-  urls = ["http://127.0.0.1:9"]
-  timeout = "1s"
-EOF
+    # agent interval/flush shortened (first two occurrences = [agent]) so segments exist within seconds
+    sed -E "s|^([[:space:]]*buffer_directory[[:space:]]*=).*|\1 \"$2\"|; s|http://influx.greenautarky.com:8086|http://127.0.0.1:9|; 0,/^[[:space:]]*interval = /s|^([[:space:]]*interval = ).*|\1\"1s\"|; 0,/^[[:space:]]*flush_interval = /s|^([[:space:]]*flush_interval = ).*|\1\"1s\"|" "$SHIPPED" > "$1"
 }
 
-# --- template: a real WAL with data in it ------------------------------------
+# --- template: a REAL agent run writes the WAL (not config check) -------------
 TPL="$W/tpl"; mkdir -p "$TPL"
 write_conf "$W/tpl.conf" "$TPL"
-timeout 8 "$BIN" --config "$W/tpl.conf" >/dev/null 2>&1
+timeout 12 "$BIN" --config "$W/tpl.conf" >/dev/null 2>&1
 seg=$(find "$TPL" -type f | sort | tail -1)
 size=0; [ -n "$seg" ] && size=$(wc -c < "$seg")
 if [ "$size" -lt 1000 ]; then echo "FAIL: telegraf wrote no WAL segment to the template (size=$size) -- cannot build fixtures"; exit 1; fi
+TPL_DIRS=$(ls "$TPL")
+[ "$(echo "$TPL_DIRS" | wc -l)" -eq 1 ] || { echo "FAIL: real run left several WAL dirs: $TPL_DIRS"; exit 1; }
 
 # new_dev <name>: a fake /mnt/data/telegraf with a copy of the healthy WAL
 new_dev() {
@@ -72,8 +68,13 @@ run_guard() { # <dev-name>  -> output in $OUT
     OUT=$(GA_TELEGRAF_DIR="$W/$1/telegraf" GA_TELEGRAF_CONF="$W/$1/telegraf/conf" GA_TELEGRAF_BIN="$BIN" "$GUARD" 2>&1)
     RC=$?
 }
-loads() { "$BIN" config check --config "$1" >/dev/null 2>&1; }
+loads() { "$BIN" --config "$1" --test --input-filter mem >/dev/null 2>&1; }
 tree_sum() { (cd "$1" && find . -type f | sort | xargs sha256sum | sha256sum); }
+
+echo "== detector opens the SAME WAL dir as the real run"
+new_dev d1
+check "detector run creates no extra WAL dir and keeps the real one" "loads $W/d1/telegraf/conf && [ \"\$(ls $W/d1/telegraf/buffer)\" = \"$TPL_DIRS\" ]"
+check "config check (the rejected detector) WOULD open another dir" "$BIN config check --config $W/d1/telegraf/conf >/dev/null 2>&1; [ \$(ls $W/d1/telegraf/buffer | wc -l) -eq 2 ]"
 
 echo "== MUST-FLAG: corrupt WAL"
 new_dev c1; corrupt "$W/c1/telegraf"
@@ -103,6 +104,7 @@ check "precondition: telegraf loads the healthy buffer" "loads $W/h1/telegraf/co
 run_guard h1
 check "guard exits 0" "[ $RC -eq 0 ]"
 check "buffer content byte-identical" "[ \"\$(tree_sum $W/h1/telegraf/buffer)\" = \"$before\" ]"
+check "no extra WAL dir created in the healthy buffer" "[ \"\$(ls $W/h1/telegraf/buffer)\" = \"$TPL_DIRS\" ]"
 check "no quarantine created" "! ls -d $W/h1/telegraf/buffer.corrupt-*"
 check "no warning logged" "! printf '%s\n' \"\$OUT\" | grep -q '^<[0-4]>'"
 

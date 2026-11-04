@@ -406,7 +406,7 @@ jobs:
       # REAL pinned telegraf release (amd64 build of the version telegraf.mk
       # bakes): corrupt WAL -> quarantined + telegraf loads, bounded to 2;
       # healthy WAL / unrelated config error / empty buffer -> untouched.
-      # Red-proven with GUARD=/bin/true: 6 of 18 cases fail.
+      # Red-proven with GUARD=/bin/true (see PR).
       - name: Telegraf corrupt-WAL guard (real telegraf, must-flag + must-not-flag)
         run: |
           set -euo pipefail

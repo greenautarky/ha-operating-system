@@ -62,14 +62,23 @@ run_test "TGW-09b" "telegraf.service runs the guard before start" \
   "systemctl cat telegraf | grep -q '^ExecStartPre=.*ga-telegraf-buffer-check'"
 
 BEFORE_Q=$(ls -d "$TG_DIR"/buffer.corrupt-* 2>/dev/null | sort)
+# The WAL dir the RUNNING telegraf writes to: the directory of the segment file
+# it holds open (its WAL directory name is a hash of the output config; stale
+# dirs from other configs can sit beside it). Resolved BEFORE the stop.
+MPID=$(systemctl show -p MainPID --value telegraf 2>/dev/null)
+SEG=""
+if [ -n "$MPID" ] && [ "$MPID" != 0 ]; then
+  SEG=$(ls -l /proc/"$MPID"/fd 2>/dev/null | sed -n "s|.* -> \\($BUF_DIR/.*\\)\$|\\1|p" | sort | tail -1)
+fi
+REAL_DIR=""
+[ -n "$SEG" ] && REAL_DIR=$(dirname "$SEG")
+run_test "TGW-09c" "resolved the WAL segment the running telegraf has open" "[ -n \"$SEG\" ] && [ -f \"$SEG\" ]"
 systemctl stop telegraf
-
-SEG=$(find "$BUF_DIR" -type f 2>/dev/null | sort | tail -1)
-if [ -z "$SEG" ]; then
-  # Nothing buffered (everything delivered): write a plausible tail ourselves.
-  mkdir -p "$BUF_DIR/tgw-fixture"
-  SEG="$BUF_DIR/tgw-fixture/00000000000000000001"
-  : > "$SEG"
+if [ -z "$SEG" ] || [ ! -f "$SEG" ]; then
+  # Fail closed: corrupting some other dir would prove nothing.
+  systemctl start telegraf
+  suite_end
+  return 0 2>/dev/null || exit 0
 fi
 SZ=$(wc -c < "$SEG")
 if [ "$SZ" -ge 1000 ]; then
@@ -79,7 +88,7 @@ else
 fi
 
 # The injection must have produced the real fault, else nothing below counts.
-PANIC=$(timeout 60 /usr/bin/telegraf config check --config "$TG_CONF" 2>&1 | grep -E 'panic: failed to open wal file|log corrupt' | head -1)
+PANIC=$(timeout 60 /usr/bin/telegraf --config "$TG_CONF" --test --input-filter mem 2>&1 | grep -E 'panic: failed to open wal file|log corrupt' | head -1)
 run_test "TGW-10" "injection worked: telegraf panics on the corrupted buffer" "[ -n \"$PANIC\" ]"
 
 START_TS=$(date '+%Y-%m-%d %H:%M:%S')
@@ -93,8 +102,8 @@ AFTER_Q=$(ls -d "$TG_DIR"/buffer.corrupt-* 2>/dev/null | sort)
 NEW_Q=$(printf '%s\n' "$AFTER_Q" | while IFS= read -r q; do
   [ -n "$q" ] && ! printf '%s\n' "$BEFORE_Q" | grep -qxF "$q" && echo "$q"; done | tail -1)
 run_test "TGW-12" "a new buffer.corrupt-* quarantine exists" "[ -n \"$NEW_Q\" ] && [ -d \"$NEW_Q\" ]"
-run_test "TGW-13" "the corrupt segment is in the quarantine" \
-  "[ -n \"$NEW_Q\" ] && [ -n \"\$(find \"$NEW_Q\" -type f)\" ]"
+run_test "TGW-13" "the corrupted WAL dir (the one telegraf wrote to) is in the quarantine" \
+  "[ -n \"$NEW_Q\" ] && [ -d \"$NEW_Q/$(basename "$REAL_DIR")\" ]"
 run_test "TGW-14" "a fresh buffer dir exists" "[ -d $BUF_DIR ]"
 run_test "TGW-15" "warning line (priority 4) in the journal" \
   "journalctl -u telegraf -p warning --since '$START_TS' --no-pager -q | grep -q 'ga-telegraf-buffer-check.*CORRUPT'"
@@ -103,6 +112,5 @@ run_test "TGW-16" "no quarantines beyond the bound of 2" \
 
 # Clean up what this test created (keep the device as found).
 [ -n "$NEW_Q" ] && rm -rf "$NEW_Q"
-rm -rf "$BUF_DIR/tgw-fixture"
 
 suite_end

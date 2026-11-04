@@ -14,8 +14,11 @@
 #
 # What
 # ----
-# Run the exact load that panics (`telegraf config check` builds every output,
-# so it opens the WAL) against the config telegraf will use. Only when its
+# Run the exact load that panics, in the mode the real agent run uses:
+# `telegraf --config <conf> --test --input-filter mem` opens the SAME WAL
+# directory as the agent and panics identically. `telegraf config check` must
+# NOT be used: it opens a different WAL directory (measured on a field device),
+# never sees the corruption and leaves a stray empty directory behind. Only when its
 # output carries the WAL-corruption panic is the buffer moved aside to
 # buffer.corrupt-<UTC timestamp> and replaced by an empty directory. A healthy
 # buffer, and any other failure (a bad override config is ga-telegraf-override-
@@ -57,9 +60,9 @@ run_check() {
     # EXEC_PREFIX is a command prefix (qemu-user on a build host) by design.
     # shellcheck disable=SC2086
     if command -v timeout >/dev/null 2>&1; then
-        ${GA_TELEGRAF_EXEC_PREFIX:-} timeout 60 "$BIN" config check --config "$CONF" 2>&1
+        ${GA_TELEGRAF_EXEC_PREFIX:-} timeout 60 "$BIN" --config "$CONF" --test --input-filter mem 2>&1
     else
-        ${GA_TELEGRAF_EXEC_PREFIX:-} "$BIN" config check --config "$CONF" 2>&1
+        ${GA_TELEGRAF_EXEC_PREFIX:-} "$BIN" --config "$CONF" --test --input-filter mem 2>&1
     fi
 }
 
