@@ -1,17 +1,25 @@
-From 2810eca9b5fb6f57156dd73c076c85cb58e9402e Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Tim Lunn <tim@feathertop.org>
-Date: Sat, 14 Oct 2023 15:03:27 +1100
+Date: Tue, 3 Nov 2026 14:50:16 +0100
 Subject: [PATCH] arch: rockchip: preloader ATAGS for vendor OP-TEE
 
 Cherry-picked relevant portions from:
 https://github.com/edgeble/u-boot/commit/319cee2d2
+
+GA port to v2026.10 (the 2024.01 patch no longer applies):
+- rk_atags.c: <common.h> is gone upstream, include <linux/errno.h> and
+  <linux/types.h> instead.
+- ROCKCHIP_PRELOADER_ATAGS defaults to y for ROCKCHIP_RV1126 only (it was
+  y for every ARCH_ROCKCHIP), so no other Rockchip board is affected.
+- Kconfig hunk moved next to ROCKCHIP_MASKROM_IMAGE; sdram_rv1126.c hunks
+  rebased without fuzz.
 ---
- arch/arm/include/asm/arch-rockchip/rk_atags.h | 321 +++++++++++++++
+ arch/arm/include/asm/arch-rockchip/rk_atags.h | 321 ++++++++++++++
  arch/arm/mach-rockchip/Kconfig                |   8 +
  arch/arm/mach-rockchip/Makefile               |   1 +
- arch/arm/mach-rockchip/rk_atags.c             | 387 ++++++++++++++++++
+ arch/arm/mach-rockchip/rk_atags.c             | 391 ++++++++++++++++++
  drivers/ram/rockchip/sdram_rv1126.c           |  64 +++
- 5 files changed, 781 insertions(+)
+ 5 files changed, 785 insertions(+)
  create mode 100644 arch/arm/include/asm/arch-rockchip/rk_atags.h
  create mode 100644 arch/arm/mach-rockchip/rk_atags.c
 
@@ -343,16 +351,16 @@ index 0000000000..d48cf92ab3
 +
 +#endif
 diff --git a/arch/arm/mach-rockchip/Kconfig b/arch/arm/mach-rockchip/Kconfig
-index 7cc35d621b..d1e07008c2 100644
+index 9654ace805..79e35814be 100644
 --- a/arch/arm/mach-rockchip/Kconfig
 +++ b/arch/arm/mach-rockchip/Kconfig
-@@ -527,6 +527,14 @@ config ROCKCHIP_SPI_IMAGE
- 	  option to produce a SPI-flash image containing U-Boot. The image
- 	  is built by binman. U-Boot sits near the start of the image.
+@@ -766,6 +766,14 @@ config ROCKCHIP_MASKROM_IMAGE
+ 	  Rockchip SoCs support maskrom mode boot over USB. Enable this
+ 	  option to produce maskrom mode boot images containing U-Boot.
  
 +config ROCKCHIP_PRELOADER_ATAGS
 +	bool "Rockchip pre-loader atags"
-+	default y if ARCH_ROCKCHIP
++	default y if ROCKCHIP_RV1126
 +	help
 +	  This enable support Rockchip atags among pre-loaders, i.e. ddr, miniloader, ATF,
 +	  tos, U-Boot, etc. It delivers boot and configure information, shared with pre-loaders
@@ -362,10 +370,10 @@ index 7cc35d621b..d1e07008c2 100644
  	default TEXT_BASE
  
 diff --git a/arch/arm/mach-rockchip/Makefile b/arch/arm/mach-rockchip/Makefile
-index 1dc92066bb..c4978d5257 100644
+index d3bc0689f8..c897ccde47 100644
 --- a/arch/arm/mach-rockchip/Makefile
 +++ b/arch/arm/mach-rockchip/Makefile
-@@ -48,6 +48,7 @@ obj-$(CONFIG_ROCKCHIP_RK3588) += rk3588/
+@@ -50,6 +50,7 @@ obj-$(CONFIG_ROCKCHIP_RK3588) += rk3588/
  obj-$(CONFIG_ROCKCHIP_RV1108) += rv1108/
  obj-$(CONFIG_ROCKCHIP_RV1126) += rv1126/
  
@@ -375,17 +383,21 @@ index 1dc92066bb..c4978d5257 100644
  
 diff --git a/arch/arm/mach-rockchip/rk_atags.c b/arch/arm/mach-rockchip/rk_atags.c
 new file mode 100644
-index 0000000000..de7181a6d3
+index 0000000000..1563eabf80
 --- /dev/null
 +++ b/arch/arm/mach-rockchip/rk_atags.c
-@@ -0,0 +1,387 @@
+@@ -0,0 +1,391 @@
 +// SPDX-License-Identifier:     GPL-2.0+
 +/*
 + * (C) Copyright 2018 Rockchip Electronics Co., Ltd.
 + *
 + */
 +
-+#include <common.h>
++#include <config.h>
++#include <stdio.h>
++#include <linux/errno.h>
++#include <linux/string.h>
++#include <linux/types.h>
 +#include <asm/io.h>
 +#include <asm/arch-rockchip/bootrom.h>
 +#include <asm/arch-rockchip/rk_atags.h>
@@ -767,18 +779,18 @@ index 0000000000..de7181a6d3
 +		memset((char *)ATAGS_PHYS_BASE, 0, sizeof(struct tag));
 +}
 diff --git a/drivers/ram/rockchip/sdram_rv1126.c b/drivers/ram/rockchip/sdram_rv1126.c
-index 0a78e18c73..1c754eebb3 100644
+index b371f597d2..0924a7e3e5 100644
 --- a/drivers/ram/rockchip/sdram_rv1126.c
 +++ b/drivers/ram/rockchip/sdram_rv1126.c
-@@ -12,6 +12,7 @@
- #include <asm/io.h>
+@@ -11,6 +11,7 @@
+ #include <syscon.h>
  #include <asm/arch-rockchip/clock.h>
  #include <asm/arch-rockchip/hardware.h>
 +#include <asm/arch-rockchip/rk_atags.h>
  #include <asm/arch-rockchip/cru_rv1126.h>
  #include <asm/arch-rockchip/grf_rv1126.h>
  #include <asm/arch-rockchip/sdram_common.h>
-@@ -2335,6 +2336,68 @@ static void enable_low_power(struct dram_info *dram,
+@@ -2334,6 +2335,68 @@ static void enable_low_power(struct dram_info *dram,
  	setbits_le32(pctl_base + DDR_PCTL2_PWRCTL, (1 << 3));
  }
  
@@ -847,7 +859,7 @@ index 0a78e18c73..1c754eebb3 100644
  static void print_ddr_info(struct rv1126_sdram_params *sdram_params)
  {
  	u32 split;
-@@ -3490,6 +3553,7 @@ static int rv1126_dmc_init(struct udevice *dev)
+@@ -3489,6 +3552,7 @@ static int rv1126_dmc_init(struct udevice *dev)
  	ddr_set_rate_for_fsp(&dram_info, sdram_params);
  	copy_fsp_param_to_ddr();
  
@@ -855,6 +867,3 @@ index 0a78e18c73..1c754eebb3 100644
  #if defined(CONFIG_CMD_DDR_TEST_TOOL)
  	save_rw_trn_result_to_ddr(&rw_trn_result);
  #endif
--- 
-2.40.1
-

@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tim Lunn <tim@feathertop.org>
+Date: Tue, 3 Nov 2026 14:50:16 +0100
+Subject: [PATCH] Read cpucode and set env var
+
+Reads the 2-byte CPU code from OTP offset 0x02 and exports it as the
+environment variable cpucode#. The iHost boot script uses it to choose
+between rv1126-sonoff-ihost.dtb and rv1109-sonoff-ihost.dtb.
+
+GA port to v2026.10: misc.c/misc.h no longer exist, the code lives in
+arch/arm/mach-rockchip/board.c next to rockchip_cpuid_set(). The debug
+leftovers of the 2024.01 patch (#define LOG_DEBUG in misc.c, #define DEBUG
+in rockchip-otp.c) are not carried: they only changed log verbosity.
+---
+ arch/arm/dts/rv1126-u-boot.dtsi |  3 +++
+ arch/arm/mach-rockchip/board.c  | 27 +++++++++++++++++++++++++++
+ 2 files changed, 30 insertions(+)
+
+diff --git a/arch/arm/dts/rv1126-u-boot.dtsi b/arch/arm/dts/rv1126-u-boot.dtsi
+index 4485980135..536facabf3 100644
+--- a/arch/arm/dts/rv1126-u-boot.dtsi
++++ b/arch/arm/dts/rv1126-u-boot.dtsi
+@@ -23,6 +23,9 @@
+ 		#size-cells = <1>;
+ 		status = "okay";
+ 
++		cpu_code: code@2 {
++			reg = <0x02 0x2>;
++		};
+ 		cpu_id: id@7 {
+ 			reg = <0x07 0x10>;
+ 		};
+diff --git a/arch/arm/mach-rockchip/board.c b/arch/arm/mach-rockchip/board.c
+index 98c890d3bd..fe203e537d 100644
+--- a/arch/arm/mach-rockchip/board.c
++++ b/arch/arm/mach-rockchip/board.c
+@@ -395,6 +395,22 @@ int rockchip_cpuid_from_efuse(const u32 cpuid_offset,
+ 	return 0;
+ }
+ 
++int rockchip_cpucode_set(const u8 *cpucode, const u32 cpucode_length)
++{
++	char cpucode_str[cpucode_length * 2 + 1];
++	int i;
++
++	memset(cpucode_str, 0, sizeof(cpucode_str));
++	for (i = 0; i < cpucode_length; i++)
++		sprintf(&cpucode_str[i * 2], "%02x", cpucode[i]);
++
++	debug("cpu code: %s\n", cpucode_str);
++
++	env_set("cpucode#", cpucode_str);
++
++	return 0;
++}
++
+ int rockchip_cpuid_set(const u8 *cpuid, const u32 cpuid_length)
+ {
+ 	u8 low[cpuid_length / 2], high[cpuid_length / 2];
+@@ -444,8 +460,11 @@ __weak int rockchip_early_misc_init_r(void)
+ 
+ __weak int misc_init_r(void)
+ {
++	const u32 cpucode_offset = 0x02;
++	const u32 cpucode_length = 0x02;
+ 	const u32 cpuid_offset = CFG_CPUID_OFFSET;
+ 	const u32 cpuid_length = 0x10;
++	u8 cpucode[cpucode_length];
+ 	u8 cpuid[cpuid_length];
+ 	int ret;
+ 
+@@ -461,6 +480,14 @@ __weak int misc_init_r(void)
+ 	if (ret)
+ 		return ret;
+ 
++	ret = rockchip_cpuid_from_efuse(cpucode_offset, cpucode_length, cpucode);
++	if (ret)
++		return ret;
++
++	ret = rockchip_cpucode_set(cpucode, cpucode_length);
++	if (ret)
++		return ret;
++
+ 	ret = rockchip_setup_macaddr();
+ 
+ 	return ret;

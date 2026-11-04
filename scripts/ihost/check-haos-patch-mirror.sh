@@ -1,11 +1,12 @@
 #!/bin/bash
-# The iHost stays on U-Boot 2024.01, but HAOS 18.x rebased its global U-Boot
-# patch (fileenv) onto 2026.04 and it no longer applies. Buildroot applies
+# The iHost builds U-Boot 2026.10, but HAOS 18.x rebased its global U-Boot
+# patch (fileenv) onto 2026.04 and it applies to 2026.10 only with fuzz, which
+# Buildroot does not allow. Buildroot applies
 # every global patch dir per package with no way to exclude one, so the iHost
 # defconfig does NOT list $(BR2_EXTERNAL_HAOS_PATH)/patches. It lists
 # buildroot-ihost/patches-haos/ instead: one symlink per HAOS package dir, and
-# a real uboot/ dir holding the 2024.01 rebase of the same patch (carried from
-# ha-operating-system 43cdc2283, where it builds the fielded iHost).
+# a real uboot/ dir holding the 2026.10 rebase of the same patch (the previous
+# 2024.01 rebase came from ha-operating-system 43cdc2283).
 #
 # docker-engine/ is a second real dir: the GA container floor
 # (buildroot-external/container-floor.mk) builds docker-engine 29.8.2, and
@@ -41,7 +42,7 @@ for d in "$UP"/*/; do
         [ -d "$MIR/uboot" ] && [ ! -L "$MIR/uboot" ] || fail "uboot/ must be a real dir in $MIR"
         up=$(cd "$UP/uboot" && ls)
         [ "$up" = "0001-CMD-read-string-from-fileinto-env.patch" ] \
-            || fail "HAOS patches/uboot changed (now: $(echo $up)); re-check what the iHost 2024.01 replacement must carry"
+            || fail "HAOS patches/uboot changed (now: $(echo $up)); re-check what the iHost 2026.10 replacement must carry"
         continue
     fi
     if [ "$p" = docker-engine ]; then
@@ -62,4 +63,4 @@ for m in "$MIR"/*; do
     [ -e "$UP/$(basename "$m")" ] || fail "$m mirrors a HAOS patch dir that no longer exists"
 done
 [ "$n" -gt 0 ] || fail "found zero HAOS patch dirs"
-echo "check-haos-patch-mirror: OK ($n HAOS patch dirs, uboot replaced by the 2024.01 rebase, docker-engine by the 29.8.2 rebase)"
+echo "check-haos-patch-mirror: OK ($n HAOS patch dirs, uboot replaced by the 2026.10 rebase, docker-engine by the 29.8.2 rebase)"

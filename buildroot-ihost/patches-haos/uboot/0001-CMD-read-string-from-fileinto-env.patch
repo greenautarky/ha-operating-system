@@ -1,8 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Pascal Vizeli <pvizeli@syshack.ch>
+Date: Tue, 3 Nov 2026 14:50:26 +0100
+Subject: [PATCH] CMD: read string from fileinto env
+
+GA/HAOS: the HAOS patch rebased onto v2026.10 (the HAOS 18.x copy is based on
+2026.04 and no longer applies without fuzz, which Buildroot does not allow).
+---
+ cmd/Kconfig   |  5 +++++
+ cmd/Makefile  |  1 +
+ cmd/fileenv.c | 47 +++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 53 insertions(+)
+ create mode 100644 cmd/fileenv.c
+
 diff --git a/cmd/Kconfig b/cmd/Kconfig
-index df6d71c1..6cda4909 100644
+index ff90a87024..414183dcf1 100644
 --- a/cmd/Kconfig
 +++ b/cmd/Kconfig
-@@ -1689,6 +1689,11 @@ config CMD_XXD
+@@ -1960,6 +1960,11 @@ config CMD_XXD
  	help
  	  Print file as hexdump to standard output
  
@@ -13,28 +27,30 @@ index df6d71c1..6cda4909 100644
 +
  endmenu
  
- menu "Android support commands"
+ if NET
 diff --git a/cmd/Makefile b/cmd/Makefile
-index 9a6790cc..a521653f 100644
+index ce772e5555..94d261c57a 100644
 --- a/cmd/Makefile
 +++ b/cmd/Makefile
-@@ -164,6 +164,7 @@ obj-$(CONFIG_CMD_SHA1SUM) += sha1sum.o
+@@ -175,6 +175,7 @@ obj-$(CONFIG_CMD_SHA1SUM) += sha1sum.o
  obj-$(CONFIG_CMD_SEAMA) += seama.o
  obj-$(CONFIG_CMD_SETEXPR) += setexpr.o
  obj-$(CONFIG_CMD_SETEXPR_FMT) += printf.o
 +obj-$(CONFIG_CMD_FILEENV) += fileenv.o
  obj-$(CONFIG_CMD_SPI) += spi.o
  obj-$(CONFIG_CMD_STRINGS) += strings.o
- obj-$(CONFIG_CMD_SMC) += smccc.o
+ obj-$(CONFIG_CMD_SM3SUM) += sm3sum.o
 diff --git a/cmd/fileenv.c b/cmd/fileenv.c
 new file mode 100644
-index 00000000..a223dc06
+index 0000000000..7a259e2135
 --- /dev/null
 +++ b/cmd/fileenv.c
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,47 @@
 +#include <config.h>
 +#include <command.h>
++#include <env.h>
 +#include <fs.h>
++#include <vsprintf.h>
 +#include <linux/ctype.h>
 +
 +static char *fs_argv[5];
@@ -77,4 +93,3 @@ index 00000000..a223dc06
 +	"<interface> <dev:part> <addr> <filename> <envname>\n"
 +	"    - Read file from fat32 and store it as env."
 +);
-\ No newline at end of file
