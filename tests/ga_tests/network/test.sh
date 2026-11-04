@@ -2,6 +2,9 @@
 # Network configuration test suite - runs ON the device
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
+. "$SCRIPT_DIR/checks.sh"
+# Effective NM config = main file + conf.d, last definition wins (see checks.sh).
+_NM_FILES="/etc/NetworkManager/NetworkManager.conf /etc/NetworkManager/conf.d/*.conf /run/NetworkManager/conf.d/*.conf"
 
 suite_start "Network"
 
@@ -88,7 +91,7 @@ run_test_show "NET-GW" "Default gateway" \
 
 # NET-07: NM connectivity check configured
 run_test "NET-07" "NM connectivity check configured" \
-  "grep -q 'checkonline.greenautarky.com' /etc/NetworkManager/NetworkManager.conf 2>/dev/null"
+  "nm_effective uri \$(ls \$_NM_FILES 2>/dev/null) | grep -q '^https://checkonline.greenautarky.com/'"
 
 # NET-08: NM reports online
 NM_STATE=$(nmcli -t -f CONNECTIVITY general 2>/dev/null || echo "unknown")
@@ -181,12 +184,18 @@ run_test "NET-16b" "OTA endpoint reachable from device (any HTTP response)" \
 # -I so this stays a HEAD request: the bundle is ~240 MB and the point is
 # reachability + trust, not a download.
 _OTA_VER="$(sed -n 's/^VERSION_ID=//p' /etc/os-release 2>/dev/null | tr -d '"')"
-if [ -n "$_OTA_VER" ]; then
+_OTA_LABEL="$(head -1 /etc/ga-release 2>/dev/null)"
+# The prod slot is staged by push-ota.sh for FINAL releases only (rc builds go to
+# releases/<ver>/<label>/, dev builds are never staged), so a 404 on a dev/rc
+# image is expected, not a defect. Final or unknown label stays strict.
+if [ -z "$_OTA_VER" ]; then
+  skip_test "NET-16c" "OTA bundle fetch" "cannot read VERSION_ID from /etc/os-release"
+elif ! ota_prod_slot_required "$_OTA_LABEL"; then
+  skip_test "NET-16c" "OTA prod-slot bundle fetch" "pre-release build ($_OTA_LABEL): prod slot is staged for final releases only"
+else
   run_test "NET-16c" "OTA bundle for $_OTA_VER fetchable with STRICT TLS (as ga-rauc-install does)" \
     "curl -sf -I --connect-timeout 10 -m 25 -o /dev/null \
        https://ota.greenautarky.com/releases/${_OTA_VER}/haos_ihost-${_OTA_VER}.raucb"
-else
-  skip_test "NET-16c" "OTA bundle fetch" "cannot read VERSION_ID from /etc/os-release"
 fi
 
 
@@ -206,9 +215,9 @@ if command -v nmcli >/dev/null 2>&1 && nmcli -t -f DEVICE device 2>/dev/null | g
     skip_test "NET-20" "wlan0 MAC randomization off (permanent MAC not reported by this driver)"
   fi
   run_test "NET-21" "NetworkManager default pins the permanent MAC for wifi" \
-    "grep -q 'wifi.cloned-mac-address=permanent' /etc/NetworkManager/NetworkManager.conf"
+    "[ \"\$(nm_effective wifi.cloned-mac-address \$(ls \$_NM_FILES 2>/dev/null))\" = permanent ]"
   run_test "NET-22" "scan-time MAC randomization disabled" \
-    "grep -q 'wifi.scan-rand-mac-address=no' /etc/NetworkManager/NetworkManager.conf"
+    "[ \"\$(nm_effective wifi.scan-rand-mac-address \$(ls \$_NM_FILES 2>/dev/null))\" = no ]"
 else
   skip_test "NET-20" "wlan0 MAC == permanent (no wlan0 / no nmcli)"
   skip_test "NET-21" "NetworkManager pins permanent MAC (no nmcli host run)"
