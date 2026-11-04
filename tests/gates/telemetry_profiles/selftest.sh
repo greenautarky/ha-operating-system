@@ -150,7 +150,7 @@ offline() {
     blk != "" {
       if (tolower($1) == "name" && $2 == "loki") isloki = 1
       if (inp && tolower($1) == "name" && $2 == "systemd") insys = 1
-      if ($1 == "DB")                    { sub(/\/mnt\/data\/fluent-bit\/db/, "/w/db") }
+      if ($1 == "DB")                    { sub(/\/mnt\/data\/fluent-bit\/db/, "/w/db"); sub(/\/run\/fluent-bit/, "/w/db") }
       if (tolower($1) == "storage.path") { $0 = "    storage.path /w/storage" }
       if (tolower($1) == "flush")        { $0 = "    Flush 1" }
       if (tolower($1) == "parsers_file") { $0 = "    Parsers_File /w/etc/parsers.conf" }

@@ -563,6 +563,13 @@ jobs:
       - name: Journal is volatile; failure trail wired to 3 triggers and bounded
         run: ./tests/gates/journald_volatile/selftest.sh
 
+      # A systemd input with Read_From_Tail true skips everything journald held
+      # before fluent-bit started: ga-boot-check's UNCLEAN SHUTDOWN line never
+      # reached Loki. Every shipped systemd input must read from the start with
+      # a cursor DB, or carry a `# tail-ok: <reason>`. Fixtures + live configs.
+      - name: Shipped journal inputs do not skip boot-time lines
+        run: ./tests/gates/fluent_bit_boot_evidence/selftest.sh
+
       # expected.env is the DECLARATION side of the os_integrity suite: the
       # release marker and the baked add-on pins the flashed device is held
       # against. It is generated repo-side and committed — and nothing checked
