@@ -589,6 +589,17 @@ jobs:
       - name: Shipped journal inputs do not skip boot-time lines
         run: ./tests/gates/fluent_bit_boot_evidence/selftest.sh
 
+      # The failure trail must exist after a crash. ga-journal-dump piped into
+      # `gzip -c 2>/dev/null`; the image's busybox (upstream HAOS config) has no
+      # gzip applet, so every dump on a device was empty (`head: standard
+      # output: I/O error`). This runs the LIVE script under busybox ash with
+      # SIGPIPE ignored (as systemd does) and only the applets the LIVE busybox
+      # config (haos/ + busybox-ga.fragment) enables.
+      - name: ga-journal-dump leaves a non-empty dump with the image's tools
+        run: |
+          sudo apt-get install -y --no-install-recommends busybox-static
+          ./tests/gates/journal_dump/selftest.sh
+
       # expected.env is the DECLARATION side of the os_integrity suite: the
       # release marker and the baked add-on pins the flashed device is held
       # against. It is generated repo-side and committed — and nothing checked
