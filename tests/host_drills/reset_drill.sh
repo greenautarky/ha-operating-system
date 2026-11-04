@@ -42,7 +42,12 @@
 #
 # USAGE
 #   tests/host_drills/reset_drill.sh --ssh root@<device> [--port 22222] \
-#       [--key PATH] --mode unclean|clean --i-know-this-reboots-the-device
+#       [--key PATH] --mode unclean|clean --i-know-this-reboots-the-device \
+#       [--require-consent]
+#   --require-consent  for the run that must PROVE (e) and (f): a missing consent
+#                      marker, an unset LOKI_QUERY_URL or an inactive shipper is
+#                      a FAIL instead of a SKIP. (e) is gated by
+#                      /mnt/data/.ga-consent-metrics, (f) by .ga-consent-error_logs.
 # =============================================================================
 set -uo pipefail
 
@@ -55,6 +60,11 @@ LOKI_WAIT_MIN="${LOKI_WAIT_MIN:-10}"
 POLL="${POLL:-3}"
 TRIGGER_WAIT="${TRIGGER_WAIT:-2}"
 CLEAN_LOKI_WAIT="${CLEAN_LOKI_WAIT:-60}"
+# --require-consent (or REQUIRE_CONSENT=1): the run that must prove (e) and (f).
+# Without it, a device without telemetry consent SKIPs (e)/(f) - telegraf and the
+# tier-1 shipper are gated off BY DESIGN there, so red would be red for the wrong
+# reason. With it, every reason to skip (e)/(f) is a FAIL: no escape hatch.
+REQUIRE_CONSENT="${REQUIRE_CONSENT:-0}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -63,6 +73,7 @@ while [ $# -gt 0 ]; do
         --key) SSH_KEY="$2"; shift 2 ;;
         --mode) MODE="$2"; shift 2 ;;
         --i-know-this-reboots-the-device) CONFIRM=1; shift ;;
+        --require-consent) REQUIRE_CONSENT=1; shift ;;
         -h|--help) sed -n '2,50p' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -100,7 +111,10 @@ rsh marker 'test -f /mnt/data/.ga_unclean_shutdown && echo MARKER' | grep -q MAR
     || abort "/mnt/data/.ga_unclean_shutdown absent before the reset - ga-crash-marker has not run, the drill would prove nothing"
 START_EPOCH="$(rsh epoch 'date +%s' | tr -d '[:space:]')"
 case "$START_EPOCH" in ''|*[!0-9]*) abort "cannot read device time" ;; esac
-LABEL="$(rsh label 'cat /mnt/data/ga-device-label 2>/dev/null' | tr -d '[:space:]')"
+# The label fluent-bit stamps on every Loki stream: DEVICE_LABEL in the env file
+# ga-fluent-bit-env writes (there is no /mnt/data/ga-device-label on any device).
+LABEL_FILE=/mnt/data/fluent-bit/env
+LABEL="$(rsh label "sed -n 's/^DEVICE_LABEL=//p' $LABEL_FILE 2>/dev/null | head -1" | tr -d '[:space:]"'"'"'')"
 HAS_DUMP="$(rsh has_dump 'test -x /usr/libexec/ga-journal-dump && echo yes || echo no' | tr -d '[:space:]')"
 T1_ACTIVE="$(rsh tier1 'systemctl is-active fluent-bit.service 2>/dev/null' | tr -d '[:space:]')"
 echo "  before: boot_id=${BOOT_BEFORE:0:8} crash_log_lines=$CRASH_BEFORE journal_dump_in_image=$HAS_DUMP tier1_shipper=${T1_ACTIVE:-unknown}"
@@ -188,7 +202,14 @@ else
 fi
 
 # --- e: telegraf (owner: telegraf WAL stream) ---------------------------------------
+# skip_or_fail <msg>: SKIP normally, FAIL under --require-consent.
+skip_or_fail() { if [ "$REQUIRE_CONSENT" = 1 ]; then bad "$1 [--require-consent: not allowed to skip]"; else skip "$1"; fi; }
+METRICS_CONSENT="$(rsh consent_metrics 'test -f /mnt/data/.ga-consent-metrics && echo yes || echo no' | tr -d '[:space:]')"
+LOGS_CONSENT="$(rsh consent_logs 'test -f /mnt/data/.ga-consent-error_logs && echo yes || echo no' | tr -d '[:space:]')"
 waited=0 TG=""
+if [ "$METRICS_CONSENT" != yes ]; then
+    skip_or_fail "(e) NOT COVERED: no metrics consent (/mnt/data/.ga-consent-metrics absent) - telegraf is gated off by design"
+else
 while [ "$waited" -lt "$SETTLE_TIMEOUT" ]; do
     TG="$(rsh telegraf 'systemctl is-active telegraf.service 2>/dev/null' | tr -d '[:space:]')"
     [ "$TG" = active ] && break
@@ -196,14 +217,17 @@ while [ "$waited" -lt "$SETTLE_TIMEOUT" ]; do
 done
 if [ "$TG" = active ]; then ok "(e) [owner: telegraf WAL] telegraf.service is active after the reset"
 else bad "(e) [owner: telegraf WAL] telegraf.service is '${TG:-unknown}' ${SETTLE_TIMEOUT}s after the reset (not a ga-boot-check/journal-dump/fluent-bit failure)"; fi
+fi
 
 # --- f: Loki ---------------------------------------------------------------------------
 if [ -z "${LOKI_QUERY_URL:-}" ]; then
-    skip "(f) NOT COVERED: LOKI_QUERY_URL not set - Loki was not queried"
+    skip_or_fail "(f) NOT COVERED: LOKI_QUERY_URL not set - Loki was not queried"
+elif [ "$LOGS_CONSENT" != yes ]; then
+    skip_or_fail "(f) NOT COVERED: no log consent (/mnt/data/.ga-consent-error_logs absent) - the tier-1 shipper is gated off by design"
 elif [ -z "$LABEL" ]; then
-    skip "(f) NOT COVERED: device label unreadable (/mnt/data/ga-device-label) - cannot select the device's stream"
+    bad "(f) DEVICE_LABEL missing in $LABEL_FILE on a device with log consent - cannot select the device's Loki stream"
 elif [ "${T1_ACTIVE:-}" != active ]; then
-    skip "(f) NOT COVERED: tier-1 shipper (fluent-bit.service) is '${T1_ACTIVE:-unknown}' on the device (telemetry consent?); tier-0 does not carry ga-boot-check lines"
+    skip_or_fail "(f) NOT COVERED: tier-1 shipper (fluent-bit.service) is '${T1_ACTIVE:-unknown}' on the device (telemetry consent?); tier-0 does not carry ga-boot-check lines"
 else
     loki_count() {  # number of UNCLEAN lines for this device since the drill started
         local auth=() hdr=()

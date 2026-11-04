@@ -42,6 +42,12 @@ cat > "$W/bin/ssh" <<'EOF'
 cmd=""; for a in "$@"; do cmd="$a"; done
 name="$(printf '%s' "$cmd" | sed -n '1s/^# //p')"
 case "$name" in trigger_*) touch "$SCEN/.after"; exit 0 ;; esac
+# The label lives ONLY in /mnt/data/fluent-bit/env on a real device: answer it
+# only if the drill reads that file (a drill reading another path gets nothing).
+if [ "$name" = label ]; then
+  case "$cmd" in */mnt/data/fluent-bit/env*) cat "$SCEN/before/label" 2>/dev/null ;; esac
+  exit 0
+fi
 phase=before; [ -f "$SCEN/.after" ] && phase=after
 if [ -f "$SCEN/$phase/$name" ]; then cat "$SCEN/$phase/$name"
 elif [ -f "$SCEN/before/$name" ]; then cat "$SCEN/before/$name"
@@ -70,6 +76,8 @@ mkscen() {
   echo active > "$b/tier1"
   echo inactive > "$b/bootcheck_state"
   echo active > "$a/telegraf"
+  echo yes > "$a/consent_metrics"
+  echo yes > "$a/consent_logs"
   if [ "$2" = unclean ]; then
     echo 11 > "$a/crash_count"
     echo "Nov 04 ga-boot-check[1]: <4>WARNING: UNCLEAN SHUTDOWN DETECTED - previous boot did not complete cleanly" > "$a/bootcheck_journal"
@@ -128,6 +136,29 @@ run unclean-no-dump unclean;                check unclean-no-dump 1 "d"
 mkscen unclean-telegraf-down unclean; echo inactive > "$W/unclean-telegraf-down/after/telegraf"
 run unclean-telegraf-down unclean;          check unclean-telegraf-down 1 "e"
 grep -q '\[owner: telegraf WAL\]' "$W/out.unclean-telegraf-down" && okk "(e) failure is labelled with its owner" || bad "(e) failure carries no owner label"
+
+# consent matrix for (e): no consent -> SKIP; no consent + --require-consent -> FAIL;
+# consent + telegraf inactive -> FAIL (above); consent + active -> PASS (unclean-good)
+mkscen unclean-no-metrics-consent unclean
+echo no > "$W/unclean-no-metrics-consent/after/consent_metrics"; echo inactive > "$W/unclean-no-metrics-consent/after/telegraf"
+run unclean-no-metrics-consent unclean;     check unclean-no-metrics-consent 0 ""
+grep -q '^  SKIP  (e) NOT COVERED: no metrics consent' "$W/out.unclean-no-metrics-consent" && okk "(e) without metrics consent is SKIP, not FAIL" || bad "(e) without metrics consent is not reported as SKIP"
+cp -r "$W/unclean-no-metrics-consent" "$W/unclean-no-metrics-consent-req"; rm -f "$W/unclean-no-metrics-consent-req/.after"
+run unclean-no-metrics-consent-req unclean REQUIRE_CONSENT=1; check unclean-no-metrics-consent-req 1 "e"
+mkscen unclean-good-req unclean; run unclean-good-req unclean REQUIRE_CONSENT=1; check unclean-good-req 0 ""
+
+# consent matrix for (f): no log consent -> SKIP; + --require-consent -> FAIL
+mkscen unclean-no-logs-consent unclean; echo no > "$W/unclean-no-logs-consent/after/consent_logs"
+run unclean-no-logs-consent unclean;        check unclean-no-logs-consent 0 ""
+cp -r "$W/unclean-no-logs-consent" "$W/unclean-no-logs-consent-req"; rm -f "$W/unclean-no-logs-consent-req/.after"
+run unclean-no-logs-consent-req unclean REQUIRE_CONSENT=1; check unclean-no-logs-consent-req 1 "f"
+# --require-consent also forbids skipping (f) for an unset LOKI_QUERY_URL
+mkscen unclean-no-loki-req unclean; run unclean-no-loki-req unclean LOKI_QUERY_URL= REQUIRE_CONSENT=1; check unclean-no-loki-req 1 "f"
+
+# label: log consent but DEVICE_LABEL missing in /mnt/data/fluent-bit/env -> FAIL naming the path, never SKIP
+mkscen unclean-no-label unclean; rm "$W/unclean-no-label/before/label"
+run unclean-no-label unclean;               check unclean-no-label 1 "f"
+grep -q 'DEVICE_LABEL missing in /mnt/data/fluent-bit/env' "$W/out.unclean-no-label" && okk "(f) missing label FAILs and names the file" || bad "(f) missing label not reported with its path"
 
 mkscen unclean-loki-missing unclean; echo 0 > "$W/unclean-loki-missing/loki_count"
 run unclean-loki-missing unclean;           check unclean-loki-missing 1 "f"
