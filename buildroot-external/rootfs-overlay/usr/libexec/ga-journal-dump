@@ -32,6 +32,7 @@
 #   gzip-compressed, and only the newest KEEP dumps are kept.
 #
 #   read after reboot:  zcat /mnt/data/journal-dump/dump-*.log.gz | less
+#   (dump-*.log = uncompressed fallback, only written when gzip is missing)
 #
 # This script never fails its caller: every error ends in exit 0 after a
 # message on stderr. A failure trail must not turn into a second failure.
@@ -72,7 +73,7 @@ if [ -n "$free_kb" ] && [ "$free_kb" -lt "$MIN_FREE_KB" ] 2>/dev/null; then
 fi
 
 TMP="$DIR/.tmp.$$"
-trap 'rm -f "$TMP" "$TMP.gz" "$TMP.ps"' EXIT
+trap 'rm -f "$TMP" "$TMP.gz" "$TMP.txt" "$TMP.ps"' EXIT
 
 T=""
 command -v timeout >/dev/null 2>&1 && T="timeout 20"
@@ -124,24 +125,43 @@ section() { # section <title> <cap>  (stdin -> newest <cap> bytes)
             head -c "$CAP_PSTORE" "$f" 2>/dev/null
         done < "$TMP.ps" | section "pstore (previous crash records: live, then newest archived)" "$CAP_PSTORE"
     fi
-} 2>/dev/null | head -c "$MAX_BYTES" | gzip -c > "$TMP.gz" 2>/dev/null
+} 2>/dev/null | head -c "$MAX_BYTES" > "$TMP.txt"
 
-if [ ! -s "$TMP.gz" ]; then
-    warn "empty dump - nothing written"
+# The text is written to a file FIRST and compressed in a separate step. It used
+# to be one pipeline into `gzip -c > file 2>/dev/null`: where gzip is missing or
+# fails, the shell's "not found" went to /dev/null and the only visible symptom
+# was `head: standard output: I/O error` (systemd runs units with SIGPIPE
+# ignored, so head reports the dead reader instead of dying silently) followed
+# by "empty dump". The image's busybox had no gzip applet (CONFIG_GZIP unset),
+# so every dump on a device was empty.
+if [ ! -s "$TMP.txt" ]; then
+    warn "empty dump - nothing written (no journal output)"
     exit 0
 fi
 
+EXT="log.gz"
+if command -v gzip >/dev/null 2>&1 && gzip -c < "$TMP.txt" > "$TMP.gz" && [ -s "$TMP.gz" ]; then
+    :
+else
+    # Loud fallback: keep the evidence uncompressed rather than lose it. The
+    # text is already bounded to MAX_BYTES and only KEEP files are kept.
+    warn "WARNING: gzip unavailable or failed - storing the dump UNCOMPRESSED"
+    rm -f "$TMP.gz"
+    mv "$TMP.txt" "$TMP.gz" 2>/dev/null || { warn "cannot stage dump"; exit 0; }
+    EXT="log"
+fi
+
 # Same boot + same reason replaces its earlier dump instead of adding another.
-for old in "$DIR"/dump-*-"$BOOT8"-"$REASON".log.gz; do
+for old in "$DIR"/dump-*-"$BOOT8"-"$REASON".log.gz "$DIR"/dump-*-"$BOOT8"-"$REASON".log; do
     [ -e "$old" ] && rm -f "$old"
 done
-OUT="$DIR/dump-$TS-$BOOT8-$REASON.log.gz"
+OUT="$DIR/dump-$TS-$BOOT8-$REASON.$EXT"
 mv "$TMP.gz" "$OUT" 2>/dev/null || { warn "cannot write $OUT"; exit 0; }
-echo "ga-journal-dump: wrote $OUT ($(stat -c%s "$OUT" 2>/dev/null) bytes compressed)"
+echo "ga-journal-dump: wrote $OUT ($(stat -c%s "$OUT" 2>/dev/null) bytes, $EXT)"
 
 # Rotation: keep the newest KEEP dumps (names sort by timestamp).
 n=0
-for f in $(ls -1r "$DIR"/dump-*.log.gz 2>/dev/null); do
+for f in $(ls -1r "$DIR"/dump-*.log.gz "$DIR"/dump-*.log 2>/dev/null); do
     n=$((n + 1))
     [ "$n" -gt "$KEEP" ] && rm -f "$f"
 done

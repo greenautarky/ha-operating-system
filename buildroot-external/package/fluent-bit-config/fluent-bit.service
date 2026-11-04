@@ -18,6 +18,11 @@ StartLimitBurst=10
 [Service]
 Type=simple
 
+# /run/fluent-bit holds the systemd-input cursor DB (see fluent-bit.conf). Kept
+# across restarts within a boot, gone after a reboot.
+RuntimeDirectory=fluent-bit
+RuntimeDirectoryPreserve=yes
+
 # Builds /mnt/data/fluent-bit/env: GA_ENV, DEVICE_UUID, DEVICE_LABEL, and the
 # per-device LOKI_* credential read from the ga-fleet-loki.yaml sidecar
 # (ADR-0003 Step 3; delivered by the fleet-manager credentials_autopush ->
