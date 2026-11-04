@@ -563,6 +563,14 @@ jobs:
       - name: Journal is volatile; failure trail wired to 3 triggers and bounded
         run: ./tests/gates/journald_volatile/selftest.sh
 
+      # The iHost must keep evidence of WHY it reset: ramoops DT region at a
+      # pinned address, pstore built in with console, softlockup / hardlockup /
+      # hung-task detectors set to panic, ga-boot-check logging the CRU reset
+      # status. Fixtures: one must-fail per check, must-pass trees, and the
+      # live ga-boot-check functions run against a fake /dev/mem.
+      - name: iHost crash evidence (ramoops, lockup detectors, reset reason)
+        run: ./tests/gates/ihost_crash_evidence/selftest.sh
+
       # expected.env is the DECLARATION side of the os_integrity suite: the
       # release marker and the baked add-on pins the flashed device is held
       # against. It is generated repo-side and committed — and nothing checked

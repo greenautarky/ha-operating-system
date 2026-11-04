@@ -67,7 +67,8 @@ usage() {
     echo ""
     echo "Available suites:"
     echo "  crash_detection health telemetry environment network ping boot_timing disk_guard watchdog config_verify stress idle_perf onboarding tailscale hardware"
-    echo "  crash_panic (host-side: triggers kernel panic, waits for reboot, verifies detection)"
+    echo "  crash_panic (host-side: triggers kernel panic, waits for reboot, verifies detection + pstore record + reset reason)"
+    echo "  crash_clean_reboot (host-side: a clean reboot must leave NO pstore panic record)"
     exit 1
 }
 
@@ -385,6 +386,9 @@ run_ssh() {
     if echo "$SUITES" | grep -qw "crash_panic"; then
         run_crash_panic_test
     fi
+    if echo "$SUITES" | grep -qw "crash_clean_reboot"; then
+        run_crash_clean_reboot_test
+    fi
 
     if [[ "$run_rc" -ne 0 ]]; then
         echo ""
@@ -404,6 +408,12 @@ run_crash_panic_test() {
     local before_count
     # shellcheck disable=SC2086
     before_count=$(ssh $SSH_OPTS "$SSH_TARGET" "wc -l < /mnt/data/crash_history.log 2>/dev/null || echo 0") || before_count=0
+
+    # Start from an EMPTY pstore so any record found afterwards was written by
+    # THIS panic. The kernel ships with sysrq disabled (MAGIC_SYSRQ_DEFAULT_ENABLE=0).
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "$SSH_TARGET" "rm -f /sys/fs/pstore/*; echo 1 > /proc/sys/kernel/sysrq; ls /sys/fs/pstore | wc -l" 2>/dev/null | grep -qx 0 \
+        || { printf "\033[0;31m  FAIL\033[0m  CRASH-04z: could not enable sysrq / empty pstore before the drill\n"; return; }
 
     echo "  Triggering kernel panic via sysrq..."
     # shellcheck disable=SC2086
@@ -470,6 +480,41 @@ run_crash_panic_test() {
         fail=$((fail + 1))
     fi
 
+    # CRASH-04d: the PREVIOUS boot's kernel log survived the warm reset in
+    # pstore and names the sysrq crash (this is what separates a panic/watchdog
+    # reset from power loss, where pstore is empty).
+    local ps_out
+    # shellcheck disable=SC2086
+    ps_out=$(ssh $SSH_OPTS "$SSH_TARGET" "grep -l sysrq /sys/fs/pstore/* 2>/dev/null" 2>/dev/null) || ps_out=""
+    if echo "$ps_out" | grep -q '^/sys/fs/pstore/'; then
+        printf "\033[0;32m  PASS\033[0m  CRASH-04d: pstore holds the previous boot's log mentioning sysrq\n"
+        pass=$((pass + 1))
+    else
+        printf "\033[0;31m  FAIL\033[0m  CRASH-04d: no pstore record with 'sysrq' after the panic (ramoops region/driver/console not working, or DRAM cleared on reset)\n"
+        fail=$((fail + 1))
+    fi
+    # shellcheck disable=SC2086
+    if ssh $SSH_OPTS "$SSH_TARGET" "ls /sys/fs/pstore | grep -q '^dmesg-'" 2>/dev/null; then
+        printf "\033[0;32m  PASS\033[0m  CRASH-04e: a kmsg panic record (dmesg-*) was written\n"
+        pass=$((pass + 1))
+    else
+        printf "\033[0;31m  FAIL\033[0m  CRASH-04e: no dmesg-* panic record in pstore\n"
+        fail=$((fail + 1))
+    fi
+
+    # CRASH-04f: ga-boot-check logged the reset reason for this boot
+    local rr
+    # shellcheck disable=SC2086
+    rr=$(ssh $SSH_OPTS "$SSH_TARGET" "journalctl -u ga-boot-check -b 0 --no-pager -q 2>/dev/null | grep 'RESET REASON'; grep 'Reset reason' /mnt/data/crash_history.log 2>/dev/null | tail -1" 2>/dev/null) || rr=""
+    if echo "$rr" | grep -Eq 'cru_glb_rst_st=0x[0-9a-f]{8} ' && echo "$rr" | grep -q 'pstore_records='; then
+        printf "\033[0;32m  PASS\033[0m  CRASH-04f: reset reason logged by ga-boot-check\n"
+        pass=$((pass + 1))
+    else
+        printf "\033[0;31m  FAIL\033[0m  CRASH-04f: no readable reset reason logged by ga-boot-check\n"
+        fail=$((fail + 1))
+    fi
+    [ -n "$rr" ] && echo "        -> $(echo "$rr" | head -1)"
+
     # Show crash detection output
     # shellcheck disable=SC2086
     local crash_entry
@@ -480,6 +525,47 @@ run_crash_panic_test() {
     echo ""
     echo "--- Crash Panic: ${pass} passed, ${fail} failed, 0 skipped (${total} total) ---"
     printf '{"suite":"Crash Panic","pass":%d,"fail":%d,"skip":0}\n' "$pass" "$fail"
+}
+
+# --- Host-side: clean reboot counterpart of the panic drill ---
+# A clean reboot must NOT leave a kmsg panic record: otherwise "pstore has a
+# record" would not discriminate anything. (The console-ramoops record of the
+# previous boot is expected after ANY warm reboot and is not checked.)
+run_crash_clean_reboot_test() {
+    echo ""
+    echo "=== Crash Clean Reboot (host-side) ==="
+    local pass=0 fail=0 attempts=0 max_attempts=60
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "$SSH_TARGET" "rm -f /sys/fs/pstore/*; ls /sys/fs/pstore | wc -l" 2>/dev/null | grep -qx 0 \
+        || { printf "\033[0;31m  FAIL\033[0m  CRASH-CR0: could not empty pstore before the reboot\n"; echo '{"suite":"Crash Clean Reboot","pass":0,"fail":1,"skip":0}'; return; }
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "$SSH_TARGET" "reboot" 2>/dev/null || true
+    sleep 20
+    while [ $attempts -lt $max_attempts ]; do
+        # shellcheck disable=SC2086
+        ssh $SSH_OPTS "$SSH_TARGET" "echo OK" 2>/dev/null | grep -q OK && break
+        sleep 3; attempts=$((attempts + 1))
+    done
+    if [ $attempts -ge $max_attempts ]; then
+        printf "\033[0;31m  FAIL\033[0m  CRASH-CR1: device did not come back after a clean reboot\n"
+        echo '{"suite":"Crash Clean Reboot","pass":0,"fail":1,"skip":0}'; return
+    fi
+    # shellcheck disable=SC2086
+    if ssh $SSH_OPTS "$SSH_TARGET" "! ls /sys/fs/pstore | grep -q '^dmesg-'" 2>/dev/null; then
+        printf "\033[0;32m  PASS\033[0m  CRASH-CR1: no dmesg-* panic record after a clean reboot\n"; pass=$((pass + 1))
+    else
+        printf "\033[0;31m  FAIL\033[0m  CRASH-CR1: a clean reboot left a panic record in pstore\n"; fail=$((fail + 1))
+    fi
+    # shellcheck disable=SC2086
+    if ssh $SSH_OPTS "$SSH_TARGET" "! journalctl -u ga-boot-check -b 0 --no-pager -q 2>/dev/null | grep -q 'UNCLEAN SHUTDOWN DETECTED'" 2>/dev/null; then
+        printf "\033[0;32m  PASS\033[0m  CRASH-CR2: ga-boot-check saw a clean shutdown\n"; pass=$((pass + 1))
+    else
+        printf "\033[0;31m  FAIL\033[0m  CRASH-CR2: ga-boot-check flagged the clean reboot as unclean\n"; fail=$((fail + 1))
+    fi
+    local total=$((pass + fail))
+    echo ""
+    echo "--- Crash Clean Reboot: ${pass} passed, ${fail} failed, 0 skipped (${total} total) ---"
+    printf '{"suite":"Crash Clean Reboot","pass":%d,"fail":%d,"skip":0}\n' "$pass" "$fail"
 }
 
 # --- Execute via serial ---
