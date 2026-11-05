@@ -30,23 +30,47 @@ if [ ! -f "$METRICS_MARKER" ]; then
   return 0 2>/dev/null || exit 0
 fi
 
-# journal of the CURRENT run of the unit (since its last start)
-tg_since() { systemctl show -p ActiveEnterTimestamp --value telegraf 2>/dev/null; }
-tg_journal() { journalctl -u telegraf --no-pager -q --since "$(tg_since)" 2>/dev/null; }
+# journal of the CURRENT run of the unit, selected by its InvocationID - no
+# timestamp parsing (busybox `date -d` rejects systemd's "Wed 2026-11-04 15:59:25
+# CET", measured on the bench). Fails (rc 1) when the run cannot be identified, so
+# a check built on it can never pass on an empty journal.
+tg_invocation() { systemctl show -p InvocationID --value telegraf 2>/dev/null; }
+tg_journal() {
+  _inv="$(tg_invocation)"
+  [ -n "$_inv" ] || { echo "TGW: telegraf has no InvocationID - current run unknown" >&2; return 1; }
+  journalctl --no-pager -q "_SYSTEMD_INVOCATION_ID=$_inv" 2>/dev/null
+}
+# seconds since the unit entered "active", from monotonic clocks only:
+# ActiveEnterTimestampMonotonic (us since boot) vs /proc/uptime (s since boot).
+# The us value exceeds 2^31 after ~36 min and the device shell (armv7) does
+# 32-bit signed arithmetic, so it is cut to seconds as a STRING, never in $(( )).
+tg_up_s() {
+  _mono="$(systemctl show -p ActiveEnterTimestampMonotonic --value telegraf 2>/dev/null)"
+  case "$_mono" in ''|0|*[!0-9]*) echo "TGW: no ActiveEnterTimestampMonotonic ('$_mono')" >&2; return 1 ;; esac
+  if [ "${#_mono}" -gt 6 ]; then _start="${_mono%??????}"; else _start=0; fi
+  _now="$(cut -d. -f1 "${PROC_UPTIME:-/proc/uptime}" 2>/dev/null)"
+  case "$_now" in ''|*[!0-9]*) echo "TGW: /proc/uptime unreadable" >&2; return 1 ;; esac
+  echo $(( _now - _start ))
+}
+# no panic / write error in the current run; FAILS if the run's journal is unknown
+no_bad_lines() {
+  _j="$(tg_journal)" || return 1
+  ! printf '%s\n' "$_j" | grep -qE 'panic:|E! .*Error writing to outputs'
+}
 
 # --- liveness --------------------------------------------------------------
 run_test "TGW-01" "telegraf.service is active" "systemctl is-active --quiet telegraf"
 
-run_test "TGW-02" "no panic and no output write error in the current run" \
-  "! tg_journal | grep -E 'panic:|E! .*Error writing to outputs'"
+run_test "TGW-02" "no panic and no output write error in the current run" "no_bad_lines"
 
 # "Wrote batch" is logged at debug level only; the shipped config runs at info,
 # so it is accepted when present, otherwise delivery is shown by the absence of
 # write errors for >= 2 flush intervals while the unit has been up that long.
 deliver_ok() {
-  tg_journal | grep -q 'Wrote batch' && return 0
-  up=$(( $(date +%s) - $(date -d "$(tg_since)" +%s 2>/dev/null || echo "$(date +%s)") ))
-  [ "$up" -ge 30 ] && ! tg_journal | grep -qE 'E! .*(Error writing|did not complete within its flush interval)'
+  _j="$(tg_journal)" || return 1
+  printf '%s\n' "$_j" | grep -q 'Wrote batch' && return 0
+  _up="$(tg_up_s)" || return 1
+  [ "$_up" -ge 30 ] && ! printf '%s\n' "$_j" | grep -qE 'E! .*(Error writing|did not complete within its flush interval)'
 }
 run_test "TGW-03" "telegraf delivers (Wrote batch, or up >= 30 s with no write errors)" "deliver_ok"
 
