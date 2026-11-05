@@ -462,6 +462,13 @@ subnet unless they arrive on that bridge, on loopback or on a configured
 trusted interface. This is Docker-level hardening that complements the
 Supervisor's gateway rule.
 
+### Security — kernel 6.12.112 -> 6.12.115
+
+The iHost kernel moves to 6.12.115 (same longterm stable branch, kernel.org
+tarball; closes 77 tracked CVEs). No config change; GA kernel patches and the
+HAOS ipv6 patch unchanged. `expected.env` declares 6.12.115. The DSGW-210
+kernel (6.18.x) is a separate pin and is not touched.
+
 ### Security — kernel 6.12.103 -> 6.12.112
 
 The iHost kernel moves to the 6.12.112 longterm stable release (kernel.org
