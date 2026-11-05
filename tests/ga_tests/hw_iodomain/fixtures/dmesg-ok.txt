@@ -1,0 +1,2 @@
+[    1.0] rockchip-iodomain: ok
+[    2.0] eth0: Link is Up

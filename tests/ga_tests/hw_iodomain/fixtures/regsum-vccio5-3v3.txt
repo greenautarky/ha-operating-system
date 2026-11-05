@@ -1,0 +1,10 @@
+ regulator                      use open bypass  opmode voltage current     min     max
+---------------------------------------------------------------------------------------
+ regulator-dummy                  1   2      0 unknown     0mV     0mA     0mV     0mV
+ vcc_1v8                          3   4      0 unknown  1800mV     0mA  1800mV  1800mV
+    foo-supply                                     0mA     0mV     0mV
+ vcc_3v3                          5   6      0 unknown  3300mV     0mA  3300mV  3300mV
+    io-domains-vccio5                              0mA     0mV     0mV
+    io-domains-vccio3                              0mA     0mV     0mV
+    io-domains-vccio4                              0mA     0mV     0mV
+    io-domains-vccio6                              0mA     0mV     0mV
