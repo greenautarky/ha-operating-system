@@ -39,6 +39,11 @@ _RBT_BOARD="${GA_BOARD:-ihost}"
 _RBT_SKIP_TABLE="${GA_BUILD_BOARD_SKIPS:-$(dirname "${BASH_SOURCE[0]}")/build_board_skips.tsv}"
 _RBT_BOARD_MK="${_RBT_ROOT}/$(ga_board_var BOARD_DIR "$_RBT_BOARD" 2>/dev/null || echo __no_such_board__)/external.mk"
 _RBT_BOARD_SKIPPED=()
+# The board's CPU arch for the GA Core image name (VER-05), read from its defconfig;
+# armv7 when it cannot be read (the iHost's value, the pre-existing behaviour).
+_RBT_DEFCONFIG="${_RBT_ROOT}/$(ga_board_var DEFCONFIG "$_RBT_BOARD" 2>/dev/null || echo __no_such_board__)"
+_RBT_ARCH="$(sed -n 's/^BR2_PACKAGE_HASSIO_ARCH="\([a-z0-9]*\)"$/\1/p' "$_RBT_DEFCONFIG" 2>/dev/null | head -n 1)"
+_RBT_ARCH="${_RBT_ARCH:-armv7}"
 _rbt_cond() {
   case "$1" in
     -) return 0 ;;
@@ -1437,24 +1442,24 @@ if [[ -f "$VER_JSON" ]]; then
     [[ "$VER_IMGS_SUP" != *greenautarky* ]] && _fail "VER-04: images.supervisor is NOT greenautarky: $VER_IMGS_SUP"
   fi
 
-  # VER-05: core image is the GA armv7 build (reversed 2026-09-28 together
+  # VER-05: core image is the GA ${_RBT_ARCH} build (reversed 2026-09-28 together
   # with REG-02 — upstream stopped building armv7 Core in late 2025, so the
   # stock image is frozen). Both .image.core and .images.core must name
-  # ghcr.io/greenautarky/home-assistant-armv7. A `.image.core` key may be
+  # ghcr.io/greenautarky/home-assistant-${_RBT_ARCH}. A `.image.core` key may be
   # absent — only assert on refs that are present.
   VER_IMG_CORE="$(jq -r '.image.core // empty' "$VER_JSON" 2>/dev/null)"
   VER_IMGS_CORE="$(jq -r '.images.core // empty' "$VER_JSON" 2>/dev/null)"
   VER05_OK=true
   if [[ -n "$VER_IMGS_CORE" ]]; then
-    [[ "$VER_IMGS_CORE" == ghcr.io/greenautarky/home-assistant-armv7 ]] \
-      || { _fail "VER-05: images.core is NOT the GA armv7 build: $VER_IMGS_CORE"; VER05_OK=false; }
+    [[ "$VER_IMGS_CORE" == ghcr.io/greenautarky/home-assistant-${_RBT_ARCH} ]] \
+      || { _fail "VER-05: images.core is NOT the GA ${_RBT_ARCH} build: $VER_IMGS_CORE"; VER05_OK=false; }
   else
     _fail "VER-05: images.core missing from version.json"; VER05_OK=false
   fi
-  if [[ -n "$VER_IMG_CORE" ]] && [[ "$VER_IMG_CORE" != ghcr.io/greenautarky/home-assistant-armv7 ]]; then
-    _fail "VER-05: image.core is NOT the GA armv7 build: $VER_IMG_CORE"; VER05_OK=false
+  if [[ -n "$VER_IMG_CORE" ]] && [[ "$VER_IMG_CORE" != ghcr.io/greenautarky/home-assistant-${_RBT_ARCH} ]]; then
+    _fail "VER-05: image.core is NOT the GA ${_RBT_ARCH} build: $VER_IMG_CORE"; VER05_OK=false
   fi
-  $VER05_OK && _pass "VER-05: core image refs are the GA armv7 build"
+  $VER05_OK && _pass "VER-05: core image refs are the GA ${_RBT_ARCH} build"
 
   # VER-06: OTA URL points to greenautarky
   VER_OTA="$(jq -r '.ota // "unknown"' "$VER_JSON" 2>/dev/null)"
