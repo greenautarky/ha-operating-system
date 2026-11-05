@@ -13,7 +13,7 @@
 # Bumping a version here + running scripts/sync-components.sh is the
 # only OS-side change needed to ship a new component release.
 
-gaos_release: BOSv1.6.0-dev3  # marker baked into /etc/ga-release at build. BOSv1.6.0-dev3 = first full-Core CI bake of the DSGW-210 (dev channel, own aarch64 Supervisor/Core); the rc marker returns with the next iHost rc. BOSv1.6.0-rc1 = first release candidate of the HAOS 18.x line (feat/1.6-haos18) after the 2026-11-05 store cut; bench/canary only. BOSv1.6.0-dev1 = first CI bake of the line.
+gaos_release: BOSv1.6.0-rc2  # marker baked into /etc/ga-release at build. BOSv1.6.0-rc2 = iHost rc of the HAOS 18.x line (feat/1.6-haos18): VCCIO5 reverted to 1.8 V (measured; U-Boot DT io-domains + check-ihost-iodomains.py), kernel 6.12.115, hw_iodomain device test; bench/canary only. BOSv1.6.0-rc1 = first release candidate of the line after the 2026-11-05 store cut. BOSv1.6.0-dev3 = first full-Core CI bake of the DSGW-210 (dev channel); a later DSGW bake sets its own label. BOSv1.6.0-dev1 = first CI bake of the line.
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at
