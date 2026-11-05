@@ -33,13 +33,12 @@ GA_DEFCONFIG_ihost=buildroot-ihost/configs/ga_ihost_full_defconfig
 GA_ADDON_PINS_ihost=buildroot-external/package/hassio/addon-images.json
 GA_BOARD_BASE_ihost=buildroot-ihost/board/sonoff/ihost
 
-# The DSGW-210 bakes no Supervisor and no add-ons yet (GA_HASSIO_SKIP_IMAGES in
-# its external.mk: no aarch64 GA images are published), so it has no pin list
-# of its own. The entry names the shared GA-layer file so the map stays total;
-# give the board its own file here when it gets an add-on set.
+# The DSGW-210 (dev bake) has its own add-on list: the iHost's minus the armv7-only
+# ga_ihosthardwarecontrol. Versions are copied from the iHost file by hand; the
+# iHost's repin/lockstep tooling does not read this file.
 GA_BOARD_DIR_dsgw210=buildroot-dsgw210
 GA_DEFCONFIG_dsgw210=buildroot-dsgw210/configs/dsgw210_defconfig
-GA_ADDON_PINS_dsgw210=buildroot-external/package/hassio/addon-images.json
+GA_ADDON_PINS_dsgw210=buildroot-dsgw210/addon-images.json
 GA_BOARD_BASE_dsgw210=buildroot-dsgw210/board/dusun/dsgw210
 
 # ga_board_var KIND BOARD — print the value of GA_<KIND>_<BOARD> (KIND: BOARD_DIR,

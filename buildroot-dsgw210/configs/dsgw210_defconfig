@@ -170,7 +170,14 @@ BR2_PACKAGE_HASSIO_ARCH="aarch64"
 BR2_PACKAGE_HASSIO_MACHINE="qemuarm-64"
 # The channel is declared, never defaulted: the ga-ops bake guard refuses a defconfig
 # without exactly one BR2_PACKAGE_HASSIO_CHANNEL_*=y (the Kconfig default is stable).
-BR2_PACKAGE_HASSIO_CHANNEL_STABLE=y
+# DEV: the DSGW-210 runs its own GA aarch64 Core/Supervisor/plugins from
+# haos-version line/1.6/dev.json (DSGW only; iHosts stay on stable.json). Dev
+# bakes only (-devN labels): no rc/final until the aarch64 chain is released (WP9).
+BR2_PACKAGE_HASSIO_CHANNEL_DEV=y
+# Bake the channel's Core (homeassistant.qemuarm-64) instead of the landing page.
+BR2_PACKAGE_HASSIO_FULL_CORE=y
+# data.ext4 is built this large and shrunk to its content (same value as the iHost).
+BR2_PACKAGE_HASSIO_DATA_IMAGE_SIZE="8192M"
 BR2_PACKAGE_OS_AGENT=y
 BR2_PACKAGE_OS_AGENT_BOARD="DSGW-210"
 # --- GreenAutarky OS layer (GA_HAOS external) ---------------------------------
