@@ -157,6 +157,17 @@ board_skipped_images() {
   sed -n 's/^GA_HASSIO_SKIP_IMAGES[[:space:]]*=[[:space:]]*//p' "${BR2EXT_IHOST}/external.mk" 2>/dev/null \
     | head -n 1 | sed 's/[[:space:]]*#.*$//'
 }
+# core_tag_valid TAG CHANNEL RELEASE — the post-build Core tag rule. A pinned calver
+# (YYYY.M.P[.N]) or the legacy `latest`; a `-dev` suffix (GA aarch64 dev Core) only
+# when the channel in version.json is dev AND the release label is -devN.
+core_tag_valid() {
+  local tag="$1" channel="$2" release="$3"
+  if [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?-dev$ ]]; then
+    [[ "$channel" == dev && "$release" =~ -dev[0-9]+$ ]]
+    return
+  fi
+  [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || [[ "$tag" == "latest" ]]
+}
 # board_skips KEY — true when the board declares it does not bake KEY.
 board_skips() { case " $(board_skipped_images) " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 BR2EXT_NETBIRD="${BR2EXT_NETBIRD:-/build/${GA_LAYER_DIR}}"
@@ -852,10 +863,10 @@ verify_build_integrity() {
       # The board declares (external.mk) that it bakes no Core image, so the
       # version.json core entry is a placeholder and there is no tag to judge.
       _check_pass "Core image tag: not checked, board '${BOARD}' bakes no Core image (GA_HASSIO_SKIP_IMAGES)"
-    elif [[ "$core_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || [[ "$core_ver" == "latest" ]]; then
+    elif core_tag_valid "$core_ver" "$(jq -r '.channel // ""' "$version_json" 2>/dev/null)" "$GA_RELEASE"; then
       _check_pass "Core image tag: $core_ver"
     else
-      _check_fail "Core image tag invalid: '$core_ver' (expected pinned version or 'latest')"
+      _check_fail "Core image tag invalid: '$core_ver' (expected pinned version or 'latest'; a -dev suffix only on the dev channel with a -devN release)"
     fi
   else
     _check_warn "version.json not found (normal for non-full builds)"
