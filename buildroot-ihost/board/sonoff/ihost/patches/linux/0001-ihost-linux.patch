@@ -140,8 +140,7 @@ index 9a87dc0d5f66..e1077309bd2a 100644
 -	vccio4-supply = <&vcc_dovdd>;
 +	vccio3-supply = <&vcc_3v3>;
 +	vccio4-supply = <&vcc_3v3>;
--	vccio5-supply = <&vcc_1v8>;
-+	vccio5-supply = <&vcc_3v3>;
+ 	vccio5-supply = <&vcc_1v8>;
 -	vccio6-supply = <&vcc_1v8>;
 -	vccio7-supply = <&vcc_dovdd>;
 +	vccio6-supply = <&vcc_3v3>;

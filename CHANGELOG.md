@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): revert VCCIO5 to 1.8 V for BOSv1.6.0-rc2
+
+The 3.3 V VCCIO5 supply (Ethernet/MDIO bank) of BOSv1.6.0-rc1 is reverted to `vcc_1v8` as in BOSv1.5.3. On a bench unit with a working PHY, same port and cable, 3.3 V made the RMII link flap, MDIO read garbage and the PHY go missing; 1.8 V is stable. The only Linux DTB difference between BOSv1.5.3 and BOSv1.6.0-rc1 was this supply. The stock vendor DT says 3.3 V, but that value does not work with our 6.12 kernel; the cause is an open question until clarified. The U-Boot DT now carries the same I/O-domain set as the Linux DT, and `check-ihost-iodomains.py` pins that measured known-good set instead of the stock values (a VCCIO5 change needs a hardware measurement first).
+
 ## Unreleased (feat/1.6-haos18): the image CVE scan reads HAOS 18.x OCI archives
 
 HAOS 18.x bakes container images as OCI archives (`skopeo … oci-archive:`), 16.x as docker-archive, under the same file name. `scan-cves.sh` handed every tarball to trivy as docker-archive, so all 15 images of the first BOSv1.6.0-dev1 bake came back "unable to initialize archive image" and the gate (correctly) refused. The format is now read from the archive content; an OCI archive is extracted to a layout directory, scanned, removed. An unrecognised archive is counted unscannable, never guessed. Self-test `scan-cves-image-format-fixtures.sh` reads the live function.
