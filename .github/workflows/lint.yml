@@ -978,6 +978,11 @@ jobs:
       - name: Core image (upstream, pre-2026 or non-drop-in must go red)
         run: ./tests/gates/core_image/selftest.sh
 
+      # ga_build.sh post-build Core tag rule: a -dev Core tag only on the dev channel
+      # with a -devN release label (the DSGW-210 dev bake); the live function is extracted.
+      - name: Core tag rule (-dev outside the dev channel/label must go red)
+        run: ./tests/gates/core_tag_rule/selftest.sh
+
       # The Supervisor image the bake ships must be the GA image at exactly the
       # version.yaml pin, and its io.hass labels must agree (version, type, arch).
       # must-pass is the real 2025.11.5.4 config read from the registry.
