@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""check-ihost-iodomains.py — the iHost I/O voltage domains match what Sonoff ships.
+"""check-ihost-iodomains.py — the iHost I/O voltage domains match the measured known-good set.
 
-Each RV1126 I/O bank is told by the DT which regulator feeds it. A wrong value
-programs the pad for the wrong voltage: VCCIO5 (Ethernet RGMII/MDIO) was
-declared 1.8 V for months while the board feeds 3.3 V (finding 2026-11-03).
+Each RV1126 I/O bank is told by the DT which regulator feeds it. Two DTs carry the
+same truth — the Linux DT and the U-Boot DT — and they had drifted apart. This
+check holds BOTH against one pinned constant (KNOWN_GOOD): the I/O-domain values
+of the Linux DTB of BOSv1.5.3, measured on a bench unit with a working PHY.
 
-Two DTs carry the same truth — the Linux DT and the U-Boot DT — and they had
-drifted apart. This check holds BOTH against one pinned constant taken from the
-vendor DT read off a never-provisioned iHost's eMMC (stock-emmc-dump.sh,
-2026-11-05, model rockchip,rv1126-evb-ddr3-v13). The expectation is a constant,
-never derived from the files it checks.
+Why not the stock vendor values: the known-good set says vccio5 = vcc_3v3, but with our
+6.12 kernel that value breaks Ethernet (RMII link flaps, MDIO reads garbage, PHY
+not found); vcc_1v8 as in BOSv1.5.3 is stable (measured 2026-11-05, same port and
+cable). Why the stock value fails is an open question. Changing VCCIO5 (or any
+other domain) therefore needs a hardware measurement first, never a paper
+comparison with the vendor DT. The expectation is a constant, never derived from
+the files it checks.
 
   check-ihost-iodomains.py              check the live tree (exit 1 on drift)
   check-ihost-iodomains.py --selftest   prove it flags a mutated copy and passes the live one
 
-A missing pmu_io_domains block FAILS (never skips): a check that finds nothing
+A missing pmu_io_domains block FAILS (never skip): a check that finds nothing
 to compare is not green.
 """
 from __future__ import annotations
@@ -25,15 +28,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Vendor DT (Sonoff stock eMMC, 2026-11-05), phandles resolved to regulator labels.
-STOCK = {
+# Linux DTB of BOSv1.5.3 measured on a bench unit with a working PHY, phandles
+# resolved to regulator labels. Not the stock vendor values (see docstring).
+KNOWN_GOOD = {
     "pmuio0": "vcc3v3_sys",
     "pmuio1": "vcc3v3_sys",
     "vccio1": "vcc_1v8",
     "vccio2": "vccio_sd",
     "vccio3": "vcc_3v3",
     "vccio4": "vcc_3v3",
-    "vccio5": "vcc_3v3",
+    "vccio5": "vcc_1v8",
     "vccio6": "vcc_3v3",
     "vccio7": "vcc_1v8",
 }
@@ -67,9 +71,9 @@ def check(texts: dict[str, str]) -> list[str]:
         if got is None:
             errs.append(f"{path}: no &pmu_io_domains block found — refusing to pass over nothing")
             continue
-        for dom, want in STOCK.items():
+        for dom, want in KNOWN_GOOD.items():
             if got.get(dom) != want:
-                errs.append(f"{path}: {dom}-supply = {got.get(dom)!r}, stock DT says {want!r}")
+                errs.append(f"{path}: {dom}-supply = {got.get(dom)!r}, known-good set says {want!r}")
     return errs
 
 
@@ -84,9 +88,9 @@ def selftest() -> int:
         print("SELFTEST FAIL: the live tree does not pass"); ok = False
     for path, _ in SOURCES:
         bad = dict(texts)
-        bad[path] = texts[path].replace("vccio5-supply = <&vcc_3v3>;", "vccio5-supply = <&vcc_1v8>;", 1)
+        bad[path] = texts[path].replace("vccio5-supply = <&vcc_1v8>;", "vccio5-supply = <&vcc_3v3>;", 1)
         if bad[path] == texts[path] or not any("vccio5" in e and path in e for e in check(bad)):
-            print(f"SELFTEST FAIL: a 1.8 V VCCIO5 in {path} is not flagged"); ok = False
+            print(f"SELFTEST FAIL: a 3.3 V VCCIO5 in {path} is not flagged"); ok = False
         gone = dict(texts)
         gone[path] = texts[path].replace("&pmu_io_domains", "&pmu_io_gone")
         if not any("no &pmu_io_domains" in e for e in check(gone)):
@@ -102,7 +106,7 @@ def main() -> int:
     for e in errs:
         print("FAIL:", e)
     if not errs:
-        print(f"ok: {len(SOURCES)} DTs × {len(STOCK)} domains match the stock iHost DT")
+        print(f"ok: {len(SOURCES)} DTs × {len(KNOWN_GOOD)} domains match the known-good set")
     return 1 if errs else 0
 
 
