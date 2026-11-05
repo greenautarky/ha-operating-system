@@ -62,8 +62,14 @@ run_test_show "ADR-08" "dongle flasher NOT running (ga_manager keeps it stopped)
 # --- does each one actually WORK? -----------------------------------------
 # mosquitto: broker listening AND the CGO go-auth plugin registered. A green
 # container with a dead .so is exactly what the base migration could produce.
-run_test_show "ADR-10" "mosquitto: port 1883 listening on the host" \
-  'netstat -tln 2>/dev/null | grep -q ":1883 "'
+# A CONNECT, not a socket listing: on HAOS 18 the published port is served by
+# docker-proxy and busybox netstat does not list that socket, so the old grep
+# went false-red while the broker was reachable (K31 2026-11-04, Odoo #1513:
+# curl to 127.0.0.1:1883 connected, ga_manager mqtt.local connected). curl's
+# telnet:// opens the TCP connection and then waits for data it never gets:
+# rc 28 (timeout) or 0 = connected; a closed port is refused at once (rc 7).
+run_test_show "ADR-10" "mosquitto: port 1883 accepts a TCP connection on the host" \
+  'curl -s -m 3 -o /dev/null telnet://127.0.0.1:1883 </dev/null; rc=$?; [ "$rc" = 0 ] || [ "$rc" = 28 ]'
 # Probe the BEHAVIOUR, not the startup log: docker rotates json logs, so on a
 # container up for days the registration lines are gone and a log grep goes
 # false-red (measured on K31 2026-08-24: 3-day-old container, log starts a day

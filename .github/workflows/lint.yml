@@ -415,6 +415,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends busybox-static
           ./tests/ga_tests/telegraf_buffer_guard/liveness_selftest.sh
 
+      # Odoo #1513: NET-07/21/22 read the EFFECTIVE NetworkManager value (main conf
+      # merged with conf.d, last definition wins) and NET-16c requires the OTA prod
+      # slot only for final releases. Runs the live helpers against the shipped
+      # 50-ga.conf, so a renamed key or a moved file fails here, not on a device.
+      - name: Network checks read the effective NM config and the OTA slot rule
+        run: sh tests/ga_tests/network/selftest.sh
+
       - name: Telegraf corrupt-WAL guard (real telegraf, must-flag + must-not-flag)
         run: |
           set -euo pipefail
