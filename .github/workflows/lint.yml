@@ -983,6 +983,13 @@ jobs:
       - name: Core tag rule (-dev outside the dev channel/label must go red)
         run: ./tests/gates/core_tag_rule/selftest.sh
 
+      # The configure-time version.json gate of hassio.mk (patches 0131/0133) runs
+      # for real against fixture channel files: a board with its own Supervisor/Core
+      # (DSGW-210) is judged by its board pins, the iHost by version.yaml; a -dev
+      # Core is accepted on the dev channel only.
+      - name: hassio.mk board pins (mixed pair, off-pin channel, -dev outside dev must go red)
+        run: ./tests/gates/hassio_board_pins/selftest.sh
+
       # The Supervisor image the bake ships must be the GA image at exactly the
       # version.yaml pin, and its io.hass labels must agree (version, type, arch).
       # must-pass is the real 2025.11.5.4 config read from the registry.

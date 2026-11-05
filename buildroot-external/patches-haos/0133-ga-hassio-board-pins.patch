@@ -1,0 +1,69 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] hassio: board-level Supervisor/Core pins, arch + channel into the Core image gate
+
+Applies after 0131. A board with its own GA Supervisor and Core (DSGW-210,
+aarch64) declares GA_HASSIO_SUPERVISOR_PIN and GA_HASSIO_CORE_PIN in its
+external.mk; the version.json gate compares the channel against those instead
+of the iHost pins in version.yaml. Both or neither: a mixed pair is a make
+error. With neither set (the iHost) nothing changes. check-core-image.sh now
+gets the board arch and the channel, so the aarch64 GA Core image and a -dev
+tag (dev channel only) can be judged.
+---
+ buildroot-external/package/hassio/hassio.mk | 21 +++++++++++-----
+ 1 file changed, 16 insertions(+), 5 deletions(-)
+
+diff --git a/buildroot-external/package/hassio/hassio.mk b/buildroot-external/package/hassio/hassio.mk
+--- a/buildroot-external/package/hassio/hassio.mk
++++ b/buildroot-external/package/hassio/hassio.mk
+@@ -76,6 +76,17 @@
+ GA_HASSIO_SKIP_IMAGES ?=
+ HASSIO_GA_IMAGES = $(filter-out $(GA_HASSIO_SKIP_IMAGES),$(HASSIO_CONTAINER_IMAGES_ARCH))
+ 
++# GA: board-level pins. The bake refuses a channel whose Supervisor/Core differ
++# from the pin; the pin defaults to version.yaml (the iHost's). A board with its
++# own GA Supervisor/Core (DSGW-210, aarch64) declares both in its external.mk;
++# both are then required together, so a board cannot take one pin from each
++# source. Empty = version.yaml (unchanged behaviour for the iHost).
++GA_HASSIO_SUPERVISOR_PIN ?=
++GA_HASSIO_CORE_PIN ?=
++# Evaluated lazily inside the configure recipe (a board external.mk may be read
++# after this file): a mixed pair stops the build there.
++HASSIO_BOARD_PINS_CHECK = $(if $(GA_HASSIO_SUPERVISOR_PIN),$(if $(GA_HASSIO_CORE_PIN),,$(error GA_HASSIO_SUPERVISOR_PIN is set without GA_HASSIO_CORE_PIN: board pins must be set together)),$(if $(GA_HASSIO_CORE_PIN),$(error GA_HASSIO_CORE_PIN is set without GA_HASSIO_SUPERVISOR_PIN: board pins must be set together)))
++
+ # GA: add-on images pre-baked into the data partition (board data: each board
+ # external sets HASSIO_ADDON_IMAGES_JSON to its addon-images.json). Empty = no
+ # add-ons, said in the build log.
+@@ -88,6 +99,7 @@
+ endif
+ 
+ define HASSIO_CONFIGURE_CMDS
++	$(HASSIO_BOARD_PINS_CHECK)
+ 	# HomeAssistantOS Deploy only landing page for "core" by setting version to "landingpage", but we are using the full core image whether BR2_PACKAGE_HASSIO_FULL_CORE is set or not
+ 	curl -fsS $(HASSIO_VERSION_URL)$(HASSIO_VERSION_CHANNEL)".json" | jq '.core = $(HASSIO_CORE_VERSION)' > $(@D)/version.json;
+ 	# Validate version.json: reject "latest" and wrong registries (catches stale stable.json)
+@@ -111,20 +123,20 @@
+ 	if [ "$$CORE" = "latest" ] || [ -z "$$CORE" ] || [ "$$CORE" = "null" ]; then echo "ERROR: version.json core='$$CORE' (must be pinned version)"; FAIL=1; fi; \
+ 	if [ "$$TINKER" = "latest" ] || [ -z "$$TINKER" ]; then echo "ERROR: version.json tinker='$$TINKER' (must be pinned version)"; FAIL=1; fi; \
+ 	if ! echo "$$SUP_IMG" | grep -q greenautarky; then echo "ERROR: version.json supervisor image='$$SUP_IMG' (must use greenautarky)"; FAIL=1; fi; \
+-	if [ $$SKIP_CORE = 0 ] && ! $(BR2_EXTERNAL_GA_HAOS_PATH)/package/hassio/check-core-image.sh $$VJ $(BR2_PACKAGE_HASSIO_MACHINE); then FAIL=1; fi; \
+-	PIN=$$(sed -nE 's/^[[:space:]]*homeassistant_supervisor:[[:space:]]*"?([^"[:space:]#]+)"?.*/\1/p' $(BR2_EXTERNAL_GA_HAOS_PATH)/../version.yaml | head -1); \
++	if [ $$SKIP_CORE = 0 ] && ! $(BR2_EXTERNAL_GA_HAOS_PATH)/package/hassio/check-core-image.sh $$VJ $(BR2_PACKAGE_HASSIO_MACHINE) $(BR2_PACKAGE_HASSIO_ARCH) $(HASSIO_VERSION_CHANNEL); then FAIL=1; fi; \
++	$(if $(GA_HASSIO_SUPERVISOR_PIN),PIN="$(GA_HASSIO_SUPERVISOR_PIN)"; echo "GA hassio: Supervisor pin from the board (GA_HASSIO_SUPERVISOR_PIN) instead of version.yaml";,PIN=$$(sed -nE 's/^[[:space:]]*homeassistant_supervisor:[[:space:]]*"?([^"[:space:]#]+)"?.*/\1/p' $(BR2_EXTERNAL_GA_HAOS_PATH)/../version.yaml | head -1);) \
+ 	if [ $$SKIP_SUP = 0 ] && ! $(BR2_EXTERNAL_GA_HAOS_PATH)/package/hassio/check-supervisor-image.sh $$VJ $(BR2_PACKAGE_HASSIO_ARCH) "$$PIN"; then FAIL=1; fi; \
+ 	if [ $$SKIP_SUP = 0 ] && [ -n "$$PIN" ] && [ "$$SUP" != "$$PIN" ]; then \
+-	  echo "ERROR: version.json supervisor='$$SUP' but version.yaml pins '$$PIN'"; \
++	  echo "ERROR: version.json supervisor='$$SUP' but the pin (board GA_HASSIO_SUPERVISOR_PIN, else version.yaml) is '$$PIN'"; \
+ 	  echo "       The BAKED supervisor would differ from the pin. A device whose"; \
+ 	  echo "       supervisor is older than the channel sets update_available=true,"; \
+ 	  echo "       which blocks StoreManager and leaves the device unprovisionable."; \
+ 	  echo "       Check HASSIO_VERSION_URL points at the branch the fleet polls."; \
+ 	  FAIL=1; \
+ 	fi; \
+-	CORE_PIN=$$(sed -nE 's/^[[:space:]]*homeassistant_core:[[:space:]]*"?([^"[:space:]#]+)"?.*/\1/p' $(BR2_EXTERNAL_GA_HAOS_PATH)/../version.yaml | head -1); \
++	$(if $(GA_HASSIO_CORE_PIN),CORE_PIN="$(GA_HASSIO_CORE_PIN)"; echo "GA hassio: Core pin from the board (GA_HASSIO_CORE_PIN) instead of version.yaml";,CORE_PIN=$$(sed -nE 's/^[[:space:]]*homeassistant_core:[[:space:]]*"?([^"[:space:]#]+)"?.*/\1/p' $(BR2_EXTERNAL_GA_HAOS_PATH)/../version.yaml | head -1);) \
+ 	if [ $$SKIP_CORE = 0 ] && [ -n "$$CORE_PIN" ] && [ "$$CORE" != "$$CORE_PIN" ]; then \
+-	  echo "ERROR: version.json core='$$CORE' but version.yaml pins '$$CORE_PIN'"; \
++	  echo "ERROR: version.json core='$$CORE' but the pin (board GA_HASSIO_CORE_PIN, else version.yaml) is '$$CORE_PIN'"; \
+ 	  echo "       The baked Core would differ from the pin the on-device suite"; \
+ 	  echo "       (OSI-04, expected.env) asserts."; \
+ 	  FAIL=1; \
