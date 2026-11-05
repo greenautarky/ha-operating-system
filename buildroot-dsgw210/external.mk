@@ -1,15 +1,15 @@
 include $(sort $(wildcard $(BR2_EXTERNAL_DSGW210_PATH)/package/*/*.mk))
 
-# --- Data-partition bake (GA layer, patch 0131) -----------------------------
-# The GA channel names ghcr.io/greenautarky/{arch}-hassio-* for the Supervisor
-# and every plugin, and the armv7-only ghcr.io/greenautarky/home-assistant-armv7
-# for Core. None of them is published for aarch64 yet, and there is no upstream
-# substitute (an upstream Supervisor polls version.home-assistant.io, which
-# would take the device out of GA's channel control). So this board bakes NONE
-# of them, loudly; the launcher (patch 0130) pulls the Supervisor from the GA
-# channel once it is published and fails closed (error in the journal) until
-# then.
-# Remove this line when the aarch64 GA images exist.
-GA_HASSIO_SKIP_IMAGES = supervisor dns audio cli multicast observer core
-# No add-on list for this board yet: which add-ons it runs, and their aarch64
-# pins, are open product decisions.
+# --- Data-partition bake (GA layer, patches 0131/0133) ----------------------
+# BOSv1.6 dev bake: this board bakes EVERY image (Supervisor, plugins, Core,
+# add-ons), all aarch64, from haos-version line/1.6/dev.json. Core 2026.10 needs
+# Supervisor 2026.10 (#1186): never pair it with 2025.11.
+GA_HASSIO_SKIP_IMAGES =
+# Board pins (patch 0133): what the bake compares the channel with, instead of
+# the iHost pins in version.yaml. They MUST equal dev.json (supervisor, core).
+# PLACEHOLDER: the 2026.10.5.x Supervisor image is being republished; set the
+# real version here AND in dev.json (haos-version) before the bake.
+GA_HASSIO_SUPERVISOR_PIN = 2026.10.5.1
+GA_HASSIO_CORE_PIN = 2026.10.4.3-dev
+# The iHost's add-on set minus ga_ihosthardwarecontrol (armv7-only), see the file.
+HASSIO_ADDON_IMAGES_JSON = $(BR2_EXTERNAL_DSGW210_PATH)/addon-images.json

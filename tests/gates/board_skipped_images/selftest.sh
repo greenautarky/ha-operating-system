@@ -6,7 +6,8 @@
 # LIVE functions (extracted from ga_build.sh, never re-declared here) to
 # fixtures, and the REAL board files to pinned expectations.
 #   iHost external.mk:   skips nothing
-#   DSGW-210 external.mk: skips all seven keys
+#   DSGW-210 external.mk: skips nothing (dev bake, all aarch64 images exist);
+#                         the all-seven declaration stays a must-flag fixture below
 #   partial / commented / absent file / similar-looking key: nothing is skipped
 # If the functions cannot be extracted the check FAILS (it never skips).
 set -u
@@ -40,6 +41,6 @@ check "board without external.mk skips nothing"               "$tmp/nofile"    "
 # the real boards, pinned
 . "$REPO/scripts/lib/tree-paths.sh"
 check "REAL iHost board bakes every image"                    "$REPO/$(ga_board_var BOARD_DIR ihost)"   ""
-check "REAL DSGW-210 board declares all seven skipped"        "$REPO/$(ga_board_var BOARD_DIR dsgw210)" "$all"
+check "REAL DSGW-210 board bakes every image (dev bake)"       "$REPO/$(ga_board_var BOARD_DIR dsgw210)" ""
 [ "$n" -ge 8 ] || { echo "FAIL: only $n cases ran"; exit 1; }
 echo "$n cases ran"; exit "$bad"

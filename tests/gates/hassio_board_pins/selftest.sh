@@ -84,5 +84,39 @@ printf '{"channel":"stable","supervisor":"2025.11.5.10","homeassistant":{"defaul
 sup_cfg "$d/sup.json" 2025.11.5.10 armv7; cp "$ROOT/tests/gates/core_image/must-pass/ga-t3-2026.8.2/config.json" "$d/core.json"
 run_case "iHost stable, no board pins (unchanged)" pass "version.json validated: supervisor=2025.11.5.10 core=2026.8.2" "$d" armv7 tinker stable ""
 
-[ "$n" -ge 8 ] || { echo "FAIL: only $n cases ran"; exit 1; }
+# --- the REAL DSGW-210 board files (data under audit; the rule is defined here) ----
+# #1186: a Core >= 2026.9 needs a Supervisor >= 2026.10 (2026.9 removed the token the
+# 2025.11 Supervisor logs in with). The board pins and the defconfig must agree on it.
+pin_of() { sed -n "s/^$1[[:space:]]*=[[:space:]]*\([^[:space:]#]*\).*/\1/p" "$2" | head -n 1; }
+pair_verdict() { # <external.mk> <defconfig> -> "ok" | reason
+  local sup core cy cm sy sm
+  sup="$(pin_of GA_HASSIO_SUPERVISOR_PIN "$1")"; core="$(pin_of GA_HASSIO_CORE_PIN "$1")"
+  [ -n "$sup" ] && [ -n "$core" ] || { echo "board pins missing"; return; }
+  grep -q '^BR2_PACKAGE_HASSIO_FULL_CORE=y$' "$2" || { echo "defconfig lacks FULL_CORE=y"; return; }
+  grep -q '^BR2_PACKAGE_HASSIO_CHANNEL_DEV=y$' "$2" || { echo "defconfig is not the dev channel"; return; }
+  IFS=. read -r cy cm _ <<<"$core"; IFS=. read -r sy sm _ <<<"$sup"
+  if (( cy > 2026 || (cy == 2026 && cm >= 9) )) && ! (( sy > 2026 || (sy == 2026 && sm >= 10) )); then
+    echo "Core $core with Supervisor $sup (#1186: Core 2026.9+ needs Supervisor 2026.10+)"; return; fi
+  echo ok
+}
+pair_case() { # label want(ok|bad) <external.mk> <defconfig>
+  n=$((n+1)); local v; v="$(pair_verdict "$3" "$4")"
+  if { [ "$2" = ok ] && [ "$v" = ok ]; } || { [ "$2" = bad ] && [ "$v" != ok ]; }; then echo "  ok    pair: $1 [$v]"
+  else echo "  FAIL  pair: $1 (want $2, got [$v])"; bad=1; fi
+}
+BOARD="$(. "$ROOT/scripts/lib/tree-paths.sh"; ga_board_var BOARD_DIR dsgw210)"
+DEFC="$(. "$ROOT/scripts/lib/tree-paths.sh"; ga_board_var DEFCONFIG dsgw210)"
+[ -r "$ROOT/$BOARD/external.mk" ] && [ -r "$ROOT/$DEFC" ] || { echo "FAIL: DSGW board files not found"; exit 1; }
+pair_case "REAL DSGW-210 board pins + defconfig" ok "$ROOT/$BOARD/external.mk" "$ROOT/$DEFC"
+mkdir -p "$tmp/pair"
+printf 'GA_HASSIO_SUPERVISOR_PIN = 2025.11.5.10\nGA_HASSIO_CORE_PIN = 2026.10.4.3-dev\n' > "$tmp/pair/old-sup.mk"
+printf 'GA_HASSIO_CORE_PIN = 2026.10.4.3-dev\n' > "$tmp/pair/no-sup.mk"
+printf 'BR2_PACKAGE_HASSIO_CHANNEL_STABLE=y\nBR2_PACKAGE_HASSIO_FULL_CORE=y\n' > "$tmp/pair/stable.defconfig"
+printf 'BR2_PACKAGE_HASSIO_CHANNEL_DEV=y\n' > "$tmp/pair/nocore.defconfig"
+pair_case "Core 2026.10 with the 2025.11 Supervisor"  bad "$tmp/pair/old-sup.mk" "$ROOT/$DEFC"
+pair_case "Supervisor pin missing"                    bad "$tmp/pair/no-sup.mk"  "$ROOT/$DEFC"
+pair_case "defconfig on the stable channel"           bad "$ROOT/$BOARD/external.mk" "$tmp/pair/stable.defconfig"
+pair_case "defconfig without FULL_CORE"               bad "$ROOT/$BOARD/external.mk" "$tmp/pair/nocore.defconfig"
+
+[ "$n" -ge 13 ] || { echo "FAIL: only $n cases ran (want >= 13)"; exit 1; }
 echo "$n cases ran"; exit "$bad"

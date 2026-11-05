@@ -8,10 +8,5 @@ dsgw210	-	DT-0*	compare the iHost device tree (rv1126) with its reference and ex
 dsgw210	-	WIFI-13*	the runtime-PM udev rule is for the iHost rtw88_8723ds chip; the DSGW-210 has a different Wi-Fi chip, whether it needs one is not evaluated
 #
 # Container images the board does not bake (GA_HASSIO_SKIP_IMAGES / no add-on list in its external.mk)
-dsgw210	core-skipped	BLD: Core tag*	the board bakes no Core image (GA_HASSIO_SKIP_IMAGES), so there is no Core tag to check
-dsgw210	core-skipped	VER-02*	the board bakes no Core image, version.json carries a placeholder Core
-dsgw210	core-skipped	VER-11*	the board bakes no Core image, there is no Core tar to compare
-dsgw210	core-skipped	XVER-06*	the board bakes no Core image, version.json carries a placeholder Core
-dsgw210	no-addons	VER-10*	the board names no add-on image list yet (open product decision), so no pinned add-on is baked
-dsgw210	no-addons	GAMCAP-01*	no ga_manager image is baked on this board (no add-on list)
 dsgw210	-	USB-01: *	the board closes the host ports in its boot script (uboot-boot.ush, appended after cmdline.txt), not in cmdline.txt; USB-01b checks that
+dsgw210	-	VER-03*	the DSGW-210 dev channel carries no tinker (iHost machine) Core; its Core is judged by VER-02, VER-05 and VER-11
