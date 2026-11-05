@@ -1,0 +1,9 @@
+{
+  "core": "2026.10.4.3-dev",
+  "homeassistant": {
+    "qemuarm-64": "2026.10.4.3-dev"
+  },
+  "images": {
+    "core": "ghcr.io/greenautarky/home-assistant-aarch64"
+  }
+}

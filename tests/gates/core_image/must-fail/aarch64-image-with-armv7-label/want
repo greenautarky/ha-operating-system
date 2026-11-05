@@ -1,0 +1,1 @@
+label io.hass.arch='armv7' (want 'aarch64')
