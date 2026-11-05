@@ -1,0 +1,1 @@
+{"architecture":"arm64","config":{"Labels":{"io.hass.arch":"armv7","io.hass.type":"core","io.hass.machine":"qemuarm-64","io.hass.version":"2026.10.4.3-dev"},"Entrypoint":["/init"]}}
