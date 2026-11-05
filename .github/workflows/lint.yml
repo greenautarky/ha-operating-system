@@ -332,6 +332,13 @@ jobs:
         # swallowing the query error fails PBO-05 alone.
         run: bash tests/gates/prebake_open_work/selftest.sh
 
+      - name: iHost I/O voltage domains match the stock Sonoff DT (Linux + U-Boot)
+        # Both DTs are held against one pinned constant read off a stock iHost's
+        # eMMC (2026-11-05). Red-proven: the pre-fix U-Boot DT fails six domains
+        # (VCCIO5 among them); the selftest mutates the LIVE files and must see
+        # a 1.8 V VCCIO5 and a missing block flagged in each.
+        run: python3 scripts/check-ihost-iodomains.py && python3 scripts/check-ihost-iodomains.py --selftest
+
       - name: one rule for Home Assistant's port (ADR-0038)
         # Core 2026.8+ serves on :80, older Core on :8123, and the fleet is mixed.
         # Every suite and runner resolves the port through lib/ha_port.sh: the
