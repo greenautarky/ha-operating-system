@@ -22,7 +22,11 @@
     },
     "ga_manager": {
       "image": "ghcr.io/greenautarky/ga_manager-{arch}",
-      "version": "0.269.0"
+      "version": "0.269.0",
+      "hold": {
+        "reason": "0.270.0 (ga_manager #381, influx_freshness state-aware, Odoo #1508) was published 2026-11-05 after the BOSv1.6.0-rc1 store cut; the pin follows the vibe_addons store (0.269.0) and moves with the next store cut, not into BOSv1.6.0-rc1",
+        "until": "2026-11-20"
+      }
     },
     "ga_default_addon": {
       "image": "ghcr.io/greenautarky/ga_default_addon-{arch}",
