@@ -1,0 +1,5 @@
+pin 81 (gpio2-17): input bias disabled, drive strength 4 mA
+pin 82 (gpio2-18): input bias disabled, drive strength 4 mA
+pin 83 (gpio2-19): input bias disabled, drive strength 12 mA
+pin 84 (gpio2-20): input bias disabled, drive strength 12 mA
+pin 86 (gpio2-22): input bias disabled, drive strength 12 mA

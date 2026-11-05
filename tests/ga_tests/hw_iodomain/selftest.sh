@@ -60,4 +60,62 @@ printf 'itead,sonoff-ihost\0rockchip,rv1126\0' > "$T/compat"
 iod_is_ihost "$T/compat"; RC=$?; show_verdict ISO-13 "board check: iHost recognised" "$RC" ""
 printf 'rockchip,rk3568\0' > "$T/compat2"
 iod_is_ihost "$T/compat2"; RC=$?; show_verdict ISO-14 "board check: other board not recognised" "$([ $RC -ne 0 ] && echo 0 || echo 1)" ""
+
+# --- IOD-03..08 fixtures (live functions from iodomain.sh) ---------------------
+for f in grf-rmii-ok grf-rmii-bad ret-ok ret-bad regsum-ok regsum-vccio5-3v3 regsum-none pinconf-ok pinconf-83-4ma dmesg-ok dmesg-grf; do
+  [ -f "$FX/$f.txt" ] || { echo "FATAL: fixture $f.txt missing"; exit 1; }
+done
+for fn in iod_readreg iod_ret_verdict iod_rmii_verdict iod_regsum_verdict iod_pinconf_verdict iod_dmesg_verdict iod_eth_verdict; do
+  type "$fn" >/dev/null 2>&1 || { echo "FATAL: iodomain.sh no longer defines $fn"; exit 1; }
+done
+flag() { show_verdict "$1" "$2" "$([ "$3" -ne 0 ] && echo 0 || echo 1)" "$4"; }   # must-flag: rc != 0 is the pass
+# IOD-03 retention
+x=$(iod_readreg "$FX/ret-ok.txt" 144); OUT=$(iod_ret_verdict "$x"); RC=$?
+show_verdict ISO-15 "0x144 = 0xFFFF passes" "$RC" "$OUT"
+x=$(iod_readreg "$FX/ret-bad.txt" 144); OUT=$(iod_ret_verdict "$x"); RC=$?
+flag ISO-16 "0x144 = 0xFFFE is flagged" "$RC" "$OUT"
+iod_readreg "$FX/regs-no140.txt" 148 >/dev/null; flag ISO-17 "an absent offset FAILS (fail closed)" $? ""
+# IOD-01 red proof with the rc1-style capture, through the same reader
+x=$(iod_readreg "$FX/regs-86.txt" 140); OUT=$(iod_verdict "$x"); RC=$?
+flag ISO-18 "rc1-style capture 0x140=0x86 flagged via iod_readreg" "$RC" "$OUT"
+# IOD-04 RMII, first window only
+x=$(iod_readreg "$FX/grf-rmii-ok.txt" 70); OUT=$(iod_rmii_verdict "$x"); RC=$?
+show_verdict ISO-19 "GRF 0x70 = 0x40 (bit6 set, bit4 clear) passes" "$RC" "$OUT"
+x=$(iod_readreg "$FX/grf-rmii-bad.txt" 70); OUT=$(iod_rmii_verdict "$x"); RC=$?
+flag ISO-20 "GRF 0x70 = 0x10 flagged — and the aliased 0x1070 window is NOT used" "$RC" "$OUT"
+x=$(iod_readreg "$FX/grf-rmii-bad.txt" 70); [ "$x" = 16 ]
+show_verdict ISO-21 "iod_readreg returns the first window (0x10), not the alias (0x40)" "$?" "got $x"
+iod_rmii_verdict 80 >/dev/null; flag ISO-22 "bit6 + bit4 both set (0x50) flagged" $? ""
+# IOD-05 regulator summary
+OUT=$(iod_regsum_verdict "$FX/regsum-ok.txt"); RC=$?
+show_verdict ISO-23 "regulator_summary known-good passes" "$RC" "$OUT"
+OUT=$(iod_regsum_verdict "$FX/regsum-vccio5-3v3.txt"); RC=$?
+flag ISO-24 "vccio5 under vcc_3v3 flagged" "$RC" "$OUT"
+OUT=$(iod_regsum_verdict "$FX/regsum-none.txt"); RC=$?
+flag ISO-25 "zero io-domains consumers FAILS (coverage)" "$RC" "$OUT"
+OUT=$(iod_regsum_verdict "$FX/does-not-exist.txt"); RC=$?
+flag ISO-26 "unreadable regulator_summary FAILS" "$RC" "$OUT"
+# IOD-06 pinconf
+OUT=$(iod_pinconf_verdict "$FX/pinconf-ok.txt"); RC=$?
+show_verdict ISO-27 "pinconf known-good passes" "$RC" "$OUT"
+OUT=$(iod_pinconf_verdict "$FX/pinconf-83-4ma.txt"); RC=$?
+flag ISO-28 "4 mA on pin 83 flagged" "$RC" "$OUT"
+OUT=$(iod_pinconf_verdict "$FX/regs-a6.txt"); RC=$?
+flag ISO-29 "a file without the pins FAILS (fail closed)" "$RC" "$OUT"
+# IOD-07 dmesg
+OUT=$(iod_dmesg_verdict "$FX/dmesg-ok.txt"); RC=$?
+show_verdict ISO-30 "clean dmesg passes" "$RC" "$OUT"
+OUT=$(iod_dmesg_verdict "$FX/dmesg-grf.txt"); RC=$?
+flag ISO-31 "dmesg with \"Couldn't write to GRF\" flagged" "$RC" "$OUT"
+: > "$T/empty"; iod_dmesg_verdict "$T/empty" >/dev/null; flag ISO-32 "empty dmesg FAILS" $? ""
+printf 'x Can'"'"'t determine voltage for vccio5\n' > "$T/d2"; iod_dmesg_verdict "$T/d2" >/dev/null; flag ISO-33 "\"Can't determine voltage\" flagged" $? ""
+printf 'x May damage SoC\n' > "$T/d3"; iod_dmesg_verdict "$T/d3" >/dev/null; flag ISO-34 "\"May damage SoC\" flagged" $? ""
+# IOD-08 ethernet verdict
+OUT=$(iod_eth_verdict 100 full 0x001cc816 5 5 100 250); RC=$?
+show_verdict ISO-35 "100/full, PHY ok, stable, rx growing passes" "$RC" "$OUT"
+iod_eth_verdict 10 full 0x001cc816 5 5 100 250 >/dev/null; flag ISO-36 "speed 10 flagged" $? ""
+iod_eth_verdict 100 half 0x001cc816 5 5 100 250 >/dev/null; flag ISO-37 "half duplex flagged" $? ""
+iod_eth_verdict 100 full 0x00000000 5 5 100 250 >/dev/null; flag ISO-38 "wrong PHY id flagged" $? ""
+iod_eth_verdict 100 full 0x001cc816 5 7 100 250 >/dev/null; flag ISO-39 "carrier_changes growth flagged" $? ""
+iod_eth_verdict 100 full 0x001cc816 5 5 100 100 >/dev/null; flag ISO-40 "rx not growing flagged" $? ""
 suite_end
