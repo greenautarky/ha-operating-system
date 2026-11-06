@@ -1,6 +1,6 @@
 # Container runtime floor (GA carry, until the buildroot submodule pins versions >= the floors).
 #
-# HAOS 18.3's buildroot ships docker-engine 29.7.2, docker-cli 29.7.2 and
+# HAOS 18.3's buildroot shipped docker-engine 29.7.2, docker-cli 29.7.2 and
 # containerd 2.3.3. Security releases are out for all three:
 #   docker-engine / docker-cli 29.8.2   https://github.com/moby/moby/releases/tag/docker-v29.8.2
 #   containerd 2.3.6                    https://github.com/containerd/containerd/releases/tag/v2.3.6

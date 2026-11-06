@@ -1,4 +1,4 @@
-From f6f8b309322869c1e2cb7d7c847b1eb8fb67ed80 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Stefan Agner <stefan@agner.ch>
 Date: Tue, 10 Mar 2026 23:29:13 +0100
 Subject: [PATCH] bridge: protect bridge subnet from direct external access in
@@ -28,10 +28,6 @@ gateway modes "routed" or "nat-unprotected", nor when
 --allow-direct-routing is set, consistent with the intent of those
 options. DOCKER_INSECURE_NO_IPTABLES_RAW=1 disables the iptables rules.
 
-GreenAutarky: rebased from the HAOS 18.3 copy of this patch (docker-engine
-29.7.2) onto docker-engine 29.8.2; the second hunk of iptabler/network.go
-moved. Same change, only context and offsets differ. Applies with no fuzz.
-
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 Signed-off-by: Stefan Agner <stefan@agner.ch>
 ---
@@ -43,9 +39,10 @@ Signed-off-by: Stefan Agner <stefan@agner.ch>
  5 files changed, 74 insertions(+), 138 deletions(-)
 
 diff --git a/daemon/libnetwork/drivers/bridge/internal/iptabler/cleaner.go b/daemon/libnetwork/drivers/bridge/internal/iptabler/cleaner.go
+index 3da6b18212..6961c1f1c8 100644
 --- a/daemon/libnetwork/drivers/bridge/internal/iptabler/cleaner.go
 +++ b/daemon/libnetwork/drivers/bridge/internal/iptabler/cleaner.go
-@@ -81,17 +81,9 @@
+@@ -81,17 +81,9 @@ func (ic iptablesCleaner) DelNetwork(ctx context.Context, nc firewaller.NetworkC
  	}
  }
  
@@ -67,6 +64,7 @@ diff --git a/daemon/libnetwork/drivers/bridge/internal/iptabler/cleaner.go b/dae
  
  func (ic iptablesCleaner) DelPorts(ctx context.Context, nc firewaller.NetworkConfig, pbs []types.PortBinding) {
 diff --git a/daemon/libnetwork/drivers/bridge/internal/iptabler/endpoint.go b/daemon/libnetwork/drivers/bridge/internal/iptabler/endpoint.go
+index 69a5bbc4d2..af8ff3c83c 100644
 --- a/daemon/libnetwork/drivers/bridge/internal/iptabler/endpoint.go
 +++ b/daemon/libnetwork/drivers/bridge/internal/iptabler/endpoint.go
 @@ -5,74 +5,12 @@
@@ -148,9 +146,10 @@ diff --git a/daemon/libnetwork/drivers/bridge/internal/iptabler/endpoint.go b/da
 +	return nil
  }
 diff --git a/daemon/libnetwork/drivers/bridge/internal/iptabler/network.go b/daemon/libnetwork/drivers/bridge/internal/iptabler/network.go
+index 67700a5a54..b42c34f028 100644
 --- a/daemon/libnetwork/drivers/bridge/internal/iptabler/network.go
 +++ b/daemon/libnetwork/drivers/bridge/internal/iptabler/network.go
-@@ -97,6 +97,13 @@
+@@ -97,6 +97,13 @@ func (n *network) setupIPTables(ctx context.Context, ipVersion iptables.IPVersio
  			return n.setupNonInternalNetworkRules(ctx, ipVersion, config, false)
  		})
  
@@ -164,7 +163,7 @@ diff --git a/daemon/libnetwork/drivers/bridge/internal/iptabler/network.go b/dae
  		if err := deleteLegacyFilterRules(ipVersion, n.config.IfName); err != nil {
  			return fmt.Errorf("failed to delete legacy rules in filter-FORWARD: %w", err)
  		}
-@@ -360,6 +367,47 @@
+@@ -360,6 +367,47 @@ func (n *network) setupNonInternalNetworkRules(ctx context.Context, ipVer iptabl
  	return nil
  }
  
@@ -213,6 +212,7 @@ diff --git a/daemon/libnetwork/drivers/bridge/internal/iptabler/network.go b/dae
  	args := []string{"-i", bridgeIface, "-o", bridgeIface, "-j"}
  	acceptRule := iptables.Rule{IPVer: version, Table: iptables.Filter, Chain: dockerForwardChain, Args: append(args, "ACCEPT")}
 diff --git a/daemon/libnetwork/drivers/bridge/internal/nftabler/endpoint.go b/daemon/libnetwork/drivers/bridge/internal/nftabler/endpoint.go
+index cfb45186d2..02b8dbcda1 100644
 --- a/daemon/libnetwork/drivers/bridge/internal/nftabler/endpoint.go
 +++ b/daemon/libnetwork/drivers/bridge/internal/nftabler/endpoint.go
 @@ -4,76 +4,16 @@
@@ -295,9 +295,10 @@ diff --git a/daemon/libnetwork/drivers/bridge/internal/nftabler/endpoint.go b/da
 +	return nil
  }
 diff --git a/daemon/libnetwork/drivers/bridge/internal/nftabler/network.go b/daemon/libnetwork/drivers/bridge/internal/nftabler/network.go
+index 4ef375bdbd..4f7e27b2f8 100644
 --- a/daemon/libnetwork/drivers/bridge/internal/nftabler/network.go
 +++ b/daemon/libnetwork/drivers/bridge/internal/nftabler/network.go
-@@ -174,6 +174,24 @@
+@@ -174,6 +174,24 @@ func (n *network) configure(ctx context.Context, table *nftables.Table, conf fir
  			})
  		}
  
