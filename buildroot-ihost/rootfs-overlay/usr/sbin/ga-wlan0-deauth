@@ -149,7 +149,7 @@ restamp_updated_at() {
               || echo "ga-wlan0-deauth: lock on $LOCK_DIR not acquired within ${LOCK_WAIT_S}s — heartbeat without it" >&2
         fi
         mkdir -p "$STAGE_DIR" 2>/dev/null && chmod 0700 "$STAGE_DIR" 2>/dev/null
-        _snap="$STAGE_DIR/.beat.$$.$(basename "$SHARE")"
+        _snap="$STAGE_DIR/.beat.$$.json"
         rm -f "$_snap"
         ln "$SHARE" "$_snap" 2>/dev/null || exit 0
         if [ -f "$_snap" ] && [ ! -L "$_snap" ]; then
