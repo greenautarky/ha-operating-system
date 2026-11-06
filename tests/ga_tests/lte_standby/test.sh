@@ -104,6 +104,16 @@ run_test "LSB-19b" "heartbeat never invents a counter file that does not exist" 
 run_test "LSB-19c" "the daemon starts a heartbeat loop and bounds it by GA_DEAUTH_HEARTBEAT_S (<= 300 s default)" \
   "grep -q '^ *heartbeat_loop &' '$DEAUTH' && grep -q 'HEARTBEAT_S:-240' '$DEAUTH'"
 
+# Shared fixture of the seam file format (identical copy in ga_manager
+# tests/fixtures/, where the consumer tests read it). The producer must render
+# EXACTLY the fixture's key set, so a field renamed on either side fails a test.
+FIX="$SCRIPT_DIR/fixtures/ga-wlan0-deauth.os-writer.json"
+RENDERED="$( export GA_DEAUTH_TEST=1 GA_DEAUTH_SHARE="$TMPD/x.json"; . "$DEAUTH"
+  render_json 7 aaaaaaaa-1111-2222-3333-444444444444 2026-11-06T02:10:00Z '"3":7' 3 '' )"
+_keys() { printf '%s' "$1" | tr -d '\n' | grep -o '"[a-z_0-9]*":' | sort -u | tr -d '\n'; }
+run_test "LSB-19d" "producer render_json key set == shared fixture key set (seam S1)" \
+  "test -n \"\$(_keys \"\$(cat '$FIX')\")\" && test \"\$(_keys '$RENDERED')\" = \"\$(_keys \"\$(cat '$FIX')\")\""
+
 # ── S2: health-gated route functional ──────────────────────────────────────
 # On a host `logger` succeeds silently (writes to the journal), so the WARNING
 # never reaches stderr for the test to capture. Shadow it with a fake logger
