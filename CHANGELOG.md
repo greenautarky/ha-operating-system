@@ -12,6 +12,13 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (master): WiFi first boot — no self-inflicted reconnect, NM-valid defaults
+
+- **The powersave assert no longer tears the link down.** On fresh-flash first boots `ga-wlan0-powersave-assert` found the install profile's powersave at `default` and ran `nmcli connection up` (deauth + reconnect). NetworkManager 1.50 cannot reapply `802-11-wireless.powersave` live (`can_reapply_change` in `nm-device-wifi.c` allows only seen-bssids, mtu, wake-on-wlan). Now the EFFECTIVE value is compared (profile `default` falls back to the global `[connection-wifi-defaults]` wifi.powersave=2: no action; this was a standing false positive); a connection still activating is waited for (bounded) and otherwise left alone; a real mismatch is persisted with `connection modify` and switched off with `iw ... set power_save off`, never re-activated.
+- **The install WiFi profile ships `powersave=2`**; PSK injection unchanged; existing devices keep their overlay copy.
+- **`NetworkManager.conf`: removed `wifi.hidden` and `connection.autoconnect-priority` from `[connection-wifi-defaults]`** (NM has no global default for them; "unknown key" warnings; never took effect).
+- Tests: `tests/ga_tests/wifi_firstboot/selftest.sh`, LSB-33, WIFI-05/06 updated.
+
 ## Unreleased (master): xz 5.6.4 -> 5.8.4 (host-xz and target xz)
 
 - **xz is lifted to 5.8.4 by a version floor.** Before: the buildroot submodule pins xz 5.6.4, inside three published advisories (GHSA-5qpq-xqfv-j9pg, GHSA-6cc8-p5mm-29w2, GHSA-x872-m794-cxhv; all fixed in 5.8.4) and covered by time-limited acknowledgements in the upstream watcher. After: `buildroot-external/xz-floor.mk` (same mechanism as `go-floor.mk`, included from each board's `local.mk`) overrides `XZ_VERSION` before the package infrastructure bakes it in, for host-xz (squashfs/erofs/RAUC bundle tooling) and the target; it switches itself off once the submodule pins >= 5.8.4. The hash file `buildroot-external/xz-floor/xz.hash` carries the 5.8.4 tarball (checked against the upstream detached signature) and licence-file hashes. master's two xz patches (0101/0102, GHSA-5qpq-xqfv-j9pg only) are dropped: 5.8.4 contains them.

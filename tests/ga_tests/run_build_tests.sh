@@ -752,15 +752,17 @@ if [[ -f "$NM_CONF" ]]; then
     && _pass "WIFI-04: infinite autoconnect retries (0)" \
     || _fail "WIFI-04: autoconnect-retries NOT set to 0"
 
-  # WIFI-05: Hidden SSID scanning enabled
-  grep -q 'wifi.hidden=true' "$NM_CONF" 2>/dev/null \
-    && _pass "WIFI-05: hidden SSID scanning enabled" \
-    || _fail "WIFI-05: hidden SSID scanning NOT enabled"
-
-  # WIFI-06: High autoconnect priority
-  grep -q 'connection.autoconnect-priority=100' "$NM_CONF" 2>/dev/null \
-    && _pass "WIFI-06: WiFi autoconnect priority=100" \
-    || _fail "WIFI-06: WiFi autoconnect priority NOT set to 100"
+  # WIFI-05/06: NetworkManager 1.50 has NO global default for wifi.hidden or
+  # connection.autoconnect-priority; in [connection-wifi-defaults] they only
+  # produce "unknown key" warnings and never took effect. Assert they are NOT set
+  # as active (uncommented) lines; priorities live in the profiles (WIFI-08b).
+  grep -Eq '^[[:space:]]*(wifi\.hidden|connection\.autoconnect-priority)[[:space:]]*=' "$NM_CONF" 2>/dev/null \
+    && _fail "WIFI-05: NM_CONF sets wifi.hidden / connection.autoconnect-priority (unknown to NM 1.50 as defaults)" \
+    || _pass "WIFI-05: no unknown-to-NM keys (wifi.hidden, connection.autoconnect-priority) in the defaults section"
+  # WIFI-06: install profile pins powersave off itself (first association)
+  grep -q '^powersave=2$' "${TARGET}/usr/share/ga-wifi/GreenAutarky-Install.nmconnection" 2>/dev/null \
+    && _pass "WIFI-06: Install WiFi profile ships powersave=2" \
+    || _fail "WIFI-06: Install WiFi profile does not ship powersave=2"
 
   # WIFI-07: match-device targets wifi type
   grep -q 'match-device=type:wifi' "$NM_CONF" 2>/dev/null \

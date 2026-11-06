@@ -7,6 +7,9 @@ autoconnect-priority=-10
 [wifi]
 mode=infrastructure
 ssid=GreenAutarky-Install
+# 2 = disable power save (RTW88 flaps with LPS on). Set in the profile so the
+# first association already has it; without it the profile says "default".
+powersave=2
 
 [wifi-security]
 key-mgmt=wpa-psk
