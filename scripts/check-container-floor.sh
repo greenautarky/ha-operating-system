@@ -27,7 +27,7 @@ set -uo pipefail
 
 MIN_DOCKER_ENGINE=29.8.2
 MIN_DOCKER_CLI=29.8.2
-MIN_CONTAINERD=2.3.6
+MIN_CONTAINERD=2.3.7
 
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/.." && pwd)"

@@ -52,7 +52,7 @@ mkbr "$tmp/br183" 29.7.2 29.7.2 2.3.3; mkext "$tmp/ext1"
 case_ "must-pass/haos-18.3-versions-floor-active" 0 "container-floor: OK (3 packages inspected)" "$tmp/ext1" "$tmp/br183" "$good_local"
 mkbr "$tmp/brnew" 29.9.0 29.9.0 2.4.0 hash
 case_ "must-pass/submodule-newer-floor-off" 0 "the GA carry is obsolete" "$tmp/ext1" "$tmp/brnew" "$good_local"
-mkbr "$tmp/breq" 29.8.2 29.8.2 2.3.6
+mkbr "$tmp/breq" 29.8.2 29.8.2 2.3.7
 case_ "must-pass/submodule-at-floor" 0 "container-floor: OK" "$tmp/ext1" "$tmp/breq" "$good_local"
 
 # --- must-fail
@@ -60,8 +60,8 @@ mkext "$tmp/ext2"; sed -i 's/DOCKER_ENGINE:docker-engine:29.8.2/DOCKER_ENGINE:do
 case_ "must-fail/floor-lowered" 1 "docker-engine effective version 29.7.2 is below the pinned minimum" "$tmp/ext2" "$tmp/br183" "$good_local"
 mkext "$tmp/ext3"; rm "$tmp/ext3/patches/docker-cli/docker-cli.hash"
 case_ "must-fail/hash-file-missing" 1 "docker-cli 29.8.2: no sha256 entry" "$tmp/ext3" "$tmp/br183" "$good_local"
-mkext "$tmp/ext4"; sed -i 's/containerd-2.3.6-go2/containerd-2.3.3-go2/' "$tmp/ext4/patches/containerd/containerd.hash"
-case_ "must-fail/hash-names-other-version" 1 "containerd 2.3.6: no sha256 entry" "$tmp/ext4" "$tmp/br183" "$good_local"
+mkext "$tmp/ext4"; sed -i 's/containerd-2.3.7-go2/containerd-2.3.3-go2/' "$tmp/ext4/patches/containerd/containerd.hash"
+case_ "must-fail/hash-names-other-version" 1 "containerd 2.3.7: no sha256 entry" "$tmp/ext4" "$tmp/br183" "$good_local"
 mkext "$tmp/ext5"; sed -i -E 's/^(sha256  )[0-9a-f]{64}(  docker-engine-)/\1deadbeef\2/' "$tmp/ext5/patches/docker-engine/docker-engine.hash"
 case_ "must-fail/hash-value-not-sha256" 1 "docker-engine 29.8.2: no sha256 entry" "$tmp/ext5" "$tmp/br183" "$good_local"
 : >"$tmp/local-none.mk"

@@ -12,6 +12,11 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): containerd 2.3.6 -> 2.3.7
+
+- **containerd is lifted to 2.3.7 by the container version floor.** Before: containerd 2.3.6, inside four published medium advisories (GHSA-5p7c-hggf-c748, GHSA-8647-2jxj-p2rc, GHSA-hc94-p972-ch66, GHSA-vwhp-8p66-mq4f; all fixed in 2.3.7), flagged by the upstream watcher. After: `CONTAINERD:containerd:2.3.7` in `buildroot-external/container-floor.mk` (floor raised from 2.3.6); it switches itself off once the buildroot submodule pins >= 2.3.7. Hash file `patches/containerd/containerd.hash` names the 2.3.7 go2 tarball. docker-engine 29.8.2 vendors the containerd 2.3.x client (v2.3.6) and its CI uses containerd v2.3.6, so a 2.3.7 patch release is the same API line. Go: containerd 2.3.7 needs Go 1.26.8, the build uses >= 1.26.9.
+- Gate `scripts/check-container-floor.sh` pins MIN_CONTAINERD=2.3.7; fixtures `tests/gates/container_floor/selftest.sh`.
+
 ## Unreleased (feat/1.6-haos18): xz 5.6.4 -> 5.8.4 (host-xz and target xz)
 
 - **xz is lifted to 5.8.4 by a version floor.** Before: the buildroot submodule pins xz 5.6.4, inside three published advisories (GHSA-5qpq-xqfv-j9pg, GHSA-6cc8-p5mm-29w2, GHSA-x872-m794-cxhv; all fixed in 5.8.4) and covered by time-limited acknowledgements in the upstream watcher. After: `buildroot-external/xz-floor.mk` (same mechanism as `go-floor.mk`, included from each board's `local.mk`) overrides `XZ_VERSION` before the package infrastructure bakes it in, for host-xz (squashfs/erofs/RAUC bundle tooling) and the target; it switches itself off once the submodule pins >= 5.8.4. The hash file `buildroot-external/xz-floor/xz.hash` carries the 5.8.4 tarball (checked against the upstream detached signature) and licence-file hashes. HAOS 18.4's buildroot already carries the 5.6.x backports (package patches 0001-0007); they are not applied to 5.8.4 (the package dir is redirected, see xz-floor.mk).
