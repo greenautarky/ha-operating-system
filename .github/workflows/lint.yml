@@ -431,6 +431,17 @@ jobs:
           set -eu
           git submodule update --init --depth 1 buildroot
           XZ_FLOOR_REQUIRE_LIVE=1 ./tests/gates/xz_floor/selftest.sh
+      # containerd 2.3.6 (buildroot pin) is inside four published advisories fixed
+      # in 2.3.7. container-floor.mk (included by the board's local.mk, like the
+      # Go and xz floors) lifts it; patches/containerd/containerd.hash holds the
+      # tarball hash. scripts/check-container-floor.sh evaluates the EFFECTIVE
+      # version with make against a pinned minimum. The self-test drives the live
+      # gate over fixture trees and, mandatory here, the real pinned submodule.
+      - name: container floor (containerd at >= 2.3.7)
+        run: |
+          set -eu
+          git submodule update --init --depth 1 buildroot
+          CONTAINER_FLOOR_REQUIRE_LIVE=1 ./tests/gates/container_floor/selftest.sh
       - name: pkg-inputs rebuilds a package when our patches or configure options for it change
         # Buildroot looks at neither BR2_GLOBAL_PATCH_DIR nor <PKG>_CONF_OPTS once
         # a package has its stamps, so on a reused (`update`) output tree the
