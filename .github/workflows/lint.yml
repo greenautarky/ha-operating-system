@@ -607,6 +607,18 @@ jobs:
           git submodule update --init --depth 1 haos
           bash tests/gates/build_tests_board_arch/selftest.sh
 
+      - name: build tests - board matrix (ALL build tests on fixture outputs of EVERY board)
+        # Runs the live tests/ga_tests/run_build_tests.sh on fixture build outputs captured from
+        # the real bakes (iHost BOSv1.6.0-rc3, DSGW-210 BOSv1.6.0-dev4), for every board in
+        # GA_BOARDS: no test may fail, everything that passed in the real bake still passes, the
+        # SKIP set is pinned. A build test that assumes one board (arch, machine, channel, pin
+        # file, a package) fails HERE in about 90 s instead of after a 75-90 minute bake
+        # (Odoo #1620). Red proofs re-introduce the historical bugs (VER-09/VER-07/VER-10/XVER-06/
+        # XVER-03/VER-05/GAMCAP-01/WIFI-09/pin file) into a copy of the runner.
+        run: |
+          git submodule update --init --depth 1 haos
+          bash tests/gates/build_tests_board_matrix/selftest.sh
+
       - name: pre-flight image check reads the board's own pins, arch and machine (Odoo #1617)
         # scripts/check-images.sh (run by ga_build.sh before the multi-hour build) used to read the
         # iHost pin file with armv7 whatever the board. The gate drives the live script per board
