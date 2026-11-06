@@ -73,14 +73,23 @@ if [ -n "$free_kb" ] && [ "$free_kb" -lt "$MIN_FREE_KB" ] 2>/dev/null; then
 fi
 
 TMP="$DIR/.tmp.$$"
-trap 'rm -f "$TMP" "$TMP.gz" "$TMP.txt" "$TMP.ps"' EXIT
+trap 'rm -f "$TMP" "$TMP.gz" "$TMP.txt" "$TMP.ps" "$TMP.sec"' EXIT
 
 T=""
 command -v timeout >/dev/null 2>&1 && T="timeout 20"
 
+# `tail -c N` on a PIPE is not exact in every implementation: uutils/Rust coreutils
+# (default on Ubuntu 26.04) returns N plus a variable amount of older bytes
+# (measured +9..+13 % on 917504). The overshoot let the sections add up to more than
+# MAX_BYTES, so the final `head -c "$MAX_BYTES"` cut off the NEWEST sections
+# (warnings, pstore) - intermittently, depending on read chunking (Odoo #1597).
+# Fix: the first tail only bounds what is staged (~cap); the cap itself is then
+# applied by `tail -c N FILE`, which seeks and is exact everywhere.
 section() { # section <title> <cap>  (stdin -> newest <cap> bytes)
     printf '\n===== %s =====\n' "$1"
-    tail -c "$2"
+    tail -c "$2" > "$TMP.sec" 2>/dev/null
+    tail -c "$2" "$TMP.sec"
+    rm -f "$TMP.sec"
 }
 
 {
