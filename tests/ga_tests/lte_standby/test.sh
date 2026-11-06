@@ -194,6 +194,11 @@ run_test "LSB-30" "powersave wrong (1) -> re-applied to 2 (disabled)" \
 DPS2="$( ( export GA_PSAVE_TEST=1 GA_PSAVE_NMCLI="$FAKENM"; . "$PSAVE"; assert_once ) )"
 run_test "LSB-31" "powersave already 2 -> ok, no change" "test '$DPS2' = ok"
 
+# The assert must never re-activate a connection (NM 1.50 cannot reapply powersave
+# live; a re-activation deauths the link — fresh-flash first boot, 2026-11).
+run_test "LSB-33" "powersave-assert has no active 'connection up' call" \
+  "! grep -v '^[[:space:]]*#' '$PSAVE' | grep -q 'connection up'"
+
 # The shipped openstick profile still pins powersave 2 on the created hop.
 #
 # Read the DEVICE's copy when there is one, the overlay only as a fallback —

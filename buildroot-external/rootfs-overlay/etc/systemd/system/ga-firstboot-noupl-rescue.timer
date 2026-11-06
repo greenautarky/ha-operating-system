@@ -1,0 +1,9 @@
+[Unit]
+Description=Check for an uplink 3 min after boot (once per boot)
+
+[Timer]
+OnBootSec=3min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

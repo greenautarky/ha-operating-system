@@ -388,6 +388,12 @@ jobs:
         # static checks fail against the pre-fix test.sh.
         run: sh tests/ga_tests/dns_config/selftest.sh
 
+      - name: WiFi first boot (install profile powersave, assert never re-activates, NM defaults keys, no-uplink rescue)
+        # Drives the LIVE assert / rescue scripts with fake nmcli/iw/ip and reads the
+        # live template, 50-ga.conf and 85-wifi-install-psk.sh. Red-proven against the
+        # pre-change files (see the PR).
+        run: sh tests/ga_tests/wifi_firstboot/selftest.sh
+
       - name: ga-services.conf layering (override on top of the default, one shared loader)
         # Drives the LIVE ga-services-conf.sh with a partial / full / absent
         # override and sweeps the overlay for hand-rolled readers. Red-proven:

@@ -6,6 +6,7 @@ Wants=NetworkManager.service
 
 [Service]
 Type=oneshot
+TimeoutStartSec=60
 ExecStart=/usr/sbin/ga-wlan0-powersave-assert
 # Re-runs whenever the openstick auto-connect timer brings a hop up, so a
 # freshly-created profile is asserted too.
