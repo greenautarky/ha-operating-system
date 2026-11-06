@@ -149,18 +149,18 @@ restamp_updated_at() {
               || echo "ga-wlan0-deauth: lock on $LOCK_DIR not acquired within ${LOCK_WAIT_S}s — heartbeat without it" >&2
         fi
         mkdir -p "$STAGE_DIR" 2>/dev/null && chmod 0700 "$STAGE_DIR" 2>/dev/null
-        _snap="$STAGE_DIR/.beat.$$.json"
-        rm -f "$_snap"
-        ln "$SHARE" "$_snap" 2>/dev/null || exit 0
-        if [ -f "$_snap" ] && [ ! -L "$_snap" ]; then
-            _new="$(head -c "$MARKS_READ_MAX" "$_snap" | tr -d '\n' \
+        _beat="$STAGE_DIR/.beat.$$.json"
+        rm -f "$_beat"
+        ln "$SHARE" "$_beat" 2>/dev/null || exit 0
+        if [ -f "$_beat" ] && [ ! -L "$_beat" ]; then
+            _new="$(head -c "$MARKS_READ_MAX" "$_beat" | tr -d '\n' \
               | sed "s/\"updated_at\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"updated_at\":\"$(_now_iso)\"/")"
             case "$_new" in
                 *'"updated_at":"'*) printf '%s\n' "$_new" | "$PUBLISH" "$SHARE" 0644 ;;
                 *) echo "ga-wlan0-deauth: no updated_at in $SHARE — heartbeat skipped" >&2 ;;
             esac
         fi
-        rm -f "$_snap"
+        rm -f "$_beat"
     ) 9<"$LOCK_DIR"
 }
 
