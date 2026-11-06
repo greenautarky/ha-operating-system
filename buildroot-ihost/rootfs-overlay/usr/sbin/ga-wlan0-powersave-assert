@@ -122,8 +122,16 @@ assert_once() {
     $NMCLI connection modify "$_c" 802-11-wireless.powersave 2 2>/dev/null || true
     if have_iw; then
         _log warning "$IFACE powersave is '$_ps' on '$_c' (expected 2=disabled) — persisted 2 and switched the driver off without re-activating; RTW88 with LPS on flaps on its own"
-        $IW dev "$IFACE" set power_save off 2>/dev/null || true
-        echo fixed
+        # Check the status: a failed `iw set power_save off` must NOT be reported as
+        # "fixed" (Odoo #1572). The profile is persisted either way, so the next
+        # activation applies it; the live link keeps its old power-save until then.
+        if _iwerr="$($IW dev "$IFACE" set power_save off 2>&1)"; then
+            echo fixed
+        else
+            _iwrc=$?
+            _log warning "'$IW dev $IFACE set power_save off' FAILED (exit $_iwrc: ${_iwerr:-no output}) — profile persisted, but the driver is NOT switched off live; takes effect at next activation"
+            echo fix-failed
+        fi
     else
         _log warning "$IFACE powersave is '$_ps' on '$_c' (expected 2=disabled) — persisted 2 but live disable unavailable ('$IW' not installed): takes effect at next activation"
         echo pending-next-activation
