@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 archive_build_configs() {
   local manifest="${cfg_dir}/MANIFEST.txt"
   { echo manifest; } > "$manifest"

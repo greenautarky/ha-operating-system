@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 archive_build_configs() {
   local cfg_dir="${OUT}/images/configs"
   local _ev_script="${SCRIPT_DIR}/ops/collect-release-evidence.sh"
