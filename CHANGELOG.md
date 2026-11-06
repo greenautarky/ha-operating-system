@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): CVE image scan finds the bake's channel without the haos/ checkout
+
+`scripts/scan-cves.sh --images` took the channel URL from `hassio.mk` via the haos/ submodule and failed ("no HASSIO_VERSION_URL in hassio.mk") wherever the submodule is not checked out (the weekly shipped-image re-scan). It now reads the `HASSIO_VERSION_URL ?=` line that GA patch 0131 adds, from the patch set (`apply-haos-patches.sh --list`): the same line the bake builds with, so Core, Supervisor and plugins come from the same `line/1.6/<channel>.json`. Zero or conflicting definitions: broken scan (exit 2), never a guess. Fixtures: `tests/gates/cve-gate/scan-cves-bake-url-fixtures.sh`.
+
 ## Unreleased (feat/1.6-haos18): WiFi first boot — no self-inflicted reconnect, one NM defaults section that NM reads, no-uplink evidence
 
 - **The powersave assert no longer tears the link down.** Observed on fresh-flash first boots: ~13 s after wlan0 first associated, `ga-wlan0-powersave-assert` found the install profile's powersave at `default` and ran `nmcli connection up` (deauth + reconnect), racing the openstick auto-connect scan. NetworkManager 1.50.2 cannot reapply `802-11-wireless.powersave` on a live link (`can_reapply_change` in `nm-device-wifi.c` whitelists only seen-bssids, mtu and wake-on-wlan), so a re-activation is always a reconnect. Now: profile `default` with the global `[connection-wifi-defaults]` wifi.powersave=2 (the effective value; was a standing false positive) is OK and untouched, with the driver reporting off as fallback if the global is unreadable; a connection still activating is waited for (bounded 30 s) and otherwise left alone; a real mismatch is persisted with `connection modify` and switched off at runtime with `iw dev wlan0 set power_save off`, no re-activation. The LTE-standby behaviour (`ok`/`fixed`, LSB-30/31) is unchanged.
