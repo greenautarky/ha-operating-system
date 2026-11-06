@@ -12,6 +12,14 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (master): WiFi first boot — no self-inflicted reconnect, NM-valid defaults
+
+- **The powersave assert no longer tears the link down.** On fresh-flash first boots `ga-wlan0-powersave-assert` found the install profile's powersave at `default` and ran `nmcli connection up` (deauth + reconnect). NetworkManager 1.50 cannot reapply `802-11-wireless.powersave` live (`can_reapply_change` in `nm-device-wifi.c` allows only seen-bssids, mtu, wake-on-wlan). Now the EFFECTIVE value is compared (profile `default` falls back to the global `[connection-wifi-defaults]` wifi.powersave=2: no action; this was a standing false positive); a connection still activating is waited for (bounded) and otherwise left alone; a real mismatch is persisted with `connection modify` and switched off with `iw ... set power_save off`, never re-activated.
+- **The install WiFi profile ships `powersave=2`**; PSK injection unchanged; existing devices keep their overlay copy.
+- **`NetworkManager.conf`: removed `wifi.hidden` and `connection.autoconnect-priority` from `[connection-wifi-defaults]`** (NM has no global default for them; "unknown key" warnings; never took effect).
+- **`iw` is now in the iHost images (`BR2_PACKAGE_IW=y`, all three ihost defconfigs).** It was missing, so the assert live disable and `ga-wifi-watchdog` rssi/link reads silently did nothing. Without `iw` the assert logs a WARNING and returns `pending-next-activation`, never `fixed`; an unreadable global default is logged at error level; the global is read from the `[connection*]` section that applies to wifi (tested against captured real NM 1.50.2 output). `85-wifi-install-psk.sh` honours `WIFI_INSTALL_PSK_FILE`. Rootfs size effect not measured (needs a bake).
+- Tests: `tests/ga_tests/wifi_firstboot/selftest.sh`, LSB-33, WIFI-05/06 updated.
+
 ## Unreleased (master): containerd 2.3.6 -> 2.3.7
 
 - **containerd is lifted to 2.3.7 by the container version floor.** Before: containerd 2.3.6, inside four published medium advisories (GHSA-5p7c-hggf-c748, GHSA-8647-2jxj-p2rc, GHSA-hc94-p972-ch66, GHSA-vwhp-8p66-mq4f; all fixed in 2.3.7), flagged by the upstream watcher. After: `CONTAINERD:containerd:2.3.7` in `buildroot-external/container-floor.mk` (new on this line, same mechanism as `go-floor.mk` and `xz-floor.mk`); it switches itself off once the buildroot submodule pins >= 2.3.7. Hash file `patches/containerd/containerd.hash` names the 2.3.7 go2 tarball. docker-engine 29.8.2 vendors the containerd 2.3.x client (v2.3.6) and its CI uses containerd v2.3.6, so a 2.3.7 patch release is the same API line. Go: containerd 2.3.7 needs Go 1.26.8, the build uses >= 1.26.9.
