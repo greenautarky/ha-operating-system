@@ -3,7 +3,7 @@
 # HAOS 18.3's buildroot shipped docker-engine 29.7.2, docker-cli 29.7.2 and
 # containerd 2.3.3. Security releases are out for all three:
 #   docker-engine / docker-cli 29.8.2   https://github.com/moby/moby/releases/tag/docker-v29.8.2
-#   containerd 2.3.6                    https://github.com/containerd/containerd/releases/tag/v2.3.6
+#   containerd 2.3.7                    https://github.com/containerd/containerd/releases/tag/v2.3.7
 # Master (HAOS 16.3 line) already ships them through its buildroot pin; this
 # file gives the 18.x line the same versions without a buildroot fork.
 #
@@ -27,7 +27,7 @@
 GA_CONTAINER_FLOORS = \
 	DOCKER_ENGINE:docker-engine:29.8.2 \
 	DOCKER_CLI:docker-cli:29.8.2 \
-	CONTAINERD:containerd:2.3.6
+	CONTAINERD:containerd:2.3.7
 
 define GA_CONTAINER_FLOOR
 GA_$(1)_SUBMODULE_VERSION := $$(shell sed -n -E 's/^$(1)_VERSION[[:space:]]*=[[:space:]]*([0-9]+(\.[0-9]+)*)[[:space:]]*$$$$/\1/p' $$(TOPDIR)/package/$(2)/$(2).mk | head -n 1)
