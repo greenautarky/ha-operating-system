@@ -96,7 +96,6 @@ index 3159f9a6a0f7..60a61ceb6a1d 100644
    '#address-cells':
      const: 2
 diff --git a/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi b/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi
-index 9a87dc0d5f66..e1077309bd2a 100644
 --- a/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi
 +++ b/arch/arm/boot/dts/rockchip/rv1126-sonoff-ihost.dtsi
 @@ -16,6 +16,18 @@
@@ -118,7 +117,7 @@ index 9a87dc0d5f66..e1077309bd2a 100644
  	vcc5v0_sys: regulator-vcc5v0-sys {
  		compatible = "regulator-fixed";
  		regulator-name = "vcc5v0_sys";
-@@ -320,18 +332,24 @@
+@@ -320,6 +332,12 @@
  			rockchip,pins = <1 RK_PD0 RK_FUNC_GPIO &pcfg_pull_none>;
  		};
  	};
@@ -131,43 +130,27 @@ index 9a87dc0d5f66..e1077309bd2a 100644
  };
  
  &pmu_io_domains {
--	pmuio0-supply = <&vcc1v8_pmu>;
-+	pmuio0-supply = <&vcc3v3_sys>;
+@@ -327,9 +345,9 @@
  	pmuio1-supply = <&vcc3v3_sys>;
  	vccio1-supply = <&vcc_1v8>;
  	vccio2-supply = <&vccio_sd>;
 -	vccio3-supply = <&vcc3v3_sd>;
--	vccio4-supply = <&vcc_dovdd>;
 +	vccio3-supply = <&vcc_3v3>;
-+	vccio4-supply = <&vcc_3v3>;
- 	vccio5-supply = <&vcc_1v8>;
--	vccio6-supply = <&vcc_1v8>;
--	vccio7-supply = <&vcc_dovdd>;
-+	vccio6-supply = <&vcc_3v3>;
-+	vccio7-supply = <&vcc_1v8>;
+ 	vccio4-supply = <&vcc_3v3>;
+-	vccio5-supply = <&vcc_3v3>;
++	vccio5-supply = <&vcc_1v8>;
+ 	vccio6-supply = <&vcc_3v3>;
+ 	vccio7-supply = <&vcc_1v8>;
  	status = "okay";
- };
- 
-@@ -342,16 +360,15 @@
- 
- &sdio {
- 	bus-width = <4>;
--	cap-sd-highspeed;
- 	cap-sdio-irq;
+@@ -346,6 +364,7 @@
  	keep-power-in-suspend;
--	max-frequency = <50000000>;
-+	max-frequency = <25000000>;
+ 	max-frequency = <25000000>;
  	mmc-pwrseq = <&sdio_pwrseq>;
 +	supports-sdio;
  	non-removable;
  	pinctrl-names = "default";
  	pinctrl-0 = <&sdmmc1_clk &sdmmc1_cmd &sdmmc1_bus4>;
- 	rockchip,default-sample-phase = <90>;
--	sd-uhs-sdr50;
- 	vmmc-supply = <&vcc3v3_sd>;
- 	vqmmc-supply = <&vcc_1v8>;
- 	status = "okay";
-@@ -372,6 +389,24 @@
+@@ -370,6 +389,24 @@
  	status = "okay";
  };
  
@@ -192,7 +175,7 @@ index 9a87dc0d5f66..e1077309bd2a 100644
  &uart0 {
  	pinctrl-names = "default";
  	pinctrl-0 = <&uart0_xfer &uart0_ctsn &uart0_rtsn>;
-@@ -389,6 +424,24 @@
+@@ -387,6 +424,24 @@
  	};
  };
  
@@ -217,7 +200,7 @@ index 9a87dc0d5f66..e1077309bd2a 100644
  &uart2 {
  	status = "okay";
  };
-@@ -404,3 +457,7 @@
+@@ -402,3 +457,7 @@
  	pinctrl-0 = <&uart4m2_xfer>;
  	status = "okay";
  };
@@ -451,7 +434,7 @@ new file mode 100644
 index 000000000000..b436f842fdc0
 --- /dev/null
 +++ b/drivers/phy/rockchip/phy-rockchip-naneng-usb2.c
-@@ -0,0 +1,1933 @@
+@@ -0,0 +1,1932 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Rockchip USB2.0 PHY with Naneng IP block driver
@@ -2004,9 +1987,8 @@ index 000000000000..b436f842fdc0
 +		    of_device_is_compatible(np, "rockchip,rv1126-usb2phy")) {
 +			rockchip_usb2phy_ops.calibrate =
 +						rv1126_usb2phy_calibrate;
-+			hrtimer_init(&rphy->wait_timer, CLOCK_MONOTONIC,
-+				     HRTIMER_MODE_REL);
-+			rphy->wait_timer.function = &rv1126_wait_timer_fn;
++			hrtimer_setup(&rphy->wait_timer, rv1126_wait_timer_fn,
++				      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 +		}
 +
 +		phy = devm_phy_create(dev, child_np, &rockchip_usb2phy_ops);
@@ -2402,7 +2384,7 @@ new file mode 100644
 index 000000000000..7b4825ba9521
 --- /dev/null
 +++ b/include/linux/wakelock.h
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,72 @@
 +/* include/linux/wakelock.h
 + *
 + * Copyright (C) 2007-2012 Google, Inc.
@@ -2434,48 +2416,44 @@ index 000000000000..7b4825ba9521
 +	WAKE_LOCK_TYPE_COUNT
 +};
 +
++/* Since v6.17 the wakeup_source API is allocate-and-register only
++ * (wakeup_source_add()/_remove() and caller-embedded sources are gone), so
++ * the lock now holds a registered source instead of embedding one.
++ */
 +struct wake_lock {
-+	struct wakeup_source ws;
++	struct wakeup_source *ws;
 +};
 +
 +static inline void wake_lock_init(struct wake_lock *lock, int type,
 +				  const char *name)
 +{
-+	struct wakeup_source *ws = &lock->ws;
-+
-+	if (ws) {
-+		memset(ws, 0, sizeof(*ws));
-+		ws->name = name;
-+	}
-+	wakeup_source_add(ws);
++	lock->ws = wakeup_source_register(NULL, name);
 +}
 +
 +static inline void wake_lock_destroy(struct wake_lock *lock)
 +{
-+	struct wakeup_source *ws = &lock->ws;
-+
-+	wakeup_source_remove(ws);
-+	__pm_relax(ws);
++	wakeup_source_unregister(lock->ws);
++	lock->ws = NULL;
 +}
 +
 +static inline void wake_lock(struct wake_lock *lock)
 +{
-+	__pm_stay_awake(&lock->ws);
++	__pm_stay_awake(lock->ws);
 +}
 +
 +static inline void wake_lock_timeout(struct wake_lock *lock, long timeout)
 +{
-+	__pm_wakeup_event(&lock->ws, jiffies_to_msecs(timeout));
++	__pm_wakeup_event(lock->ws, jiffies_to_msecs(timeout));
 +}
 +
 +static inline void wake_unlock(struct wake_lock *lock)
 +{
-+	__pm_relax(&lock->ws);
++	__pm_relax(lock->ws);
 +}
 +
 +static inline int wake_lock_active(struct wake_lock *lock)
 +{
-+	return lock->ws.active;
++	return lock->ws ? lock->ws->active : 0;
 +}
 +
 +#endif

@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): iHost kernel 6.12.115 -> 6.18.60 (proposal, not part of the BOSv1.6 final unless proven on a bench unit)
+
+The iHost kernel moves to the 6.18 LTS line, the line the DSGW-210 already runs. Kernel config fragments now come from the HAOS submodule (`kernel/v6.18.y`, same as DSGW); the copied 16.3 `v6.12.y` fragments and the 18.3 delta file are removed. Patch set ported: the iHost DT patch is rebased on the upstream 6.18 Sonoff DT (upstream now carries the WDT node, the 25 MHz SDIO limit and pmuio0/vccio4/vccio6/vccio7 values), the NANENG USB2 PHY driver and `wakelock.h` are adapted to the v6.17+ `hrtimer_setup()` and `wakeup_source_register()` APIs. I/O domains (VCCIO5 stays `vcc_1v8`), RMII/gmac and pinctrl are byte-identical to the 6.12 reference (DT-01 reference unchanged). Needs a versioned `linux.hash` (the pinned Buildroot GPL-2.0 hash is outdated); Buildroot then reads kernel patches only from the matching `patches/linux/6.18.60/` directory, so the iHost patches moved there. Build-proven only; not yet booted on a device.
+
 ## Unreleased (feat/1.6-haos18): revert VCCIO5 to 1.8 V for BOSv1.6.0-rc2
 
 The 3.3 V VCCIO5 supply (Ethernet/MDIO bank) of BOSv1.6.0-rc1 is reverted to `vcc_1v8` as in BOSv1.5.3. On a bench unit with a working PHY, same port and cable, 3.3 V made the RMII link flap, MDIO read garbage and the PHY go missing; 1.8 V is stable. The only Linux DTB difference between BOSv1.5.3 and BOSv1.6.0-rc1 was this supply. The stock vendor DT says 3.3 V, but that value does not work with our 6.12 kernel; the cause is an open question until clarified. The U-Boot DT now carries the same I/O-domain set as the Linux DT, and `check-ihost-iodomains.py` pins that measured known-good set instead of the stock values (a VCCIO5 change needs a hardware measurement first).
