@@ -115,5 +115,10 @@ has "$o" '^  FAIL  XVER-07: .*stable.json' && ok "ihost: still compared against 
 has "$o" '^  PASS  XVER-06: .*matches stable.json' && ok "ihost: XVER-06 matches stable.json" || bad "ihost: XVER-06 not against stable.json"
 has "$o" '^  PASS  XVER-03: stable.json core image is the GA armv7 build' && ok "ihost: XVER-03 still expects the armv7 Core image" || bad "ihost: XVER-03 not green"
 
+# WIFI-09 needs /usr/sbin/iw (shared overlay: ga-wifi-watchdog, ga-wlan0-powersave-assert): every board's
+# defconfig must build it in (the DSGW-210 did not: BOSv1.6.0-dev4 re-bake, run 42233089444)
+for b in $GA_BOARDS; do
+  grep -qx 'BR2_PACKAGE_IW=y' "$ROOT/$(ga_board_var DEFCONFIG "$b")" && ok "$b: defconfig builds iw in" || bad "$b: defconfig lacks BR2_PACKAGE_IW=y"
+done
 [ "$ran" -ge 21 ] || { echo "FAIL: only $ran cases ran"; exit 1; }
 echo "$ran cases ran, $fails failed"; exit $((fails>0))
