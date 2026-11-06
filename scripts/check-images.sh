@@ -2,7 +2,7 @@
 # Pre-build check: verify all required container images exist in their registries.
 # Run this BEFORE starting the multi-hour OS build to catch missing images early.
 #
-# Usage: ./scripts/check-images.sh [stable.json URL or local path]
+# Usage: [GA_BOARD=ihost|dsgw210] ./scripts/check-images.sh [channel file URL or local path]
 #
 # Checks:
 #   1. All images from stable.json (supervisor, core, cli, dns, audio, multicast, observer)
@@ -20,13 +20,66 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # script location when unset, which is every real invocation.
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
-# Default stable.json source
-STABLE_JSON_URL="${1:-https://raw.githubusercontent.com/greenautarky/haos-version/main/stable.json}"
-ADDON_IMAGES_JSON="${REPO_ROOT}/buildroot-external/package/hassio/addon-images.json"
+# THE BOARD this check is for (GA_BOARD, exported by ga_build.sh; the iHost when unset). It decides
+# three things that used to be the iHost's, whatever the board (Odoo #1617: the ga_default_addon-aarch64
+# image that was missing in a DSGW-210 bake was invisible here, 50 builder minutes lost):
+#   the add-on pin file   scripts/lib/tree-paths.sh GA_ADDON_PINS_<board>
+#   the CPU arch          BR2_PACKAGE_HASSIO_ARCH   of the board's defconfig
+#   the HA machine        BR2_PACKAGE_HASSIO_MACHINE of the board's defconfig
+# CHECK_ARCH / CHECK_MACHINE still override (the ga-ops pre-check passes them). A board whose defconfig
+# cannot be read is an ERROR - only the iHost keeps its old defaults, and says so.
+BOARD="${GA_BOARD:-ihost}"
+# shellcheck source=lib/tree-paths.sh
+. "$SCRIPT_DIR/lib/tree-paths.sh"
+_pins_rel="$(ga_board_var ADDON_PINS "$BOARD")" || { echo "ERROR: unknown board '$BOARD' (known: $GA_BOARDS)" >&2; exit 1; }
+_defconfig="${REPO_ROOT}/$(ga_board_var DEFCONFIG "$BOARD")"
+# `|| true`: under pipefail an unreadable defconfig (a scratch REPO_ROOT) must reach the explicit handling below
+_dc_var() { sed -n "s/^$1=\"\(.*\)\"\$/\1/p" "$_defconfig" 2>/dev/null | head -n 1 || true; }
+ADDON_IMAGES_JSON="${REPO_ROOT}/${_pins_rel}"
 
-# Architecture to check (iHost = armv7)
-ARCH="${CHECK_ARCH:-armv7}"
-MACHINE="${CHECK_MACHINE:-tinker}"
+# Architecture and machine to check
+ARCH="${CHECK_ARCH:-$(_dc_var BR2_PACKAGE_HASSIO_ARCH)}"
+MACHINE="${CHECK_MACHINE:-$(_dc_var BR2_PACKAGE_HASSIO_MACHINE)}"
+if [ -z "$ARCH" ] || [ -z "$MACHINE" ]; then
+    if [ "$BOARD" = ihost ]; then
+        ARCH="${ARCH:-armv7}"; MACHINE="${MACHINE:-tinker}"
+        echo "NOTE: no BR2_PACKAGE_HASSIO_ARCH/MACHINE readable at ${_defconfig} - using the iHost defaults (${ARCH}/${MACHINE})" >&2
+    else
+        echo "ERROR: board ${BOARD}: BR2_PACKAGE_HASSIO_ARCH/MACHINE not readable from ${_defconfig} - refusing to assume an arch" >&2
+        exit 1
+    fi
+fi
+# skopeo platform flags for that arch (the multi-arch fallback of check_image)
+case "$ARCH" in
+    armv7)   SKOPEO_PLATFORM="--override-arch arm --override-variant v7" ;;
+    aarch64) SKOPEO_PLATFORM="--override-arch arm64" ;;
+    amd64)   SKOPEO_PLATFORM="--override-arch amd64" ;;
+    *)       SKOPEO_PLATFORM="--override-arch ${ARCH}" ;;
+esac
+
+# The version channel file of THIS board's line (the same source the bake reads: HASSIO_VERSION_URL of
+# hassio.mk + the channel the defconfig selects). An explicit $1 wins. Not derivable: the iHost keeps
+# the legacy URL (loudly), any other board is an ERROR.
+LEGACY_STABLE_URL="https://raw.githubusercontent.com/greenautarky/haos-version/main/stable.json"
+if [ -n "${1:-}" ]; then
+    STABLE_JSON_URL="$1"
+else
+    _vbase="$("${SCRIPT_DIR}/apply-haos-patches.sh" --cat buildroot-external/package/hassio/hassio.mk 2>/dev/null \
+              | sed -n 's/^HASSIO_VERSION_URL[[:space:]]*?\?=[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 || true)"
+    if grep -q '^BR2_PACKAGE_HASSIO_CHANNEL_BETA=y' "$_defconfig" 2>/dev/null; then _chan=beta
+    elif grep -q '^BR2_PACKAGE_HASSIO_CHANNEL_DEV=y' "$_defconfig" 2>/dev/null; then _chan=dev
+    else _chan=stable; fi
+    if [ -n "$_vbase" ] && [ -r "$_defconfig" ]; then
+        STABLE_JSON_URL="${_vbase}${_chan}.json"
+    elif [ "$BOARD" = ihost ]; then
+        STABLE_JSON_URL="$LEGACY_STABLE_URL"
+        echo "NOTE: could not derive the ${BOARD} channel file (hassio.mk / defconfig) - falling back to ${LEGACY_STABLE_URL}" >&2
+    else
+        echo "ERROR: board ${BOARD}: cannot derive its channel file from hassio.mk + ${_defconfig} - pass it as the first argument" >&2
+        exit 1
+    fi
+fi
+echo "Board: ${BOARD}  arch: ${ARCH}  machine: ${MACHINE}  pins: ${_pins_rel}  channel file: ${STABLE_JSON_URL}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -76,7 +129,7 @@ check_image() {
             return 0
         fi
         # Try with arch override for multi-arch images
-        if err=$(skopeo inspect --override-arch arm --override-variant v7 --raw "docker://${full}" 2>&1 >/dev/null); then
+        if err=$(skopeo inspect $SKOPEO_PLATFORM --raw "docker://${full}" 2>&1 >/dev/null); then
             printf "${GREEN}  OK${NC}  %s (multi-arch)\n" "$full"
             pass_count=$((pass_count + 1))
             return 0
@@ -236,6 +289,30 @@ _is_prerelease() {
     printf '%s' "$_ipr_suffix" | grep -q '[A-Za-z]'
 }
 
+# A pin may be AHEAD of the store when a newer image is needed on ONE board before the shared store can move
+# (the store is one file for every board and moves with the release set). Declared next to the pin, like a
+# hold, with the same rules (reason; YYYY-MM-DD; not past; at most 30 days ahead), because the store is what
+# provisioning installs from: an undeclared pin ahead of it means a fresh device lands on another version
+# than the image bakes. It excuses ONLY "pin newer than the store"; a pin BEHIND the store stays a failure.
+#     "store_ahead": {"reason": "<why, who decided>", "until": "YYYY-MM-DD"}
+ahead_count=0
+_store_ahead_ok() {  # <key> <pinned> <store version>; sets _sa_reason / _sa_until / _sa_why
+    _sa_reason=""; _sa_until=""; _sa_why=""
+    _sa_reason=$(jq -r ".addons.\"$1\".store_ahead.reason // empty" "$ADDON_IMAGES_JSON")
+    _sa_until=$(jq -r ".addons.\"$1\".store_ahead.until // empty" "$ADDON_IMAGES_JSON")
+    [ -n "$_sa_reason$_sa_until" ] || return 1
+    local _today="${GA_TODAY:-$(date -u +%F)}" _limit
+    _limit="$(date -u -d "${_today} +30 days" +%F)"
+    if [ -z "$_sa_reason" ]; then _sa_why="store_ahead has no reason"
+    elif ! [[ "$_sa_until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then _sa_why="store_ahead until '${_sa_until}' is not YYYY-MM-DD"
+    elif [[ "$_sa_until" < "$_today" ]]; then _sa_why="store_ahead expired on ${_sa_until}"
+    elif [[ "$_sa_until" > "$_limit" ]]; then _sa_why="store_ahead until ${_sa_until} is more than 30 days ahead"
+    elif [ "$(printf '%s\n%s\n' "$2" "$3" | sort -V | tail -1)" != "$2" ] || [ "$2" = "$3" ]; then
+        _sa_why="store_ahead is declared but the pin is not newer than the store (${2} vs ${3})"
+    fi
+    [ -z "$_sa_why" ]
+}
+
 if [ -f "$ADDON_IMAGES_JSON" ] && command -v git >/dev/null 2>&1; then
     echo ""
     echo "--- vibe_addons lockstep with addon-images.json ---"
@@ -292,7 +369,13 @@ if [ -f "$ADDON_IMAGES_JSON" ] && command -v git >/dev/null 2>&1; then
                 printf "${YELLOW}PRERELEASE${NC}: %s — store is on canary %s, pin holds release %s. NOT a failure: baking a canary is a decision, not a lockstep repair. Pin it deliberately, or wait for the release.\n" \
                     "$key" "$found_version" "$expected_version"
                 prerelease_count=$((prerelease_count + 1))
+            elif _store_ahead_ok "$key" "$expected_version" "$found_version"; then
+                # Declared, reasoned, expiring: the pin is AHEAD of the store on purpose.
+                printf "${YELLOW}AHEAD-OF-STORE${NC}: %s pinned %s, vibe_addons/%s is %s — declared (store_ahead) until %s: %s\n" \
+                    "$key" "$expected_version" "$(basename "$found_dir")" "$found_version" "$_sa_until" "$_sa_reason"
+                ahead_count=$((ahead_count + 1))
             else
+                [ -n "${_sa_why:-}" ] && printf "${RED}STORE_AHEAD INVALID${NC}: %s — %s; counted as a lockstep break\n" "$key" "$_sa_why"
                 printf "${RED}FAIL${NC}: %s version mismatch — addon-images.json=%s vibe_addons/%s=%s — bump one to match\n" \
                     "$key" "$expected_version" "$(basename "$found_dir")" "$found_version"
                 lockstep_count=$((lockstep_count + 1))
@@ -447,6 +530,7 @@ echo "Failed:       $((fail_count + lockstep_count))  (missing from registry: ${
 echo "Unverified:   ${auth_count} (private, no registry credentials)"
 echo "Pre-release:  ${prerelease_count} (store on a canary, pin on a release — deliberate, not drift)"
 echo "Held:         ${held_count:-0} (pin deliberately behind the newest published image — declared hold with reason and end date)"
+echo "Ahead-of-store: ${ahead_count:-0} (pin deliberately newer than the store - declared store_ahead with reason and end date)"
 
 if [ "${drift_fatal:-0}" = "1" ]; then
     echo ""

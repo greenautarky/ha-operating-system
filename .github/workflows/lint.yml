@@ -368,6 +368,13 @@ jobs:
         # stable slot regardless of what runs fails three cases.
         run: sh tests/ga_tests/config_verify/selftest.sh
 
+      - name: SUP-LAYOUT the Supervisor-layout check flags an add-on base and passes the real Supervisors
+        # Fixtures are listings exported from the real images: the broken
+        # armv7 2026.10.5.1 (must fail), the shipping armv7 2025.11.5.10 and the
+        # aarch64 2026.10.5.1 (must pass), an empty listing (must be a broken
+        # check, not a pass). The script under test is the live one.
+        run: bash tests/ga_tests/supervisor_layout/selftest.sh
+
       - name: HCA-09..11 judge the site config Core RUNS, by value
         # HCA-11 asserted config_source == yaml, which names Core's last writer
         # (YAML at start, config/core/update at runtime — Core 2026.8.2
@@ -599,6 +606,14 @@ jobs:
         run: |
           git submodule update --init --depth 1 haos
           bash tests/gates/build_tests_board_arch/selftest.sh
+
+      - name: pre-flight image check reads the board's own pins, arch and machine (Odoo #1617)
+        # scripts/check-images.sh (run by ga_build.sh before the multi-hour build) used to read the
+        # iHost pin file with armv7 whatever the board. The gate drives the live script per board
+        # (stub registry/store): every pin of THAT board's file asked for as THAT board's arch, a pin
+        # out of lockstep with the store red, an unknown board an error; red-proven against the
+        # pre-change script.
+        run: bash tests/gates/check_images_board/selftest.sh
 
       - name: uplink ladder (fallback staircase decisions)
         # Drives the real ladder script against a stub NetworkManager: healthy

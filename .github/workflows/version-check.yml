@@ -137,6 +137,17 @@ jobs:
         timeout-minutes: 8
         run: ./scripts/check-supervisor-core-image.sh
 
+      # Not "does it exist" and not "which Core": is it a SUPERVISOR at all?
+      # 2026.10.5.1 (armv7) was built on the add-on base and carried the add-on
+      # boot oneshots; the container exited ~7 s after start on every fresh flash
+      # while every other check here was green. Static s6-layout read, no start.
+      - name: Check the pinned Supervisor is a Supervisor, not an add-on base
+        if: >-
+          !cancelled() && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
+        timeout-minutes: 8
+        run: ./scripts/check-supervisor-layout.sh
+
       # The source-level build tests read upstream HAOS files with the GA patch
       # set applied (run_build_tests.sh SRC-HAOS-01 exports them from haos/).
       - name: haos/ submodule (upstream HAOS, shallow)

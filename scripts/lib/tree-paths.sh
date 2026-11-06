@@ -34,8 +34,10 @@ GA_ADDON_PINS_ihost=buildroot-external/package/hassio/addon-images.json
 GA_BOARD_BASE_ihost=buildroot-ihost/board/sonoff/ihost
 
 # The DSGW-210 (dev bake) has its own add-on list: the iHost's minus the armv7-only
-# ga_ihosthardwarecontrol. Versions are copied from the iHost file by hand; the
-# iHost's repin/lockstep tooling does not read this file.
+# ga_ihosthardwarecontrol. Its versions follow the vibe_addons store like the iHost's: the pre-flight
+# (scripts/check-images.sh, GA_BOARD=dsgw210) holds this file to the store and to the registry as aarch64;
+# a pin AHEAD of the store needs a declared, expiring "store_ahead" (Odoo #1617). The iHost's repin
+# tooling (scripts/repin-addons.py) does not read this file.
 GA_BOARD_DIR_dsgw210=buildroot-dsgw210
 GA_DEFCONFIG_dsgw210=buildroot-dsgw210/configs/dsgw210_defconfig
 GA_ADDON_PINS_dsgw210=buildroot-dsgw210/addon-images.json
