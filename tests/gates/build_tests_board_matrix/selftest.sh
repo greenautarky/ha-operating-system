@@ -54,9 +54,9 @@ for b in $GA_BOARDS; do
   for id in $(echo "$NOT_COVERED" | tr -d '^()$' | tr '|' ' '); do
     grep -qE "^ +FAIL +${id}[: ]" "${LOG[$b]}" || bad "$b: $id no longer fails on the fixture -- the fixture grew a bundle: move it out of NOT_COVERED"
   done
-  lost="$(comm -23 "$HERE/expected/$b.pass" <(ids PASS "${LOG[$b]}") | tr '\n' ' ')"
+  lost="$(LC_ALL=C comm -23 "$HERE/expected/$b.pass" <(ids PASS "${LOG[$b]}") | tr '\n' ' ')"
   [ -z "$lost" ] && ok "$b: every test that passed in the real bake still passes ($(wc -l < "$HERE/expected/$b.pass") ids)" || bad "$b: passed in the real bake, not now: $lost"
-  sk="$(diff <(ids SKIP "${LOG[$b]}" | grep -vE "$NOT_COVERED|$ENV_DEP") "$HERE/expected/$b.skip" | grep '^[<>]' | tr '\n' ' ')"
+  sk="$(LC_ALL=C diff <(ids SKIP "${LOG[$b]}" | grep -vE "$NOT_COVERED|$ENV_DEP") "$HERE/expected/$b.skip" | grep '^[<>]' | tr '\n' ' ')"
   [ -z "$sk" ] && ok "$b: the SKIP set is the pinned one" || bad "$b: SKIP set differs from expected/$b.skip: $sk"
 done
 
@@ -66,7 +66,7 @@ done
 # directories REMOVED from the source tree; every verdict must be unchanged. PROBE_TOLERATED iterate
 # GA_BOARDS by design (they lint/scan every board; a missing directory is an error there, not a verdict).
 PROBE_TOLERATED='^(UNITREF-01|CVE-SCAN-08|CVE-SCAN-09)$'
-vmap() { grep -E '^ +(PASS|FAIL|SKIP) ' "$1" | sed -E 's/^ +(PASS|FAIL|SKIP) +([^ :(]+).*/\2 \1/' | sort -u; }
+vmap() { grep -E '^ +(PASS|FAIL|SKIP) ' "$1" | sed -E 's/^ +(PASS|FAIL|SKIP) +([^ :(]+).*/\2 \1/' | LC_ALL=C sort -u; }
 others() { local o="" x; for x in $GA_BOARDS; do [ "$x" = "$1" ] || o="$o $x"; done; echo "$o"; }
 for b in $GA_BOARDS; do
   [ -n "${LOG[$b]:-}" ] || continue
