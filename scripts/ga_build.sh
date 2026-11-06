@@ -2393,7 +2393,9 @@ if [[ "$MODE" == "full" || "$MODE" == "partial" || "$MODE" == "update" ]]; then
       # source is how five ga_manager releases became undeliverable
       # (2026-07-29). Override with GA_SOURCE_DRIFT_STRICT=0 for a deliberate
       # build of an older pin.
-      GA_SOURCE_DRIFT_STRICT="${GA_SOURCE_DRIFT_STRICT:-1}" "${SCRIPT_DIR}/check-images.sh"
+      # GA_BOARD: the pre-flight reads THIS board's pin file, arch and machine (Odoo #1617); without
+      # it the DSGW-210 bake was checked as an iHost armv7 one and its aarch64 images were never looked at.
+      GA_BOARD="$BOARD" GA_SOURCE_DRIFT_STRICT="${GA_SOURCE_DRIFT_STRICT:-1}" "${SCRIPT_DIR}/check-images.sh"
       _img_rc=$?
       set -e
       case "$_img_rc" in

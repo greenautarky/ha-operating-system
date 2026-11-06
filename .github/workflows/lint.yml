@@ -600,6 +600,14 @@ jobs:
           git submodule update --init --depth 1 haos
           bash tests/gates/build_tests_board_arch/selftest.sh
 
+      - name: pre-flight image check reads the board's own pins, arch and machine (Odoo #1617)
+        # scripts/check-images.sh (run by ga_build.sh before the multi-hour build) used to read the
+        # iHost pin file with armv7 whatever the board. The gate drives the live script per board
+        # (stub registry/store): every pin of THAT board's file asked for as THAT board's arch, a pin
+        # out of lockstep with the store red, an unknown board an error; red-proven against the
+        # pre-change script.
+        run: bash tests/gates/check_images_board/selftest.sh
+
       - name: uplink ladder (fallback staircase decisions)
         # Drives the real ladder script against a stub NetworkManager: healthy
         # devices cost no probe traffic, three confirmed strikes switch, the
