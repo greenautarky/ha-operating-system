@@ -38,6 +38,7 @@ mkext() { # dir: ext/package/hassio linked to the LIVE gates, version.yaml besid
   local d="$1"; mkdir -p "$d/ext/package/hassio"
   ln -s "$EXT/package/hassio/check-core-image.sh" "$d/ext/package/hassio/"
   ln -s "$EXT/package/hassio/check-supervisor-image.sh" "$d/ext/package/hassio/"
+  ln -s "$EXT/package/hassio/bake-source-file.sh" "$d/ext/package/hassio/"   # patch 0134: hassio.mk asks it which haos-version file to bake
   printf 'x:\n  homeassistant_core:        "2026.8.2"  # ihost\n  homeassistant_supervisor:  "2025.11.5.10"  # ihost\n' > "$d/version.yaml"
 }
 chan() { # dir channel supervisor core coreimg ; DSGW-shaped (qemuarm-64)
