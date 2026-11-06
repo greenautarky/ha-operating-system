@@ -25,5 +25,21 @@ check 1 "must-fail: -dev Core, channel unreadable"          2026.10.4.3-dev   ""
 check 1 "must-fail: other suffix (-rc1)"                    2026.10.4.3-rc1   dev    BOSv1.6.0-dev1
 check 1 "must-fail: not a version"                          banana            dev    BOSv1.6.0-dev1
 check 1 "must-fail: empty tag"                              ""                dev    BOSv1.6.0-dev1
+# The build suite's copy (run_build_tests.sh core_tag_ok, the BLD check), extracted LIVE too:
+# the same -dev rule; it does not accept the legacy `latest`; the suite requires a 4-digit year.
+fn2="$(awk '/^core_tag_ok\(\)/,/^}/' "$REPO/tests/ga_tests/run_build_tests.sh")"
+[ -n "$fn2" ] || { echo "FAIL: core_tag_ok not found in tests/ga_tests/run_build_tests.sh"; exit 1; }
+check2() { # want label tag channel release
+  n=$((n+1)); bash -c "$fn2"'
+core_tag_ok "$1" "$2" "$3"' _ "$3" "$4" "$5"; rc=$?
+  if [ "$rc" -eq "$1" ]; then echo "  ok    [suite] $2"; else echo "  FAIL  [suite] $2 (rc=$rc, want $1)"; bad=1; fi
+}
+check2 0 "must-pass: plain calver, stable"                 2026.8.2.2        stable BOSv1.6.0-rc1
+check2 0 "must-pass: DSGW dev Core on dev + -devN"         2026.10.4.3-dev   dev    BOSv1.6.0-dev5
+check2 1 "must-fail: -dev Core on stable channel"          2026.10.4.3-dev   stable BOSv1.6.0-dev5
+check2 1 "must-fail: -dev Core on dev channel, rc label"   2026.10.4.3-dev   dev    BOSv1.6.0-rc1
+check2 1 "must-fail: -dev Core, release label unset"       2026.10.4.3-dev   dev    ""
+check2 1 "must-fail: -dev Core, channel unreadable"        2026.10.4.3-dev   ""     BOSv1.6.0-dev5
+check2 1 "must-fail: not a version"                        banana            dev    BOSv1.6.0-dev5
 [ "$n" -ge 10 ] || { echo "FAIL: only $n cases ran"; exit 1; }
 echo "$n cases ran"; exit "$bad"

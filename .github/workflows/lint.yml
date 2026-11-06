@@ -585,6 +585,13 @@ jobs:
         # table with a mistyped glob.
         run: bash tests/gates/build_board_skips/selftest.sh
 
+      - name: build tests - per-board arch, pin file and Core tag (BLD, VER-09, VER-10)
+        # Drives the live runner on fixture bakes of both boards: the iHost stays on
+        # armv7 + the shared pin file, the DSGW-210 is judged on aarch64 + its own pin
+        # file + a -dev Core only on dev with a -devN label; wrong arch/tarball/digest
+        # must still go red. Red-proven against the pre-change runner.
+        run: bash tests/gates/build_tests_board_arch/selftest.sh
+
       - name: uplink ladder (fallback staircase decisions)
         # Drives the real ladder script against a stub NetworkManager: healthy
         # devices cost no probe traffic, three confirmed strikes switch, the
