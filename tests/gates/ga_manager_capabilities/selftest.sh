@@ -110,14 +110,17 @@ RC2="$G/desired_state.py=OLDREG,$G/healthchecks/dataflow.py=OLDDF,$BASE"
 
 # expect <name> <rc> <must-contain> [--pin-only]
 expect() {
-  local name="$1" want="$2" needle="$3" mode="${4:-}" py="python3"
-  [[ "$mode" == "--no-zstd" ]] && { py="env PATH=/nonexistent $(command -v python3)"; mode=""; }
+  local name="$1" want="$2" needle="$3" mode="${4:-}" py=(python3)
+  # Python zstd modules blocked by import (a CI Python may ship them); --no-zstd also hides the CLI.
+  local blk="import sys,runpy;sys.modules['zstandard']=None;sys.modules['compression.zstd']=None;sys.argv=sys.argv[1:];runpy.run_path(sys.argv[0],run_name='__main__')"
+  [[ "$mode" == "--no-modules" ]] && { py=(python3 -c "$blk"); mode=""; }
+  [[ "$mode" == "--no-zstd" ]] && { py=(env PATH=/nonexistent "$(command -v python3)" -c "$blk"); mode=""; }
   local d="$WORK/$name" out rc
   ran=$((ran + 1))
   if [[ "$mode" == "--pin-only" ]]; then
-    out="$($py "$GATE" --pins "$d/pins.json" 2>&1)"; rc=$?
+    out="$("${py[@]}" "$GATE" --pins "$d/pins.json" 2>&1)"; rc=$?
   else
-    out="$($py "$GATE" --pins "$d/pins.json" --images-dir "$d/images" 2>&1)"; rc=$?
+    out="$("${py[@]}" "$GATE" --pins "$d/pins.json" --images-dir "$d/images" 2>&1)"; rc=$?
   fi
   if [[ "$rc" -eq "$want" ]] && grep -qF -- "$needle" <<<"$out"; then
     ok "$name: rc=$rc — $needle"
@@ -175,8 +178,9 @@ expect oci-zstd 2 "zstd"
 command -v zstd >/dev/null || { echo "FATAL: the zstd CLI is required for this selftest"; exit 1; }
 mk "$WORK/zstd-real-fixed"   0.221.0 0.221.0 "$GOOD" "" oci-zstd-real
 expect zstd-real-fixed 0 "core_influxdb present in the baked image"
+expect zstd-real-fixed 0 "core_influxdb present in the baked image" --no-modules
 mk "$WORK/zstd-real-rc2"     0.221.0 0.221.0 "$RC2" "" oci-zstd-real
-expect zstd-real-rc2 1 "usr/bin/ga_manager/ha_influxdb.py absent"
+expect zstd-real-rc2 1 "usr/bin/ga_manager/ha_influxdb.py absent" --no-modules
 expect zstd-real-fixed 2 "no zstd decompressor available" --no-zstd
 
 echo "=== cannot judge ==="
@@ -187,6 +191,6 @@ printf 'not a tar' > "$WORK/not-an-archive/images/$(ls "$WORK/not-an-archive/ima
 expect not-an-archive 2 "CANNOT JUDGE"
 
 echo
-if [[ "$ran" -lt 25 ]]; then echo "FAIL: only $ran cases ran — coverage dropped"; exit 1; fi
+if [[ "$ran" -lt 26 ]]; then echo "FAIL: only $ran cases ran — coverage dropped"; exit 1; fi
 if [[ "$fails" -gt 0 ]]; then echo "ga_manager capability gate selftest: $fails/$ran FAILED"; exit 1; fi
 echo "ga_manager capability gate selftest: $ran/$ran as expected"
