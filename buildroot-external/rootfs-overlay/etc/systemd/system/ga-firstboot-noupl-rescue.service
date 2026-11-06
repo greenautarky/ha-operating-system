@@ -5,7 +5,7 @@ After=local-fs.target NetworkManager.service
 [Service]
 Type=oneshot
 ExecStart=/usr/sbin/ga-firstboot-noupl-rescue
-TimeoutStartSec=180
+TimeoutStartSec=200
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7

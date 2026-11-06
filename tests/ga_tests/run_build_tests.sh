@@ -922,6 +922,13 @@ else
   _missing_in_image "WIFI-01..07" "${NM_MAIN} missing or empty -- the image has no NetworkManager configuration"
 fi
 
+# WIFI-09: iw ships (ga-wlan0-powersave-assert and ga-wifi-watchdog call it)
+if [[ -x "${TARGET}/usr/sbin/iw" ]]; then
+  _pass "WIFI-09: /usr/sbin/iw present"
+else
+  _missing_in_image "WIFI-09" "/usr/sbin/iw missing -- BR2_PACKAGE_IW not built in; powersave live-disable and wifi-watchdog rssi are dead"
+fi
+
 # WIFI-08: GreenAutarky-Install fallback WiFi connection
 # NOTE: WiFi config lives in /usr/share/ga-wifi/ (not /etc/NetworkManager/system-connections/)
 # because HAOS bind-mounts an overlay partition over /etc/NM/system-connections/.

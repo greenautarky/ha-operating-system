@@ -13,6 +13,8 @@
 # probe instead of reading the 600 s-stale cached value. fm reachability is not
 # used: the script would have to know which fm (prod/staging) the device talks to.
 #
+# Journal contents are NOT filtered for secrets (no reliable filter exists); the
+# file is therefore created 0600 (umask 077) on the data partition, never copied.
 # Once per boot (file name carries the boot id), bounded size, newest few kept,
 # never blocks boot (timer-driven, every command time-limited, always exit 0).
 # POSIX /bin/sh. Test hook: GA_RESCUE_TEST=1 sources without acting; every
@@ -31,19 +33,32 @@ DMESG="${GA_RESCUE_DMESG:-dmesg}"
 LOG_TAG="ga-firstboot-noupl-rescue"
 _log() { logger -t "$LOG_TAG" -p "daemon.$1" "$2" 2>/dev/null || echo "$LOG_TAG: $2" >&2; }
 
-# Echoes ok | no-route | no-connectivity.
+# Time budget (service TimeoutStartSec=200): ip 10 + 10, connectivity 20,
+# nmcli 4 x 10, dmesg 2 x 10, journal 2 x 20 = 140 s worst case.
+# Echoes ok | unverified | no-route | no-connectivity | skipped.
+#   unverified = default route present but NM answered `unknown` (probe
+#   disabled/not run): not evidence of "no uplink", logged loudly, nothing written.
 uplink_state() {
+    if ! command -v "$NMCLI" >/dev/null 2>&1 || ! command -v "$IP" >/dev/null 2>&1; then
+        _log warning "'$NMCLI' or '$IP' not available on this board — rescue skipped"
+        echo skipped; return
+    fi
     [ -n "$(timeout 10 $IP -4 route show default 2>/dev/null)" ] || { echo no-route; return; }
-    _c="$(timeout 30 $NMCLI -g CONNECTIVITY networking connectivity check 2>/dev/null | head -n 1)"
-    [ "$_c" = "full" ] && echo ok || echo no-connectivity
+    _c="$(timeout 20 $NMCLI -g CONNECTIVITY networking connectivity check 2>/dev/null | head -n 1)"
+    case "$_c" in
+        full) echo ok ;;
+        unknown) _log warning "NM connectivity is 'unknown' (probe not run/disabled) with a default route present — cannot judge the uplink"; echo unverified ;;
+        *) echo no-connectivity ;;
+    esac
 }
 
 rescue_once() {
+    umask 077   # the evidence file holds a journal: private from creation
     _st="$(uplink_state)"
-    if [ "$_st" = ok ]; then
-        _log info "uplink ok at +3 min (default route + connectivity full) — nothing to preserve"
-        echo ok; return
-    fi
+    case "$_st" in
+        ok) _log info "uplink ok at +3 min (default route + connectivity full) — nothing to preserve"; echo ok; return ;;
+        unverified|skipped) echo "$_st"; return ;;
+    esac
     _bid="$(tr -d '-' < "$BOOT_ID_FILE" 2>/dev/null | cut -c1-12)"
     [ -n "$_bid" ] || _bid=unknown
     _f="$OUT_DIR/ga-firstboot-noupl-$_bid.txt"
@@ -51,23 +66,29 @@ rescue_once() {
         _log info "evidence for this boot already written ($_f)"
         echo exists; return
     fi
-    mkdir -p "$OUT_DIR" 2>/dev/null || { _log warning "cannot create $OUT_DIR"; echo failed; return; }
+    mkdir -p "$OUT_DIR" || { _log err "cannot create $OUT_DIR — evidence NOT written"; echo failed; return; }
+    rm -f "$OUT_DIR"/ga-firstboot-noupl-*.txt.tmp   # orphans of a killed earlier run
     _tmp="$_f.tmp"
-    {
+    if ! {
         echo "# ga-firstboot-noupl-rescue: uplink state '$_st' at $(date -u +%FT%TZ), boot $_bid"
         echo "## ip -4 route";                       timeout 10 $IP -4 route 2>&1
         echo "## ls /sys/class/net";                ls /sys/class/net 2>&1
-        echo "## dmesg wifi driver lines (rtw/efuse/wlan0)"; timeout 20 $DMESG 2>&1 | grep -iE 'rtw|efuse|wlan0' | tail -n 200
-        echo "## nmcli dev";                        timeout 20 $NMCLI dev 2>&1
-        echo "## nmcli con (name,state,autoconnect,retries)"; timeout 20 $NMCLI -f NAME,STATE,AUTOCONNECT,AUTOCONNECT-RETRIES con show 2>&1 | head -c "$MAX_OTHER"
-        echo "## journalctl NM + wifi helpers"; timeout 30 $JOURNALCTL -b --no-pager -u NetworkManager -t ga-wlan0-powersave-assert -t ga-openstick -t ga-uplink-ladder -t ga-rtw-recover 2>&1 | tail -c "$MAX_OTHER"
-        echo "## nmcli -f all dev";                 timeout 20 $NMCLI -f all dev 2>&1 | head -c "$MAX_OTHER"
-        echo "## nmcli con show --active";          timeout 20 $NMCLI con show --active 2>&1 | head -c "$MAX_OTHER"
-        echo "## dmesg (newest part)";              timeout 20 $DMESG 2>&1 | tail -c "$MAX_OTHER"
-        echo "## journalctl -b (newest part)";      timeout 60 $JOURNALCTL -b --no-pager 2>&1 | tail -c "$MAX_JOURNAL"
-    } > "$_tmp" 2>/dev/null
-    chmod 600 "$_tmp" 2>/dev/null
-    mv -f "$_tmp" "$_f" 2>/dev/null || { rm -f "$_tmp"; echo failed; return; }
+        echo "## dmesg wifi driver lines (rtw/efuse/wlan0)"; timeout 10 $DMESG 2>&1 | grep -iE 'rtw|efuse|wlan0' | tail -n 200
+        echo "## nmcli dev";                        timeout 10 $NMCLI dev 2>&1
+        echo "## nmcli con (name,state,autoconnect,retries)"; timeout 10 $NMCLI -f NAME,STATE,AUTOCONNECT,AUTOCONNECT-RETRIES con show 2>&1 | head -c "$MAX_OTHER"
+        echo "## journalctl NM + wifi helpers"; timeout 20 $JOURNALCTL -b --no-pager -u NetworkManager -t ga-wlan0-powersave-assert -t ga-openstick -t ga-uplink-ladder -t ga-rtw-recover 2>&1 | tail -c "$MAX_OTHER"
+        echo "## nmcli -f all dev";                 timeout 10 $NMCLI -f all dev 2>&1 | head -c "$MAX_OTHER"
+        echo "## nmcli con show --active";          timeout 10 $NMCLI con show --active 2>&1 | head -c "$MAX_OTHER"
+        echo "## dmesg (newest part)";              timeout 10 $DMESG 2>&1 | tail -c "$MAX_OTHER"
+        echo "## journalctl -b (newest part)";      timeout 20 $JOURNALCTL -b --no-pager 2>&1 | tail -c "$MAX_JOURNAL"
+    } > "$_tmp"; then
+        _log err "writing $_tmp failed (disk full / read-only?) — evidence NOT written"
+        rm -f "$_tmp"; echo failed; return
+    fi
+    if ! mv -f "$_tmp" "$_f"; then
+        _log err "cannot move $_tmp to $_f — evidence NOT written"
+        rm -f "$_tmp"; echo failed; return
+    fi
     # Keep the newest $KEEP files.
     # shellcheck disable=SC2012
     ls -1t "$OUT_DIR"/ga-firstboot-noupl-*.txt 2>/dev/null | tail -n +"$((KEEP + 1))" | while IFS= read -r _old; do rm -f "$_old"; done
