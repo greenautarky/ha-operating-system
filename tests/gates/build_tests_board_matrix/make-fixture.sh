@@ -59,7 +59,7 @@ touch -d '2026-01-01' "$OUT"/images/rootfs.erofs 2>/dev/null || : > "$OUT/images
 touch "$OUT"/images/*.raucb "$OUT"/images/*.img.xz
 # the Buildroot .config of the build (the real ga_output/.config; images/configs/buildroot.config is its archived copy)
 [ -f "$OUT/images/configs/buildroot.config" ] && cp "$OUT/images/configs/buildroot.config" "$OUT/.config"
-# host Go: a replay of the real `go version [-m] target/` of this bake (the verdict logic still runs live)
+# host Go: replays what the real `go version [-m] target/` printed in this bake; the verdict code is the real one
 cat > "$OUT/host/bin/go" <<GO
 #!/bin/bash
 M="$FX/go-version-m.txt"
