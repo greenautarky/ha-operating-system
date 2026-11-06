@@ -1119,6 +1119,19 @@ jobs:
           git submodule update --init --depth 1 haos
           git -C haos submodule update --init --depth 1 buildroot
           CONTAINER_FLOOR_REQUIRE_LIVE=1 ./tests/gates/container_floor/selftest.sh
+      # xz 5.6.4 (buildroot pin) is inside three published advisories fixed in 5.8.4.
+      # xz-floor.mk (included by the board's local.mk, like the Go floor) lifts
+      # host-xz and xz; xz-floor/ holds the hashes and replaces the submodule's
+      # package dir (its backport patches are already inside 5.8.4).
+      # scripts/check-xz-floor.sh evaluates the EFFECTIVE version with make
+      # against a pinned minimum. The self-test drives the live gate over fixture
+      # trees and, mandatory here, the real pinned submodule.
+      - name: xz floor (host-xz and xz at >= 5.8.4)
+        run: |
+          set -eu
+          git submodule update --init --depth 1 haos
+          git -C haos submodule update --init --depth 1 buildroot
+          XZ_FLOOR_REQUIRE_LIVE=1 ./tests/gates/xz_floor/selftest.sh
       # The signing certificate must chain to the pinned OTA root. A cert that
       # does not used to be appended to the device keyring as a second anchor
       # and left to the end-of-build audit; patch 0110 now stops the build at

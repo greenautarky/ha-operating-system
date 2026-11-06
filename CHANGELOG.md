@@ -12,6 +12,11 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): xz 5.6.4 -> 5.8.4 (host-xz and target xz)
+
+- **xz is lifted to 5.8.4 by a version floor.** Before: the buildroot submodule pins xz 5.6.4, inside three published advisories (GHSA-5qpq-xqfv-j9pg, GHSA-6cc8-p5mm-29w2, GHSA-x872-m794-cxhv; all fixed in 5.8.4) and covered by time-limited acknowledgements in the upstream watcher. After: `buildroot-external/xz-floor.mk` (same mechanism as `go-floor.mk`, included from each board's `local.mk`) overrides `XZ_VERSION` before the package infrastructure bakes it in, for host-xz (squashfs/erofs/RAUC bundle tooling) and the target; it switches itself off once the submodule pins >= 5.8.4. The hash file `buildroot-external/xz-floor/xz.hash` carries the 5.8.4 tarball (checked against the upstream detached signature) and licence-file hashes. HAOS 18.4's buildroot already carries the 5.6.x backports (package patches 0001-0007); they are not applied to 5.8.4 (the package dir is redirected, see xz-floor.mk).
+- Gate `scripts/check-xz-floor.sh` evaluates the effective version with make against a pinned minimum and holds floor, hash file, package-dir redirect and `local.mk` include together. Fixtures: `tests/gates/xz_floor/selftest.sh` (3 must-pass, 12 must-fail, live tree).
+
 ## Unreleased (feat/1.6-haos18): HAOS base 18.3 -> 18.4
 
 `haos` submodule moves to the upstream 18.4 release tag. OS version 18.4.1.6 (HAOS 18.4 + GA suffix 1.6; board markers unchanged). Upstream: buildroot 2025.02.19, Go 1.27.3, docker-engine/cli 29.8.2 and containerd 2.3.6 (GA container/Go floors now equal or below the submodule and switch themselves off), kernel 6.18.58 (iHost stays on its own 6.12.115, DSGW-210 on 6.18.54), new kernel patches (HW VLAN tag insertion, IPv6 reachability-test option) verified to apply to 6.12.115 and 6.18.54. The iHost docker-engine patch mirror is now a byte-identical copy of HAOS 18.4's rebased patch (pin updated). EROFS deduplication is dropped on both GA boards as upstream did (erofs-utils bug); rootfs size is only observable at a bake. Not taken over: upstream's U-Boot boot-tries refill (#5054), the boards carry their own boot scripts.
