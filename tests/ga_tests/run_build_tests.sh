@@ -44,6 +44,27 @@ _RBT_BOARD_SKIPPED=()
 _RBT_DEFCONFIG="${_RBT_ROOT}/$(ga_board_var DEFCONFIG "$_RBT_BOARD" 2>/dev/null || echo __no_such_board__)"
 _RBT_ARCH="$(sed -n 's/^BR2_PACKAGE_HASSIO_ARCH="\([a-z0-9]*\)"$/\1/p' "$_RBT_DEFCONFIG" 2>/dev/null | head -n 1)"
 _RBT_ARCH="${_RBT_ARCH:-armv7}"
+# skopeo platform flags for that arch (armv7 = the pre-existing iHost value, unchanged).
+case "$_RBT_ARCH" in
+  aarch64) _RBT_SKOPEO_ARCH="--override-arch arm64" ;;
+  *)       _RBT_SKOPEO_ARCH="--override-arch arm --override-variant v7" ;;
+esac
+# The board's add-on pin file: the iHost reads the shared GA-layer file (unchanged);
+# any other board reads its own (its set differs: arch, no ga_ihosthardwarecontrol).
+_RBT_PINS_REL=""
+[[ "$_RBT_BOARD" == ihost ]] || _RBT_PINS_REL="$(ga_board_var ADDON_PINS "$_RBT_BOARD" 2>/dev/null || true)"
+# core_tag_ok TAG CHANNEL RELEASE -- BLD Core tag rule. A pinned calver; a `-dev` suffix
+# (GA aarch64 dev Core) only when the channel in version.json is dev AND the release
+# label is -devN (same rule as core_tag_valid in scripts/ga_build.sh, which
+# tests/gates/core_tag_rule/selftest.sh holds to this copy). `latest` is not accepted here.
+core_tag_ok() {
+  local tag="$1" channel="$2" release="$3"
+  if [[ "$tag" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?-dev$ ]]; then
+    [[ "$channel" == dev && "$release" =~ -dev[0-9]+$ ]]
+    return
+  fi
+  [[ "$tag" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
+}
 _rbt_cond() {
   case "$1" in
     -) return 0 ;;
@@ -1366,7 +1387,7 @@ if [[ -f "$VER_JSON" ]]; then
   # because nothing refused it. The bridge that could carry a current Core had
   # been proven on hardware three weeks earlier and never shipped.
   CORE_YEAR="${CORE_TAG%%.*}"
-  if [[ ! "$CORE_TAG" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+  if ! core_tag_ok "$CORE_TAG" "$(jq -r '.channel // ""' "$VER_JSON" 2>/dev/null)" "${GA_RELEASE:-}"; then
     _fail "BLD: Core tag is '$CORE_TAG' (expected HA calver like 2026.8.2 or 2026.8.2.1)"
   elif (( CORE_YEAR < 2026 )); then
     _fail "BLD-CORE-FLOOR: Core tag '$CORE_TAG' is from $CORE_YEAR — this fleet must not ship a Core older than 2026. A 2025 tag is the frozen stock armv7 image upstream stopped maintaining. Build one with greenautarky/ga-core-armv7 and pin that."
@@ -1511,10 +1532,10 @@ if [[ -f "$VER_JSON" ]]; then
     SUP_TAR="$(ls "$IMAGES_DIR"/*hassio-supervisor*.tar 2>/dev/null | head -n 1 || true)"
     if [[ -n "$SUP_TAR" ]]; then
       SUP_BUILD_DIGEST="$(basename "$SUP_TAR" .tar | grep -oP 'sha256_\K[a-f0-9]+' || true)"
-      SUP_REF="$(jq -r '.images.supervisor // .image.supervisor' "$VER_JSON" 2>/dev/null | sed "s/{arch}/${ARCH:-armv7}/")"
+      SUP_REF="$(jq -r '.images.supervisor // .image.supervisor' "$VER_JSON" 2>/dev/null | sed "s/{arch}/${ARCH:-$_RBT_ARCH}/")"
       SUP_TAG="$(jq -r '.supervisor' "$VER_JSON" 2>/dev/null)"
       if [[ -n "$SUP_REF" ]] && [[ -n "$SUP_TAG" ]] && [[ "$SUP_TAG" != "null" ]]; then
-        SUP_GHCR_DIGEST="$(skopeo inspect --override-arch arm --override-variant v7 "docker://${SUP_REF}:${SUP_TAG}" 2>/dev/null | jq -r '.Digest' | sed 's/sha256://' || true)"
+        SUP_GHCR_DIGEST="$(skopeo inspect $_RBT_SKOPEO_ARCH "docker://${SUP_REF}:${SUP_TAG}" 2>/dev/null | jq -r '.Digest' | sed 's/sha256://' || true)"
         if [[ -n "$SUP_BUILD_DIGEST" ]] && [[ -n "$SUP_GHCR_DIGEST" ]]; then
           if [[ "$SUP_BUILD_DIGEST" == "$SUP_GHCR_DIGEST" ]]; then
             _pass "VER-09: Supervisor image digest matches GHCR (fresh)"
@@ -1550,6 +1571,12 @@ if [[ -f "$VER_JSON" ]]; then
   # image reference — exact, not a glob — and treats a missing tar as fatal while
   # an unreachable registry stays a counted UNVERIFIED.
   ADDON_JSON="${BR2EXT_NETBIRD:-/build/buildroot-external}/package/hassio/addon-images.json"
+  if [[ -n "$_RBT_PINS_REL" ]]; then
+    # non-iHost board: its own pin file, from the source root (same derivation as VER10_SRC)
+    for _pr in /build "${OUT}/.." "$(dirname "$0")/../.."; do
+      [[ -f "${_pr}/${_RBT_PINS_REL}" ]] && { ADDON_JSON="$(cd "$_pr" && pwd)/${_RBT_PINS_REL}"; break; }
+    done
+  fi
 
   # $SRC is only defined further down in this script, so the source root is
   # resolved locally — the same three-way derivation BLD_FE_SRC uses below.
@@ -1576,7 +1603,7 @@ if [[ -f "$VER_JSON" ]]; then
     # Status read from the command itself, not from behind a pipe — a pipe
     # reports the pipe's status, which is how a gate looks green while failing.
     VER10_OUT="$("$VER10_CHECKER" --images-dir "$IMAGES_DIR" --pins "$ADDON_JSON" \
-                                  --arch "${ARCH:-armv7}" 2>&1)"
+                                  --arch "${ARCH:-$_RBT_ARCH}" 2>&1)"
     VER10_RC=$?
     VER10_SUMMARY="$(printf '%s\n' "$VER10_OUT" | grep -E '^baked add-on images:' || true)"
     if [[ "$VER10_RC" -eq 0 ]]; then
@@ -1605,7 +1632,7 @@ if [[ -f "$VER_JSON" ]]; then
   elif [[ ! -f "$ADDON_JSON" ]]; then
     _skip "GAMCAP-01" "no addon-images.json at $ADDON_JSON"
   else
-    GAMCAP_ARGS=(--pins "$ADDON_JSON" --arch "${ARCH:-armv7}")
+    GAMCAP_ARGS=(--pins "$ADDON_JSON" --arch "${ARCH:-$_RBT_ARCH}")
     [[ -d "$IMAGES_DIR" ]] && GAMCAP_ARGS+=(--images-dir "$IMAGES_DIR")
     # Status from the command itself, never from behind a pipe.
     GAMCAP_OUT="$(python3 "$GAMCAP_CHECKER" "${GAMCAP_ARGS[@]}" 2>&1)"
