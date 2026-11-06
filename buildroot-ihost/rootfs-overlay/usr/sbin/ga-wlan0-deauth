@@ -38,6 +38,14 @@
 # it is a regular file (link() does not follow a symlink, and the staged name
 # is not reachable from a container).
 #
+# HEARTBEAT (contract: ga_manager lte_standby.py, S1 — "the OS writer re-stamps
+# updated_at on a heartbeat even when nothing happened"; a file older than its
+# DEAUTH_STALE_S = 600 s reads as a dead writer = flapping UNKNOWN). A quiet,
+# healthy device produces no deauth line, so a background sleep loop re-stamps
+# ONLY updated_at every GA_DEAUTH_HEARTBEAT_S (default 240 s, two beats inside
+# the 600 s window) under the same lock, through the same atomic publish.
+# Odoo #1567.
+#
 # POSIX /bin/sh (BusyBox ash) — no python on the image, and BusyBox `date` has
 # no %N. Test hook: `GA_DEAUTH_TEST=1 . ga-wlan0-deauth` sources the functions
 # without starting the follow loop; every path is env-overridable.
@@ -58,6 +66,7 @@ BOOT_ID_PATH="${GA_DEAUTH_BOOT_ID_PATH:-/proc/sys/kernel/random/boot_id}"
 # would still be bounded (deauths are minutes apart), but a burst must not
 # thrash the SD card. 0 = write on every event (tests set this).
 MIN_WRITE_INTERVAL="${GA_DEAUTH_MIN_WRITE_INTERVAL:-2}"
+HEARTBEAT_S="${GA_DEAUTH_HEARTBEAT_S:-240}"
 
 _now_iso() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 _boot_id() { cat "$BOOT_ID_PATH" 2>/dev/null || echo unknown; }
@@ -126,6 +135,42 @@ publish_counter() {
     ) 9<"$LOCK_DIR"
 }
 
+# Heartbeat: re-stamp updated_at in the existing file, nothing else. The file
+# is read through the same hard-link snapshot as the marks (regular file only),
+# every other field is carried verbatim, and the write is the atomic publish.
+# A missing/garbled file is left alone (the event path or the next start
+# writes it) — a heartbeat must never invent a counter.
+restamp_updated_at() {
+    [ -e "$SHARE" ] || [ -L "$SHARE" ] || return 0
+    mkdir -p "$LOCK_DIR" 2>/dev/null || true
+    (
+        if command -v flock >/dev/null 2>&1; then
+            flock -x -w "$LOCK_WAIT_S" 9 \
+              || echo "ga-wlan0-deauth: lock on $LOCK_DIR not acquired within ${LOCK_WAIT_S}s — heartbeat without it" >&2
+        fi
+        mkdir -p "$STAGE_DIR" 2>/dev/null && chmod 0700 "$STAGE_DIR" 2>/dev/null
+        _snap="$STAGE_DIR/.beat.$$.$(basename "$SHARE")"
+        rm -f "$_snap"
+        ln "$SHARE" "$_snap" 2>/dev/null || exit 0
+        if [ -f "$_snap" ] && [ ! -L "$_snap" ]; then
+            _new="$(head -c "$MARKS_READ_MAX" "$_snap" | tr -d '\n' \
+              | sed "s/\"updated_at\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"updated_at\":\"$(_now_iso)\"/")"
+            case "$_new" in
+                *'"updated_at":"'*) printf '%s\n' "$_new" | "$PUBLISH" "$SHARE" 0644 ;;
+                *) echo "ga-wlan0-deauth: no updated_at in $SHARE — heartbeat skipped" >&2 ;;
+            esac
+        fi
+        rm -f "$_snap"
+    ) 9<"$LOCK_DIR"
+}
+
+heartbeat_loop() {
+    while :; do
+        sleep "$HEARTBEAT_S"
+        restamp_updated_at
+    done
+}
+
 # Count Reason-3 deauths already in THIS boot's kernel journal, to seed
 # reason3_total so it is "since boot", not "since the daemon started".
 seed_from_journal() {
@@ -148,6 +193,12 @@ main() {
     # First publish: the seeded count for this boot (also rewrites boot_id after
     # a reboot — the counter restarts at this boot's journal count).
     publish_counter "$total" "$boot_id" "$last_ev" "\"3\":$r3" "$last_reason"
+
+    # Heartbeat in the background (systemd's control-group kill reaps it with
+    # the service; the trap covers a manual run).
+    heartbeat_loop &
+    _hb_pid=$!
+    trap 'kill "$_hb_pid" 2>/dev/null' EXIT INT TERM
 
     # Follow the kernel journal from now on. -o cat = bare message lines.
     journalctl -k -f -o cat --no-pager 2>/dev/null | while IFS= read -r line; do

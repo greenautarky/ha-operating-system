@@ -82,6 +82,28 @@ echo "bbbbbbbb-5555-6666-7777-888888888888" > "$BID"
 run_test "LSB-17" "a reboot (new boot_id) rewrites boot_id and resets the count" \
   "grep -q '\"boot_id\":\"bbbbbbbb-5555-6666-7777-888888888888\"' '$SHARE' && grep -q '\"reason3_total\":0' '$SHARE'"
 
+# Heartbeat (Odoo #1567): the consumer (ga_manager lte_standby, DEAUTH_STALE_S =
+# 600 s) treats a file whose updated_at is older than 10 min as a dead writer.
+# A quiet device must keep re-stamping updated_at and ONLY that.
+HB="$TMPD/hb.json"
+printf '{"reason3_total":7,"boot_id":"cccc","last_event_at":"2026-09-13T10:00:00Z","updated_at":"2020-01-01T00:00:00Z","healer_marks":["2026-09-13T10:05:00Z"],"by_reason":{"3":7},"last_reason":"3"}\n' > "$HB"
+( export GA_DEAUTH_TEST=1 GA_DEAUTH_SHARE="$HB" \
+         GA_SHARE_PUBLISH="$PUB" GA_SHARE_STAGE_DIR="$TMPD/stage" GA_DEAUTH_BOOT_ID_PATH="$BID"
+  . "$DEAUTH"
+  restamp_updated_at )
+run_test "LSB-18" "heartbeat re-stamps updated_at to now (fresh within the consumer's 600 s)" \
+  "! grep -q '2020-01-01T00:00:00Z' '$HB' && test \"\$(sed -n 's/.*\"updated_at\":\"\\([0-9]*\\)-.*/\\1/p' '$HB')\" -ge 2026"
+run_test "LSB-19" "heartbeat leaves counter, boot_id, last_event_at, healer_marks, by_reason untouched" \
+  "grep -q '\"reason3_total\":7' '$HB' && grep -q '\"boot_id\":\"cccc\"' '$HB' && grep -q '\"last_event_at\":\"2026-09-13T10:00:00Z\"' '$HB' && grep -q '2026-09-13T10:05:00Z' '$HB' && grep -q '\"by_reason\":{\"3\":7}' '$HB'"
+HBM="$TMPD/hb-missing.json"
+( export GA_DEAUTH_TEST=1 GA_DEAUTH_SHARE="$HBM" \
+         GA_SHARE_PUBLISH="$PUB" GA_SHARE_STAGE_DIR="$TMPD/stage" GA_DEAUTH_BOOT_ID_PATH="$BID"
+  . "$DEAUTH"
+  restamp_updated_at )
+run_test "LSB-19b" "heartbeat never invents a counter file that does not exist" "! test -e '$HBM'"
+run_test "LSB-19c" "the daemon starts a heartbeat loop and bounds it by GA_DEAUTH_HEARTBEAT_S (<= 300 s default)" \
+  "grep -q '^ *heartbeat_loop &' '$DEAUTH' && grep -q 'HEARTBEAT_S:-240' '$DEAUTH'"
+
 # ── S2: health-gated route functional ──────────────────────────────────────
 # On a host `logger` succeeds silently (writes to the journal), so the WARNING
 # never reaches stderr for the test to capture. Shadow it with a fake logger
