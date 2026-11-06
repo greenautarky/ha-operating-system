@@ -1,0 +1,55 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] hassio: an rc label bakes line/1.6/rc.json, devices keep polling stable (Odoo #1610)
+
+Applies after 0131/0133. The bake read the device-facing {channel}.json, so baking an rc
+with a new Supervisor meant publishing that Supervisor to every device of the line first
+(2026-11-06, BOSv1.6.0-rc3). A BOSv1.6.N-rcM label now bakes line/1.6/rc.json instead
+(rule: package/hassio/bake-source-file.sh, the single definition, also called by the
+ga-ops channel guard, gen_expected.sh and scan-cves.sh). HASSIO_VERSION_URL,
+/etc/ga-version-url and updater.json are untouched: the image still polls stable.json.
+version.json records channel = the device channel and bake_source = the file it was read from.
+---
+ buildroot-external/package/hassio/hassio.mk | 21 +++++++++++-----
+
+diff --git a/buildroot-external/package/hassio/hassio.mk b/buildroot-external/package/hassio/hassio.mk
+--- a/buildroot-external/package/hassio/hassio.mk
++++ b/buildroot-external/package/hassio/hassio.mk
+@@ -67,6 +67,18 @@
+ HASSIO_VERSION_CHANNEL = "dev"
+ endif
+ 
++# GA (Odoo #1610): which haos-version file the BAKE reads. A BOSv1.6.N-rcM label bakes the
++# candidate set line/1.6/rc.json; everything else (finals, beta, dev) bakes {channel}.json.
++# The rule lives in ONE script (also used by the ga-ops channel guard, gen_expected.sh and
++# scan-cves.sh). What the device POLLS is untouched: /etc/ga-version-url and updater.json
++# keep naming HASSIO_VERSION_URL + HASSIO_VERSION_CHANNEL (stable), so an rc image never
++# makes the line's devices read rc.json. GA_RELEASE comes from the environment
++# (ga_build.sh exports it); a build without it falls through to the channel. Lazy (=) so that
++# scripts/probe-ga-version-url.sh, which evaluates only the install recipe, never runs it; the
++# configure recipe below fails closed on an empty answer.
++HASSIO_BAKE_SOURCE = $(shell $(BR2_EXTERNAL_GA_HAOS_PATH)/package/hassio/bake-source-file.sh "$$GA_RELEASE" $(call qstrip,$(HASSIO_VERSION_CHANNEL)))
++HASSIO_BAKE_FILE = "$(HASSIO_BAKE_SOURCE)"
++
+ HASSIO_CONTAINER_IMAGES_ARCH = supervisor dns audio cli multicast observer core
+ 
+ # GA: a board whose arch has no GA image in the channel lists the keys here
+@@ -93,7 +105,7 @@
+ HASSIO_ADDON_IMAGES_JSON ?=
+ 
+ ifeq ($(BR2_PACKAGE_HASSIO_FULL_CORE),y)
+-HASSIO_CORE_VERSION = $(shell curl -fsS $(HASSIO_VERSION_URL)$(HASSIO_VERSION_CHANNEL)".json" | jq '.homeassistant["$(call qstrip,$(BR2_PACKAGE_HASSIO_MACHINE))"] // .homeassistant.default')
++HASSIO_CORE_VERSION = $(shell curl -fsS $(HASSIO_VERSION_URL)$(HASSIO_BAKE_FILE)".json" | jq '.homeassistant["$(call qstrip,$(BR2_PACKAGE_HASSIO_MACHINE))"] // .homeassistant.default')
+ else
+ HASSIO_CORE_VERSION = "landingpage"
+ endif
+@@ -101,7 +113,9 @@
+ define HASSIO_CONFIGURE_CMDS
+ 	$(HASSIO_BOARD_PINS_CHECK)
+ 	# HomeAssistantOS Deploy only landing page for "core" by setting version to "landingpage", but we are using the full core image whether BR2_PACKAGE_HASSIO_FULL_CORE is set or not
+-	curl -fsS $(HASSIO_VERSION_URL)$(HASSIO_VERSION_CHANNEL)".json" | jq '.core = $(HASSIO_CORE_VERSION)' > $(@D)/version.json;
++	[ -n "$(HASSIO_BAKE_SOURCE)" ] || { echo "FATAL: GA hassio: bake-source-file.sh gave no answer (GA_RELEASE='$$GA_RELEASE')"; exit 1; }; \
++	echo "GA hassio: bake reads $(HASSIO_VERSION_URL)$(HASSIO_BAKE_FILE).json (devices poll $(HASSIO_VERSION_URL)$(HASSIO_VERSION_CHANNEL).json)"; \
++	curl -fsS $(HASSIO_VERSION_URL)$(HASSIO_BAKE_FILE)".json" | jq '.core = $(HASSIO_CORE_VERSION) | .channel = $(HASSIO_VERSION_CHANNEL) | .bake_source = $(HASSIO_BAKE_FILE)' > $(@D)/version.json;
+ 	# Validate version.json: reject "latest" and wrong registries (catches stale stable.json)
+ 	# Core is the GA armv7 build again (2026-09-28): upstream stopped building
+ 	# armv7 in late 2025, so the stock image is frozen at 2025.11.3.

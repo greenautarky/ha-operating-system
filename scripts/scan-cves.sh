@@ -659,7 +659,19 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
         SCAN_BROKEN=true
       fi
     fi
-    VERSION_URL="${HASSIO_VERSION_URL:-${_mk_url}}${CHANNEL}.json"
+    # The file the bake reads for this tree's release label: an -rcN bakes line/1.6/rc.json, not the
+    # device-facing stable.json (Odoo #1610). One rule, bake-source-file.sh; an unreadable label on a
+    # known channel is a broken scan, never a silent fall back to stable.
+    BAKE_SRC="$CHANNEL"
+    if [[ "$CHANNEL" != "unknown" ]]; then
+      _rel="${GA_RELEASE:-$(awk '/^gaos_release:/{print $2; exit}' "${REPO_ROOT}/version.yaml" 2>/dev/null)}"
+      if ! BAKE_SRC="$("${REPO_ROOT}/buildroot-external/package/hassio/bake-source-file.sh" "$_rel" "$CHANNEL")"; then
+        echo "  ERROR: bake-source-file.sh failed for release '${_rel}' channel '${CHANNEL}' - cannot tell which file the bake reads"
+        SCAN_BROKEN=true
+        BAKE_SRC="$CHANNEL"
+      fi
+    fi
+    VERSION_URL="${HASSIO_VERSION_URL:-${_mk_url}}${BAKE_SRC}.json"
     echo "  Channel:  ${CHANNEL} (${VERSION_URL})"
     STABLE=""
     [[ "$CHANNEL" != "unknown" ]] && STABLE=$(curl -sf "$VERSION_URL" 2>/dev/null || true)

@@ -119,7 +119,12 @@ fi
 VERSION_URL=$(scripts/apply-haos-patches.sh --cat buildroot-external/package/hassio/hassio.mk \
   | sed -nE 's/^HASSIO_VERSION_URL[[:space:]]*\??=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' | head -1)
 [ -n "$VERSION_URL" ] || fail "no HASSIO_VERSION_URL in the patched haos hassio.mk (scripts/apply-haos-patches.sh --cat) — refusing to guess a branch"
-PLUGINS=$(CHANNEL="$CHANNEL" VERSION_URL="$VERSION_URL" python3 - <<'PYEOF'
+# Which file the BAKE reads for this release label (an -rcN bakes line/1.6/rc.json, Odoo #1610): the
+# one rule, buildroot-external/package/hassio/bake-source-file.sh. EXPECTED_CHANNEL below stays the
+# DEVICE channel (updater.json says stable); only the component versions come from the bake file.
+BAKE_SRC=$(buildroot-external/package/hassio/bake-source-file.sh "$REL" "$CHANNEL") \
+  || fail "bake-source-file.sh failed for release '$REL' channel '$CHANNEL'"
+PLUGINS=$(CHANNEL="$BAKE_SRC" VERSION_URL="$VERSION_URL" python3 - <<'PYEOF'
 import json, os, sys, urllib.request
 url = os.environ["VERSION_URL"] + os.environ["CHANNEL"] + ".json"
 try:
