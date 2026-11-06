@@ -3039,9 +3039,9 @@ if [[ -n "$SRC" ]]; then
     # a beta or dev bake and would refuse the promotion. Only the baked channel is
     # asserted; stable may lag until it is promoted.
     CH_CORE_IMG="$(echo "${BUILD_CHANNEL_JSON:-}" | jq -r '.images.core // "unknown"' 2>/dev/null || echo unknown)"
-    [[ "$CH_CORE_IMG" == ghcr.io/greenautarky/home-assistant-armv7 ]] \
-      && _pass "XVER-03: ${BUILD_CHANNEL:-build}.json core image is the GA armv7 build: $CH_CORE_IMG" \
-      || _fail "XVER-03: ${BUILD_CHANNEL:-build}.json core image is NOT the GA armv7 build: $CH_CORE_IMG"
+    [[ "$CH_CORE_IMG" == ghcr.io/greenautarky/home-assistant-${_RBT_ARCH} ]] \
+      && _pass "XVER-03: ${BUILD_CHANNEL:-build}.json core image is the GA ${_RBT_ARCH} build: $CH_CORE_IMG" \
+      || _fail "XVER-03: ${BUILD_CHANNEL:-build}.json core image is NOT the GA ${_RBT_ARCH} build: $CH_CORE_IMG"
 
     # XVER-04: stable.json supervisor image is greenautarky (GA fork stays)
     [[ "$STABLE_SUP_IMG" == *greenautarky* ]] \

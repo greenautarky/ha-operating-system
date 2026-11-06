@@ -39,8 +39,8 @@ chmod +x "$W/bin/skopeo"
 cat > "$W/bin/curl" <<'CU'
 #!/bin/bash
 case "$*" in
-  *stable.json*) echo '{"core":"2026.8.2.2","supervisor":"2025.11.5.10","homeassistant":{"tinker":"2026.8.2.2"},"images":{"core":"x","supervisor":"x"}}' ;;
-  *dev.json*)    echo '{"core":"2026.10.4.3-dev","supervisor":"2026.10.5.1","homeassistant":{"tinker":"2026.10.4.3-dev"},"images":{"core":"x","supervisor":"x"}}' ;;
+  *stable.json*) echo '{"core":"2026.8.2.2","supervisor":"2025.11.5.10","homeassistant":{"tinker":"2026.8.2.2"},"images":{"core":"ghcr.io/greenautarky/home-assistant-armv7","supervisor":"x"}}' ;;
+  *dev.json*)    echo '{"core":"2026.10.4.3-dev","supervisor":"2026.10.5.1","homeassistant":{"tinker":"2026.10.4.3-dev"},"images":{"core":"'"${STUB_DEV_CORE_IMG:-ghcr.io/greenautarky/home-assistant-aarch64}"'","supervisor":"x"}}' ;;
   *) exit 22 ;;
 esac
 CU
@@ -103,6 +103,9 @@ mkfix dsgw210 aarch64 2026.10.4.3-dev dev
 o="$(run dsgw210 BOSv1.6.0-dev5)"
 has "$o" '^  PASS  XVER-06: .*matches dev.json' && ok "dsgw210: XVER-06 compares against dev.json and passes" || bad "dsgw210: XVER-06 not green"
 has "$o" '^  PASS  XVER-07: .*matches dev.json' && ok "dsgw210: XVER-07 compares against dev.json and passes" || bad "dsgw210: XVER-07 not green"
+has "$o" '^  PASS  XVER-03: dev.json core image is the GA aarch64 build' && ok "dsgw210: XVER-03 expects the aarch64 Core image and passes" || bad "dsgw210: XVER-03 not green"
+o="$(STUB_DEV_CORE_IMG=ghcr.io/greenautarky/home-assistant-armv7 run dsgw210 BOSv1.6.0-dev5)"
+has "$o" '^  FAIL  XVER-03: dev.json core image is NOT the GA aarch64 build' && ok "dsgw210: an armv7 Core image in dev.json FAILS XVER-03" || bad "dsgw210: armv7 Core image in dev.json accepted"
 SUPV=2026.10.4.0 mkfix dsgw210 aarch64 2026.10.4.3-dev dev
 o="$(SUPV=2026.10.4.0 run dsgw210 BOSv1.6.0-dev5)"
 has "$o" '^  FAIL  XVER-07: .*dev.json' && ok "dsgw210: a Supervisor that differs from dev.json FAILS XVER-07" || bad "dsgw210: XVER-07 drift not caught"
@@ -110,6 +113,7 @@ mkfix ihost armv7 2026.8.2.2 stable "$D2"
 o="$(run ihost BOSv1.6.0-rc2)"
 has "$o" '^  FAIL  XVER-07: .*stable.json' && ok "ihost: still compared against stable.json (Supervisor 2026.10.5.1 != stable)" || bad "ihost: XVER-07 not against stable.json"
 has "$o" '^  PASS  XVER-06: .*matches stable.json' && ok "ihost: XVER-06 matches stable.json" || bad "ihost: XVER-06 not against stable.json"
+has "$o" '^  PASS  XVER-03: stable.json core image is the GA armv7 build' && ok "ihost: XVER-03 still expects the armv7 Core image" || bad "ihost: XVER-03 not green"
 
-[ "$ran" -ge 18 ] || { echo "FAIL: only $ran cases ran"; exit 1; }
+[ "$ran" -ge 21 ] || { echo "FAIL: only $ran cases ran"; exit 1; }
 echo "$ran cases ran, $fails failed"; exit $((fails>0))
