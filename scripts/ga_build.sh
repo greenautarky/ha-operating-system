@@ -1383,35 +1383,6 @@ PKGEOF
   fi
   echo "Source pins validated: $pins_file (${_nrepos} repositories)"
 
-  # Capture the evidence NOW, not at promotion time.
-  #
-  # images/configs/ is a FIXED path — cfg_dir="${OUT}/images/configs" — so every
-  # build overwrites it. The previous build's provenance is gone the moment the
-  # next build starts, which is sooner than any retention policy. Collecting at
-  # promotion time would therefore collect whatever happened to be built last,
-  # not what is being promoted.
-  #
-  # So every build files its own evidence under a version+build-id directory that
-  # nothing overwrites and ota-cleanup.sh never touches. Promotion then only has
-  # to publish the one directory matching the artefact it is promoting.
-  #
-  # Failure here does NOT fail the build: the image is already built and valid,
-  # and refusing it over a bookkeeping step would be the wrong trade. It is loud
-  # instead, and the promotion step is where absence becomes fatal.
-  local _ev_script="${SCRIPT_DIR}/ops/collect-release-evidence.sh"
-  local _ev_root="${GA_EVIDENCE_ROOT:-/build/release-evidence}"
-  local _ev_ver
-  _ev_ver="$(sed -n "s/^${GA_RELEASE_KEY}:[[:space:]]*\([^[:space:]#]*\).*/\1/p" "${SCRIPT_DIR}/../version.yaml" 2>/dev/null | head -1)"
-  if [[ -x "$_ev_script" && -n "$_ev_ver" ]]; then
-    mkdir -p "${_ev_root}"
-    if "$_ev_script" "$OUT" "$_ev_ver" "${_ev_root}/${GA_BUILD_TIMESTAMP}"; then
-      echo "Release evidence filed: ${_ev_root}/${GA_BUILD_TIMESTAMP}/${_ev_ver}"
-    else
-      echo "WARNING: release-evidence collection FAILED — this build cannot be promoted until it is re-run" >&2
-    fi
-  else
-    echo "WARNING: release-evidence collector or gaos_release missing — nothing filed for this build" >&2
-  fi
 
   # -------------------------------------------------------------------------
   # Create reproducibility manifest
@@ -1540,6 +1511,40 @@ CONTAINEREOF
     else
       rm -f "${container_lock_json}.tmp"
     fi
+  fi
+
+  # ORDER: this runs LAST in archive_build_configs, after MANIFEST.txt and the container
+  # lockfile are written. It used to run before them, so a clean tree filed no MANIFEST
+  # (BOSv1.6.0-rc4 bake, 2026-11-07: "required evidence missing or empty: MANIFEST.txt")
+  # and an incremental tree filed the PREVIOUS build's MANIFEST as this build's evidence.
+  # Capture the evidence NOW, not at promotion time.
+  #
+  # images/configs/ is a FIXED path — cfg_dir="${OUT}/images/configs" — so every
+  # build overwrites it. The previous build's provenance is gone the moment the
+  # next build starts, which is sooner than any retention policy. Collecting at
+  # promotion time would therefore collect whatever happened to be built last,
+  # not what is being promoted.
+  #
+  # So every build files its own evidence under a version+build-id directory that
+  # nothing overwrites and ota-cleanup.sh never touches. Promotion then only has
+  # to publish the one directory matching the artefact it is promoting.
+  #
+  # Failure here does NOT fail the build: the image is already built and valid,
+  # and refusing it over a bookkeeping step would be the wrong trade. It is loud
+  # instead, and the promotion step is where absence becomes fatal.
+  local _ev_script="${SCRIPT_DIR}/ops/collect-release-evidence.sh"
+  local _ev_root="${GA_EVIDENCE_ROOT:-/build/release-evidence}"
+  local _ev_ver
+  _ev_ver="$(sed -n "s/^${GA_RELEASE_KEY}:[[:space:]]*\([^[:space:]#]*\).*/\1/p" "${SCRIPT_DIR}/../version.yaml" 2>/dev/null | head -1)"
+  if [[ -x "$_ev_script" && -n "$_ev_ver" ]]; then
+    mkdir -p "${_ev_root}"
+    if "$_ev_script" "$OUT" "$_ev_ver" "${_ev_root}/${GA_BUILD_TIMESTAMP}"; then
+      echo "Release evidence filed: ${_ev_root}/${GA_BUILD_TIMESTAMP}/${_ev_ver}"
+    else
+      echo "WARNING: release-evidence collection FAILED — this build cannot be promoted until it is re-run" >&2
+    fi
+  else
+    echo "WARNING: release-evidence collector or gaos_release missing — nothing filed for this build" >&2
   fi
 
   echo "=== Build configuration archive complete: ${cfg_dir} ==="

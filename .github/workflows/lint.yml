@@ -667,6 +667,12 @@ jobs:
       - name: Shipped journal inputs do not skip boot-time lines
         run: ./tests/gates/fluent_bit_boot_evidence/selftest.sh
 
+      # Release evidence must be collected AFTER the files it files (MANIFEST.txt,
+      # container lockfile): before, a clean bake filed no MANIFEST and an
+      # incremental one filed the PREVIOUS build's. Fixtures + live ga_build.sh.
+      - name: Release evidence is collected after the manifest it requires
+        run: ./tests/gates/evidence_order/selftest.sh
+
       # The failure trail must exist after a crash. ga-journal-dump piped into
       # `gzip -c 2>/dev/null`; the image's busybox (upstream HAOS config) has no
       # gzip applet, so every dump on a device was empty (`head: standard
