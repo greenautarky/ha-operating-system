@@ -1,4 +1,5 @@
 import { test, expect } from '../fixtures/device';
+import { loginWithCredentials } from '../helpers/auth';
 import { waitForHA } from '../helpers/ha-api';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
@@ -62,34 +63,13 @@ function ssh(cmd: string): string {
 
 async function getToken(deviceUrl: string): Promise<string> {
   if (process.env.HA_TOKEN) return process.env.HA_TOKEN;
-  const clientId = `${deviceUrl}/`;
-  const flow = await (
-    await fetch(`${deviceUrl}/auth/login_flow`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: clientId, handler: ['homeassistant', null], redirect_uri: clientId }),
-    })
-  ).json();
-  const cred = await (
-    await fetch(`${deviceUrl}/auth/login_flow/${flow.flow_id}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        client_id: clientId,
-        username: process.env.HA_ADMIN_USER || 'admin',
-        password: process.env.HA_ADMIN_PASS,
-      }),
-    })
-  ).json();
-  if (!cred.result) throw new Error('login failed — check HA_ADMIN_PASS');
-  const tok = await (
-    await fetch(`${deviceUrl}/auth/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ grant_type: 'authorization_code', code: cred.result, client_id: clientId }),
-    })
-  ).json();
-  return tok.access_token as string;
+  // Shared helper: records the refresh token so global-teardown revokes it (Odoo #1565).
+  const tok = await loginWithCredentials(
+    deviceUrl,
+    process.env.HA_ADMIN_USER || 'admin',
+    process.env.HA_ADMIN_PASS || process.env.HA_ADMIN_PASSWORD || '',
+  );
+  return tok.access_token;
 }
 
 async function api(deviceUrl: string, token: string, method: string, apiPath: string, body?: unknown) {
