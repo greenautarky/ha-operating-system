@@ -408,6 +408,21 @@ grype_policy() {
   printf '%s %s %s\n' "$n" "$s" "${#blk[@]}"
 }
 
+# bake_version_url — the HASSIO_VERSION_URL the bake uses, read from the added
+# `+HASSIO_VERSION_URL ?= "<url>"` lines of the patch set (HAOS 18.x layout).
+# Prints it; fails (prints nothing) unless exactly one distinct value exists.
+bake_version_url() {
+  local list p urls n
+  list="$("${REPO_ROOT}/scripts/apply-haos-patches.sh" --list 2>/dev/null)" || return 1
+  [[ -n "$list" ]] || return 1
+  urls="$(while IFS= read -r p; do
+            [[ -f "$p" ]] && sed -nE 's/^\+HASSIO_VERSION_URL[[:space:]]*\??=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' "$p"
+          done <<<"$list" | sort -u)"
+  n="$(grep -c . <<<"$urls" || true)"
+  [[ "$n" == "1" ]] || return 1
+  printf '%s\n' "$urls"
+}
+
 # scan_one_image <label> <syft-source> <trivy target args...>
 # image_tar_format <tar> -> "docker-archive" | "oci-layout" | "unknown"
 # HAOS 16.x writes the baked container images as docker-archive (manifest.json);
@@ -630,15 +645,19 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
       CHANNEL="unknown"
     fi
     IMG_SOURCE="channel:${CHANNEL}"
-    # Default = the branch the BUILD reads (hassio.mk), not a hardcoded main/:
-    # during an rc dress rehearsal the image bakes from a candidate branch.
-    # hassio.mk is upstream HAOS's with GA patch 0131 applied (HAOS 18.x
-    # layout): read as the build sees it, haos/ working tree untouched.
-    _mk_url="$("${REPO_ROOT}/scripts/apply-haos-patches.sh" --cat buildroot-external/package/hassio/hassio.mk 2>/dev/null \
-      | sed -nE 's/^HASSIO_VERSION_URL[[:space:]]*\??=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' | head -1 || true)"
-    if [[ -z "${HASSIO_VERSION_URL:-}" && -z "$_mk_url" ]]; then
-      echo "  ERROR: no HASSIO_VERSION_URL in hassio.mk and none given — cannot tell which images ship"
-      SCAN_BROKEN=true
+    # Default = the channel line the BUILD reads. The bake's definition is the
+    # `HASSIO_VERSION_URL ?=` line GA patch 0131 adds to hassio.mk (HAOS 18.x
+    # layout); the same patch installs it as /etc/ga-version-url. Read from the
+    # patch set itself (apply-haos-patches.sh --list), so no haos/ checkout is
+    # needed and there is no second copy of the URL here. Ambiguous or missing
+    # = broken scan, never a guess.
+    _mk_url=""
+    if [[ -z "${HASSIO_VERSION_URL:-}" ]]; then
+      _mk_url="$(bake_version_url || true)"
+      if [[ -z "$_mk_url" ]]; then
+        echo "  ERROR: no single HASSIO_VERSION_URL in the GA hassio patch set and none given — cannot tell which images ship"
+        SCAN_BROKEN=true
+      fi
     fi
     VERSION_URL="${HASSIO_VERSION_URL:-${_mk_url}}${CHANNEL}.json"
     echo "  Channel:  ${CHANNEL} (${VERSION_URL})"
