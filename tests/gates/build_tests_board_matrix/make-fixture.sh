@@ -18,6 +18,16 @@ rm -rf "$W"; mkdir -p "$W/src" "$W/buildroot/package/go"
 _hide="^(\.git|buildroot-external|ga_output.*"
 for _hb in ${HIDE_BOARDS:-}; do _hide="$_hide|$(ga_board_var BOARD_DIR "$_hb")"; done
 for e in $(ls -A "$ROOT" | grep -vE "$_hide)\$"); do ln -s "$ROOT/$e" "$W/src/$e"; done
+# version.yaml as it stood for the bake this fixture came from: the board's release marker is the
+# PINNED one of that bake (fixtures/<board>/gaos_release.txt), not the live one, so bumping the
+# marker for the next rc does not turn GA-REL-03 red against a fixture of the previous bake.
+# Everything else in version.yaml stays the live file.
+_key=gaos_release; [ "$BOARD" = ihost ] || _key="gaos_release_${BOARD}"
+_rel="$(head -1 "$FX/gaos_release.txt" 2>/dev/null | tr -d '[:space:]')"
+[ -n "$_rel" ] || { echo "make-fixture: $FX/gaos_release.txt missing or empty (pin the fixture's release marker)" >&2; exit 2; }
+grep -qE "^${_key}:" "$ROOT/version.yaml" || { echo "make-fixture: version.yaml has no ${_key}" >&2; exit 2; }
+rm -f "$W/src/version.yaml"
+sed -E "s/^(${_key}:)[[:space:]]*[^#[:space:]]+/\\1 ${_rel}/" "$ROOT/version.yaml" > "$W/src/version.yaml"
 cp -a "$ROOT/buildroot-external" "$W/src/buildroot-external"
 tar -xJf "$FX/synced.tar.xz" -C "$W/src/buildroot-external/rootfs-overlay" --strip-components=1
 OUT="$W/src/ga_output"
