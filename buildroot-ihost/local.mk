@@ -6,3 +6,5 @@ include $(call qstrip,$(BR2_EXTERNAL_GA_HAOS_PATH))/go-floor.mk
 # Container runtime floor (docker-engine, docker-cli, containerd): see
 # buildroot-external/container-floor.mk. Same include point as the Go floor.
 include $(call qstrip,$(BR2_EXTERNAL_GA_HAOS_PATH))/container-floor.mk
+# xz floor (host-xz and xz): see buildroot-external/xz-floor.mk. Same include point as the Go floor.
+include $(call qstrip,$(BR2_EXTERNAL_GA_HAOS_PATH))/xz-floor.mk

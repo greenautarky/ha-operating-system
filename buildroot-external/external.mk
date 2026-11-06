@@ -55,6 +55,6 @@ LIBGLIB2_IGNORE_CVES += CVE-2026-58016
 # which is not compiled on Linux. Not affected, no patch.
 LIBGLIB2_IGNORE_CVES += CVE-2025-4056
 
-# xz 5.6.4: two patches, 0101-0102, the upstream v5.6 branch commits for
-# GHSA-5qpq-xqfv-j9pg (fixed in 5.8.4; no CVE id assigned yet, so there is
-# nothing to list here and NVD has no entry for cve-check to match).
+# xz: lifted to 5.8.4 by buildroot-external/xz-floor.mk (version floor, no
+# patches: the three advisories GHSA-5qpq-xqfv-j9pg, GHSA-6cc8-p5mm-29w2 and
+# GHSA-x872-m794-cxhv are fixed in 5.8.4 and have no CVE id to list here).
