@@ -82,14 +82,13 @@ IOD_DMESG_BAD="Couldn't write to GRF|Can't determine voltage|May damage SoC"
 # match (lowest address == the offset itself) counts. rc 1 = unreadable/absent.
 iod_readreg() {
   [ -r "$1" ] || return 1
-  _want=$((0x$2))
-  while IFS=': ' read -r _a _v _rest; do
-    case "$_a" in *[!0-9a-fA-F]*|"") continue ;; esac
-    [ "$((0x$_a))" -eq "$_want" ] || continue
-    case "$_v" in *[!0-9a-fA-F]*|"") continue ;; esac
-    echo $((0x$_v)); return 0
-  done < "$1"
-  return 1
+  # sed, not `while read < file`: a shell `read` fetches the debugfs file in tiny
+  # chunks and gets nothing back from it on the device (measured on K31 BOSv1.6.0-rc2,
+  # 2026-11-06), while sed reads in blocks. The offset column is zero-padded to the
+  # register width (3 digits for PMUGRF, 5 for GRF) — strip the zeros in the pattern.
+  _v=$(sed -n "s/^0*$2:[[:space:]]*\\([0-9a-fA-F][0-9a-fA-F]*\\).*/\\1/p" "$1" | head -n1)
+  [ -n "$_v" ] || return 1
+  echo $((0x$_v))
 }
 
 # iod_ret_verdict <dec> — PMUGRF 0x144 (IO retention) must equal 0xFFFF.
@@ -116,8 +115,11 @@ iod_regsum_verdict() {
     function want(n) { return (n==5) ? "vcc_1v8" : ((n==3||n==4||n==6) ? "vcc_3v3" : "") }
     /^[ \t]*-+[ \t]*$/ || /^[ \t]*regulator[ \t]/ { next }
     {
-      match($0, /^[ ]*/); ind = RLENGTH
-      if (ind <= 1) { cur = $1; next }
+      # A REGULATOR row carries three integer columns (use open bypass) after its
+      # name — at any nesting depth (vcc_3v3 sits under vcc3v3_sys under vcc5v0_sys on
+      # the iHost). A CONSUMER row has a count and then "0mA". Indentation alone
+      # cannot tell them apart.
+      if ($2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/) { cur = $1; next }
       if (match($1, /io-domains-vccio[0-9]/)) {
         n = substr($1, RSTART + RLENGTH - 1, 1) + 0; seen++
         w = want(n)
