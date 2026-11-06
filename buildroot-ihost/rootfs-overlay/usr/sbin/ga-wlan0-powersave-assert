@@ -44,17 +44,31 @@ conn_state() {
 # wifi.powersave in a [connection*] section of the merged config (conf.d
 # 50-ga.conf sets 2). Empty if unset/unreadable.
 global_powersave() {
-    $NMBIN --print-config 2>/dev/null \
-      | awk '/^\[/ {c = ($0 ~ /^\[connection/)} c && /^wifi.powersave[ ]*=/ {sub(/^[^=]*=[ ]*/, ""); print; exit}'
+    $NMBIN --print-config 2>/dev/null | awk -v iface="$IFACE" '
+        function flush() {
+            if (sec ~ /^\[connection/ && have && !done) {
+                # applies to wlan0 if no match-device, or it names type:wifi / our ifname
+                if (md == "" || md ~ /type:wifi/ || md ~ ("interface-name:" iface) || md == iface || md == "*") {
+                    if (sec == "[connection]") last = val; else if (first == "") first = val
+                }
+            }
+            have = 0; md = ""; val = ""
+        }
+        /^\[/ { flush(); sec = $0; next }
+        /^match-device[ ]*=/ { sub(/^[^=]*=[ ]*/, ""); md = $0; next }
+        /^wifi.powersave[ ]*=/ { sub(/^[^=]*=[ ]*/, ""); val = $0; have = 1; next }
+        END { flush(); if (first != "") print first; else if (last != "") print last }'
 }
 
 # Runtime truth from the driver: "off" | "on" | "" (unknown). Not the profile.
+have_iw() { command -v "$IW" >/dev/null 2>&1; }
 runtime_powersave() {
+    have_iw || return 0
     $IW dev "$IFACE" get power_save 2>/dev/null | awk '/Power save:/ {print $3; exit}'
 }
 
 # assert: read the active conn's powersave; 2 = disabled = correct. Echoes
-# ok|fixed|deferred|no-conn.
+# ok|fixed|pending-next-activation|deferred|no-conn.
 #
 # NEVER `connection up` / re-activate here. NetworkManager 1.50 cannot reapply
 # 802-11-wireless.powersave on a live link (nm-device-wifi.c can_reapply_change
@@ -92,7 +106,11 @@ assert_once() {
     case "$_ps" in
         0|default|"0 (default)"|"default (0)")
             # EFFECTIVE value = profile value, falling back to the global default.
-            if [ "$(global_powersave)" = "2" ]; then
+            _g="$(global_powersave)"
+            if [ -z "$_g" ]; then
+                _log err "cannot read the global wifi.powersave from '$NMBIN --print-config' (empty/unparseable) — cannot prove the effective value, falling back to the driver state"
+            fi
+            if [ "$_g" = "2" ]; then
                 _log info "$IFACE powersave profile value is default; the global [connection-wifi-defaults] wifi.powersave=2 is the effective value on '$_c' — as intended, no action"
                 echo ok; return
             fi
@@ -101,10 +119,15 @@ assert_once() {
                 echo ok; return
             fi ;;
     esac
-    _log warning "$IFACE powersave is '$_ps' on '$_c' (expected 2=disabled) — persisting 2 and switching the driver off without re-activating; RTW88 with LPS on flaps on its own"
     $NMCLI connection modify "$_c" 802-11-wireless.powersave 2 2>/dev/null || true
-    $IW dev "$IFACE" set power_save off 2>/dev/null || true
-    echo fixed
+    if have_iw; then
+        _log warning "$IFACE powersave is '$_ps' on '$_c' (expected 2=disabled) — persisted 2 and switched the driver off without re-activating; RTW88 with LPS on flaps on its own"
+        $IW dev "$IFACE" set power_save off 2>/dev/null || true
+        echo fixed
+    else
+        _log warning "$IFACE powersave is '$_ps' on '$_c' (expected 2=disabled) — persisted 2 but live disable unavailable ('$IW' not installed): takes effect at next activation"
+        echo pending-next-activation
+    fi
 }
 
 [ -n "${GA_PSAVE_TEST:-}" ] || assert_once

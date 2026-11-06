@@ -7,7 +7,7 @@
 # Expected key allowlist (WFB-30) is a PINNED constant taken from NM 1.50.2
 # (src/core/devices/wifi/nm-device-wifi.c + man/NetworkManager.conf), not derived
 # from the file under test.
-# shellcheck disable=SC1090,SC2016
+# shellcheck disable=SC1090,SC2016,SC2034
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 EXT="$ROOT/buildroot-external"
@@ -30,8 +30,7 @@ ck WFB-11 sh -c "awk '/^\\[/{s=\$0} s==\"[wifi]\" && /^powersave=2\$/{f=1} END{e
 ck WFB-12 grep -q '^psk=__WIFI_INSTALL_PSK__$' "$NMC"
 mkdir -p "$T/tgt/usr/share/ga-wifi"; cp "$NMC" "$T/tgt/usr/share/ga-wifi/"
 printf 'fixture-psk-not-real\n' > "$T/psk"
-sed "s|^PSK_FILE=.*|PSK_FILE=$T/psk|" "$PSKSCRIPT" > "$T/psk.sh"   # master hardcodes the path
-bash "$T/psk.sh" "$T/tgt" >/dev/null 2>&1
+WIFI_INSTALL_PSK_FILE="$T/psk" bash "$PSKSCRIPT" "$T/tgt" >/dev/null 2>&1
 BUILT="$T/tgt/usr/share/ga-wifi/GreenAutarky-Install.nmconnection"
 ck WFB-13 grep -q '^psk=fixture-psk-not-real$' "$BUILT"
 ck WFB-14 sh -c "awk '/^\\[/{s=\$0} s==\"[wifi]\" && /^powersave=2\$/{f=1} END{exit !f}' '$BUILT'"
@@ -63,7 +62,7 @@ mk_nmbin() { # $1 = global wifi.powersave value or "" ; fake NetworkManager --pr
     chmod +x "$T/NetworkManager"
 }
 mk_nmbin 2
-run_assert() { ( export GA_PSAVE_TEST=1 GA_PSAVE_NM="$T/NetworkManager" GA_PSAVE_NMCLI="$T/nmcli" GA_PSAVE_IW="$T/iw" GA_PSAVE_WAIT=0; . "$ASSERT"; assert_once ) 2>/dev/null; }
+run_assert() { ( logger() { echo "$*" >> "$T/log"; }; export GA_PSAVE_TEST=1 GA_PSAVE_NM="$T/NetworkManager" GA_PSAVE_NMCLI="$T/nmcli" GA_PSAVE_IW="${IWOVR:-$T/iw}" GA_PSAVE_WAIT=0; . "$ASSERT"; assert_once ) 2>/dev/null; }
 
 # must-pass: profile default + global 2 -> no action at all (even if iw says on)
 mk_nm default activated; mk_iw on; R="$(run_assert)"
@@ -84,6 +83,37 @@ ck WFB-27 sh -c "! grep -q 'connection modify\\|connection up' '$T/nm.log'"
 mk_nmbin ""; mk_nm 2 activated; mk_iw on; R="$(run_assert)"
 ck WFB-28 test "$R" = ok
 
+# F1: iw ABSENT (not faked) — must not claim a live disable
+IWOVR=/nonexistent/iw; export IWOVR
+mk_nmbin ""; mk_nm 1 activated; : > "$T/log"; R="$(run_assert)"
+ck WFB-70 test "$R" = pending-next-activation
+ck WFB-71 grep -q 'connection modify inst 802-11-wireless.powersave 2' "$T/nm.log"
+ck WFB-72 grep -q 'live disable unavailable' "$T/log"
+ck WFB-73 sh -c "! grep -q 'switched the driver off' '$T/log'"
+mk_nmbin 2; mk_nm default activated; R="$(run_assert)"; ck WFB-74 test "$R" = ok   # still no action
+unset IWOVR
+ck WFB-75 grep -q '^BR2_PACKAGE_IW=y$' "$IH/configs/ga_ihost_full_defconfig"
+
+# F2: global_powersave loud on empty, and parses REAL NM output
+mk_nmbin ""; mk_nm default activated; mk_iw off; : > "$T/log"; R="$(run_assert)"
+ck WFB-76 grep -q 'cannot read the global wifi.powersave' "$T/log"
+FIX="$ROOT/tests/ga_tests/wifi_firstboot/nm-print-config.1.50.2.txt"
+printf '#!/bin/sh\ncat "%s"\n' "$FIX" > "$T/nm_fixture"; chmod +x "$T/nm_fixture"
+gp() { ( GA_PSAVE_TEST=1; . "$ASSERT"; NMBIN="$1"; IFACE=wlan0; global_powersave ) 2>/dev/null; }
+ck WFB-77 test "$(gp "$T/nm_fixture")" = 2
+# a first [connection*] section that does NOT apply to wifi must not win
+printf '#!/bin/sh\nprintf "[connection-eth]\\nmatch-device=type:ethernet\\nwifi.powersave=3\\n[connection-wifi-defaults]\\nmatch-device=type:wifi\\nwifi.powersave=2\\n[connection]\\nwifi.powersave=1\\n"\n' > "$T/nm_multi"; chmod +x "$T/nm_multi"
+ck WFB-78 test "$(gp "$T/nm_multi")" = 2
+# live binary (this box only: needs the ihost build tree + qemu-arm); CI prints SKIP
+NMB=/home/user/build16/out-ihost
+if command -v qemu-arm >/dev/null 2>&1 && [ -x "$NMB/target/usr/sbin/NetworkManager" ]; then
+    mkdir -p "$T/nmcfg"; cp "$CONF" "$T/nmcfg/50-ga.conf"; printf '[main]\nplugins=keyfile\n' > "$T/nmcfg/NetworkManager.conf"
+    printf '#!/bin/sh\nexec qemu-arm -L %s/target %s/target/usr/sbin/NetworkManager --config %s/NetworkManager.conf --config-dir %s --print-config\n' "$NMB" "$NMB" "$T/nmcfg" "$T/nmcfg" > "$T/nm_real"; chmod +x "$T/nm_real"
+    ck WFB-79 test "$(gp "$T/nm_real")" = 2
+else
+    echo "SKIP WFB-79 (real NetworkManager 1.50.2 under qemu-arm not available here; fixture WFB-77 holds its captured output)"
+fi
+
 # ── WFB-3x: 50-ga.conf ──────────────────────────────────────────────────────
 KEYS="$(awk '/^\[/{s=$0; next} s=="[connection-wifi-defaults]" && /^[A-Za-z]/{sub(/=.*/,""); print}' "$CONF")"
 ck WFB-30 test -n "$KEYS"                                          # fail closed on zero
@@ -91,6 +121,7 @@ BAD=""; for k in $KEYS; do case "$k" in match-device|stop-match|wifi.powersave|w
 ck WFB-31 test -z "$BAD"
 ck WFB-32 grep -q '^wifi.powersave=2$' "$CONF"
 ck WFB-33 grep -q '^match-device=type:wifi$' "$CONF"
+
 
 TOTAL=$((PASSES+FAILS))
 echo "wifi_firstboot: $PASSES/$TOTAL passed"

@@ -178,6 +178,7 @@ FAKENM="$TMPD/fakenmcli"
 cat > "$FAKENM" <<NMEOF
 #!/bin/sh
 STATE="$TMPD/ps_state"
+echo "\$*" >> "$TMPD/nm_calls"
 case "\$*" in
   *"-f NAME,DEVICE connection show --active"*) echo "openstick-auto:wlan0"; echo "Supervisor:eth0" ;;
   *"-f 802-11-wireless.powersave connection show"*) echo "802-11-wireless.powersave:\$(cat \$STATE 2>/dev/null || echo 1)" ;;
@@ -186,18 +187,26 @@ case "\$*" in
 esac
 NMEOF
 chmod +x "$FAKENM"
+# Never the real iw / NetworkManager on a dev machine: fakes for both.
+FAKEIW="$TMPD/fakeiw"; printf '#!/bin/sh\ncase "$*" in *"get power_save"*) echo "Power save: on" ;; esac\n' > "$FAKEIW"; chmod +x "$FAKEIW"
+FAKENMBIN="$TMPD/fakenmbin"; printf '#!/bin/sh\nexit 0\n' > "$FAKENMBIN"; chmod +x "$FAKENMBIN"
 
 echo 1 > "$TMPD/ps_state"   # start with powersave WRONG (1=ignore)
-DPS="$( ( export GA_PSAVE_TEST=1 GA_PSAVE_NMCLI="$FAKENM"; . "$PSAVE"; assert_once ) )"
+DPS="$( ( export GA_PSAVE_TEST=1 GA_PSAVE_NMCLI="$FAKENM" GA_PSAVE_IW="$FAKEIW" GA_PSAVE_NM="$FAKENMBIN"; . "$PSAVE"; assert_once ) )"
 run_test "LSB-30" "powersave wrong (1) -> re-applied to 2 (disabled)" \
   "test '$DPS' = fixed && test \"\$(cat $TMPD/ps_state)\" = 2"
-DPS2="$( ( export GA_PSAVE_TEST=1 GA_PSAVE_NMCLI="$FAKENM"; . "$PSAVE"; assert_once ) )"
+DPS2="$( ( export GA_PSAVE_TEST=1 GA_PSAVE_NMCLI="$FAKENM" GA_PSAVE_IW="$FAKEIW" GA_PSAVE_NM="$FAKENMBIN"; . "$PSAVE"; assert_once ) )"
 run_test "LSB-31" "powersave already 2 -> ok, no change" "test '$DPS2' = ok"
 
 # The assert must never re-activate a connection (NM 1.50 cannot reapply powersave
 # live; a re-activation deauths the link — fresh-flash first boot, 2026-11).
-run_test "LSB-33" "powersave-assert has no active 'connection up' call" \
-  "! grep -v '^[[:space:]]*#' '$PSAVE' | grep -q 'connection up'"
+# Behavioural: with the profile wrong and the connection activated, the assert
+# must issue NO activation call of any spelling (connection up / con up / c up /
+# device connect) — NM 1.50 cannot reapply powersave live; a re-activation deauths.
+echo 1 > "$TMPD/ps_state"; : > "$TMPD/nm_calls"
+( export GA_PSAVE_TEST=1 GA_PSAVE_NMCLI="$FAKENM" GA_PSAVE_IW="$FAKEIW" GA_PSAVE_NM="$FAKENMBIN"; . "$PSAVE"; assert_once ) >/dev/null 2>&1
+run_test "LSB-33" "powersave-assert issues no activation call (behavioural)" \
+  "test -s '$TMPD/nm_calls' && ! grep -Eq '(^| )(c|con|conn|connection) (.* )?(up|down)( |\$)|(^| )(d|dev|device) connect' '$TMPD/nm_calls'"
 
 # The shipped openstick profile still pins powersave 2 on the created hop.
 #
