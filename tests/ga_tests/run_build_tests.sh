@@ -44,6 +44,10 @@ _RBT_BOARD_SKIPPED=()
 _RBT_DEFCONFIG="${_RBT_ROOT}/$(ga_board_var DEFCONFIG "$_RBT_BOARD" 2>/dev/null || echo __no_such_board__)"
 _RBT_ARCH="$(sed -n 's/^BR2_PACKAGE_HASSIO_ARCH="\([a-z0-9]*\)"$/\1/p' "$_RBT_DEFCONFIG" 2>/dev/null | head -n 1)"
 _RBT_ARCH="${_RBT_ARCH:-armv7}"
+# The board's HA machine (the key of version.json "homeassistant", {machine} in image refs), likewise;
+# tinker = the iHost's value, the pre-existing behaviour.
+_RBT_MACHINE="$(sed -n 's/^BR2_PACKAGE_HASSIO_MACHINE="\([A-Za-z0-9_-]*\)"$/\1/p' "$_RBT_DEFCONFIG" 2>/dev/null | head -n 1)"
+_RBT_MACHINE="${_RBT_MACHINE:-tinker}"
 # skopeo platform flags for that arch (armv7 = the pre-existing iHost value, unchanged).
 case "$_RBT_ARCH" in
   aarch64) _RBT_SKOPEO_ARCH="--override-arch arm64" ;;
@@ -549,7 +553,7 @@ if [[ -d "${OUT}/images/boot" ]]; then
 else
   # Fall back to the hook source so a target-only run still says something.
   if grep -q 'BOOT_DATA}/ga-ethernet-force' \
-       "$(dirname "${BASH_SOURCE[0]}")/../../buildroot-ihost/board/sonoff/ihost/haos-hook.sh" 2>/dev/null; then
+       "${_RBT_ROOT}/$(ga_board_var BOARD_BASE "$_RBT_BOARD" 2>/dev/null || echo __no_such_board__)/haos-hook.sh" 2>/dev/null; then
     _pass "CFG-49a: board hook writes the ethernet-force marker (source check — no boot artifact in this run)"
   else
     _fail "CFG-49a: board hook does not write the ethernet-force marker"
@@ -1415,8 +1419,8 @@ if [[ -f "$VER_JSON" ]]; then
   # doing so in late 2025, so "stock" became "frozen". Core is a GA image again —
   # not the old fork, but the armv7 bridge, which tracks upstream releases.
   [[ "$CORE_IMG" == *greenautarky* ]] \
-    && _pass "REG-02: Core image is the GA armv7 build: $CORE_IMG" \
-    || _fail "REG-02: Core image is NOT a GA armv7 build: $CORE_IMG (upstream no longer builds armv7 — a stock image here is frozen)"
+    && _pass "REG-02: Core image is the GA ${_RBT_ARCH} build: $CORE_IMG" \
+    || _fail "REG-02: Core image is NOT a GA ${_RBT_ARCH} build: $CORE_IMG (upstream no longer builds armv7 — a stock image here is frozen)"
 
   # REG: No upstream or oliverc7 refs in version.json
   if grep -qE 'oliverc7|iHost-Open-Source' "$VER_JSON" 2>/dev/null; then
@@ -1504,14 +1508,14 @@ if [[ -f "$VER_JSON" ]]; then
     # *homeassistant*.tar glob misses ghcr.io_greenautarky_home-assistant-armv7_*
     # and, with the landingpage tar of the same image beside it, could pick
     # the wrong one.
-    CORE_REF="$(jq -r '.images.core // .image.core' "$VER_JSON" 2>/dev/null | sed "s/{machine}/${MACHINE:-tinker}/;s/{arch}/${ARCH:-armv7}/")"
-    CORE_TAG="$(jq -r '.homeassistant."'${MACHINE:-tinker}'" // .core' "$VER_JSON" 2>/dev/null)"
+    CORE_REF="$(jq -r '.images.core // .image.core' "$VER_JSON" 2>/dev/null | sed "s/{machine}/${MACHINE:-$_RBT_MACHINE}/;s/{arch}/${ARCH:-$_RBT_ARCH}/")"
+    CORE_TAG="$(jq -r '.homeassistant."'${MACHINE:-$_RBT_MACHINE}'" // .core' "$VER_JSON" 2>/dev/null)"
     CORE_TAR="$(ls "$IMAGES_DIR"/"${CORE_REF//[:\/]/_}_${CORE_TAG}"@*.tar 2>/dev/null | head -n 1 || true)"
     if [[ -n "$CORE_TAR" ]]; then
       # Extract digest from tar filename (format: ...@sha256_XXXX.tar)
       BUILD_DIGEST="$(basename "$CORE_TAR" .tar | grep -oP 'sha256_\K[a-f0-9]+' || true)"
       if [[ -n "$CORE_REF" ]] && [[ -n "$CORE_TAG" ]] && [[ "$CORE_TAG" != "null" ]]; then
-        GHCR_DIGEST="$(skopeo inspect --override-arch arm --override-variant v7 "docker://${CORE_REF}:${CORE_TAG}" 2>/dev/null | jq -r '.Digest' | sed 's/sha256://' || true)"
+        GHCR_DIGEST="$(skopeo inspect $_RBT_SKOPEO_ARCH "docker://${CORE_REF}:${CORE_TAG}" 2>/dev/null | jq -r '.Digest' | sed 's/sha256://' || true)"
         if [[ -n "$BUILD_DIGEST" ]] && [[ -n "$GHCR_DIGEST" ]]; then
           if [[ "$BUILD_DIGEST" == "$GHCR_DIGEST" ]]; then
             _pass "VER-07: Core image digest matches GHCR (fresh)"
@@ -1682,14 +1686,14 @@ if [[ -f "$VER_JSON" ]]; then
   if [[ -d "$IMAGES_DIR" ]]; then
     # By image name + tag (see VER-07): *homeassistant*.tar never matched the
     # GA armv7 image, so this check skipped instead of running.
-    CORE_REF_V11="$(jq -r '.images.core // .image.core' "$VER_JSON" 2>/dev/null | sed "s/{machine}/${MACHINE:-tinker}/;s/{arch}/${ARCH:-armv7}/")"
-    CORE_TAG_V11="$(jq -r '.homeassistant."'${MACHINE:-tinker}'" // .core' "$VER_JSON" 2>/dev/null)"
+    CORE_REF_V11="$(jq -r '.images.core // .image.core' "$VER_JSON" 2>/dev/null | sed "s/{machine}/${MACHINE:-$_RBT_MACHINE}/;s/{arch}/${ARCH:-$_RBT_ARCH}/")"
+    CORE_TAG_V11="$(jq -r '.homeassistant."'${MACHINE:-$_RBT_MACHINE}'" // .core' "$VER_JSON" 2>/dev/null)"
     CORE_TAR_V11="$(ls "$IMAGES_DIR"/"${CORE_REF_V11//[:\/]/_}_${CORE_TAG_V11}"@*.tar 2>/dev/null | head -n 1 || true)"
     if [[ -n "$CORE_TAR_V11" ]]; then
       CONFIG_JSON_V11="$(_image_config_json "$CORE_TAR_V11")"
       if [[ -n "$CONFIG_JSON_V11" ]]; then
         LABEL_VERSION=$(printf '%s' "$CONFIG_JSON_V11" | jq -r '.config.Labels."io.hass.version" // "unknown"' || true)
-        EXPECTED_VERSION="$(jq -r '.homeassistant."'${MACHINE:-tinker}'" // .core' "$VER_JSON" 2>/dev/null)"
+        EXPECTED_VERSION="$(jq -r '.homeassistant."'${MACHINE:-$_RBT_MACHINE}'" // .core' "$VER_JSON" 2>/dev/null)"
         if [[ "$LABEL_VERSION" == "$EXPECTED_VERSION" ]]; then
           _pass "VER-11: Core io.hass.version label ($LABEL_VERSION) matches version.json"
         elif [[ "$LABEL_VERSION" == "latest" ]]; then
@@ -4774,7 +4778,8 @@ fi
 # secrets that is a fleet compromise. U-Boot boot/Kconfig: "-2 = autoboot with
 # no delay and not check for abort".
 # =========================================================================
-_ub_cfg="${_cve_src}/buildroot-ihost/board/sonoff/ihost/uboot.config"
+# THE BUILT BOARD's fragment (the iHost's for the iHost; the DSGW-210 has its own)
+_ub_cfg="${_cve_src}/$(ga_board_var BOARD_BASE "$_RBT_BOARD" 2>/dev/null || echo __no_such_board__)/uboot.config"
 if [[ -f "$_ub_cfg" ]]; then
   # Last uncommented assignment wins in a kconfig fragment.
   _ub_val=$(grep -E '^[[:space:]]*CONFIG_BOOTDELAY=' "$_ub_cfg" | tail -1 | cut -d= -f2 | tr -d ' ')
@@ -4786,7 +4791,7 @@ if [[ -f "$_ub_cfg" ]]; then
     _fail "UBOOT-01: CONFIG_BOOTDELAY=${_ub_val} — interruptible boot = physical root via the U-Boot prompt"
   fi
 else
-  _skip "UBOOT-01: bootdelay" "iHost uboot.config not found (no source tree)"
+  _skip "UBOOT-01: bootdelay" "${_RBT_BOARD} uboot.config not found (no source tree)"
 fi
 # UBOOT-02: verify it survived into the generated U-Boot config, if one exists.
 _ub_built=$(ls -d "${OUT}"/build/uboot-*/.config 2>/dev/null | head -1 || true)

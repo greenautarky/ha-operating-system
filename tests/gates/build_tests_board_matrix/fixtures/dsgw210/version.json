@@ -1,0 +1,38 @@
+{
+  "channel": "dev",
+  "ga_release": "BOSv1.6.0-dev1",
+  "supervisor": "2026.10.5.1",
+  "homeassistant": {
+    "default": "2026.10.4.3-dev",
+    "qemuarm-64": "2026.10.4.3-dev"
+  },
+  "hassos": {
+    "dsgw210": "18.3.1.6"
+  },
+  "hassos-upgrade": {},
+  "ota": "https://ota.greenautarky.com/releases/{version}/{os_name}_{board}-{version}.raucb",
+  "cli": "2026.10.1",
+  "dns": "2026.10.0",
+  "audio": "2026.10.0",
+  "multicast": "2026.10.0",
+  "observer": "2026.08.0",
+  "image": {
+    "core": "ghcr.io/greenautarky/home-assistant-aarch64",
+    "supervisor": "ghcr.io/greenautarky/{arch}-hassio-supervisor",
+    "cli": "ghcr.io/greenautarky/{arch}-hassio-cli",
+    "audio": "ghcr.io/greenautarky/{arch}-hassio-audio",
+    "dns": "ghcr.io/greenautarky/{arch}-hassio-dns",
+    "observer": "ghcr.io/greenautarky/{arch}-hassio-observer",
+    "multicast": "ghcr.io/greenautarky/{arch}-hassio-multicast"
+  },
+  "images": {
+    "core": "ghcr.io/greenautarky/home-assistant-aarch64",
+    "supervisor": "ghcr.io/greenautarky/{arch}-hassio-supervisor",
+    "cli": "ghcr.io/greenautarky/{arch}-hassio-cli",
+    "audio": "ghcr.io/greenautarky/{arch}-hassio-audio",
+    "dns": "ghcr.io/greenautarky/{arch}-hassio-dns",
+    "observer": "ghcr.io/greenautarky/{arch}-hassio-observer",
+    "multicast": "ghcr.io/greenautarky/{arch}-hassio-multicast"
+  },
+  "core": "2026.10.4.3-dev"
+}

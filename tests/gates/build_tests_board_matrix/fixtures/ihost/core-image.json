@@ -1,0 +1,86 @@
+{
+ "architecture": "arm",
+ "config": {
+  "Entrypoint": [
+   "/init"
+  ],
+  "Env": [
+   "PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+   "LANG=C.UTF-8",
+   "PYTHON_VERSION=3.14.10",
+   "PYTHON_SHA256=de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032",
+   "DEBIAN_FRONTEND=noninteractive",
+   "HOME=/root",
+   "PIP_DISABLE_PIP_VERSION_CHECK=1",
+   "PIP_NO_CACHE_DIR=1",
+   "PIP_PREFER_BINARY=1",
+   "PYTHONDONTWRITEBYTECODE=1",
+   "PYTHONUNBUFFERED=1",
+   "S6_BEHAVIOUR_IF_STAGE2_FAILS=2",
+   "S6_CMD_WAIT_FOR_SERVICES_MAXTIME=0",
+   "S6_CMD_WAIT_FOR_SERVICES=1",
+   "S6_SERVICES_GRACETIME=240000",
+   "UV_SYSTEM_PYTHON=true",
+   "UV_NO_CACHE=true",
+   "TERM=xterm-256color",
+   "MAKEFLAGS=-j4",
+   "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig",
+   "LD_LIBRARY_PATH=/usr/local/lib",
+   "PIP_ROOT_USER_ACTION=ignore",
+   "CARGO_BUILD_JOBS=4",
+   "NPY_NUM_BUILD_JOBS=4",
+   "UV_CONCURRENT_BUILDS=4",
+   "S6_SERVICES_READYTIME=50"
+  ],
+  "ExposedPorts": {
+   "8123/tcp": {}
+  },
+  "Labels": {
+   "ga.upstream.version": "2026.10.4",
+   "io.hass.arch": "armv7",
+   "io.hass.machine": "tinker",
+   "io.hass.type": "core",
+   "io.hass.version": "2026.10.4.4",
+   "org.opencontainers.image.description": "armv7 glibc baseimage for self-built upstream Home Assistant Core after upstream froze armv7",
+   "org.opencontainers.image.licenses": "Apache-2.0",
+   "org.opencontainers.image.source": "https://github.com/greenautarky/ga-core-armv7",
+   "org.opencontainers.image.title": "Home Assistant Core (GreenAutarky armv7)",
+   "org.opencontainers.image.version": "2026.10.4.4"
+  },
+  "WorkingDir": "/config"
+ },
+ "created": "2026-11-06T11:11:33.400422239Z",
+ "os": "linux",
+ "rootfs": {
+  "diff_ids": [
+   "sha256:39650eaf45dd7a501ad2c65eb24d7551cde88f12a2842ae0bbc01249f4b6ae4b",
+   "sha256:b935ab6d8df8dfd14fb34dda28851be147d344fd43bd137dc7247c0f74ac0237",
+   "sha256:e16bd1c09bcce752da492ba7fea4feaab8188ad3426de1bf4ab3266ee4cc2425",
+   "sha256:21f02b23350a55a3442a0978e99496dd7975b6023c1c9689b90e1526f4f87767",
+   "sha256:f9023e58be481bf04e20b62f7bbf6ea40950595723ae47b050612b9ff71e7120",
+   "sha256:bd14e59034990de0dceaf4dfbe70b3644626ee23757ecf9696110d959b613887",
+   "sha256:8804e1204aed2592030f62f708687f7eadacd365c9ceedd1271eb304fdd0d8f3",
+   "sha256:2d9cd2d84957e84ee2cb7273571460f88eefdd8557aa2e42d7769a439e0a6742",
+   "sha256:8a6dfe30e076b0950df92395486e24281d62347f11ad5a042cbf4bb6d4b3cee9",
+   "sha256:6d169b8084e896e545cb210b03d149ae805b9d451c2c523365dd553def233b9d",
+   "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+   "sha256:90a199f7f453d1e847faf553bb3a468a169888e3a22f7d41cbb6fbfe6eec3feb",
+   "sha256:0ccd85a7455c206124ac2f571dad2a6a25532b6a56b8b1c82697604c23e01fd8",
+   "sha256:abef8e85d1b42c4ab7d17a6777f364155d52e992d67299fed5108698c487f664",
+   "sha256:2ce87d8867e8297c2e2ebede04e54e0e01806b9393d1a8e5850652eee667d81a",
+   "sha256:a7e15a442430f1e65dd795786df5b0b8189d2d8ac57ba13f36c60a857baad58f",
+   "sha256:c45e577fa5ea027964b3b45c56b5298fc5616e7f7a86d64163eca05dc97cf9a1",
+   "sha256:97868ddbd83794a05e0962e4d55f34e922836349938df2080d8730ead84e1de0",
+   "sha256:6175a5a0d5ccb5920953394daf6326f48903a3df713bd01bbb9b0a6f3ac0628c",
+   "sha256:a9bd778b5cbb81708545d371fd521c22e0d8005275478d1fb9352a0bcd6ded66",
+   "sha256:cef1f1059ecdd271578d1a00de43f0f70fe1a39e1a7c715ff6442996cc8aad69",
+   "sha256:1c7a821fe0d626adf16d4e505e47c71bf2fcef42fb659852d93cceb2998b096e",
+   "sha256:8813b94b27843256f7cc47b454f71be0686b0a68b86af4f6a01e84fba6174bdb",
+   "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+   "sha256:364aa10dab0e63ecbb50b5cdac0b0779fa9acd2d17c9ce3a9f12be03a146665a",
+   "sha256:aa94b68103c6c542edc877513ffbeaa90ae4235bd73933fc48e4f35b4e80269b",
+   "sha256:fad2861bdde36c9cf9a0d50dcd8a447ab7602d9bef72ab6f2931ae8b020d241c"
+  ],
+  "type": "layers"
+ }
+}
