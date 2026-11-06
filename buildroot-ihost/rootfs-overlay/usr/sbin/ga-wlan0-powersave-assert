@@ -18,6 +18,7 @@ set -u
 IFACE="${GA_PSAVE_IFACE:-wlan0}"
 NMCLI="${GA_PSAVE_NMCLI:-nmcli}"
 IW="${GA_PSAVE_IW:-iw}"
+NMBIN="${GA_PSAVE_NM:-NetworkManager}"
 WAIT_S="${GA_PSAVE_WAIT:-30}"
 LOG_TAG="ga-wlan0-powersave-assert"
 _log() { logger -t "$LOG_TAG" -p "daemon.$1" "$2" 2>/dev/null || echo "$LOG_TAG: $2" >&2; }
@@ -39,6 +40,14 @@ conn_state() {
     $NMCLI -t -g GENERAL.STATE connection show "$1" 2>/dev/null | head -n 1
 }
 
+# The global default NM applies when the profile says "default": the first
+# wifi.powersave in a [connection*] section of the merged config (conf.d
+# 50-ga.conf sets 2). Empty if unset/unreadable.
+global_powersave() {
+    $NMBIN --print-config 2>/dev/null \
+      | awk '/^\[/ {c = ($0 ~ /^\[connection/)} c && /^wifi.powersave[ ]*=/ {sub(/^[^=]*=[ ]*/, ""); print; exit}'
+}
+
 # Runtime truth from the driver: "off" | "on" | "" (unknown). Not the profile.
 runtime_powersave() {
     $IW dev "$IFACE" get power_save 2>/dev/null | awk '/Power save:/ {print $3; exit}'
@@ -53,8 +62,9 @@ runtime_powersave() {
 # deauth + reconnect — and on a fresh-flash first boot, ~13 s after the first
 # association, it raced the openstick auto-connect scan (measured). Instead:
 #   * profile 2                          -> ok
-#   * profile "default" (0) + driver off -> ok (the conf.d wifi.powersave=2 default
-#                                           is in effect; nothing to repair)
+#   * profile "default" (0): the EFFECTIVE value is the global default; if that is
+#     2 (50-ga.conf) -> ok, no action (this was a standing false positive). If
+#     the global is unreadable, a driver reporting power save off is also ok.
 #   * connection still activating        -> wait a bounded time; if it is still
 #                                           activating, defer (do not touch it)
 #   * otherwise: persist 2 in the profile (takes effect at the next activation)
@@ -81,6 +91,11 @@ assert_once() {
     fi
     case "$_ps" in
         0|default|"0 (default)"|"default (0)")
+            # EFFECTIVE value = profile value, falling back to the global default.
+            if [ "$(global_powersave)" = "2" ]; then
+                _log info "$IFACE powersave profile value is default; the global [connection-wifi-defaults] wifi.powersave=2 is the effective value on '$_c' — as intended, no action"
+                echo ok; return
+            fi
             if [ "$(runtime_powersave)" = "off" ]; then
                 _log info "$IFACE powersave profile value is default but the driver reports power save off (conf.d default 2) on '$_c' — as intended"
                 echo ok; return

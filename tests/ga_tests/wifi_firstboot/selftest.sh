@@ -58,20 +58,30 @@ case "\$*" in *"get power_save"*) echo "Power save: $1" ;; esac
 IW
     chmod +x "$T/iw"; : > "$T/iw.log"
 }
-run_assert() { ( export GA_PSAVE_TEST=1 GA_PSAVE_NMCLI="$T/nmcli" GA_PSAVE_IW="$T/iw" GA_PSAVE_WAIT=0; . "$ASSERT"; assert_once ) 2>/dev/null; }
+mk_nmbin() { # $1 = global wifi.powersave value or "" ; fake NetworkManager --print-config
+    printf '#!/bin/sh\necho "[main]"\necho "[connection-wifi-defaults]"\n[ -n "%s" ] && echo "wifi.powersave=%s"\nexit 0\n' "$1" "$1" > "$T/NetworkManager"
+    chmod +x "$T/NetworkManager"
+}
+mk_nmbin 2
+run_assert() { ( export GA_PSAVE_TEST=1 GA_PSAVE_NM="$T/NetworkManager" GA_PSAVE_NMCLI="$T/nmcli" GA_PSAVE_IW="$T/iw" GA_PSAVE_WAIT=0; . "$ASSERT"; assert_once ) 2>/dev/null; }
 
+# must-pass: profile default + global 2 -> no action at all (even if iw says on)
+mk_nm default activated; mk_iw on; R="$(run_assert)"
+ck WFB-29 test "$R" = ok
+ck WFB-29b sh -c "! grep -q 'connection modify\\|connection up' '$T/nm.log' && ! grep -q 'set power_save' '$T/iw.log'"
+mk_nmbin ""
 mk_nm default activated; mk_iw on;  R="$(run_assert)"
 ck WFB-20 test "$R" = fixed
 ck WFB-21 sh -c "! grep -q 'connection up' '$T/nm.log'"          # no re-activation
 ck WFB-22 grep -q 'connection modify inst 802-11-wireless.powersave 2' "$T/nm.log"
 ck WFB-23 grep -q 'dev wlan0 set power_save off' "$T/iw.log"      # applied without deauth
-mk_nm default activating; mk_iw on; R="$(run_assert)"
+mk_nmbin ""; mk_nm default activating; mk_iw on; R="$(run_assert)"
 ck WFB-24 test "$R" = deferred
 ck WFB-25 sh -c "! grep -q 'connection modify\\|connection up' '$T/nm.log'"
-mk_nm default activated; mk_iw off; R="$(run_assert)"
+mk_nmbin ""; mk_nm default activated; mk_iw off; R="$(run_assert)"
 ck WFB-26 test "$R" = ok                                           # conf.d default in effect
 ck WFB-27 sh -c "! grep -q 'connection modify\\|connection up' '$T/nm.log'"
-mk_nm 2 activated; mk_iw on; R="$(run_assert)"
+mk_nmbin ""; mk_nm 2 activated; mk_iw on; R="$(run_assert)"
 ck WFB-28 test "$R" = ok
 
 # ── WFB-3x: 50-ga.conf ──────────────────────────────────────────────────────
@@ -103,6 +113,10 @@ ck WFB-43 test -s "$F"
 ck WFB-44 grep -q '^## nmcli -f all dev' "$F"
 ck WFB-45 grep -q '^## nmcli con show --active' "$F"
 ck WFB-46 grep -q '^## dmesg' "$F"
+ck WFB-53 grep -q '^## ls /sys/class/net' "$F"
+ck WFB-54 grep -q 'rtw|efuse|wlan0' "$ROOT/buildroot-external/rootfs-overlay/usr/sbin/ga-firstboot-noupl-rescue"
+ck WFB-55 grep -q '^## journalctl NM + wifi helpers' "$F"
+ck WFB-56 grep -q -- '-t ga-rtw-recover' "$ROOT/buildroot-external/rootfs-overlay/usr/sbin/ga-firstboot-noupl-rescue"
 ck WFB-47 grep -q 'journal line 2999' "$F"                          # newest part kept
 ck WFB-48 sh -c "! grep -q 'journal line 0 ' '$F'"                  # bounded (oldest dropped)
 R="$(run_rescue)"

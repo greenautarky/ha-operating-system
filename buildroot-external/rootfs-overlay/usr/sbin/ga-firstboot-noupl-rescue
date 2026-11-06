@@ -56,6 +56,11 @@ rescue_once() {
     {
         echo "# ga-firstboot-noupl-rescue: uplink state '$_st' at $(date -u +%FT%TZ), boot $_bid"
         echo "## ip -4 route";                       timeout 10 $IP -4 route 2>&1
+        echo "## ls /sys/class/net";                ls /sys/class/net 2>&1
+        echo "## dmesg wifi driver lines (rtw/efuse/wlan0)"; timeout 20 $DMESG 2>&1 | grep -iE 'rtw|efuse|wlan0' | tail -n 200
+        echo "## nmcli dev";                        timeout 20 $NMCLI dev 2>&1
+        echo "## nmcli con (name,state,autoconnect,retries)"; timeout 20 $NMCLI -f NAME,STATE,AUTOCONNECT,AUTOCONNECT-RETRIES con show 2>&1 | head -c "$MAX_OTHER"
+        echo "## journalctl NM + wifi helpers"; timeout 30 $JOURNALCTL -b --no-pager -u NetworkManager -t ga-wlan0-powersave-assert -t ga-openstick -t ga-uplink-ladder -t ga-rtw-recover 2>&1 | tail -c "$MAX_OTHER"
         echo "## nmcli -f all dev";                 timeout 20 $NMCLI -f all dev 2>&1 | head -c "$MAX_OTHER"
         echo "## nmcli con show --active";          timeout 20 $NMCLI con show --active 2>&1 | head -c "$MAX_OTHER"
         echo "## dmesg (newest part)";              timeout 20 $DMESG 2>&1 | tail -c "$MAX_OTHER"
