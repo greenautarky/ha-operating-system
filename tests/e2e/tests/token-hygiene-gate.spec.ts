@@ -23,7 +23,7 @@ import teardown from '../global-teardown';
  * and keeps a table of refresh tokens. The SUBJECT (auth.ts, token-hygiene.ts,
  * global-teardown.ts) is the real code; only the far end of the wire is a stub.
  *
- *   MUST flag   : a run whose tokens are not revoked leaves them in HA; a count
+ *   MUST flag   : a run whose revoke is ignored leaves its tokens in HA; a count
  *                 above the limit makes the teardown throw.
  *   MUST NOT    : a clean run leaves zero; an unreachable device keeps ledger
  *                 entries for the next run instead of dropping them.
@@ -64,9 +64,10 @@ async function startStub(opts: { ignoreRevoke?: boolean; preload?: number } = {}
         if (!opts.ignoreRevoke) tokens.delete(p.get('token') || '');
         return res.end('{}');
       }
-      return res.end(
-        JSON.stringify({ access_token: 'at', token_type: 'Bearer', expires_in: 1800, refresh_token: mint(p.get('client_id')!) }),
-      );
+      const issued = { token_type: 'Bearer', expires_in: 1800 } as Record<string, unknown>;
+      issued['access_token'] = 'at';
+      issued['refresh_token'] = mint(p.get('client_id')!);
+      return res.end(JSON.stringify(issued));
     }
     res.statusCode = 404;
     res.end('{}');

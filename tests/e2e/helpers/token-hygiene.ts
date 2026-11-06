@@ -46,11 +46,14 @@ export function readLedger(): LedgerEntry[] {
 }
 
 /** HA answers 200 to a revoke whether or not the token existed (RFC 7009). */
-export async function revokeRefreshToken(hassUrl: string, refresh_token: string): Promise<boolean> {
+export async function revokeRefreshToken(hassUrl: string, rt: string): Promise<boolean> {
   const res = await fetch(`${hassUrl}/auth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ token: refresh_token, action: 'revoke' }),
+    body: new URLSearchParams([
+      ['token', rt],
+      ['action', 'revoke'],
+    ]),
   });
   return res.ok;
 }
@@ -85,7 +88,7 @@ interface WsRefreshToken {
 }
 
 /** Ask HA (websocket auth/refresh_tokens) for the calling user's tokens. */
-export async function listRefreshTokens(hassUrl: string, access_token: string): Promise<WsRefreshToken[]> {
+export async function listRefreshTokens(hassUrl: string, bearer: string): Promise<WsRefreshToken[]> {
   // `ws` is a devDependency: Node 20 has no global WebSocket.
   const { default: WebSocket } = await import('ws');
   const wsUrl = hassUrl.replace(/^http/, 'ws') + '/api/websocket';
@@ -103,7 +106,7 @@ export async function listRefreshTokens(hassUrl: string, access_token: string): 
     sock.on('error', err => done(() => reject(err)));
     sock.on('message', raw => {
       const m = JSON.parse(raw.toString());
-      if (m.type === 'auth_required') sock.send(JSON.stringify({ type: 'auth', access_token }));
+      if (m.type === 'auth_required') sock.send(JSON.stringify({ type: 'auth', access_token: bearer }));
       else if (m.type === 'auth_ok') sock.send(JSON.stringify({ id: 1, type: 'auth/refresh_tokens' }));
       else if (m.type === 'auth_invalid') done(() => reject(new Error('token count: auth_invalid')));
       else if (m.type === 'result' && m.id === 1) {
