@@ -367,6 +367,14 @@ jobs:
         # Red-proven by restoring the first-row rule: OSV-01 and OSV-02 fail.
         run: sh tests/ga_tests/openstick/selftest.sh
 
+      - name: hw_iodomain parses PMUGRF 0x140 against the pinned 0xA6 (iHost I/O-domain voltages)
+        # BOSv1.6.0-rc1 read 0x86 (vccio5 = 3.3 V, Ethernet dead) and every other
+        # check was green. Drives the LIVE iodomain.sh that the device suite
+        # sources: 0x86 must be flagged (naming vccio5 / 3.3 V), 0xA6 must pass,
+        # a missing 140 line or unreadable regmap must FAIL, the phandle ->
+        # regulator-name resolution must tell vcc_1v8 from vcc_3v3.
+        run: sh tests/ga_tests/hw_iodomain/selftest.sh
+
       - name: GOTC-03/04/05 reject a Go binary built with another toolchain than buildroot pins, below the Go floor, or embedding a vendored x/net, x/crypto, x/text, x/mod below its floor
         # BOSv1.5.0-rc4 shipped netbird, os-agent and runc built with go1.26.5
         # while buildroot pinned go1.26.8: buildroot does not recompile a package
