@@ -455,7 +455,11 @@ GA_BUILD_TIMESTAMP="${GA_BUILD_TIMESTAMP:-$(date '+%Y%m%d%H%M%S')}"
 # env-propagation fragility. Tracked in fleet_auto_update_audit_2026_06_01
 # follow-up.
 GA_RELEASE_SOURCE=""
-GA_RELEASE_FROM_YAML="$(sed -nE 's/^gaos_release:[[:space:]]*"?([^"#[:space:]]+)"?.*$/\1/p' \
+# Per-board marker: ihost keeps `gaos_release:`, any other board reads
+# `gaos_release_<board>:` (one branch, two boards, two release labels).
+GA_RELEASE_KEY="gaos_release"
+[[ "${BOARD:-ihost}" == ihost ]] || GA_RELEASE_KEY="gaos_release_${BOARD}"
+GA_RELEASE_FROM_YAML="$(sed -nE "s/^${GA_RELEASE_KEY}:[[:space:]]*\"?([^\"#[:space:]]+)\"?.*\$/\\1/p" \
                        "${SCRIPT_DIR}/../version.yaml" 2>/dev/null | head -1)"
 if [[ -n "${GA_RELEASE:-}" ]]; then
   GA_RELEASE_SOURCE="env"
@@ -1397,7 +1401,7 @@ PKGEOF
   local _ev_script="${SCRIPT_DIR}/ops/collect-release-evidence.sh"
   local _ev_root="${GA_EVIDENCE_ROOT:-/build/release-evidence}"
   local _ev_ver
-  _ev_ver="$(sed -n 's/^gaos_release:[[:space:]]*\([^[:space:]#]*\).*/\1/p' "${SCRIPT_DIR}/../version.yaml" 2>/dev/null | head -1)"
+  _ev_ver="$(sed -n "s/^${GA_RELEASE_KEY}:[[:space:]]*\([^[:space:]#]*\).*/\1/p" "${SCRIPT_DIR}/../version.yaml" 2>/dev/null | head -1)"
   if [[ -x "$_ev_script" && -n "$_ev_ver" ]]; then
     mkdir -p "${_ev_root}"
     if "$_ev_script" "$OUT" "$_ev_ver" "${_ev_root}/${GA_BUILD_TIMESTAMP}"; then
