@@ -82,9 +82,12 @@ with tarfile.open(f"{out}/{name}", "w") as t:
         add(t, "manifest.json", json.dumps([{"Config": "cfg.json", "RepoTags": [], "Layers": names}]).encode())
     else:
         # OCI layout as skopeo `oci-archive:` writes it
-        mt = "application/vnd.oci.image.layer.v1.tar" + ("+zstd" if fmt == "oci-zstd" else "+gzip" if gz else "")
+        mt = "application/vnd.oci.image.layer.v1.tar" + ("+zstd" if fmt.startswith("oci-zstd") else "+gzip" if gz else "")
         descs = []
         for data in layers:
+            if fmt == "oci-zstd-real":
+                import subprocess
+                data = subprocess.run(["zstd", "-c"], input=data, capture_output=True, check=True).stdout
             add(t, "blobs/" + sha(data).replace(":", "/"), data)
             descs.append({"mediaType": mt, "digest": sha(data), "size": len(data)})
         cfg = b"{}"; add(t, "blobs/" + sha(cfg).replace(":", "/"), cfg)
@@ -107,13 +110,14 @@ RC2="$G/desired_state.py=OLDREG,$G/healthchecks/dataflow.py=OLDDF,$BASE"
 
 # expect <name> <rc> <must-contain> [--pin-only]
 expect() {
-  local name="$1" want="$2" needle="$3" mode="${4:-}"
+  local name="$1" want="$2" needle="$3" mode="${4:-}" py="python3"
+  [[ "$mode" == "--no-zstd" ]] && { py="env PATH=/nonexistent $(command -v python3)"; mode=""; }
   local d="$WORK/$name" out rc
   ran=$((ran + 1))
   if [[ "$mode" == "--pin-only" ]]; then
-    out="$(python3 "$GATE" --pins "$d/pins.json" 2>&1)"; rc=$?
+    out="$($py "$GATE" --pins "$d/pins.json" 2>&1)"; rc=$?
   else
-    out="$(python3 "$GATE" --pins "$d/pins.json" --images-dir "$d/images" 2>&1)"; rc=$?
+    out="$($py "$GATE" --pins "$d/pins.json" --images-dir "$d/images" 2>&1)"; rc=$?
   fi
   if [[ "$rc" -eq "$want" ]] && grep -qF -- "$needle" <<<"$out"; then
     ok "$name: rc=$rc — $needle"
@@ -165,6 +169,15 @@ mk "$WORK/oci-two-manifests" 0.221.0 0.221.0 "$GOOD" "" oci-two
 expect oci-two-manifests 2 "index.json lists 2 manifests, expected exactly 1"
 mk "$WORK/oci-zstd"          0.221.0 0.221.0 "$GOOD" "" oci-zstd
 expect oci-zstd 2 "zstd"
+# real zstd layers (the aarch64 ga_manager of the DSGW-210 bake): decoded through the `zstd` CLI
+# when no Python module is there; judged like every other layer, and with no decompressor at all
+# the verdict stays CANNOT JUDGE (a failure, never a skip).
+command -v zstd >/dev/null || { echo "FATAL: the zstd CLI is required for this selftest"; exit 1; }
+mk "$WORK/zstd-real-fixed"   0.221.0 0.221.0 "$GOOD" "" oci-zstd-real
+expect zstd-real-fixed 0 "core_influxdb present in the baked image"
+mk "$WORK/zstd-real-rc2"     0.221.0 0.221.0 "$RC2" "" oci-zstd-real
+expect zstd-real-rc2 1 "usr/bin/ga_manager/ha_influxdb.py absent"
+expect zstd-real-fixed 2 "no zstd decompressor available" --no-zstd
 
 echo "=== cannot judge ==="
 mkdir -p "$WORK/no-pin/images"; echo '{"addons": {}}' > "$WORK/no-pin/pins.json"
@@ -174,6 +187,6 @@ printf 'not a tar' > "$WORK/not-an-archive/images/$(ls "$WORK/not-an-archive/ima
 expect not-an-archive 2 "CANNOT JUDGE"
 
 echo
-if [[ "$ran" -lt 22 ]]; then echo "FAIL: only $ran cases ran — coverage dropped"; exit 1; fi
+if [[ "$ran" -lt 25 ]]; then echo "FAIL: only $ran cases ran — coverage dropped"; exit 1; fi
 if [[ "$fails" -gt 0 ]]; then echo "ga_manager capability gate selftest: $fails/$ran FAILED"; exit 1; fi
 echo "ga_manager capability gate selftest: $ran/$ran as expected"
