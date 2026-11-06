@@ -736,6 +736,11 @@ jobs:
           ./tests/gates/version_url_scope/selftest.sh
           ./scripts/check-version-url-scope.sh
 
+      - name: rc bake source (Odoo #1610) - an -rcN label bakes rc.json, the image still names the stable line
+        # Runs the LIVE bake-source-file.sh and the LIVE patched hassio.mk (apply-haos-patches.sh --cat)
+        # in make, with a rule table and make-level cases; exits 1 if fewer than 15 cases ran.
+        run: ./tests/gates/rc_bake_source/selftest.sh
+
       - name: RAUC slot contract (parser + fail-closed)
         run: sh tests/ga_tests/rauc_slots/test.sh
 

@@ -6,7 +6,8 @@
 #           tar was pulled for, a different one for the other platform (so a check that asks the
 #           wrong platform sees a stale image -- the DSGW dev4 VER-09 defect)
 #   curl    the haos-version channel files: stable.json = the iHost bake's channel file, dev.json =
-#           the DSGW-210 bake's (both captured from the real bakes)
+#           the DSGW-210 bake's (both captured from the real bakes); rc.json = the iHost bake's
+#           too (an -rcN label bakes line/1.6/rc.json, Odoo #1610 -- same file content as the fixture)
 # Prints the runner output, colour-stripped. Env: RUNNER (default: this checkout's runner).
 set -u
 BOARD="$1"; W="$2"; REL="${3:-}"
@@ -30,7 +31,7 @@ SK
 cat > "$W/bin/curl" <<CU
 #!/bin/bash
 case "\$*" in
-  *stable.json*) jq 'del(.ga_release)' "$HERE/fixtures/ihost/version.json" ;;
+  *stable.json*|*rc.json*) jq 'del(.ga_release)' "$HERE/fixtures/ihost/version.json" ;;
   *dev.json*)    jq 'del(.ga_release)' "$HERE/fixtures/dsgw210/version.json" ;;
   *) exit 22 ;;
 esac

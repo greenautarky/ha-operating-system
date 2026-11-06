@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): an -rcN bake reads line/1.6/rc.json, devices keep polling stable.json (Odoo #1610)
+
+The bake used to read the device-facing `line/1.6/stable.json`, so baking rc3 with Supervisor 2026.10.5.1 meant publishing that Supervisor to every 1.6 device first (2026-11-06). Now a `BOSv1.6.N-rcM` label bakes `line/1.6/rc.json` (new patch 0134; the rule is `buildroot-external/package/hassio/bake-source-file.sh`, also called by gen_expected.sh, scan-cves.sh and the ga-ops channel guard). `HASSIO_VERSION_URL`, `/etc/ga-version-url` and `updater.json` still name the stable line; `version.json` carries `channel` = the device channel and `bake_source`. Finals bake the proven stable.json. stable.json moves only through ga-ops `promote-line-channel` after the K31 gate. Fixtures: `tests/gates/rc_bake_source/selftest.sh`.
+
 ## Unreleased (feat/1.6-haos18): CVE image scan finds the bake's channel without the haos/ checkout
 
 `scripts/scan-cves.sh --images` took the channel URL from `hassio.mk` via the haos/ submodule and failed ("no HASSIO_VERSION_URL in hassio.mk") wherever the submodule is not checked out (the weekly shipped-image re-scan). It now reads the `HASSIO_VERSION_URL ?=` line that GA patch 0131 adds, from the patch set (`apply-haos-patches.sh --list`): the same line the bake builds with, so Core, Supervisor and plugins come from the same `line/1.6/<channel>.json`. Zero or conflicting definitions: broken scan (exit 2), never a guess. Fixtures: `tests/gates/cve-gate/scan-cves-bake-url-fixtures.sh`.
