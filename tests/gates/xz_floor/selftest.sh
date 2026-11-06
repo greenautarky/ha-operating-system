@@ -2,10 +2,10 @@
 # Self-test for scripts/check-xz-floor.sh (the LIVE script) against the LIVE
 # buildroot-external/xz-floor.mk + xz-floor/ it holds. Fixture trees: a fake
 # buildroot package dir next to a COPY of the live GA files, then mutated.
-#   must-pass: submodule at 5.6.4 (floor active), submodule newer (floor off,
+#   expected green: submodule at 5.6.4 (floor active), submodule newer (floor off,
 #              submodule's own hash), submodule at the floor, the real pinned
 #              submodule
-#   must-fail: floor lowered, hash file missing / naming another version, a
+#   expected red:   floor lowered, hash file missing / naming another version, a
 #              licence hash missing, a patch in xz-floor/, PKGDIR redirect
 #              dropped (the submodule's patches would apply), local.mk without
 #              the include / commented out, floor file missing (rc 2), package
