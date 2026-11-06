@@ -480,7 +480,8 @@ jobs:
           npx playwright test --project=desktop --reporter=line \
             tests/heating-cards-gate.spec.ts \
             tests/resident-surface-gate.spec.ts \
-            tests/destructive-fixture-gate.spec.ts
+            tests/destructive-fixture-gate.spec.ts \
+            tests/token-hygiene-gate.spec.ts
 
       - name: ga-telemetry-gate + consent-apply (consent markers and shippers)
         # Fixture-driven: the gate against v1/v2/stale stores, and the apply

@@ -23,6 +23,8 @@ const baseURL = haBaseUrl();
 
 export default defineConfig({
   testDir: './tests',
+  // Odoo #1565: revoke the refresh tokens the logins minted + bound the count.
+  globalTeardown: './global-teardown.ts',
 
   // Tests are against a single device — run sequentially to avoid race conditions
   fullyParallel: false,

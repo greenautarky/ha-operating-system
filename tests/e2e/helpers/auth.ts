@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import { recordRefreshToken } from './token-hygiene';
 
 /**
  * HA authentication helpers.
@@ -49,10 +50,11 @@ export async function haLogin(page: Page, hassUrl: string): Promise<void> {
   await injectToken(page, hassUrl, tokens);
 }
 
-async function loginWithCredentials(
+export async function loginWithCredentials(
   hassUrl: string,
   username: string,
   password: string,
+  opts: { record?: boolean } = {},
 ): Promise<HassTokens> {
   const clientId = `${hassUrl}/`;
 
@@ -92,7 +94,10 @@ async function loginWithCredentials(
     }),
   });
   if (!tokenRes.ok) throw new Error(`Token exchange failed: ${tokenRes.status}`);
-  return (await tokenRes.json()) as HassTokens;
+  const tokens = (await tokenRes.json()) as HassTokens;
+  // Odoo #1565: every login leaves a refresh token in HA; global-teardown revokes the ledger.
+  if (opts.record !== false) recordRefreshToken(hassUrl, tokens.refresh_token);
+  return tokens;
 }
 
 async function injectToken(
