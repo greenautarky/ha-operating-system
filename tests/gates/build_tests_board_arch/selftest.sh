@@ -35,16 +35,26 @@ case "\$*" in
 esac
 SK
 chmod +x "$W/bin/skopeo"
+# curl stand-in for the version channel files (stable.json = the old iHost line, dev.json = the 1.6 dev line)
+cat > "$W/bin/curl" <<'CU'
+#!/bin/bash
+case "$*" in
+  *stable.json*) echo '{"core":"2026.8.2.2","supervisor":"2025.11.5.10","homeassistant":{"tinker":"2026.8.2.2"},"images":{"core":"x","supervisor":"x"}}' ;;
+  *dev.json*)    echo '{"core":"2026.10.4.3-dev","supervisor":"2026.10.5.1","homeassistant":{"tinker":"2026.10.4.3-dev"},"images":{"core":"x","supervisor":"x"}}' ;;
+  *) exit 22 ;;
+esac
+CU
+chmod +x "$W/bin/curl"
 
 mkfix() {  # <board> <arch> <core tag> <channel> [supervisor digest in the tar name] [omit-one-addon-tar 0|1]
   local board="$1" arch="$2" ctag="$3" chan="$4" supd="${5:-$D1}" omit="${6:-0}"
   local pins img n=0 ref pre
   rm -rf "$OUTD"; mkdir -p "$OUTD/build/hassio-1.0.0/images" "$OUTD/target/usr"
-  jq -n --arg a "$arch" --arg c "$ctag" --arg ch "$chan" '{channel:$ch, core:$c, supervisor:"2026.10.5.1",
+  jq -n --arg a "$arch" --arg c "$ctag" --arg ch "$chan" --arg sv "${SUPV:-2026.10.5.1}" '{channel:$ch, core:$c, supervisor:$sv,
      images:{supervisor:"ghcr.io/greenautarky/{arch}-hassio-supervisor", core:"ghcr.io/greenautarky/home-assistant-\($a)"}}' \
      > "$OUTD/build/hassio-1.0.0/version.json"
   img="$OUTD/build/hassio-1.0.0/images"
-  touch "$img/ghcr.io_greenautarky_${arch}-hassio-supervisor_2026.10.5.1@sha256_${supd}.tar"
+  touch "$img/ghcr.io_greenautarky_${arch}-hassio-supervisor_${SUPV:-2026.10.5.1}@sha256_${supd}.tar"
   pins="$ROOT/$(ga_board_var ADDON_PINS "$board")"
   for a in $(jq -r '.addons|keys[]' "$pins"); do
     n=$((n+1)); [ "$omit" = 1 ] && [ "$n" = 1 ] && continue
@@ -88,5 +98,18 @@ has "$(run ihost BOSv1.6.0-rc2)" '^  FAIL  BLD: Core tag is' && ok "ihost: a -de
 mkfix ihost armv7 2026.10.4.3 stable "$D1"
 has "$(run ihost BOSv1.6.0-rc2)" '^  FAIL  VER-09: Supervisor STALE' && ok "ihost: a Supervisor tar that differs from the armv7 digest FAILS" || bad "ihost: stale Supervisor not caught"
 
-[ "$ran" -ge 12 ] || { echo "FAIL: only $ran cases ran"; exit 1; }
+# --- XVER-06/07: the build is compared against ITS OWN channel file ---
+mkfix dsgw210 aarch64 2026.10.4.3-dev dev
+o="$(run dsgw210 BOSv1.6.0-dev5)"
+has "$o" '^  PASS  XVER-06: .*matches dev.json' && ok "dsgw210: XVER-06 compares against dev.json and passes" || bad "dsgw210: XVER-06 not green"
+has "$o" '^  PASS  XVER-07: .*matches dev.json' && ok "dsgw210: XVER-07 compares against dev.json and passes" || bad "dsgw210: XVER-07 not green"
+SUPV=2026.10.4.0 mkfix dsgw210 aarch64 2026.10.4.3-dev dev
+o="$(SUPV=2026.10.4.0 run dsgw210 BOSv1.6.0-dev5)"
+has "$o" '^  FAIL  XVER-07: .*dev.json' && ok "dsgw210: a Supervisor that differs from dev.json FAILS XVER-07" || bad "dsgw210: XVER-07 drift not caught"
+mkfix ihost armv7 2026.8.2.2 stable "$D2"
+o="$(run ihost BOSv1.6.0-rc2)"
+has "$o" '^  FAIL  XVER-07: .*stable.json' && ok "ihost: still compared against stable.json (Supervisor 2026.10.5.1 != stable)" || bad "ihost: XVER-07 not against stable.json"
+has "$o" '^  PASS  XVER-06: .*matches stable.json' && ok "ihost: XVER-06 matches stable.json" || bad "ihost: XVER-06 not against stable.json"
+
+[ "$ran" -ge 18 ] || { echo "FAIL: only $ran cases ran"; exit 1; }
 echo "$ran cases ran, $fails failed"; exit $((fails>0))

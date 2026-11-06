@@ -1635,7 +1635,9 @@ if [[ -f "$VER_JSON" ]]; then
     GAMCAP_ARGS=(--pins "$ADDON_JSON" --arch "${ARCH:-$_RBT_ARCH}")
     [[ -d "$IMAGES_DIR" ]] && GAMCAP_ARGS+=(--images-dir "$IMAGES_DIR")
     # Status from the command itself, never from behind a pipe.
-    GAMCAP_OUT="$(python3 "$GAMCAP_CHECKER" "${GAMCAP_ARGS[@]}" 2>&1)"
+    # The build container has no zstd on PATH; Buildroot's host tools (built in this very
+    # bake) have one. Appended, so a zstd on PATH still wins.
+    GAMCAP_OUT="$(PATH="$PATH:${OUT}/host/bin" python3 "$GAMCAP_CHECKER" "${GAMCAP_ARGS[@]}" 2>&1)"
     GAMCAP_RC=$?
     printf '%s\n' "$GAMCAP_OUT" | sed 's/^/        /'
     if [[ "$GAMCAP_RC" -eq 0 ]] && [[ -d "$IMAGES_DIR" ]]; then
@@ -2969,7 +2971,7 @@ if [[ -n "$SRC" ]]; then
     # shape that turns a config error into an invisible one, so this now fails
     # closed: an undeterminable channel is empty, and the checks below refuse to
     # compare rather than assume.
-    _defcfg="${SRC:+${SRC}/buildroot-ihost/configs/ga_ihost_full_defconfig}"
+    _defcfg="${SRC:+$_RBT_DEFCONFIG}"
     BUILD_CHANNEL=""
     if [[ -n "$_defcfg" && -f "$_defcfg" ]]; then
       if grep -q "^BR2_PACKAGE_HASSIO_CHANNEL_BETA=y" "$_defcfg"; then

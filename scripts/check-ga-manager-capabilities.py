@@ -43,6 +43,8 @@ import argparse
 import io
 import json
 import re
+import shutil
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -86,20 +88,28 @@ def _norm(name: str) -> str:
 
 
 def _decompress_layer(data: bytes, media_type: str) -> bytes:
-    """Layer bytes as a plain tar. gzip and plain are stdlib; zstd needs a
-    decompressor module and is a loud error without one (never a skipped layer)."""
+    """Layer bytes as a plain tar. gzip and plain are stdlib; zstd is tried with
+    compression.zstd (Python >= 3.14), then the zstandard module, then the `zstd`
+    CLI (`zstd -dc`). With none of them it is a loud error (never a skipped layer)."""
     if media_type.endswith("+zstd") or data[:4] == b"\x28\xb5\x2f\xfd":
         try:
+            try:
+                from compression import zstd  # type: ignore[import-not-found]  # Python >= 3.14
+                return zstd.decompress(data)
+            except ImportError:
+                pass
             try:
                 import zstandard  # type: ignore[import-not-found]
                 return zstandard.ZstdDecompressor().stream_reader(io.BytesIO(data)).read()
             except ImportError:
                 pass
-            try:
-                from compression import zstd  # type: ignore[import-not-found]  # Python >= 3.14
-                return zstd.decompress(data)
-            except ImportError:
-                raise ValueError("zstd-compressed layer and no zstd decompressor available") from None
+            exe = shutil.which("zstd")
+            if exe:
+                r = subprocess.run([exe, "-dc"], input=data, capture_output=True, check=False)
+                if r.returncode != 0:
+                    raise ValueError("zstd layer not decodable (zstd -dc failed)")
+                return r.stdout
+            raise ValueError("zstd-compressed layer and no zstd decompressor available")
         except ValueError:
             raise
         except Exception as e:  # a decompressor's own error type (ZstdError, ...)
