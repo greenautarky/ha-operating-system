@@ -663,7 +663,7 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
     # device-facing stable.json (Odoo #1610). One rule, bake-source-file.sh; an unreadable label on a
     # known channel is a broken scan, never a silent fall back to stable.
     BAKE_SRC="$CHANNEL"
-    if [[ "$CHANNEL" != "unknown" ]]; then
+    if [[ "$CHANNEL" != "unknown" && -x "${REPO_ROOT}/buildroot-external/package/hassio/bake-source-file.sh" ]]; then
       _rel="${GA_RELEASE:-$(awk '/^gaos_release:/{print $2; exit}' "${REPO_ROOT}/version.yaml" 2>/dev/null)}"
       if ! BAKE_SRC="$("${REPO_ROOT}/buildroot-external/package/hassio/bake-source-file.sh" "$_rel" "$CHANNEL")"; then
         echo "  ERROR: bake-source-file.sh failed for release '${_rel}' channel '${CHANNEL}' - cannot tell which file the bake reads"

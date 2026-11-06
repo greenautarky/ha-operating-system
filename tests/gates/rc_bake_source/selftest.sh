@@ -29,6 +29,12 @@ expect ""             stable stable      # developer make without GA_RELEASE
 "$RULE" BOSv1.6.0-rc3 latest >/dev/null 2>&1 && bad "unknown channel accepted" || ok
 "$RULE" onlyone >/dev/null 2>&1 && bad "wrong arg count accepted" || ok
 
+# reachability (a rule nobody calls is dead): every consumer must call the one script
+for f in tests/ga_tests/os_integrity/gen_expected.sh scripts/scan-cves.sh; do
+  grep -q 'bake-source-file.sh' "$REPO/$f" && ok || bad "$f does not call bake-source-file.sh"
+done
+grep -q 'bake-source-file.sh' <("$REPO/scripts/apply-haos-patches.sh" --cat buildroot-external/package/hassio/hassio.mk) && ok || bad "patched hassio.mk does not call bake-source-file.sh"
+
 # --- make level: the live patched hassio.mk -------------------------------------------------
 mk=$(mktemp -d); trap 'rm -rf "$mk"' EXIT
 "$REPO/scripts/apply-haos-patches.sh" --cat buildroot-external/package/hassio/hassio.mk > "$mk/hassio.mk" 2>"$mk/err" \
