@@ -1,0 +1,30 @@
+# real NetworkManager 1.50.2 --print-config output (ihost build, shipped 50-ga.conf); regenerate with the selftest drift check
+
+[main]
+# rc-manager=auto
+# migrate-ifcfg-rh=false
+# auth-polkit=false
+# dhcp=internal
+# iwd-config-path=
+plugins=keyfile
+autoconnect-retries-default=4
+configure-and-quit=no
+
+[connectivity]
+uri=https://checkonline.greenautarky.com/online.txt
+response=NetworkManager is online
+interval=600
+
+[logging]
+# backend=journal
+# audit=true
+
+[device]
+# wifi.backend=wpa_supplicant
+
+[connection-wifi-defaults]
+match-device=type:wifi
+wifi.powersave=2
+wifi.cloned-mac-address=permanent
+
+# no-auto-default file "/var/lib/NetworkManager/no-auto-default.state"
