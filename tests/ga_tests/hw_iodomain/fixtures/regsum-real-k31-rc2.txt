@@ -1,0 +1,38 @@
+ regulator                      use open bypass  opmode voltage current     min     max
+---------------------------------------------------------------------------------------
+ regulator-dummy                  1    0      0 unknown     0mV     0mA     0mV     0mV 
+ vcc5v0_sys                       9   10      0 unknown  5000mV     0mA  5000mV  5000mV 
+    vcc5v0_host                   2    1      0 unknown  5000mV     0mA     0mV     0mV 
+       phy-ff4c8000.usb2phy.1-phy   2                                 0mA     0mV     0mV
+    vdd_npu_vepu                  1    0      0  normal   800mV     0mA   650mV   950mV 
+    vdd_arm                       1    0      0  normal   800mV     0mA   725mV  1350mV 
+    vcc_ddr                       1    0      0  normal   500mV     0mA     0mV     0mV 
+    vcc3v3_sys                    2    3      0  normal  3300mV     0mA  3300mV  3300mV 
+       fe020000.syscon:io-domains-pmuio1   0                                 0mA     0mV     0mV
+       fe020000.syscon:io-domains-pmuio0   0                                 0mA     0mV     0mV
+       vcc_3v3                    3    5      0 unknown  3300mV     0mA     0mV     0mV 
+          ffc40000.ethernet-phy   1                                 0mA     0mV     0mV
+          ffc50000.mmc-vmmc       1                                 0mA  3300mV  3400mV
+          fe020000.syscon:io-domains-vccio6   0                                 0mA     0mV     0mV
+          fe020000.syscon:io-domains-vccio4   0                                 0mA     0mV     0mV
+          fe020000.syscon:io-domains-vccio3   0                                 0mA     0mV     0mV
+    vcc_buck5                     6    6      0 unknown  2200mV     0mA  2200mV  2200mV 
+       vcc_0v8                    1    0      0 unknown   800mV     0mA   800mV   800mV 
+       vcc1v8_pmu                 1    0      0 unknown  1800mV     0mA  1800mV  1800mV 
+       vcc0v8_pmu                 1    0      0 unknown   800mV     0mA   800mV   800mV 
+       vcc_1v8                    4    6      0 unknown  1800mV     0mA  1800mV  1800mV 
+          ffc50000.mmc-vqmmc      1                                 0mA     0mV     0mV
+          fe020000.syscon:io-domains-vccio7   0                                 0mA     0mV     0mV
+          ffc70000.mmc-vqmmc      1                                 0mA     0mV     0mV
+          fe020000.syscon:io-domains-vccio5   0                                 0mA     0mV     0mV
+          fe020000.syscon:io-domains-vccio1   0                                 0mA     0mV     0mV
+          ff5e0000.adc-vref       1                                 0mA     0mV     0mV
+       vcc_dovdd                  1    0      0 unknown  1800mV     0mA  1800mV  1800mV 
+       vcc_dvdd                   0    0      0 unknown  1200mV     0mA  1200mV  1200mV 
+    vcc_avdd                      0    0      0 unknown  2800mV     0mA  2800mV  2800mV 
+    vccio_sd                      2    2      0 unknown  1800mV     0mA  1800mV  3300mV 
+       ffc60000.mmc-vqmmc         1                                 0mA  1800mV  1950mV
+       fe020000.syscon:io-domains-vccio2   0                                 0mA     0mV     0mV
+    vcc3v3_sd                     2    1      0 unknown  3300mV     0mA  3300mV  3300mV 
+       ffc70000.mmc-vmmc          1                                 0mA  3300mV  3400mV
+    vcc_5v0                       0    0      0 unknown  5000mV     0mA     0mV     0mV 

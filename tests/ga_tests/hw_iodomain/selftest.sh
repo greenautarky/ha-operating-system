@@ -118,4 +118,23 @@ iod_eth_verdict 100 half 0x001cc816 5 5 100 250 >/dev/null; flag ISO-37 "half du
 iod_eth_verdict 100 full 0x00000000 5 5 100 250 >/dev/null; flag ISO-38 "wrong PHY id flagged" $? ""
 iod_eth_verdict 100 full 0x001cc816 5 7 100 250 >/dev/null; flag ISO-39 "carrier_changes growth flagged" $? ""
 iod_eth_verdict 100 full 0x001cc816 5 5 100 100 >/dev/null; flag ISO-40 "rx not growing flagged" $? ""
+# --- REAL captures from K31 BOSv1.6.0-rc2 (2026-11-06) — the first fixtures that were
+# measured, not modelled. They differ from the modelled ones in three ways: offsets are
+# zero-padded to the register width (5 digits in GRF), regulators nest three deep
+# (vcc_3v3 < vcc3v3_sys < vcc5v0_sys) and consumers carry a "fe020000.syscon:" prefix.
+x=$(iod_readreg "$FX/regs-real-pmugrf-k31-rc2.txt" 144); OUT=$(iod_ret_verdict "$x"); RC=$?
+show_verdict ISO-41 "REAL pmugrf capture: 0x144 = 0xFFFF read and passes" "$RC" "$OUT"
+x=$(iod_readreg "$FX/regs-real-pmugrf-k31-rc2.txt" 140); OUT=$(iod_verdict "$x"); RC=$?
+show_verdict ISO-42 "REAL pmugrf capture: 0x140 = 0xA6 passes" "$RC" "$OUT"
+x=$(iod_readreg "$FX/regs-real-grf-k31-rc2.txt" 70); OUT=$(iod_rmii_verdict "$x"); RC=$?
+show_verdict ISO-43 "REAL grf capture (5-digit offsets): 0x70 = 0x40 read and passes" "$RC" "$OUT"
+OUT=$(iod_regsum_verdict "$FX/regsum-real-k31-rc2.txt"); RC=$?
+show_verdict ISO-44 "REAL regulator_summary (nested regulators) passes" "$RC" "$OUT"
+sed 's/^\( *\)fe020000.syscon:io-domains-vccio5\(.*\)$/\1XX\2/' "$FX/regsum-real-k31-rc2.txt" > "$T/rs-mut"
+OUT=$(iod_regsum_verdict "$T/rs-mut"); RC=$?
+flag ISO-45 "REAL summary with the vccio5 row removed FAILS (coverage)" "$RC" "$OUT"
+_l5=$(grep 'io-domains-vccio5' "$FX/regsum-real-k31-rc2.txt")
+awk -v l="$_l5" '/io-domains-vccio5/ {next} {print} /^ +vcc_3v3 / {print l}' "$FX/regsum-real-k31-rc2.txt" > "$T/rs-mut2"
+OUT=$(iod_regsum_verdict "$T/rs-mut2"); RC=$?
+flag ISO-46 "REAL summary with vccio5 moved under vcc_3v3 flagged" "$RC" "$OUT"
 suite_end
