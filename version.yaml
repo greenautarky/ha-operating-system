@@ -14,6 +14,11 @@
 # only OS-side change needed to ship a new component release.
 
 gaos_release: BOSv1.6.0-rc2  # marker baked into /etc/ga-release at build. BOSv1.6.0-rc2 = iHost rc of the HAOS 18.x line (feat/1.6-haos18): VCCIO5 reverted to 1.8 V (measured; U-Boot DT io-domains + check-ihost-iodomains.py), kernel 6.12.115, hw_iodomain device test; bench/canary only. BOSv1.6.0-rc1 = first release candidate of the line after the 2026-11-05 store cut. BOSv1.6.0-dev3 = first full-Core CI bake of the DSGW-210 (dev channel); a later DSGW bake sets its own label. BOSv1.6.0-dev1 = first CI bake of the line.
+# Per-board marker (BOSv1.6: iHost and DSGW210 share this branch, so each board
+# carries its OWN release marker). `gaos_release:` above is the iHost marker
+# (unchanged meaning). A non-iHost board reads `gaos_release_<board>:`; ga-ops'
+# bake pre-flight, ga_build.sh (/etc/ga-release) and GA-REL-03 all use that key.
+gaos_release_dsgw210: BOSv1.6.0-dev4  # marker. DSGW-210 dev bake of the HAOS 18.x line; iHost is unaffected (own gaos_release).
 
 components:
   # Tier-2 component repos — each publishes a .tar.gz OCI artifact at

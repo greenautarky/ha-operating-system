@@ -3899,7 +3899,9 @@ fi
 # ga_build.sh's resolution should have produced). Catches the case where
 # the source-of-truth diverged from the stamp (= the bake1 incident shape).
 if [[ -n "$GA_REL_STAMPED" && -f "$VERSION_YAML" ]]; then
-  GAOS_YAML="$(sed -nE 's/^gaos_release:[[:space:]]*"?([^"#[:space:]]+)"?.*$/\1/p' \
+  GAOS_KEY="gaos_release"
+  [[ "$_RBT_BOARD" == ihost ]] || GAOS_KEY="gaos_release_${_RBT_BOARD}"
+  GAOS_YAML="$(sed -nE "s/^${GAOS_KEY}:[[:space:]]*\"?([^\"#[:space:]]+)\"?.*\$/\\1/p" \
                "$VERSION_YAML" 2>/dev/null | head -1)"
   if [[ -n "$GAOS_YAML" && "$GAOS_YAML" == "$GA_REL_STAMPED" ]]; then
     _pass "GA-REL-03: /etc/ga-release matches version.yaml gaos_release"
