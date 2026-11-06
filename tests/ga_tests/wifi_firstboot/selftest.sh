@@ -74,6 +74,23 @@ ck WFB-20 test "$R" = fixed
 ck WFB-21 sh -c "! grep -q 'connection up' '$T/nm.log'"          # no re-activation
 ck WFB-22 grep -q 'connection modify inst 802-11-wireless.powersave 2' "$T/nm.log"
 ck WFB-23 grep -q 'dev wlan0 set power_save off' "$T/iw.log"      # applied without deauth
+# #1572: `iw set power_save off` itself FAILS -> must NOT print "fixed"; distinct state + warning
+mk_iw_fail() { # fake iw: get -> on, set -> error exit 237 (rc pinned)
+    cat > "$T/iw" <<IW
+#!/bin/sh
+echo "\$*" >> "$T/iw.log"
+case "\$*" in *"get power_save"*) echo "Power save: on" ;; *"set power_save"*) echo "command failed: Operation not supported (-95)" >&2; exit 237 ;; esac
+IW
+    chmod +x "$T/iw"; : > "$T/iw.log"
+}
+mk_nmbin ""; mk_nm default activated; mk_iw_fail; : > "$T/log"; R="$(run_assert)"
+ck WFB-80 test "$R" = fix-failed
+ck WFB-81 sh -c "! [ '$R' = fixed ]"
+ck WFB-82 grep -q 'FAILED (exit 237' "$T/log"
+ck WFB-83 grep -q 'warning' "$T/log"
+ck WFB-84 grep -q 'Operation not supported' "$T/log"      # iw's own error reaches the log
+ck WFB-85 grep -q 'connection modify inst 802-11-wireless.powersave 2' "$T/nm.log"   # still persisted
+ck WFB-86 sh -c "! grep -q 'connection up' '$T/nm.log'"
 mk_nmbin ""; mk_nm default activating; mk_iw on; R="$(run_assert)"
 ck WFB-24 test "$R" = deferred
 ck WFB-25 sh -c "! grep -q 'connection modify\\|connection up' '$T/nm.log'"
