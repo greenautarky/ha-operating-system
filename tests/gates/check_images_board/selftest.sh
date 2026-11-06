@@ -110,6 +110,24 @@ decl "open-ended declaration (> 30 days) -> invalid, FAIL"         '{"reason":"r
 decl "malformed date -> invalid, FAIL"                             '{"reason":"r","until":"soon"}' 2.1.7 2.1.6 1 'STORE_AHEAD INVALID.*not YYYY-MM-DD'
 decl "declared, but the pin is BEHIND the store -> still FAIL"     '{"reason":"r","until":"2026-12-04"}' 2.1.6 2.1.7 1 'STORE_AHEAD INVALID.*not newer'
 
+# ---- no derivable channel file (the check-versions workflow runs this bare, without the haos submodule) ----
+# The iHost keeps the legacy URL - loudly, and the script must not die silently before saying anything;
+# any other board is an error.
+mkdir -p "$W/nohaos/lib"; cp "$ROOT/scripts/lib/tree-paths.sh" "$W/nohaos/lib/"; cp "$ROOT/scripts/check-images.sh" "$W/nohaos/"
+printf '#!/bin/sh\nexit 1\n' > "$W/nohaos/apply-haos-patches.sh"; chmod +x "$W/nohaos/apply-haos-patches.sh"
+cat > "$W/bin/curl" <<'CU'
+#!/bin/bash
+echo "$*" >> "$STUB_LOG"; exit 22
+CU
+chmod +x "$W/bin/curl"
+: > "$W/asked"
+env PATH="$W/bin:$PATH" STUB_LOG="$W/asked" REPO_ROOT="$ROOT" bash "$W/nohaos/check-images.sh" > "$W/out" 2>&1; RC=$?
+{ grep -q "NOTE: could not derive the ihost channel file" "$W/out" && grep -q "haos-version/main/stable.json" "$W/asked"; } \
+  && ok "iHost, channel file not derivable: loud NOTE and the legacy URL (not a silent exit; rc=$RC)" || { bad "iHost without haos: no NOTE / no legacy URL (rc=$RC)"; tail -n 4 "$W/out" | sed 's/^/          /'; }
+env GA_BOARD=dsgw210 PATH="$W/bin:$PATH" STUB_LOG="$W/asked" REPO_ROOT="$ROOT" bash "$W/nohaos/check-images.sh" > "$W/out" 2>&1; RC=$?
+{ [ "$RC" != 0 ] && grep -q "cannot derive its channel file" "$W/out"; } && ok "dsgw210, channel file not derivable: error naming the cause" || bad "dsgw210 without haos: rc=$RC"
+rm -f "$W/bin/curl"
+
 # ---- red proof: the pre-change script (iHost pin file + armv7 whatever the board) --------------------
 mkdir -p "$W/old/lib"; cp "$ROOT/scripts/lib/tree-paths.sh" "$W/old/lib/"
 cp "$ROOT/scripts/check-images.sh" "$W/old/check-images.sh"
@@ -120,5 +138,5 @@ rm -rf "$W/newest"; mkdir -p "$W/newest"
 run dsgw210 "$W/old/check-images.sh"
 grep -qE -- "-armv7[: ]" "$W/asked" && ok "red proof: the pre-change check asks a DSGW bake for armv7 images (the #1617 defect)" || bad "red proof: pre-change script did not reproduce the defect"
 
-[ "$ran" -ge 20 ] || { echo "FAIL: only $ran cases ran"; exit 1; }
+[ "$ran" -ge 22 ] || { echo "FAIL: only $ran cases ran"; exit 1; }
 echo "$ran cases ran, $fails failed"; exit $((fails>0))

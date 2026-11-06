@@ -65,7 +65,7 @@ if [ -n "${1:-}" ]; then
     STABLE_JSON_URL="$1"
 else
     _vbase="$("${SCRIPT_DIR}/apply-haos-patches.sh" --cat buildroot-external/package/hassio/hassio.mk 2>/dev/null \
-              | sed -n 's/^HASSIO_VERSION_URL[[:space:]]*?\?=[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+              | sed -n 's/^HASSIO_VERSION_URL[[:space:]]*?\?=[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 || true)"
     if grep -q '^BR2_PACKAGE_HASSIO_CHANNEL_BETA=y' "$_defconfig" 2>/dev/null; then _chan=beta
     elif grep -q '^BR2_PACKAGE_HASSIO_CHANNEL_DEV=y' "$_defconfig" 2>/dev/null; then _chan=dev
     else _chan=stable; fi
