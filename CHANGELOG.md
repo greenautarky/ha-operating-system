@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): HAOS base 18.3 -> 18.4
+
+`haos` submodule moves to the upstream 18.4 release tag. OS version 18.4.1.6 (HAOS 18.4 + GA suffix 1.6; board markers unchanged). Upstream: buildroot 2025.02.19, Go 1.27.3, docker-engine/cli 29.8.2 and containerd 2.3.6 (GA container/Go floors now equal or below the submodule and switch themselves off), kernel 6.18.58 (iHost stays on its own 6.12.115, DSGW-210 on 6.18.54), new kernel patches (HW VLAN tag insertion, IPv6 reachability-test option) verified to apply to 6.12.115 and 6.18.54. The iHost docker-engine patch mirror is now a byte-identical copy of HAOS 18.4's rebased patch (pin updated). EROFS deduplication is dropped on both GA boards as upstream did (erofs-utils bug); rootfs size is only observable at a bake. Not taken over: upstream's U-Boot boot-tries refill (#5054), the boards carry their own boot scripts.
+
 ## Unreleased (feat/1.6-haos18): revert VCCIO5 to 1.8 V for BOSv1.6.0-rc2
 
 The 3.3 V VCCIO5 supply (Ethernet/MDIO bank) of BOSv1.6.0-rc1 is reverted to `vcc_1v8` as in BOSv1.5.3. On a bench unit with a working PHY, same port and cable, 3.3 V made the RMII link flap, MDIO read garbage and the PHY go missing; 1.8 V is stable. The only Linux DTB difference between BOSv1.5.3 and BOSv1.6.0-rc1 was this supply. The stock vendor DT says 3.3 V, but that value does not work with our 6.12 kernel; the cause is an open question until clarified. The U-Boot DT now carries the same I/O-domain set as the Linux DT, and `check-ihost-iodomains.py` pins that measured known-good set instead of the stock values (a VCCIO5 change needs a hardware measurement first).

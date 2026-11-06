@@ -3,21 +3,21 @@ Subject: [PATCH] meta: product name GreenAutarky BOS, GA version suffix
 
 GA delta of HAOS's meta (until HAOS 18.x an edit of the file itself):
   HAOS_NAME="GreenAutarky BOS"
-  VERSION_SUFFIX="1.6"  -> OS version 18.3.1.6, the <HAOS>.<GA> scheme of the
+  VERSION_SUFFIX="1.6"  -> OS version 18.4.1.6, the <HAOS>.<GA> scheme of the
                            16.3 line (16.3.1.10 = BOSv1.5.x). Without it the
-                           version is a bare 18.3, which cannot be told apart
+                           version is a bare 18.4, which cannot be told apart
                            from upstream's. One value for every board.
 ---
  buildroot-external/meta | 4 ++--
  1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/buildroot-external/meta b/buildroot-external/meta
-index 51a0f91..26f5a10 100644
+index eeae68a..26f5a10 100644
 --- a/buildroot-external/meta
 +++ b/buildroot-external/meta
 @@ -1,8 +1,8 @@
  VERSION_MAJOR="18"
- VERSION_MINOR="3"
+ VERSION_MINOR="4"
 -VERSION_SUFFIX=""
 +VERSION_SUFFIX="1.6"
  

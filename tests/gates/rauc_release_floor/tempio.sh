@@ -2,8 +2,8 @@
 # Sourced by the release-floor self-tests: the tempio the image builds with
 # (buildroot-external/package/tempio/tempio.mk), fetched and checksummed when
 # it is not on PATH. Sets TEMPIO; exits the caller on failure.
-TEMPIO_VERSION="2021.09.0"
-TEMPIO_SHA256="b7b93ebfd24c1161cec7aecfad62ab51f2241149358cef354b86cdbc6a60546f"
+TEMPIO_VERSION="2026.07.0"
+TEMPIO_SHA256="c03682e407110fa89475c0231cde5c4b5fd59660c7fc68e5ce5d2e703ed8c002"
 tempio_fetch() {  # <scratch dir>
   TEMPIO="$(command -v tempio || true)"
   [[ -n "$TEMPIO" ]] && return 0
