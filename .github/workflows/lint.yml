@@ -419,6 +419,18 @@ jobs:
           git submodule update --init --depth 1 buildroot
           bash tests/ga_tests/build/go_toolchain/inputs_check.sh
 
+      # xz 5.6.4 (buildroot pin) is inside three published advisories fixed in 5.8.4.
+      # xz-floor.mk (included by the board's local.mk, like the Go floor) lifts
+      # host-xz and xz; xz-floor/ holds the hashes and replaces the submodule's
+      # package dir (its backport patches are already inside 5.8.4).
+      # scripts/check-xz-floor.sh evaluates the EFFECTIVE version with make
+      # against a pinned minimum. The self-test drives the live gate over fixture
+      # trees and, mandatory here, the real pinned submodule.
+      - name: xz floor (host-xz and xz at >= 5.8.4)
+        run: |
+          set -eu
+          git submodule update --init --depth 1 buildroot
+          XZ_FLOOR_REQUIRE_LIVE=1 ./tests/gates/xz_floor/selftest.sh
       - name: pkg-inputs rebuilds a package when our patches or configure options for it change
         # Buildroot looks at neither BR2_GLOBAL_PATCH_DIR nor <PKG>_CONF_OPTS once
         # a package has its stamps, so on a reused (`update`) output tree the
