@@ -210,6 +210,31 @@ same="$(ls "$D1"/dump-*-bbbb0008-shutdown.log.gz | wc -l)"
 newest="$(ls -1 "$D1"/dump-*.log.gz | tail -1)"
 case "$newest" in *20260109T000000*) ok "newest dump survives rotation" ;; *) bad "newest dump missing after rotation: $newest" ;; esac
 
+# Pipe-inexact `tail -c` (uutils/Rust coreutils, the CI runner's default; Odoo #1597): the
+# shim overshoots by 1/4 (measured on uutils: up to ~13 %; the margin makes it deterministic) when reading a pipe, as measured on uutils. Before the fix the
+# sections summed past MAX_BYTES and head -c cut off the NEWEST ones (WARN, PSTORE).
+# Deterministic here instead of depending on the runner's read chunking.
+mkdir -p "$W/shim"
+REALTAIL="$(command -v tail)"
+cat > "$W/shim/tail" <<SEOF
+#!/bin/sh
+if [ "\$1" = -c ] && [ "\$#" -eq 2 ]; then
+  cat > "$W/shim/.in.\$\$"
+  "$REALTAIL" -c \$(( \$2 + \$2 / 4 )) "$W/shim/.in.\$\$"; rm -f "$W/shim/.in.\$\$"
+else exec "$REALTAIL" "\$@"; fi
+SEOF
+chmod +x "$W/shim/tail"
+D3="$W/d3"
+PATH="$W/shim:$PATH" run_dump "$SC" "$D3" dddddddd-0000 shutdown 20260101T000001
+f3="$(ls "$D3"/dump-*.log.gz 2>/dev/null | head -1)"
+if [ -n "$f3" ]; then
+  s3="$(zcat "$f3" | wc -c)"
+  [ "$s3" -le 2097152 ] && ok "pipe-inexact tail: dump $s3 bytes <= bound" || bad "pipe-inexact tail: $s3 bytes"
+  for m in MARK-BOOT MARK-KERN MARK-PID1 MARK-WARN MARK-PSTORE; do
+    [ "$(zcat "$f3" | grep -c "$m")" -ge 1 ] && ok "pipe-inexact tail: $m present" || bad "pipe-inexact tail: $m missing (newest sections cut off)"
+  done
+else bad "pipe-inexact tail: no dump written"; fi
+
 # RED: remove the per-section caps and the global guard -> the bound must break
 MUT="$W/ga-journal-dump.mutant"
 sed -e 's/tail -c "\$2"/cat/' -e 's/head -c "\$MAX_BYTES"/cat/' "$SC" > "$MUT"
