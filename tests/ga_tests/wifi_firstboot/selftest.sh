@@ -94,7 +94,7 @@ ck WFB-33 grep -q '^match-device=type:wifi$' "$CONF"
 
 # ── WFB-4x: rescue ──────────────────────────────────────────────────────────
 mk_rescue_cmds() { # $1 route(yes|no) $2 connectivity
-    printf '#!/bin/sh\n[ "$1 $2 $3 $4" = "-4 route show default" ] && [ "%s" = yes ] && echo "default via 10.0.0.1"\nexit 0\n' "$1" > "$T/ip"
+    printf '#!/bin/sh\n[ "$1 $2 $3 $4" = "-4 route show default" ] && [ "%s" = yes ] && echo "default via gateway-fixture"\nexit 0\n' "$1" > "$T/ip"
     printf '#!/bin/sh\ncase "$*" in *"connectivity check"*) echo %s ;; *) echo "nmcli-out $*" ;; esac\n' "$2" > "$T/rnm"
     printf '#!/bin/sh\ni=0; while [ $i -lt 3000 ]; do echo "journal line $i xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; i=$((i+1)); done\n' > "$T/jc"
     printf '#!/bin/sh\necho "dmesg-out"\n' > "$T/dm"
