@@ -9,11 +9,11 @@
 #
 # docker-engine/ is a second real dir: the GA container floor
 # (buildroot-external/container-floor.mk) builds docker-engine 29.8.2, and
-# HAOS 18.3's bridge-subnet patch for 29.7.2 no longer applies there (second
-# hunk of iptabler/network.go moved; buildroot applies patches with no fuzz).
-# The dir holds the same patch rebased onto 29.8.2. Drop it, and make the dir a
-# symlink again, once HAOS ships a patch that applies to the docker-engine
-# version the floor resolves to.
+# HAOS 18.3's bridge-subnet patch for 29.7.2 did not apply there. HAOS 18.4
+# ships docker-engine 29.8.2 itself and rebased the patch to it, so the dir now
+# holds a byte-identical copy of HAOS 18.4's patch (verified to apply with no
+# fuzz, 2026-11-06). Follow-up: make the dir a symlink again and drop this
+# special case (here, the dsgw210 check and both gate self-tests).
 #
 # This check keeps the mirror honest on every configure (fails, never skips):
 #   * every package dir HAOS has must be mirrored (a new upstream patch dir
@@ -27,11 +27,11 @@ set -euo pipefail
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 UP="$REPO/haos/buildroot-external/patches"
 MIR="$REPO/buildroot-ihost/patches-haos"
-# sha256 of HAOS 18.3's docker-engine/0001 (bridge-subnet protection, written
-# for docker-engine 29.7.2) that buildroot-ihost/patches-haos/docker-engine/0001
-# is the rebase of. PINNED: change it only after re-checking the rebase.
+# sha256 of HAOS 18.4's docker-engine/0001 (bridge-subnet protection, for
+# docker-engine 29.8.2) that buildroot-ihost/patches-haos/docker-engine/0001
+# is a copy of. PINNED: change it only after re-checking the rebase.
 DOCKER_UP_PATCH=0001-bridge-protect-bridge-subnet-from-direct-external-ac.patch
-DOCKER_UP_SHA=5e6179c245dbcefc351374e32177b7519cc2105c056ea2940325d389e73fb224
+DOCKER_UP_SHA=af9d953fa1c228a7a40208c5932fe2677ebdfb00d2013b0032fb090735617a6b
 fail() { echo "check-haos-patch-mirror: FAIL: $*" >&2; exit 1; }
 [ -d "$UP" ] || fail "$UP missing"
 n=0
