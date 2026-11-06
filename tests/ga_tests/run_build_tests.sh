@@ -2995,12 +2995,33 @@ if [[ -n "$SRC" ]]; then
         BUILD_CHANNEL="stable"
       fi
     fi
-    if [[ -z "$BUILD_CHANNEL" ]]; then
+    # The file the bake READ is not always the channel's name: an -rcN of the 1.6 line on
+    # channel stable bakes from rc.json (#1610) while devices keep polling stable.json.
+    # Ask the one definition of that rule, the script hassio.mk itself calls, instead of
+    # re-deriving it here (measured 2026-11-07 on the BOSv1.6.0-rc4 bake: XVER-06/07
+    # compared an rc.json bake against stable.json and failed). On a tree without the
+    # script (lines before #1610) the bake file is the channel name, as before. If the
+    # script exists but cannot answer, the comparison refuses rather than guesses.
+    # The script lives in the GA external tree (hassio.mk calls it via BR2_EXTERNAL_GA_HAOS_PATH).
+    _bsf="${BR2EXT_NETBIRD:-${_RBT_ROOT:-}/${GA_LAYER_DIR:-buildroot-external}}/package/hassio/bake-source-file.sh"
+    _rbt_rel="${GA_RELEASE:-$(head -1 "${TARGET}/etc/ga-release" 2>/dev/null | tr -d '[:space:]')}"
+    BAKE_FILE="$BUILD_CHANNEL"
+    _bsf_patch="$(ls "${_bsf%/package/hassio/bake-source-file.sh}"/patches-haos/*-ga-hassio-rc-bake-source.patch 2>/dev/null | head -1)"
+    if [[ -n "$BUILD_CHANNEL" ]] && { [[ -f "$_bsf" ]] || [[ -n "$_bsf_patch" ]]; }; then
+      # this tree bakes through the rule, so the rule MUST answer here too (no silent fallback)
+      if [[ -f "$_bsf" ]]; then
+        BAKE_FILE="$(sh "$_bsf" "$_rbt_rel" "$BUILD_CHANNEL" 2>/dev/null || true)"
+      else
+        echo "  NOTE: hassio.mk uses bake-source-file.sh but it is not at $_bsf — XVER-06/07 refuse to compare" >&2
+        BAKE_FILE=""
+      fi
+    fi
+    if [[ -z "$BUILD_CHANNEL" || -z "$BAKE_FILE" ]]; then
       BUILD_CHANNEL_JSON=""
-    elif [[ "$BUILD_CHANNEL" == "stable" ]]; then
+    elif [[ "$BAKE_FILE" == "stable" ]]; then
       BUILD_CHANNEL_JSON="$STABLE_JSON"
     else
-      BUILD_CHANNEL_JSON="$(curl -sf "${_VER_BASE}${BUILD_CHANNEL}.json" 2>/dev/null || true)"
+      BUILD_CHANNEL_JSON="$(curl -sf "${_VER_BASE}${BAKE_FILE}.json" 2>/dev/null || true)"
     fi
     CH_CORE="$(echo "$BUILD_CHANNEL_JSON" | jq -r '.core // "unknown"')"
     CH_SUP="$(echo "$BUILD_CHANNEL_JSON" | jq -r '.supervisor // "unknown"')"
@@ -3063,11 +3084,11 @@ if [[ -n "$SRC" ]]; then
       if [[ -z "$BUILD_CHANNEL" ]]; then
         _fail "XVER-06: could not read the channel from the defconfig (SRC='${SRC:-}') — refusing to assume 'stable', which is NOT a pass"
       elif [[ -z "$BUILD_CHANNEL_JSON" ]]; then
-        _fail "XVER-06: could not fetch ${BUILD_CHANNEL}.json — the comparison could not run, which is NOT a pass"
+        _fail "XVER-06: could not fetch ${BAKE_FILE:-${BUILD_CHANNEL}}.json — the comparison could not run, which is NOT a pass"
       elif [[ "$VJ_CORE" == "$CH_CORE" ]]; then
-        _pass "XVER-06: version.json core ($VJ_CORE) matches ${BUILD_CHANNEL}.json ($CH_CORE) — updater.json will be correct"
+        _pass "XVER-06: version.json core ($VJ_CORE) matches ${BAKE_FILE}.json ($CH_CORE) — updater.json will be correct"
       else
-        _fail "XVER-06: version.json core ($VJ_CORE) != ${BUILD_CHANNEL}.json core ($CH_CORE)"
+        _fail "XVER-06: version.json core ($VJ_CORE) != ${BAKE_FILE}.json core ($CH_CORE)"
       fi
     else
       _skip "XVER-06" "version.json not found (full build needed)"
@@ -3081,11 +3102,11 @@ if [[ -n "$SRC" ]]; then
       if [[ -z "$BUILD_CHANNEL" ]]; then
         _fail "XVER-07: could not read the channel from the defconfig (SRC='${SRC:-}') — refusing to assume 'stable', which is NOT a pass"
       elif [[ -z "$BUILD_CHANNEL_JSON" ]]; then
-        _fail "XVER-07: could not fetch ${BUILD_CHANNEL}.json — the comparison could not run, which is NOT a pass"
+        _fail "XVER-07: could not fetch ${BAKE_FILE:-${BUILD_CHANNEL}}.json — the comparison could not run, which is NOT a pass"
       elif [[ "$BUILD_SUP" == "$CH_SUP" ]]; then
-        _pass "XVER-07: build version.json supervisor ($BUILD_SUP) matches ${BUILD_CHANNEL}.json ($CH_SUP)"
+        _pass "XVER-07: build version.json supervisor ($BUILD_SUP) matches ${BAKE_FILE}.json ($CH_SUP)"
       else
-        _fail "XVER-07: build version.json supervisor ($BUILD_SUP) != ${BUILD_CHANNEL}.json ($CH_SUP)"
+        _fail "XVER-07: build version.json supervisor ($BUILD_SUP) != ${BAKE_FILE}.json ($CH_SUP)"
       fi
     else
       _skip "XVER-07" "build version.json not present (full build needed)"

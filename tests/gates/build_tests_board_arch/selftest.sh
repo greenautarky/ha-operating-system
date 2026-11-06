@@ -35,11 +35,13 @@ case "\$*" in
 esac
 SK
 chmod +x "$W/bin/skopeo"
-# curl stand-in for the version channel files (stable.json = the old iHost line, dev.json = the 1.6 dev line)
+# curl stand-in for the version channel files (stable.json = the old iHost line, rc.json = what an -rcN of the 1.6
+# line bakes from (#1610), dev.json = the 1.6 dev line)
 cat > "$W/bin/curl" <<'CU'
 #!/bin/bash
 case "$*" in
   *stable.json*) echo '{"core":"2026.8.2.2","supervisor":"2025.11.5.10","homeassistant":{"tinker":"2026.8.2.2"},"images":{"core":"ghcr.io/greenautarky/home-assistant-armv7","supervisor":"x"}}' ;;
+  *rc.json*)     echo '{"core":"2026.8.2.2","supervisor":"2026.10.5.1","homeassistant":{"tinker":"2026.8.2.2"},"images":{"core":"ghcr.io/greenautarky/home-assistant-armv7","supervisor":"x"}}' ;;
   *dev.json*)    echo '{"core":"2026.10.4.3-dev","supervisor":"2026.10.5.1","homeassistant":{"tinker":"2026.10.4.3-dev"},"images":{"core":"'"${STUB_DEV_CORE_IMG:-ghcr.io/greenautarky/home-assistant-aarch64}"'","supervisor":"x"}}' ;;
   *) exit 22 ;;
 esac
@@ -110,9 +112,15 @@ SUPV=2026.10.4.0 mkfix dsgw210 aarch64 2026.10.4.3-dev dev
 o="$(SUPV=2026.10.4.0 run dsgw210 BOSv1.6.0-dev5)"
 has "$o" '^  FAIL  XVER-07: .*dev.json' && ok "dsgw210: a Supervisor that differs from dev.json FAILS XVER-07" || bad "dsgw210: XVER-07 drift not caught"
 mkfix ihost armv7 2026.8.2.2 stable "$D2"
+# an -rcN of the 1.6 line bakes from rc.json (#1610): XVER-06/07 compare against rc.json
 o="$(run ihost BOSv1.6.0-rc2)"
-has "$o" '^  FAIL  XVER-07: .*stable.json' && ok "ihost: still compared against stable.json (Supervisor 2026.10.5.1 != stable)" || bad "ihost: XVER-07 not against stable.json"
-has "$o" '^  PASS  XVER-06: .*matches stable.json' && ok "ihost: XVER-06 matches stable.json" || bad "ihost: XVER-06 not against stable.json"
+has "$o" '^  PASS  XVER-07: .*matches rc.json' && ok "ihost rc label: XVER-07 compares against rc.json and passes" || bad "ihost rc label: XVER-07 not against rc.json"
+has "$o" '^  PASS  XVER-06: .*matches rc.json' && ok "ihost rc label: XVER-06 compares against rc.json and passes" || bad "ihost rc label: XVER-06 not against rc.json"
+# a final label still bakes from stable.json: the same build is then compared against stable
+o="$(run ihost BOSv1.6.0)"
+has "$o" '^  FAIL  XVER-07: .*stable.json' && ok "ihost final label: compared against stable.json (Supervisor 2026.10.5.1 != stable)" || bad "ihost final label: XVER-07 not against stable.json"
+has "$o" '^  PASS  XVER-06: .*matches stable.json' && ok "ihost final label: XVER-06 matches stable.json" || bad "ihost final label: XVER-06 not against stable.json"
+o="$(run ihost BOSv1.6.0-rc2)"
 has "$o" '^  PASS  XVER-03: stable.json core image is the GA armv7 build' && ok "ihost: XVER-03 still expects the armv7 Core image" || bad "ihost: XVER-03 not green"
 
 # WIFI-09 needs /usr/sbin/iw (shared overlay: ga-wifi-watchdog, ga-wlan0-powersave-assert): every board's

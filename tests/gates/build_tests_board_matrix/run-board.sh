@@ -31,7 +31,12 @@ SK
 cat > "$W/bin/curl" <<CU
 #!/bin/bash
 case "\$*" in
-  *stable.json*|*rc.json*) jq 'del(.ga_release)' "$HERE/fixtures/ihost/version.json" ;;
+  # rc.json = what an -rcN of the 1.6 line bakes from (#1610): the fixture's own set.
+  # stable.json = what devices poll, deliberately an OLDER set (the field release), so a
+  # check that compares the build against stable.json instead of the file the bake read
+  # goes red here exactly as it did on the real BOSv1.6.0-rc4 bake (XVER-06/07).
+  *rc.json*)     jq 'del(.ga_release)' "$HERE/fixtures/ihost/version.json" ;;
+  *stable.json*) jq 'del(.ga_release) | .core="2026.8.2.2" | .homeassistant.tinker="2026.8.2.2" | .supervisor="2025.11.5.10"' "$HERE/fixtures/ihost/version.json" ;;
   *dev.json*)    jq 'del(.ga_release)' "$HERE/fixtures/dsgw210/version.json" ;;
   *) exit 22 ;;
 esac
