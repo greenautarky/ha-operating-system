@@ -112,8 +112,12 @@ else
 
   # Container bridges must never be filtered here — a rule naming hassio or
   # docker0 would break add-on traffic in a way that looks like a broken add-on.
-  run_test "FW-29" "container bridges untouched (no hassio/docker0 rule)" \
-    "! nft list table $TABLE | grep -Eq 'hassio|docker0|veth'"
+  run_test "FW-29" "container bridges never dropped (accept-only rules for hassio/docker0/veth)" \
+    "! nft list table $TABLE | grep -E 'hassio|docker0|veth' | grep -q drop"
+
+  # Odoo #1647: the table ends in a default drop, so uplinks (ppp0/wwan0/usb0) and unknown NICs get nothing.
+  run_test "FW-29b" "default-deny: input chain ends in a bare drop (uplinks closed)" \
+    "nft list table $TABLE | sed -n '/chain input/,/}/p' | grep -E '^[[:space:]]*(counter )?drop' | tail -n1 | grep -Eq '^[[:space:]]*(counter )?drop[[:space:]]*\$'"
 
   run_test "FW-30" "status JSON reports the allowlist mode" \
     "grep -q '\"enabled\": true' $STATUS_FILE && grep -q 'allowlist' $STATUS_FILE"

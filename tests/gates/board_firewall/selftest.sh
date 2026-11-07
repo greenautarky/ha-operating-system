@@ -67,6 +67,28 @@ cmp -s "$W/nodrop/usr/libexec/ga-firewall-gate" "$W/dsgw210/usr/libexec/ga-firew
 cp -a "$W/dsgw210" "$W/nonft"; rm -f "$W/nonft/usr/sbin/nft"
 must_flag dsgw210 "$W/nonft" FWB-04 "MUST-FLAG an image without nft"
 
+# --- Odoo #1647: the uplink must not be reachable (default-deny on every non-trusted interface)
+GATEF=usr/libexec/ga-firewall-gate
+cp -a "$W/dsgw210" "$W/nocatch"; chmod u+w "$W/nocatch/$GATEF"
+sed -i '/Default deny for every other interface/,+1d' "$W/nocatch/$GATEF"   # the old denylist-only model
+cmp -s "$W/nocatch/$GATEF" "$W/dsgw210/$GATEF" && no "fixture nocatch changed nothing" \
+  || must_flag dsgw210 "$W/nocatch" FWB-16 "MUST-FLAG an uplink interface not covered (no default drop: usb0/ppp0 reach the add-on ports)"
+
+cp -a "$W/dsgw210" "$W/ppplan"; chmod u+w "$W/ppplan/usr/share/ga-board.conf"
+sed -i 's/GA_LAN_IFACES:=end0 wlan0/GA_LAN_IFACES:=end0 wlan0 ppp0/' "$W/ppplan/usr/share/ga-board.conf"
+grep -q 'wlan0 ppp0}' "$W/ppplan/usr/share/ga-board.conf" && must_flag dsgw210 "$W/ppplan" FWB-16 "MUST-FLAG an add-on/ssh port reachable via ppp0 (modem listed as LAN)" \
+  || no "fixture ppplan did not change the board file"
+
+cp -a "$W/dsgw210" "$W/nobridge"; chmod u+w "$W/nobridge/$GATEF"
+sed -i '/iifname ."veth/d' "$W/nobridge/$GATEF"
+cmp -s "$W/nobridge/$GATEF" "$W/dsgw210/$GATEF" && no "fixture nobridge changed nothing" \
+  || must_flag dsgw210 "$W/nobridge" FWB-17 "MUST-FLAG a gate that would drop container (veth) traffic under the default drop"
+
+cp -a "$W/dsgw210" "$W/noest"; chmod u+w "$W/noest/$GATEF"
+sed -i '/echo "    ct state established,related accept"/d' "$W/noest/$GATEF"
+cmp -s "$W/noest/$GATEF" "$W/dsgw210/$GATEF" && no "fixture noest changed nothing" \
+  || must_flag dsgw210 "$W/noest" FWB-18 "MUST-FLAG a gate that drops replies to the device's own connections"
+
 # the iHost must not pass with the DSGW's NIC names and vice versa (pinned per board, not derived)
 must_flag ihost "$W/dsgw210" FWB-11 "MUST-FLAG the DSGW-210 tree judged as an iHost (wrong NIC names)"
 
@@ -79,5 +101,5 @@ done
 n="$(git -C "$ROOT" ls-files | grep -cE '(^|/)ga-firewall(-gate|\.service)$')"
 [ "$n" = 3 ] && ok "exactly one gate + one unit + one wants link tracked (no per-board copy)" || no "firewall files tracked: $n (expected 3: gate, unit, wants link)"
 
-[ "$ran" -ge 14 ] || { echo "FAIL: only $ran cases ran (floor 14)"; exit 1; }
+[ "$ran" -ge 18 ] || { echo "FAIL: only $ran cases ran (floor 18)"; exit 1; }
 echo "$ran cases ran, $bad failed"; exit $((bad>0))

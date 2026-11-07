@@ -25,11 +25,21 @@
 #     (tailscale0) are accepted FIRST in every chain, hardcoded, never derived
 #     from policy. The fleet-manager and GACI reach :8099 and HA Core (:80 on
 #     Core 2026.8+, :8123 before) over the mesh.
-#   * The drops are scoped to the PHYSICAL interfaces by name. The chain policy
-#     stays `accept`, so a truncated or half-loaded ruleset fails OPEN rather
-#     than locking the device out — and container traffic (hassio, docker0,
-#     veth*) is untouched by construction rather than by an accept rule someone
-#     might delete.
+#   * DEFAULT-DENY INGRESS (Odoo #1647): after the hardcoded trusted accepts
+#     (lo, mesh, container bridges) and the LAN allowlist, EVERYTHING else
+#     arriving on ANY interface is dropped — the modem uplink (ppp0 / wwan0 /
+#     usb0 / whatever a board names it), a future NIC, a USB-Ethernet adapter.
+#     The model is an allowlist of trusted interfaces, not a denylist of LAN
+#     names, so an uplink nobody listed is closed rather than forgotten.
+#     Outbound-initiated flows are unaffected (ct established,related).
+#   * The chain policy stays `accept`. nft loads a file atomically, so the
+#     table is either complete (final `drop` included) or absent — a truncated
+#     ruleset cannot exist. Fail-closed (policy drop) would lock a device out
+#     of its only management path if the table load or the mesh failed; for a
+#     device in a customer home that is the worse failure. A load failure is
+#     therefore fail-OPEN but LOUD: journal at err level plus status JSON
+#     ruleset_loaded=false / source=load-failed (read by ga_manager's firewall
+#     healthcheck).
 #   * If `nft -f` fails the table is deleted, leaving the device as it was.
 #
 # INTERFACES (iHost defaults; a board names its own in /usr/share/ga-board.conf)
@@ -39,7 +49,11 @@
 #           is single-purpose equipment, but it is not hardened, and nothing
 #           needs to reach the device inbound over it.
 #   wt0 / tailscale0   management mesh, always open.
-#   hassio / docker0 / veth*   container bridges, never filtered here.
+#   hassio / docker0 / br-* / veth* / wpan0   container bridges and the local
+#           Thread radio: internal, accepted (they must be, the table now ends
+#           in a default drop).
+#   anything else (ppp0, wwan0, usb0, ...)   uplink / unknown: dropped, except
+#           replies to connections the device itself opened.
 #
 # HOST vs CONTAINER — measured, not assumed:
 # Docker here runs with userland-proxy at its default (enabled), so a published
@@ -83,6 +97,8 @@ HOST_ALLOW_TCP='22222'          # sshd — on-site + local diagnostics
 CONTAINER_ALLOW_TCP='80, 8123'  # HA Core UI (resident's own front door)
 
 log() { echo "ga-firewall-gate: $*"; }
+# Loud variant for the fail-open path: reaches the journal at err priority.
+log_err() { echo "ga-firewall-gate: $*"; logger -t ga-firewall-gate -p daemon.err "$*" 2>/dev/null || true; }
 
 flush_table() {
 	# Idempotent removal: `delete table` errors if absent, so probe first.
@@ -139,6 +155,9 @@ RULES="$(mktemp /tmp/ga-firewall.XXXXXX)" || {
 	echo "    type filter hook input priority 0; policy accept;"
 	echo "    iif \"lo\" accept"
 	echo "    iifname { \"wt0\", \"tailscale0\" } accept"
+	echo "    iifname { \"hassio\", \"docker0\", \"wpan0\" } accept"
+	echo "    iifname \"br-*\" accept"
+	echo "    iifname \"veth*\" accept"
 	echo "    ct state established,related accept"
 	# ICMPv6 neighbour/router discovery MUST pass or IPv6 stops working
 	# entirely — no address resolution, and no router advertisement means no
@@ -157,14 +176,20 @@ RULES="$(mktemp /tmp/ga-firewall.XXXXXX)" || {
 	# therefore blackhole the HA UI while looking correct on paper.
 	echo "    iifname { $LAN_IFACES } tcp dport { $HOST_ALLOW_TCP, $CONTAINER_ALLOW_TCP } accept"
 	echo "    iifname { $LAN_IFACES } drop"
+	# Default deny for every other interface (uplinks, unknown NICs).
+	echo "    drop"
 	echo "  }"
 
 	echo "  chain forward {"
 	echo "    type filter hook forward priority -5; policy accept;"
 	echo "    iifname { \"wt0\", \"tailscale0\" } accept"
+	echo "    iifname { \"hassio\", \"docker0\", \"wpan0\" } accept"
+	echo "    iifname \"br-*\" accept"
+	echo "    iifname \"veth*\" accept"
 	echo "    ct state established,related accept"
 	echo "    iifname { $LAN_IFACES } ct status dnat tcp dport { $CONTAINER_ALLOW_TCP } accept"
 	echo "    iifname { $LAN_IFACES } ct status dnat drop"
+	echo "    ct status dnat drop"
 	echo "  }"
 
 	echo "}"
@@ -177,7 +202,7 @@ if nft -f "$RULES" 2>/tmp/ga-firewall.err; then
 	log "active (allowlist) — LAN open: tcp $HOST_ALLOW_TCP (host), tcp $CONTAINER_ALLOW_TCP (container)"
 	write_status true default true
 else
-	log "nft load FAILED — flushing to fail-open: $(cat /tmp/ga-firewall.err 2>/dev/null)"
+	log_err "nft load FAILED — firewall NOT active, device is UNFILTERED (fail-open): $(cat /tmp/ga-firewall.err 2>/dev/null)"
 	flush_table
 	write_status false load-failed false
 fi
