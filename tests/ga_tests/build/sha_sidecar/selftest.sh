@@ -16,7 +16,7 @@ echo "=== sha-sidecar fixtures ==="
 # shellcheck disable=SC1090
 . "$LIB" 2>/dev/null
 declare -F ga_write_sha_sidecar >/dev/null || { _fail "ga_write_sha_sidecar not found in $LIB"; exit 1; }
-W="$(mktemp -d "${TMPDIR:-/home/user/.cache/claude-tmp}/shasc.XXXXXX")"; trap 'rm -rf "$W"' EXIT
+W="$(mktemp -d "${TMPDIR:-/tmp}/shasc.XXXXXX")"; trap 'rm -rf "$W"' EXIT
 mkdir -p "$W/build/ga_output/images"; I="$W/build/ga_output/images"
 printf 'payload-%s\n' 1 2 3 > "$I/os-1.img.xz"; printf 'bundle\n' > "$I/os-1.raucb"
 ga_write_sha_sidecar "$I/os-1.img.xz" && ga_write_sha_sidecar "$I/os-1.raucb" || _fail "writer returned non-zero"
