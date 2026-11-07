@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # selftest: scripts/archive-extract-file.py (reads the baked Supervisor image's dns.py for BLD-SUP-DNS / INT-05 /
 # SVC-09*, Odoo #1649). Drives the LIVE script on scratch archives:
-#   must-pass: docker-archive and OCI archive, gzip and plain layers, the LAST layer wins
-#   must-flag: file absent -> rc 3, whiteout deletes it -> rc 3, unreadable archive / no layers -> rc 2
+#   green cases: docker-archive and OCI archive, gzip and plain layers, the LAST layer wins
+#   red cases: file absent -> rc 3, whiteout deletes it -> rc 3, unreadable archive / no layers -> rc 2
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/../../.." && pwd)"
 X="$ROOT/scripts/archive-extract-file.py"
