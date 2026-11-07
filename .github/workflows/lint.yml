@@ -628,6 +628,19 @@ jobs:
           git submodule update --init --depth 1 haos
           bash tests/gates/build_tests_board_matrix/selftest.sh
 
+      - name: build tests - sibling repos only via GA_SIBLING_REPOS, skip loudly (Odoo #1632)
+        # SRC-14..16, BLD-ADMIN, BLD-SUP-DNS and INT-05 read the retired forks. They look ONLY under
+        # GA_SIBLING_REPOS: unset/empty/missing -> a NOTE and SKIP; right siblings PASS, wrong ones FAIL.
+        # Red-proven against the runner that guessed a workstation path.
+        run: |
+          git submodule update --init --depth 1 haos
+          bash tests/gates/sibling_repos/selftest.sh
+
+      - name: no workstation paths in the repo (Odoo #1632; red on a hard-coded home directory)
+        run: |
+          bash tests/gates/workstation_paths/selftest.sh
+          bash scripts/check-no-workstation-paths.sh
+
       - name: pre-flight image check reads the board's own pins, arch and machine (Odoo #1617)
         # scripts/check-images.sh (run by ga_build.sh before the multi-hour build) used to read the
         # iHost pin file with armv7 whatever the board. The gate drives the live script per board

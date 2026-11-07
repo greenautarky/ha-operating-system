@@ -47,8 +47,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HA_OS_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=lib/ga-os-meta.sh
 . "$SCRIPT_DIR/lib/ga-os-meta.sh"
-SUPERVISOR_REPO="${SUPERVISOR_REPO:-/home/user/git/ha-supervisor}"
-HAOS_VERSION_REPO="${HAOS_VERSION_REPO:-/home/user/git/haos-version}"
+SUPERVISOR_REPO="${SUPERVISOR_REPO:-${GA_REPOS_DIR:-$HOME/git}/ha-supervisor}"
+HAOS_VERSION_REPO="${HAOS_VERSION_REPO:-${GA_REPOS_DIR:-$HOME/git}/haos-version}"
 
 # haos-version: main is the authoritative branch for ihost (it's what
 # URL_HASSIO_VERSION in ha-supervisor const.py points at). DSGW210-specific

@@ -11,7 +11,7 @@
 #   --to TAG|PINS         Current release tag or source-pins.json path (default: current build)
 #   --output FILE         Output file (default: CHANGELOG-<build-id>.md)
 #   --build-dir PATH      Build output dir (default: ga_output)
-#   --repos-dir PATH      Parent dir containing all repo checkouts (default: /home/user/git)
+#   --repos-dir PATH      Parent dir containing all repo checkouts (default: $GA_REPOS_DIR, else $HOME/git)
 #
 # If --from is not given, uses the most recent git tag on ha-operating-system.
 #
@@ -26,7 +26,7 @@
 set -euo pipefail
 
 BUILD_DIR="${BUILD_DIR:-ga_output}"
-REPOS_DIR="${REPOS_DIR:-/home/user/git}"
+REPOS_DIR="${REPOS_DIR:-${GA_REPOS_DIR:-$HOME/git}}"
 FROM_REF=""
 TO_REF=""
 OUTPUT=""

@@ -2284,18 +2284,26 @@ if [[ -n "$SRC" ]]; then
   # still-present SRC-14/15/16 frontend checks below, which _skip cleanly
   # when no checkout is found. These remaining frontend checks are out of
   # this rewrite's scope (T2/T3 named families only).
-  FE_ROOT=""
-  for fe_dir in "${SRC}/../homeassistant_frontend" "/home/user/git/homeassistant_frontend"; do
-    [[ -d "$fe_dir/src" ]] && FE_ROOT="$fe_dir" && break
-  done
+  # Sibling checkouts (frontend / core / supervisor forks) are found ONLY under GA_SIBLING_REPOS, the
+  # directory that holds them. Nothing is guessed (no workstation path, no "next to the source tree"):
+  # a guess made these checks SKIP on CI and judge some other checkout on a laptop (Odoo #1632).
+  # Unset or without the repo -> the checks skip, and say so once, loudly.
+  _sibling_repo() {  # _sibling_repo <dirname> <marker-subdir>  -> prints the checkout, or nothing
+    local d="${GA_SIBLING_REPOS:+${GA_SIBLING_REPOS%/}/$1}"
+    [[ -n "$d" && -d "$d/$2" ]] && printf '%s' "$d"
+    return 0
+  }
+  if [[ -z "${GA_SIBLING_REPOS:-}" ]]; then
+    echo "  NOTE: GA_SIBLING_REPOS is not set -- the checks that read the retired frontend/core/supervisor forks (SRC-14/15/16, BLD-ADMIN, BLD-SUP-DNS, INT-05) are SKIPPED, not judged. Set it to the directory holding those checkouts to run them."
+  elif [[ ! -d "${GA_SIBLING_REPOS}" ]]; then
+    echo "  NOTE: GA_SIBLING_REPOS='${GA_SIBLING_REPOS}' is not a directory -- those checks are SKIPPED."
+  fi
+  FE_ROOT="$(_sibling_repo homeassistant_frontend src)"
   # CORE_ROOT discovery — the SRC-14d..e / BLD-ADMIN checks below reference it.
   # (Restored here after the de-fork removed the SRC-11 block that used to
   # define it; the ha-core fork is retired so this is never found and those
   # checks _skip cleanly, but the var must exist under `set -u`.)
-  CORE_ROOT=""
-  for core_dir in "${SRC}/../homeassisant_core" "/home/user/git/homeassisant_core"; do
-    [[ -d "$core_dir/.github" ]] && CORE_ROOT="$core_dir" && break
-  done
+  CORE_ROOT="$(_sibling_repo homeassisant_core .github)"
 
   # SRC-14: PIN verification integration (frontend + core)
   if [[ -n "$FE_ROOT" ]]; then
@@ -2314,7 +2322,7 @@ if [[ -n "$SRC" ]]; then
       && _pass "SRC-14c: verifyGASetupPin API function exists" \
       || _fail "SRC-14c: verifyGASetupPin missing from API client"
   else
-    _skip "SRC-14a..c" "frontend repo not found"
+    _skip "SRC-14a..c" "frontend repo not found; GA_SIBLING_REPOS=${GA_SIBLING_REPOS:-unset}"
   fi
 
   if [[ -n "$CORE_ROOT" ]]; then
@@ -2367,7 +2375,7 @@ if [[ -n "$SRC" ]]; then
       && _pass "BLD-ADMIN-04: GAAdminBypassView is registered in greenautarky_site/__init__.py" \
       || _fail "BLD-ADMIN-04: GAAdminBypassView is NOT registered — /admin will return 404"
   else
-    _skip "SRC-14d..e + BLD-ADMIN-01..04" "ha-core repo not found"
+    _skip "SRC-14d..e + BLD-ADMIN-01..04" "ha-core repo not found; GA_SIBLING_REPOS=${GA_SIBLING_REPOS:-unset}"
   fi
 
   # SRC-15: QR code PIN auto-injection (frontend)
@@ -2394,7 +2402,7 @@ if [[ -n "$SRC" ]]; then
       && _pass "SRC-15d: QR auto-inject E2E tests exist" \
       || _fail "SRC-15d: QR auto-inject E2E tests missing"
   else
-    _skip "SRC-15a..d" "frontend repo not found"
+    _skip "SRC-15a..d" "frontend repo not found; GA_SIBLING_REPOS=${GA_SIBLING_REPOS:-unset}"
   fi
 
   # SRC-16: Ethernet consent integration (frontend + core)
@@ -2411,7 +2419,7 @@ if [[ -n "$SRC" ]]; then
       && _pass "SRC-16c: setEthernetPreference API function exists" \
       || _fail "SRC-16c: setEthernetPreference missing from API client"
   else
-    _skip "SRC-16a..c" "frontend repo not found"
+    _skip "SRC-16a..c" "frontend repo not found; GA_SIBLING_REPOS=${GA_SIBLING_REPOS:-unset}"
   fi
 
   # SRC-17: the RAUC keyring audit exists and is wired fail-closed.
@@ -2799,10 +2807,7 @@ if [[ -n "$SRC" ]]; then
   fi
 
   # BLD-SUP-DNS: Supervisor fork has GA DNS entries in dns.py
-  SUP_ROOT=""
-  for sup_dir in "${SRC}/../supervisor" "/home/user/git/supervisor"; do
-    [[ -d "$sup_dir/supervisor" ]] && SUP_ROOT="$sup_dir" && break
-  done
+  SUP_ROOT="$(_sibling_repo supervisor supervisor)"
   if [[ -n "$SUP_ROOT" ]]; then
     DNS_PY="${SUP_ROOT}/supervisor/plugins/dns.py"
     if [[ -f "$DNS_PY" ]]; then
@@ -2843,7 +2848,7 @@ if [[ -n "$SRC" ]]; then
       _skip "BLD-SUP-DNS-a..c" "dns.py not found in supervisor fork"
     fi
   else
-    _skip "BLD-SUP-DNS-a..c" "supervisor repo not found"
+    _skip "BLD-SUP-DNS-a..c" "supervisor repo not found; GA_SIBLING_REPOS=${GA_SIBLING_REPOS:-unset}"
   fi
 
   # =========================================================================

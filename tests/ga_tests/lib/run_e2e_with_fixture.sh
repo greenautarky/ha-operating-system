@@ -17,7 +17,7 @@
 # Optional env:
 #   SSH_PORT       (default 22222)
 #   SSH_USER       (default root)
-#   SSH_KEY        (default /home/user/Nextcloud2/GreenAutarky/security_store/HomeassistantGreen0.pem)
+#   SSH_KEY        (REQUIRED: path of the device test key; no default)
 #   DEVICE_ID      (default KIB-SON-TEST — passed through to fixture)
 #   GHCR_USER      (default Thomastaube — passed through to fixture)
 #   BUNDLE_VERSION (default v1.2 — passed through to fixture)
@@ -31,7 +31,7 @@ DEVICE_IP="${DEVICE_IP:-}"
 GHCR_PAT="${GHCR_PAT:-}"
 SSH_PORT="${SSH_PORT:-22222}"
 SSH_USER="${SSH_USER:-root}"
-SSH_KEY="${SSH_KEY:-/home/user/Nextcloud2/GreenAutarky/security_store/HomeassistantGreen0.pem}"
+SSH_KEY="${SSH_KEY:?SSH_KEY must name the private key of the test device (no default: a workstation path does not belong in the repo)}"
 DEVICE_ID="${DEVICE_ID:-KIB-SON-TEST}"
 GHCR_USER="${GHCR_USER:-Thomastaube}"
 BUNDLE_VERSION="${BUNDLE_VERSION:-v1.2}"

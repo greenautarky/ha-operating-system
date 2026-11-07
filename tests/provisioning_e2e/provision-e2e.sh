@@ -42,7 +42,7 @@ set -uo pipefail
 BENCH="${BENCH_SSH:-remote1}"
 FM_SSH="${FM_SSH:-ga-newhost}"
 FM_URL="${FM_URL:-http://127.0.0.1:8090}"
-FM_TOKEN_PATH="${FM_TOKEN_PATH:-/home/thomas/ga-fleet-manager/state/auth.token}"
+FM_TOKEN_PATH="${FM_TOKEN_PATH:-~/ga-fleet-manager/state/auth.token}"
 BUILDER_SSH="${BUILDER_SSH:-homes4}"            # reaches the builder LXC
 BUILDER_CT="${BUILDER_CT:-107}"
 BUILDER_IMAGE_DIR="${BUILDER_IMAGE_DIR:-/home/builder/ha-operating-system/ga_output/images}"
@@ -225,7 +225,7 @@ if [[ $SKIP_FLASH -eq 0 && -n "$FROM_BUILDER" ]]; then
   EXPECTED_SHA="$(ssh "$BUILDER_SSH" "pct exec $BUILDER_CT -- cat $BUILDER_IMAGE_DIR/$FROM_BUILDER.sha256" \
     | awk '{print $1}')"
   [[ -n "$EXPECTED_SHA" ]] || die "no .sha256 next to $FROM_BUILDER on the builder"
-  IMAGE="/home/thomas/$FROM_BUILDER"
+  IMAGE="~/$FROM_BUILDER"   # remote path on the bench: its login home
   ssh "$BUILDER_SSH" "pct exec $BUILDER_CT -- cat $BUILDER_IMAGE_DIR/$FROM_BUILDER" \
     | ssh "$BENCH" "cat > $IMAGE" || die "image transfer failed"
   GOT_SHA="$(ssh "$BENCH" "sha256sum $IMAGE" | awk '{print $1}')"

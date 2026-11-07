@@ -123,8 +123,8 @@ ck WFB-77 test "$(gp "$T/nm_fixture")" = 2
 printf '#!/bin/sh\nprintf "[connection-eth]\\nmatch-device=type:ethernet\\nwifi.powersave=3\\n[connection-wifi-defaults]\\nmatch-device=type:wifi\\nwifi.powersave=2\\n[connection]\\nwifi.powersave=1\\n"\n' > "$T/nm_multi"; chmod +x "$T/nm_multi"
 ck WFB-78 test "$(gp "$T/nm_multi")" = 2
 # live binary (this box only: needs the ihost build tree + qemu-arm); CI prints SKIP
-NMB=/home/user/build16/out-ihost
-if command -v qemu-arm >/dev/null 2>&1 && [ -x "$NMB/target/usr/sbin/NetworkManager" ]; then
+NMB="${GA_NM_BUILD_DIR:-}"   # set GA_NM_BUILD_DIR to an ihost build output to run WFB-79; unset -> SKIP
+if [ -n "$NMB" ] && command -v qemu-arm >/dev/null 2>&1 && [ -x "$NMB/target/usr/sbin/NetworkManager" ]; then
     mkdir -p "$T/nmcfg"; cp "$CONF" "$T/nmcfg/50-ga.conf"; printf '[main]\nplugins=keyfile\n' > "$T/nmcfg/NetworkManager.conf"
     printf '#!/bin/sh\nexec qemu-arm -L %s/target %s/target/usr/sbin/NetworkManager --config %s/NetworkManager.conf --config-dir %s --print-config\n' "$NMB" "$NMB" "$T/nmcfg" "$T/nmcfg" > "$T/nm_real"; chmod +x "$T/nm_real"
     ck WFB-79 test "$(gp "$T/nm_real")" = 2
