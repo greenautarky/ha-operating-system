@@ -30,6 +30,15 @@ rm -f "$W/src/version.yaml"
 sed -E "s/^(${_key}:)[[:space:]]*[^#[:space:]]+/\\1 ${_rel}/" "$ROOT/version.yaml" > "$W/src/version.yaml"
 cp -a "$ROOT/buildroot-external" "$W/src/buildroot-external"
 tar -xJf "$FX/synced.tar.xz" -C "$W/src/buildroot-external/rootfs-overlay" --strip-components=1
+# The vendored wizard's built entry bundles are 26-byte stubs in the capture. BLD-FE-04 reads the PIN /
+# QR / Ethernet markers out of them, so the fixture carries them (the markers are the ones the real
+# 2.12.9 bundle has: element names and property names survive minification). FIXTURE_WIZARD_MARKERS
+# overrides the marker text (red proofs: leave one out).
+_mk='customElements.define("ga-setup-pin");customElements.define("ga-setup-ethernet");this.autoPin=1;history.replaceState(null,"");'
+[ -z "${FIXTURE_WIZARD_MARKERS+x}" ] || _mk="$FIXTURE_WIZARD_MARKERS"
+for _js in "$W"/src/buildroot-external/rootfs-overlay/usr/share/ga/custom_components/greenautarky_site/frontend_bundle/frontend_*/greenautarky-setup.*.js; do
+  [ -f "$_js" ] && printf '%s\n' "$_mk" > "$_js"
+done
 OUT="$W/src/ga_output"
 tar -xJf "$FX/ga_output.tar.xz" -C "$W/src"
 # Verbatim overlay scripts whose RULE changed after the fixture's bake: the fixture target holds
@@ -92,6 +101,22 @@ with tarfile.open(fx + "/ga_manager-files.tar") as src, tarfile.open(fileobj=lay
 with tarfile.open(gm, "w") as t:
     add(t, "cfg.json", json.dumps(plat).encode()); add(t, "layer0.tar", layer.getvalue())
     add(t, "manifest.json", json.dumps([{"Config": "cfg.json", "RepoTags": [], "Layers": ["layer0.tar"]}]).encode())
+# Supervisor: an OCI archive with ONE layer holding plugins/dns.py -- the REAL file out of the
+# shipped 2026.10.5.3 image (fixtures/supervisor-dns.py), which BLD-SUP-DNS-a..c, SVC-09/09b/09c and
+# INT-05 read out of the baked archive (Odoo #1649). FIXTURE_SUP_DNS=<file> swaps the file (red proofs).
+(sup,) = glob.glob(f"{img}/*hassio-supervisor*.tar")
+dns = open(os.environ.get("FIXTURE_SUP_DNS") or f"{fx}/../supervisor-dns.py", "rb").read()
+lay = io.BytesIO()
+with tarfile.open(fileobj=lay, mode="w") as lt:
+    add(lt, "usr/src/supervisor/supervisor/plugins/dns.py", dns)
+lb = lay.getvalue(); ld = hashlib.sha256(lb).hexdigest()
+scfg = json.dumps(dict(plat, config={})).encode(); sd = hashlib.sha256(scfg).hexdigest()
+sman = json.dumps({"schemaVersion": 2, "config": {"digest": "sha256:" + sd, "size": len(scfg)},
+                   "layers": [{"digest": "sha256:" + ld, "size": len(lb), "mediaType": "application/vnd.oci.image.layer.v1.tar"}]}).encode()
+smd = hashlib.sha256(sman).hexdigest()
+with tarfile.open(sup, "w") as t:
+    add(t, "index.json", json.dumps({"schemaVersion": 2, "manifests": [{"digest": "sha256:" + smd}]}).encode())
+    add(t, "blobs/sha256/" + smd, sman); add(t, "blobs/sha256/" + sd, scfg); add(t, "blobs/sha256/" + ld, lb)
 # every other baked archive: a minimal OCI archive with the board's platform (content is read by no test)
 for f_ in glob.glob(f"{img}/*.tar"):
     if os.path.getsize(f_) == 0:

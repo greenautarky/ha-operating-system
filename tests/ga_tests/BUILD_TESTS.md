@@ -66,16 +66,16 @@ No device or emulator needed — checks the build output tree directly.
 - OVL-05a: ga-overlay-init.service exists
 - OVL-05b: ga-overlay-init.service enabled at boot
 
-### Source verification (cross-repo, runs when repos available)
-- SRC-14a: ga-setup-pin.ts component exists
-- SRC-14b: wizard STEPS includes pin
-- SRC-14c: verifyGASetupPin API function exists
-- SRC-14d: Core has verify_pin endpoint
-- SRC-14e: Core has PIN rate limiting
-- SRC-15a: ga-setup-pin has autoPin property (QR support)
-- SRC-15b: wizard parses ?pin= from URL
-- SRC-15c: wizard cleans PIN from URL (history.replaceState)
-- SRC-15d: QR auto-inject E2E tests exist
+### Wizard / Core component / Supervisor DNS (read from what the bake ships, Odoo #1649)
+These used to read sibling checkouts of the frontend / Core / Supervisor forks (`GA_SIBLING_REPOS`, which no
+bake or CI job set, so they were SKIP in every run). They now read the vendored `greenautarky_site` component
+in the rootfs-overlay and the baked Supervisor image archive. Pinned in `tests/gates/build_tests_board_matrix`.
+- SRC-14d: Core has verify_pin endpoint (vendored component)
+- SRC-14e: Core has PIN rate limiting (vendored component)
+- BLD-ADMIN-01..04: GAAdminBypassView exists, bound to /admin, redirects to /config, registered in `__init__.py`
+- BLD-FE-04: the BUILT wizard entry bundles (frontend_latest + frontend_es5) carry the PIN step, the QR auto-PIN (`autoPin`, `replaceState`) and the Ethernet step
+- BLD-SUP-DNS-a..c, SVC-09, SVC-09b, SVC-09c, INT-05: the baked Supervisor's `plugins/dns.py` has the GA hostnames, reads ga-services.conf, uses the dynamic OTA picker, and its hardcoded fallback IP equals ga-services.conf (`scripts/archive-extract-file.py`)
+- REMOVED: SRC-14a..c, SRC-15a..d, SRC-16a..c (asserted TypeScript source files of the frontend repo, which are not in the shipped artefact; BLD-FE-03/04 judge the artefact, `tests/e2e` pin-verification / ethernet-consent drive the behaviour)
 
 ### Version chain & freshness
 - VER-01: version.json supervisor version is not "latest"
