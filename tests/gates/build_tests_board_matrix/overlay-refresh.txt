@@ -1,3 +1,5 @@
 # Verbatim overlay files refreshed into the frozen fixture target (see make-fixture.sh).
 # usr/sbin/ga-rauc-install: board-aware bundle name, #1631 (fixtures predate it)
 usr/sbin/ga-rauc-install
+# usr/libexec/ga-firewall-gate: default-deny ingress on every non-trusted interface, Odoo #1647 (fixtures predate it)
+usr/libexec/ga-firewall-gate
