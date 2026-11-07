@@ -1032,6 +1032,16 @@ jobs:
       - name: Baked add-on images (a pin that is not in the image must go red)
         run: ./tests/gates/baked_addon_images/selftest.sh
 
+      # BOSv1.6.0-rc4 baked the Core image config without variant v7 (an old skopeo in the
+      # download-cache path dropped it); the Supervisor re-pulled the Core on first boot
+      # (Odoo #1637). Every baked image must declare the board's os/arch/variant; the real rc4
+      # and rc2 Core configs are fixtures, and the patched fetch script is exercised with a stub
+      # skopeo. Needs the haos checkout (patch applier).
+      - name: Baked image platforms (a Core without variant v7 must go red)
+        env:
+          HAOS_PATCHES_REQUIRE_LIVE: "1"
+        run: ./tests/gates/baked_image_platforms/selftest.sh
+
       # The Core image the bake ships must be the GA armv7 build at a 2026+ tag
       # and carry what the Supervisor reads (io.hass.version/machine, s6 /init).
       # The 2026.8.2 tag first published 2026-09-22 booted standalone and had

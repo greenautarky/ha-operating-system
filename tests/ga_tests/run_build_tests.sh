@@ -1627,6 +1627,28 @@ if [[ -f "$VER_JSON" ]]; then
     fi
   fi
 
+  # VER-12: EVERY baked image declares the board's platform (os/arch/variant). BOSv1.6.0-rc4 baked
+  # the Core as linux/arm without variant v7 (an old skopeo in the download cache path dropped it);
+  # the Supervisor then removed and re-pulled the baked Core on first boot (Odoo #1637). The checker
+  # pins the expectation per arch and fails closed on zero/unreadable archives; its selftest is
+  # tests/gates/baked_image_platforms/selftest.sh. Status read from the command, not from a pipe.
+  VER12_CHECKER="${VER10_SRC:+${VER10_SRC}/scripts/check-baked-image-platforms.sh}"
+  if [[ ! -d "$IMAGES_DIR" ]]; then
+    _skip "VER-12" "no images dir — source-only run"
+  elif [[ -z "$VER12_CHECKER" ]] || [[ ! -x "$VER12_CHECKER" ]]; then
+    _fail "VER-12: images were built but scripts/check-baked-image-platforms.sh was not found or is not executable (looked under '${VER10_SRC:-<unresolved>}')"
+  else
+    VER12_OUT="$("$VER12_CHECKER" --images-dir "$IMAGES_DIR" --arch "${ARCH:-$_RBT_ARCH}" 2>&1)"
+    VER12_RC=$?
+    VER12_SUMMARY="$(printf '%s\n' "$VER12_OUT" | grep -E '^baked image platforms:' || true)"
+    if [[ "$VER12_RC" -eq 0 ]]; then
+      _pass "VER-12: ${VER12_SUMMARY}"
+    else
+      printf '%s\n' "$VER12_OUT" | sed 's/^/        /'
+      _fail "VER-12: a baked image does not declare the board's platform (${VER12_SUMMARY:-rc=${VER12_RC}})"
+    fi
+  fi
+
   # GAMCAP-01: the BAKED ga_manager carries what this OS relies on it for.
   # BOSv1.4.0-rc2 shipped a ga_manager that configured nothing for Home
   # Assistant Core's InfluxDB integration, so Core wrote nothing into the
