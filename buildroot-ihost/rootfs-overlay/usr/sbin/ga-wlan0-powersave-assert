@@ -132,7 +132,7 @@ assert_once() {
             if [ "$_after" = "off" ]; then
                 echo fixed
             else
-                _log err "'$IW dev $IFACE set power_save off' returned 0 but the re-read state is '${_after:-unreadable}', not off — NOT fixed live; profile persisted, takes effect at next activation"
+                _log err "'$IW dev $IFACE set power_save off' returned 0 but the re-read state is '${_after:-unreadable}', not off — live switch-off unconfirmed; profile persisted, takes effect at next activation"
                 echo fix-failed
             fi
         else

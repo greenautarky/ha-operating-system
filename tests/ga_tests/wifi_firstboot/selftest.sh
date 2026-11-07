@@ -104,7 +104,7 @@ ck WFB-83 grep -q 'warning' "$T/log"
 ck WFB-84 grep -q 'Operation not supported' "$T/log"      # iw's own error reaches the log
 ck WFB-85 grep -q 'connection modify inst 802-11-wireless.powersave 2' "$T/nm.log"   # still persisted
 ck WFB-86 sh -c "! grep -q 'connection up' '$T/nm.log'"
-# #1572 re-read: set succeeds (rc 0) but the re-read still says on -> not fixed
+# #1572 re-read: set succeeds (rc 0) but the re-read still says on -> fix-failed
 mk_nmbin ""; mk_nm default activated; mk_iw_stuck; : > "$T/log"; R="$(run_assert)"
 ck WFB-87 test "$R" = fix-failed
 ck WFB-88 grep -q 're-read state is .on.' "$T/log"
