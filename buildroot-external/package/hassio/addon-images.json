@@ -22,21 +22,15 @@
     },
     "ga_manager": {
       "image": "ghcr.io/greenautarky/ga_manager-{arch}",
-      "version": "0.269.0",
-      "hold": {
-        "reason": "0.270.0 (ga_manager #381, influx_freshness state-aware, Odoo #1508) was published 2026-11-05 after the BOSv1.6.0-rc1 store cut; the pin follows the vibe_addons store (0.269.0) and moves with the next store cut, not into BOSv1.6.0-rc1",
-        "until": "2026-11-20"
-      }
+      "version": "0.273.0"
     },
     "ga_default_addon": {
       "image": "ghcr.io/greenautarky/ga_default_addon-{arch}",
-      "version": "2.1.6",
-      "hold": {"reason": "2.1.7 (published 2026-11-06) only rebuilds tempio with Go 1.27.2 to clear CVE-2025-68121 for the DSGW210 aarch64 image; the iHost pin follows the vibe_addons store (2.1.6) and moves with the next store cut", "until": "2026-12-04"}
+      "version": "2.1.7"
     },
     "ga_hmvapp_addon": {
       "image": "ghcr.io/greenautarky/ga_hmvapp_addon-{arch}",
-      "version": "2.6.2",
-      "hold": {"reason": "2.6.3 (published 2026-11-06) only rebuilds tempio with Go 1.27.2 to clear CVE-2025-68121 for the DSGW210 aarch64 image; the iHost pin follows the vibe_addons store (2.6.2) and moves with the next store cut", "until": "2026-12-04"}
+      "version": "2.6.3"
     }
   }
 }

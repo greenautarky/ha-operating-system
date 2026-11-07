@@ -18,27 +18,15 @@
     },
     "ga_manager": {
       "image": "ghcr.io/greenautarky/ga_manager-{arch}",
-      "version": "0.269.0",
-      "hold": {
-        "reason": "0.270.0 (ga_manager #381, influx_freshness state-aware, Odoo #1508) was published 2026-11-05 after the BOSv1.6.0-rc1 store cut; the pin follows the vibe_addons store (0.269.0) and moves with the next store cut, not into BOSv1.6.0-rc1",
-        "until": "2026-11-20"
-      }
+      "version": "0.273.0"
     },
     "ga_default_addon": {
       "image": "ghcr.io/greenautarky/ga_default_addon-{arch}",
-      "version": "2.1.7",
-      "store_ahead": {
-        "reason": "the vibe_addons store (one file for every board) is on the older patch release; the 2.1.7 aarch64 image clears the fixable CRITICAL CVE-2025-68121 (Go stdlib in tempio) that the older aarch64 image carries (trivy, 2026-11-06), the armv7 image of the older release has none. The store moves with the next store cut (Thomas), the iHost pin holds until then (hold on the iHost file). Odoo #1617",
-        "until": "2026-12-04"
-      }
+      "version": "2.1.7"
     },
     "ga_hmvapp_addon": {
       "image": "ghcr.io/greenautarky/ga_hmvapp_addon-{arch}",
-      "version": "2.6.3",
-      "store_ahead": {
-        "reason": "the vibe_addons store (one file for every board) is on the older patch release; the 2.6.3 aarch64 image clears the fixable CRITICAL CVE-2025-68121 (Go stdlib in tempio) that the older aarch64 image carries (trivy, 2026-11-06), the armv7 image of the older release has none. The store moves with the next store cut (Thomas), the iHost pin holds until then (hold on the iHost file). Odoo #1617",
-        "until": "2026-12-04"
-      }
+      "version": "2.6.3"
     }
   }
 }
