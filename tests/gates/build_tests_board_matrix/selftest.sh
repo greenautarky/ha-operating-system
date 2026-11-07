@@ -14,9 +14,13 @@
 #   it calls are the live ones.
 #
 # WHAT IT ASSERTS, per board
-#   1. no test FAILs except NOT_COVERED: four checks that open a signed OTA bundle / the disk image
-#      (BLD-ETH-01, IMG-01, RFLOOR-01, RAUC-SIG-01) cannot be fixtured (hundreds of MB, signed); their
-#      code carries no board token (reviewed 2026-11-06) and they stay covered by the bake itself.
+#   1. no test FAILs except NOT_COVERED: RAUC-SIG-01 only. It verifies the bundle's signature against the
+#      keyring THIS image ships; the repo holds no signing key for that keyring, so it cannot pass on a
+#      fixture (swapping the keyring would turn RAUC-KEYRING-01 red). It is judged by its REAL code, extracted
+#      from the live runner, in tests/gates/rauc_sig_runner (throwaway CA, real `rauc`), and by the bake.
+#      BLD-ETH-01, IMG-01 and RFLOOR-01 are judged here on MINIMAL SYNTHETIC release artefacts
+#      (synth-release-artefacts.sh: a squashfs "bundle" with boot.vfat + manifest, a toy GPT image); their
+#      red proofs are at the bottom of this file (Odoo #1632).
 #   2. every test that PASSED in the real bake still PASSES (expected/<board>.pass = pinned from the real
 #      bake log, not from this run): a test that quietly turned into a SKIP or vanished is red.
 #   3. the SKIP set is exactly expected/<board>.skip (the build_board_skips.tsv rows + what the real bake
@@ -26,16 +30,17 @@
 #   Then red proofs: the historical board-unaware bugs are re-introduced into a COPY of the runner and
 #   the matrix must go red on the named test of the right board.
 set -u
+unset GA_SIBLING_REPOS   # hermetic: ENV_DEP tests must SKIP here, whatever the caller exported
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/../../.." && pwd)"
 # shellcheck source=../../../scripts/lib/tree-paths.sh
 . "$ROOT/scripts/lib/tree-paths.sh"
-for t in jq python3 tar xz strings; do command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 2; }; done
+for t in jq python3 tar xz strings mksquashfs unsquashfs sfdisk; do command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 2; }; done
 [ -d "$ROOT/haos/buildroot-external" ] || { echo "FATAL: haos submodule not checked out (git submodule update --init --depth 1 haos)"; exit 2; }
 W="$(mktemp -d "${TMPDIR:-/tmp}/bm-XXXXXX")"; trap 'rm -rf "$W"' EXIT
 fails=0; ran=0
 ok()  { ran=$((ran+1)); echo "  ok    $1"; }
 bad() { ran=$((ran+1)); fails=$((fails+1)); echo "  FAIL  $1"; }
-NOT_COVERED='^(BLD-ETH-01|IMG-01|RFLOOR-01|RAUC-SIG-01)$'
+NOT_COVERED='^(RAUC-SIG-01)$'
 ENV_DEP='^(SRC-1[456].*|BLD-ADMIN-0[1-4]|BLD-SUP-DNS-a\.\.c|INT-05)$'
 ids() { "$HERE/ids.sh" "$1" < "$2"; }
 
@@ -139,6 +144,22 @@ echo "$out" | grep -qE "^ +PASS +VER-12[: ]" && ok "red proof ver12: the same ca
 MUT='s/\[\[ "\$_RBT_BOARD" == ihost \]\] \|\| _RBT_PINS_REL=.*\n/_RBT_PINS_REL=""\n/'
 expect_red pins-ihost dsgw210 VER-10 ihost
 
+# ---- red proofs of the three checks that open release artefacts (synthetic artefacts, Odoo #1632) ------------
+# Each mutation spoils ONE thing in the synthetic artefacts; the named test must go red, on both boards.
+# (The green side is the pinned expected/<board>.pass above: these three ids must pass on the clean fixture.)
+synth_red() { # <env assignment> <test id> <label>
+  local b out
+  for b in $GA_BOARDS; do
+    out="$(env "$1" "$HERE/run-board.sh" "$b" "$W/ws-$3-$b" 2>&1)"
+    if echo "$out" | grep -qE "^ +FAIL +${2}[: ]"; then ok "red proof $3: $b goes red on $2"; else bad "red proof $3: $b did NOT go red on $2"; fi
+  done
+}
+synth_red SYNTH_ETH_IN_BUNDLE=1 BLD-ETH-01 eth-marker-in-bundle
+synth_red SYNTH_NO_SD_MARKER=1  BLD-ETH-01 eth-detector-dead
+synth_red SYNTH_RELEASE=BOSv0.0.1 RFLOOR-01 floor-release-differs
+synth_red SYNTH_NO_META=1       RFLOOR-01 floor-no-meta
+synth_red SYNTH_IMG_BLANK1=1    IMG-01    img-slot1-blank
+
 # ---- the fixtures are committed to a PUBLIC repo: nothing key- or hash-shaped but the fake values -----
 leak=""
 for b in $GA_BOARDS; do
@@ -156,5 +177,5 @@ for b in $GA_BOARDS; do
 done
 [ ! -s "$W/leaks.txt" ] && ok "fixtures: no key/hash/token-shaped value" || { bad "fixtures: secret-shaped content:"; cut -c1-120 "$W/leaks.txt"; }
 
-[ "$ran" -ge 33 ] || { echo "FAIL: only $ran cases ran (floor 33)"; exit 1; }
+[ "$ran" -ge 43 ] || { echo "FAIL: only $ran cases ran (floor 43)"; exit 1; }
 echo "$ran cases ran, $fails failed"; exit $((fails>0))
