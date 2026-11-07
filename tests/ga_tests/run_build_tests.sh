@@ -5247,6 +5247,22 @@ else
   fi
 fi
 
+# --- Host firewall present and correct on THIS board's image (Odoo #1591) ---
+# One shared gate + unit (buildroot-external); a board supplies only its NIC names. The checker
+# reads this target tree and renders the ruleset with the target's own gate (see
+# tests/gates/board_firewall/check.sh, red/green: its selftest.sh).
+_fwb_chk="${_RBT_ROOT}/tests/gates/board_firewall/check.sh"
+if [[ ! -x "$_fwb_chk" ]]; then
+  _fail "FWB-00: board firewall checker missing (${_fwb_chk})"
+else
+  _fwb_rc=0; _fwb_out="$("$_fwb_chk" "$_RBT_BOARD" "$TARGET" 2>&1)" || _fwb_rc=$?   # a failing checker must not end the runner (a sourced lib sets -e)
+  if [[ "$_fwb_rc" == 0 ]] && ! grep -q '^FAIL' <<<"$_fwb_out"; then
+    _pass "FWB-00: ga-firewall enabled on ${_RBT_BOARD}, LAN limited to 22222/80/8123, add-on ports closed ($(grep -c '^PASS' <<<"$_fwb_out") checks)"
+  else
+    _fail "FWB-00: host firewall wrong on ${_RBT_BOARD}: $(grep '^FAIL' <<<"$_fwb_out" | head -n 4 | tr '\n' ';')"
+  fi
+fi
+
 echo ""
 total=$((pass + fail + skip))
 if (( ${#_RBT_BOARD_SKIPPED[@]} > 0 )); then
