@@ -62,6 +62,18 @@ mk_nmbin() { # $1 = global wifi.powersave value or "" ; fake NetworkManager --pr
     printf '#!/bin/sh\necho "[main]"\necho "[connection-wifi-defaults]"\n[ -n "%s" ] && echo "wifi.powersave=%s"\nexit 0\n' "$1" "$1" > "$T/NetworkManager"
     chmod +x "$T/NetworkManager"
 }
+mk_iw_stuck() { cat > "$T/iw" <<IW
+#!/bin/sh
+echo "\$*" >> "$T/iw.log"
+case "\$*" in *"get power_save"*) echo "Power save: on" ;; esac
+IW
+    chmod +x "$T/iw"; : > "$T/iw.log"; }
+mk_iw_flip() { cat > "$T/iw" <<IW
+#!/bin/sh
+echo "\$*" >> "$T/iw.log"
+case "\$*" in *"set power_save off"*) echo off > "$T/iwst" ;; *"get power_save"*) echo "Power save: \$(cat "$T/iwst" 2>/dev/null || echo on)" ;; esac
+IW
+    chmod +x "$T/iw"; rm -f "$T/iwst"; : > "$T/iw.log"; }
 mk_nmbin 2
 run_assert() { ( logger() { echo "$*" >> "$T/log"; }; export GA_PSAVE_TEST=1 GA_PSAVE_NM="$T/NetworkManager" GA_PSAVE_NMCLI="$T/nmcli" GA_PSAVE_IW="${IWOVR:-$T/iw}" GA_PSAVE_WAIT=0; . "$ASSERT"; assert_once ) 2>/dev/null; }
 
@@ -70,7 +82,7 @@ mk_nm default activated; mk_iw on; R="$(run_assert)"
 ck WFB-29 test "$R" = ok
 ck WFB-29b sh -c "! grep -q 'connection modify\\|connection up' '$T/nm.log' && ! grep -q 'set power_save' '$T/iw.log'"
 mk_nmbin ""
-mk_nm default activated; mk_iw on;  R="$(run_assert)"
+mk_nm default activated; mk_iw_flip;  R="$(run_assert)"   # stub flips to off after set
 ck WFB-20 test "$R" = fixed
 ck WFB-21 sh -c "! grep -q 'connection up' '$T/nm.log'"          # no re-activation
 ck WFB-22 grep -q 'connection modify inst 802-11-wireless.powersave 2' "$T/nm.log"
@@ -92,6 +104,27 @@ ck WFB-83 grep -q 'warning' "$T/log"
 ck WFB-84 grep -q 'Operation not supported' "$T/log"      # iw's own error reaches the log
 ck WFB-85 grep -q 'connection modify inst 802-11-wireless.powersave 2' "$T/nm.log"   # still persisted
 ck WFB-86 sh -c "! grep -q 'connection up' '$T/nm.log'"
+# #1572 re-read: set succeeds (rc 0) but the re-read still says on -> not fixed
+mk_nmbin ""; mk_nm default activated; mk_iw_stuck; : > "$T/log"; R="$(run_assert)"
+ck WFB-87 test "$R" = fix-failed
+ck WFB-88 grep -q 're-read state is .on.' "$T/log"
+mk_nmbin ""; mk_nm default activated; mk_iw_flip; R="$(run_assert)"
+ck WFB-89 test "$R" = fixed
+ck WFB-90 sh -c "grep -c 'get power_save' '$T/iw.log' | grep -qx 2"   # once before, once after the set
+# main path: status file written, fix-failed exits non-zero
+mk_nmbin ""; mk_nm default activated; mk_iw_stuck
+cat > "$T/nmbin_main" <<NB
+#!/bin/sh
+echo "[connection-wifi-defaults]"
+NB
+chmod +x "$T/nmbin_main"
+( GA_PSAVE_NM="$T/nmbin_main" GA_PSAVE_NMCLI="$T/nmcli" GA_PSAVE_IW="$T/iw" GA_PSAVE_WAIT=0 GA_PSAVE_STATUS="$T/status" sh "$ASSERT" >"$T/out" 2>/dev/null ); RC=$?
+ck WFB-91 test "$RC" = 1
+ck WFB-92 grep -qx fix-failed "$T/status"
+mk_iw_flip
+( GA_PSAVE_NM="$T/nmbin_main" GA_PSAVE_NMCLI="$T/nmcli" GA_PSAVE_IW="$T/iw" GA_PSAVE_WAIT=0 GA_PSAVE_STATUS="$T/status" sh "$ASSERT" >"$T/out" 2>/dev/null ); RC=$?
+ck WFB-93 test "$RC" = 0
+ck WFB-94 grep -qx fixed "$T/status"
 mk_nmbin ""; mk_nm default activating; mk_iw on; R="$(run_assert)"
 ck WFB-24 test "$R" = deferred
 ck WFB-25 sh -c "! grep -q 'connection modify\\|connection up' '$T/nm.log'"

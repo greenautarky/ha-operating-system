@@ -68,7 +68,8 @@ runtime_powersave() {
 }
 
 # assert: read the active conn's powersave; 2 = disabled = correct. Echoes
-# ok|fixed|pending-next-activation|deferred|no-conn.
+# ok|fixed|fix-failed|pending-next-activation|deferred|no-conn. "fixed" = set
+# succeeded AND the re-read state is off; fix-failed = set failed or re-read not off.
 #
 # NEVER `connection up` / re-activate here. NetworkManager 1.50 cannot reapply
 # 802-11-wireless.powersave on a live link (nm-device-wifi.c can_reapply_change
@@ -125,11 +126,18 @@ assert_once() {
         # Check the status: a failed `iw set power_save off` must NOT be reported as
         # "fixed" (Odoo #1572). The profile is persisted either way, so the next
         # activation applies it; the live link keeps its old power-save until then.
+        # "fixed" only after the effective state was RE-READ post-set and is off.
         if _iwerr="$($IW dev "$IFACE" set power_save off 2>&1)"; then
-            echo fixed
+            _after="$(runtime_powersave)"
+            if [ "$_after" = "off" ]; then
+                echo fixed
+            else
+                _log err "'$IW dev $IFACE set power_save off' returned 0 but the re-read state is '${_after:-unreadable}', not off — NOT fixed live; profile persisted, takes effect at next activation"
+                echo fix-failed
+            fi
         else
             _iwrc=$?
-            _log warning "'$IW dev $IFACE set power_save off' FAILED (exit $_iwrc: ${_iwerr:-no output}) — profile persisted, but the driver is NOT switched off live; takes effect at next activation"
+            _log err "'$IW dev $IFACE set power_save off' FAILED (exit $_iwrc: ${_iwerr:-no output}) — profile persisted, but the driver is NOT switched off live; takes effect at next activation"
             echo fix-failed
         fi
     else
@@ -138,4 +146,11 @@ assert_once() {
     fi
 }
 
-[ -n "${GA_PSAVE_TEST:-}" ] || assert_once
+if [ -z "${GA_PSAVE_TEST:-}" ]; then
+    _st="$(assert_once)"
+    echo "$_st"
+    # Status file for readers; fix-failed also fails the unit (systemctl --failed).
+    { echo "$_st" > "${GA_PSAVE_STATUS:-/run/ga-wlan0-powersave-assert.status}"; } 2>/dev/null || true
+    [ "$_st" = fix-failed ] && exit 1
+    exit 0
+fi
