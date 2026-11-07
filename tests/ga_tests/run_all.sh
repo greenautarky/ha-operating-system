@@ -51,6 +51,7 @@ SUITES_EXCLUDED="
   reboot          destructive: reboots the device, host-side, run on demand
   e2e_user_flows  own lane: run_e2e_tests.sh, needs a resident account
   enroll_env      host suite: CI lint.yml host-suites
+  ota_bundle_name host suite: CI lint.yml host-suites — ga-rauc-install asks for the bundle name of its board (#1631)
   telemetry_env   host suite: CI lint.yml host-suites — env label from the fleet env (#1191); the device half is TEL-13..16 in telemetry
   addon_prime     host suite: CI lint.yml host-suites — ga-addon-prime against both ha CLI generations (stub hassio_cli)
   ihost_root_password host suite: CI lint.yml host-suites — the iHost root-password bake wiring (static, no device)
