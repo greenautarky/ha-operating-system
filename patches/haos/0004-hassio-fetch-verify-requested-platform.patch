@@ -1,0 +1,65 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] hassio: fetch verifies the archive declares the requested platform
+
+BOSv1.6.0-rc4 baked the Core image config as linux/arm WITHOUT variant v7.
+The registry's Core config has it. The download cache (name@digest) kept an
+archive written by an old skopeo (1.2.2): it rewrites a docker-v2s2 image
+config on the way to OCI and drops "variant". OCI-native sources are not
+rewritten, so only Core was hit. The Supervisor's check_image then saw
+linux/arm against the expected linux/arm/v7 and re-pulled the Core.
+
+Verify the archive's image config (os, architecture, and variant when one is
+requested) on a cache hit and after a fetch. A cached archive that fails is
+discarded and fetched again; a fresh one that fails stops the build. Measured
+2026-11-07 over 41 cached/baked armv7 archives: only the rc4 Core fails.
+---
+diff --git a/buildroot-external/package/hassio/fetch-container-image.sh b/buildroot-external/package/hassio/fetch-container-image.sh
+index 5f1284c..f33e208 100755
+--- a/buildroot-external/package/hassio/fetch-container-image.sh
++++ b/buildroot-external/package/hassio/fetch-container-image.sh
+@@ -51,6 +51,22 @@ case "${arch}" in
+ esac
+ skopeo_platform="--override-arch '${oci_arch}'${oci_variant:+ --override-variant '${oci_variant}'}"
+ 
++# GA: the platform the archive's image config declares (os/arch/variant) must be
++# the one we asked skopeo for. The download cache is keyed by name@digest, NOT by
++# the tool that wrote the file, and skopeo < ~1.9 rewrites a docker-v2s2 config on
++# the way to OCI WITHOUT its "variant" (BOSv1.6.0-rc4: Core baked as linux/arm
++# where the Supervisor expects linux/arm/v7, so it removed and re-pulled the Core
++# on first boot). OCI-native sources are untouched, which is why only Core broke.
++# oci_variant is only enforced when set (armv7); aarch64 registries differ.
++platform_ok() {
++	local f=$1 mdig cdig
++	mdig=$(tar -xOf "${f}" index.json | jq -er '.manifests[0].digest') || return 1
++	cdig=$(tar -xOf "${f}" "blobs/sha256/${mdig#sha256:}" | jq -er '.config.digest') || return 1
++	tar -xOf "${f}" "blobs/sha256/${cdig#sha256:}" \
++		| jq -e --arg a "${oci_arch}" --arg v "${oci_variant}" \
++			'.os == "linux" and .architecture == $a and ($v == "" or .variant == $v)' >/dev/null
++}
++
+ image_digest=$(retry 3 "skopeo inspect ${skopeo_platform} 'docker://${full_image_name}' | jq -r '.Digest'")
+ 
+ # Cleanup image name file name use
+@@ -67,6 +83,10 @@ fi
+ (
+ 	# Use file locking to avoid race condition
+ 	flock --verbose 3
++	if [ -f "${image_file_path}" ] && ! platform_ok "${image_file_path}"; then
++		echo "GA fetch: WARNING: cached ${image_file_path##*/} does not declare linux/${oci_arch}${oci_variant:+/${oci_variant}}; discarding it and fetching again" >&2
++		rm -f "${image_file_path}"
++	fi
+ 	if [ ! -f "${image_file_path}" ]
+ 	then
+ 		echo "Fetching image: ${full_image_name} (digest ${image_digest})"
+@@ -75,5 +95,11 @@ fi
+ 		echo "Skipping download of existing image: ${full_image_name} (digest ${image_digest})"
+ 	fi
+ 
++	if ! platform_ok "${image_file_path}"; then
++		echo "GA fetch: ERROR: ${full_image_name} was fetched but its image config does not declare linux/${oci_arch}${oci_variant:+/${oci_variant}} ($(skopeo --version 2>&1 | head -n 1)); refusing to bake it" >&2
++		rm -f "${image_file_path}"
++		exit 1
++	fi
++
+ 	cp "${image_file_path}" "${dst_image_file_path}"
+ ) 3>"${image_file_path}.lock"

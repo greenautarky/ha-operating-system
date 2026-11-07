@@ -43,7 +43,26 @@ fx, img = sys.argv[1], sys.argv[2]
 def add(t, name, data):
     ti = tarfile.TarInfo(name); ti.size = len(data); ti.mtime = 1_700_000_000; t.addfile(ti, io.BytesIO(data))
 # Core: an OCI archive (HAOS 18.x skopeo oci-archive): index.json -> manifest -> config (labels)
+import os
+# Platform every baked image declares, per the board's arch (inferred from the archive names: the
+# board's image refs carry armv7 / aarch64). The CAPTURED rc3 Core config has NO variant (the
+# BOSv1.6.0-rc4 defect, Odoo #1637: the cached archive was written by skopeo 1.2.2); the fixture
+# stands for a bake of the FIXED fetch, so the Core's variant is set here. FIXTURE_CORE_NO_VARIANT=1
+# keeps the capture as it was (the red proof of VER-12).
+names = " ".join(glob.glob(f"{img}/*.tar"))
+plat = {"os": "linux", "architecture": "arm64"} if "aarch64" in names else {"os": "linux", "architecture": "arm", "variant": "v7"}
+def with_plat(cfgj):
+    c = json.loads(cfgj); c.update(plat); return json.dumps(c).encode()
+def oci(path, cfgb):
+    cd_ = hashlib.sha256(cfgb).hexdigest()
+    m_ = json.dumps({"schemaVersion": 2, "config": {"digest": "sha256:" + cd_, "size": len(cfgb)}, "layers": []}).encode()
+    md_ = hashlib.sha256(m_).hexdigest()
+    with tarfile.open(path, "w") as t_:
+        add(t_, "index.json", json.dumps({"schemaVersion": 2, "manifests": [{"digest": "sha256:" + md_}]}).encode())
+        add(t_, "blobs/sha256/" + md_, m_); add(t_, "blobs/sha256/" + cd_, cfgb)
 cfg = open(f"{fx}/core-image.json", "rb").read()
+if not os.environ.get("FIXTURE_CORE_NO_VARIANT"):
+    cfg = with_plat(cfg)
 cd = hashlib.sha256(cfg).hexdigest()
 man = json.dumps({"schemaVersion": 2, "config": {"digest": "sha256:" + cd, "size": len(cfg), "mediaType": "application/vnd.oci.image.config.v1+json"}, "layers": []}).encode()
 md = hashlib.sha256(man).hexdigest()
@@ -58,8 +77,12 @@ with tarfile.open(fx + "/ga_manager-files.tar") as src, tarfile.open(fileobj=lay
     for m in src.getmembers():
         add(lt, m.name, src.extractfile(m).read())
 with tarfile.open(gm, "w") as t:
-    add(t, "cfg.json", b"{}"); add(t, "layer0.tar", layer.getvalue())
+    add(t, "cfg.json", json.dumps(plat).encode()); add(t, "layer0.tar", layer.getvalue())
     add(t, "manifest.json", json.dumps([{"Config": "cfg.json", "RepoTags": [], "Layers": ["layer0.tar"]}]).encode())
+# every other baked archive: a minimal OCI archive with the board's platform (content is read by no test)
+for f_ in glob.glob(f"{img}/*.tar"):
+    if os.path.getsize(f_) == 0:
+        oci(f_, json.dumps(dict(plat, config={})).encode())
 PY
 # release artefacts: only their existence/age is reproduced (a signed multi-hundred-MB bundle and a disk
 # image cannot live in a fixture); the checks that open them are the pinned NOT_COVERED set in selftest.sh

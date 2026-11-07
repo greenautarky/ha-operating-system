@@ -130,6 +130,11 @@ else bad "mutation uboot01: could not be applied"; fi
 # WIFI-09 (dev4): an image without iw -- not a runner mutation, the fixture as it was captured
 out="$(FIXTURE_NO_RECONSTRUCT=1 "$HERE/run-board.sh" dsgw210 "$W/wm-noiw" 2>&1)"
 echo "$out" | grep -qE "^ +FAIL +WIFI-09[: ]" && ok "red proof wifi09: the DSGW image as captured (no iw) goes red on WIFI-09" || bad "red proof wifi09: no iw did NOT go red"
+# VER-12 (rc4, Odoo #1637): the captured rc3 Core config has no variant; kept as captured, the iHost goes red
+out="$(FIXTURE_CORE_NO_VARIANT=1 "$HERE/run-board.sh" ihost "$W/wm-novariant" 2>&1)"
+echo "$out" | grep -qE "^ +FAIL +VER-12[: ]" && ok "red proof ver12: the iHost Core without variant v7 goes red on VER-12" || bad "red proof ver12: Core without variant did NOT go red on VER-12"
+out="$(FIXTURE_CORE_NO_VARIANT=1 "$HERE/run-board.sh" dsgw210 "$W/wm-novariant-d" 2>&1)"
+echo "$out" | grep -qE "^ +PASS +VER-12[: ]" && ok "red proof ver12: the same capture stays green on the DSGW (aarch64: no variant is valid)" || bad "red proof ver12: DSGW lost VER-12"
 # the DSGW pin file read as the iHost's (ADDON_PINS left empty for non-ihost boards)
 MUT='s/\[\[ "\$_RBT_BOARD" == ihost \]\] \|\| _RBT_PINS_REL=.*\n/_RBT_PINS_REL=""\n/'
 expect_red pins-ihost dsgw210 VER-10 ihost
