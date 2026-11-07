@@ -5255,7 +5255,7 @@ _fwb_chk="${_RBT_ROOT}/tests/gates/board_firewall/check.sh"
 if [[ ! -x "$_fwb_chk" ]]; then
   _fail "FWB-00: board firewall checker missing (${_fwb_chk})"
 else
-  _fwb_out="$("$_fwb_chk" "$_RBT_BOARD" "$TARGET" 2>&1)"; _fwb_rc=$?
+  _fwb_rc=0; _fwb_out="$("$_fwb_chk" "$_RBT_BOARD" "$TARGET" 2>&1)" || _fwb_rc=$?   # a failing checker must not end the runner (a sourced lib sets -e)
   if [[ "$_fwb_rc" == 0 ]] && ! grep -q '^FAIL' <<<"$_fwb_out"; then
     _pass "FWB-00: ga-firewall enabled on ${_RBT_BOARD}, LAN limited to 22222/80/8123, add-on ports closed ($(grep -c '^PASS' <<<"$_fwb_out") checks)"
   else
