@@ -103,7 +103,7 @@ PY
   for i in wt0 tailscale0; do for p in 22222 8123 8099 8086; do [ "$(VERD "$i" "$p")" = accept ] || bad="$bad $i:$p"; done; done
   for i in lo hassio docker0 veth1a2b br-0123abcd; do [ "$(VERD "$i" 8086)" = accept ] || bad="$bad $i:8086"; done
   [ "$(VERD "$LAN1" 8086)" = drop ] || bad="$bad lan:8086"
-  chk FWB-17 "$BOARD: mesh ssh/UI, LAN ssh/80/8123, loopback and container bridges still reachable; LAN add-on port closed${bad:+ -- wrong:$bad}" '[ -z "$bad" ]'
+  chk FWB-17 "$BOARD: mesh ssh/UI, LAN ssh/80/8123, loopback and container bridges stay accepted; LAN add-on port closed${bad:+ -- wrong:$bad}" '[ -z "$bad" ]'
   chk FWB-18 "$BOARD: replies to own connections (ct established,related) are accepted BEFORE the default drop" \
     '[ "$(grep -n "ct state established,related accept" "$R" | head -n1 | cut -d: -f1)" -lt "$(grep -nx "    drop" "$R" | head -n1 | cut -d: -f1)" ]'
 fi
