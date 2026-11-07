@@ -4152,14 +4152,14 @@ if [[ -f "$RAUC_INSTALL" ]]; then
   fi
 
   # RAUC-03: per-rc slot URL includes the ga_release label.
-  if grep -qF 'PRIMARY_URL="${BASE_URL}/${GA_RELEASE}/haos_ihost' "$RAUC_INSTALL" 2>/dev/null; then
+  if grep -qF 'PRIMARY_URL="${BASE_URL}/${GA_RELEASE}/haos_${BOARD}-' "$RAUC_INSTALL" 2>/dev/null; then
     _pass "RAUC-03: per-rc slot URL built from \${GA_RELEASE}"
   else
     _fail "RAUC-03: per-rc PRIMARY_URL construction missing"
   fi
 
   # RAUC-04: prod fallback (version-only slot) on per-rc slot miss.
-  if grep -qF 'FALLBACK_URL="${BASE_URL}/haos_ihost' "$RAUC_INSTALL" 2>/dev/null \
+  if grep -qF 'FALLBACK_URL="${BASE_URL}/haos_${BOARD}-' "$RAUC_INSTALL" 2>/dev/null \
      && grep -q 'falling back' "$RAUC_INSTALL" 2>/dev/null; then
     _pass "RAUC-04: prod fallback to version-only slot on per-rc miss"
   else

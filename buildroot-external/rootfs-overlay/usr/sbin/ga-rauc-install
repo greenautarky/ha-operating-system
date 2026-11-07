@@ -24,9 +24,9 @@
 #
 # Either path validates the version regex, then downloads the OTA bundle. With
 # a ga_release it pulls the per-rc canary slot
-# releases/<version>/<ga_release>/haos_ihost-<version>.raucb (falling back to
+# releases/<version>/<ga_release>/haos_<board>-<version>.raucb (falling back to
 # the version-only prod slot on 404); without one it pulls the prod slot
-# releases/<version>/haos_ihost-<version>.raucb. Then `rauc info` +
+# releases/<version>/haos_<board>-<version>.raucb. Then `rauc info` +
 # `rauc install` + a 5-second-delayed reboot.
 #
 # Every download connects to the OTA endpoint ga-resolve-ota pinned in
@@ -173,12 +173,29 @@ fi
 OTA_RESOLVE="${OTA_HOST}:443:${OTA_IP}"
 echo "[ga-rauc-install] OTA endpoint: ${OTA_HOST} pinned to ${OTA_IP} (from $OTA_ACTIVE_FILE)"
 
+# The bundle name carries the board: haos_<BOARD_ID>-<version>.raucb, the name
+# Buildroot gives the bundle (VARIANT_ID in /etc/os-release is the board's
+# meta BOARD_ID, one source for both). A DSGW-210 asking for haos_ihost-* would
+# 404 on every slot. Unreadable = loud fallback to ihost (the only board the
+# name was ever hard-coded for), never silent.
+# GA_OS_RELEASE relocates the file (host tests only).
+OS_RELEASE="${GA_OS_RELEASE:-/etc/os-release}"
+BOARD=""
+if regular_file "$OS_RELEASE"; then
+    BOARD="$(sed -n 's/^VARIANT_ID=//p' "$OS_RELEASE" | head -n 1 | tr -d '"'"'"'[:space:]')"
+fi
+case "$BOARD" in
+    "" | *[!a-z0-9]* )
+        echo "[ga-rauc-install] WARNING: no usable VARIANT_ID ('$BOARD') in $OS_RELEASE — assuming board 'ihost'; a non-iHost board will fail to download" >&2
+        BOARD=ihost ;;
+esac
+
 BASE_URL="https://${OTA_HOST}/releases/${VERSION}"
 if [ -n "$GA_RELEASE" ]; then
-    PRIMARY_URL="${BASE_URL}/${GA_RELEASE}/haos_ihost-${VERSION}.raucb"
-    FALLBACK_URL="${BASE_URL}/haos_ihost-${VERSION}.raucb"
+    PRIMARY_URL="${BASE_URL}/${GA_RELEASE}/haos_${BOARD}-${VERSION}.raucb"
+    FALLBACK_URL="${BASE_URL}/haos_${BOARD}-${VERSION}.raucb"
 else
-    PRIMARY_URL="${BASE_URL}/haos_ihost-${VERSION}.raucb"
+    PRIMARY_URL="${BASE_URL}/haos_${BOARD}-${VERSION}.raucb"
     FALLBACK_URL=""
 fi
 # Staging directory: /mnt/data/tmp/ — our canonical "scratch space for
@@ -187,7 +204,7 @@ fi
 # curl returns error 23 mid-download. /mnt/data/tmp/ is created by
 # /usr/lib/tmpfiles.d/ga-mnt-data-tmp.conf and aged out at 7 days by
 # systemd-tmpfiles-clean.timer.
-STAGING_DIR="/mnt/data/tmp"
+STAGING_DIR="${GA_STAGING_DIR:-/mnt/data/tmp}"  # GA_STAGING_DIR: host tests only
 mkdir -p "$STAGING_DIR"
 BUNDLE="$STAGING_DIR/ga-rauc-install-${VERSION}.raucb"
 

@@ -230,6 +230,12 @@ jobs:
         timeout-minutes: 10
         run: sh tests/ga_tests/ota_fetch/test.sh
 
+      - name: ota_bundle_name — ga-rauc-install asks for haos_<board>-<ver>.raucb
+        # The bake names the bundle after the board; the installer must too.
+        # Red-proven against the pre-change script (4 of 8 fail).
+        timeout-minutes: 5
+        run: sh tests/ga_tests/ota_bundle_name/test.sh
+
       - name: gen_expected.sh works from any cwd (the release-train's call shape)
         # The generator computed its output path relative to the CALLER's cwd and
         # then cd'd to the repo root. So it worked from the repo root — how every
