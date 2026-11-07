@@ -46,6 +46,10 @@
 #   --force              Install even if device is already on target version
 #                        (useful for canary re-install of same-version dev iterations)
 #   --version VER        Version string (auto-detected from bundle if omitted)
+#   --board BOARD        Optional cross-check only (ihost | dsgw210). The board is
+#                        ALWAYS read from the bundle's RAUC manifest
+#                        (compatible=haos-<board>); a --board that disagrees is
+#                        refused, and so is a bundle whose board cannot be read.
 #   --ga-release LABEL   Stage to a per-rc canary slot releases/<ver>/<LABEL>/
 #                        instead of the shared prod slot (server mode)
 #
@@ -53,6 +57,10 @@
 #   - SSH target is the ga-tools host alias (default: ga-tools_tailscale).
 #     ota.greenautarky.com is HTTPS-only via Caddy and not SSH-able.
 #   - Files are placed under /data/ota/releases/<version>/ (Caddy bind-mount).
+#   - The file name is board-specific: haos_<board>-<version>.raucb, with <board>
+#     taken from the bundle's manifest (ihost -> haos_ihost-*, dsgw210 ->
+#     haos_dsgw210-*). That is what ga-rauc-install requests (Odoo #1631); a
+#     DSGW bundle can therefore never overwrite or shadow an iHost one.
 #   - Generates a sidecar .sha256 file in the filename-only format:
 #     "<sha>  <filename>\n" — devices verify against this.
 #   - Existing bundle for the same version is moved to _archive/ with a
@@ -67,6 +75,7 @@ NO_REBOOT=false
 FORCE=false
 VERSION=""
 GA_RELEASE=""
+BOARD_ARG=""
 SSH_KEY="${SSH_KEY:-$HOME/Nextcloud2/GreenAutarky/security_store/HomeassistantGreen0.pem}"
 SSH_PORT="${SSH_PORT:-22222}"
 # OTA server: SSH target alias, NOT the public hostname.
@@ -97,6 +106,7 @@ while [[ $# -gt 0 ]]; do
     --force)     FORCE=true; shift ;;
     --version)   VERSION="$2"; shift 2 ;;
     --ga-release) GA_RELEASE="$2"; shift 2 ;;
+    --board)     BOARD_ARG="$2"; shift 2 ;;
     *) echo "Unknown: $1"; exit 1 ;;
   esac
 done
@@ -134,10 +144,42 @@ SCP_CMD="scp -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o UserKnownHostsF
 OTA_SSH="ssh -o ConnectTimeout=15 $OTA_SSH_HOST"
 OTA_SCP="scp -o ConnectTimeout=15"
 
+# Board of a bundle, read from its RAUC manifest. A verity bundle starts with a
+# squashfs that holds manifest.raucm; `compatible=haos-<board>` is set by the
+# build (name.sh hassos_rauc_compatible). No default: an unreadable or unknown
+# board is an error, never 'ihost'.
+bundle_board() {
+  local f="$1" mf compat board
+  if ! command -v unsquashfs >/dev/null 2>&1; then
+    echo "ERROR: unsquashfs not found (squashfs-tools) — cannot read the board from $f; refusing to guess" >&2
+    return 1
+  fi
+  mf=$(unsquashfs -cat "$f" manifest.raucm 2>/dev/null) || mf=""
+  compat=$(printf '%s\n' "$mf" | sed -n 's/^compatible=[[:space:]]*//p' | head -n 1 | tr -d '[:space:]"')
+  if [[ -z "$compat" ]]; then
+    echo "ERROR: cannot read 'compatible' from the manifest of $f — refusing to guess the board" >&2
+    return 1
+  fi
+  board="${compat#haos-}"
+  case "$compat:$board" in
+    haos-ihost:ihost|haos-dsgw210:dsgw210) printf '%s\n' "$board" ;;
+    *) echo "ERROR: unsupported bundle compatible '$compat' in $f (known: haos-ihost, haos-dsgw210)" >&2
+       return 1 ;;
+  esac
+}
+
 # --- Server mode: upload to the OTA server ---
 if [[ "$MODE" == "server" ]]; then
-  # Expected filename for the device pull: haos_ihost-{version}.raucb
-  OTA_FILENAME="haos_ihost-${VERSION}.raucb"
+  # Expected filename for the device pull: haos_<board>-{version}.raucb. The
+  # board comes from the bundle itself (manifest compatible=haos-<board>), never
+  # from a default: staging the wrong name is worse than refusing (Odoo #1640).
+  BOARD="$(bundle_board "$RAUCB")" || exit 1
+  if [[ -n "$BOARD_ARG" && "$BOARD_ARG" != "$BOARD" ]]; then
+    echo "ERROR: --board $BOARD_ARG but the bundle's manifest says board '$BOARD' — refusing to stage" >&2
+    exit 1
+  fi
+  echo "  Board:    $BOARD (from bundle manifest)"
+  OTA_FILENAME="haos_${BOARD}-${VERSION}.raucb"
   # Without --ga-release: the shared per-HAOS-version PROD slot
   #   releases/<version>/haos_ihost-<version>.raucb  (Supervisor fleet auto-
   #   update pulls this on a real version bump — reserve it for prod releases).
