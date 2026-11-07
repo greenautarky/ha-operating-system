@@ -1,0 +1,3 @@
+# Verbatim overlay files refreshed into the frozen fixture target (see make-fixture.sh).
+# usr/sbin/ga-rauc-install: board-aware bundle name, #1631 (fixtures predate it)
+usr/sbin/ga-rauc-install
