@@ -43,7 +43,7 @@ SUITES=""
 SSH_KEY="${SSH_KEY:-}"
 
 # GA-flasher paths
-FLASHER_DIR="${FLASHER_DIR:-/home/user/git/ga-flasher-py}"
+FLASHER_DIR="${FLASHER_DIR:-${GA_REPOS_DIR:-$HOME/git}/ga-flasher-py}"
 SERIAL_TMUX="$FLASHER_DIR/work/serial-tmux.sh"
 
 usage() {

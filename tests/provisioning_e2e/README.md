@@ -31,7 +31,7 @@ that, with deadlines.
     --json /tmp/provision-e2e.json
 
 # image already on the bench
-./provision-e2e.sh --device KIB-SON-00000031 --image /home/thomas/gaos.img.xz
+./provision-e2e.sh --device KIB-SON-00000031 --image ~/gaos.img.xz
 
 # grade a device tree, no hardware (this is what CI runs)
 ./provision-e2e.sh --verify-only tests/ga_tests/provisioning/fixtures/must-pass-converged
