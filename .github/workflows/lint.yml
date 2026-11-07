@@ -616,6 +616,15 @@ jobs:
       - name: Install squashfs-tools for the matrix's synthetic release artefacts
         run: command -v mksquashfs >/dev/null && command -v unsquashfs >/dev/null || sudo apt-get install -y -qq squashfs-tools
 
+      - name: build tests - host firewall on every board (Odoo #1591)
+        # tests/gates/board_firewall: the image of each board, assembled from the overlay roots its
+        # defconfig names, has ga-firewall enabled and a ruleset that opens only 22222/80/8123 to the
+        # LAN. Red on a DSGW-210 without the GA-layer overlay, without the enable link, without its
+        # board file, with InfluxDB opened, without the drop rule, without nft.
+        run: |
+          git submodule update --init --depth 1 haos
+          bash tests/gates/board_firewall/selftest.sh
+
       - name: build tests - board matrix (ALL build tests on fixture outputs of EVERY board)
         # Runs the live tests/ga_tests/run_build_tests.sh on fixture build outputs captured from
         # the real bakes (iHost BOSv1.6.0-rc3, DSGW-210 BOSv1.6.0-dev4), for every board in
