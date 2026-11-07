@@ -47,7 +47,7 @@ OUTPUT_DIR="${PWR_OUTPUT_DIR:-${SCRIPT_DIR}/results}"
 PROMPT_PATTERN='(#\s*$|login:|KiBu)'
 POST_BOOT_CHECK=false
 MAX_CONSECUTIVE_HANGS=3
-FLASHER_DIR="${FLASHER_DIR:-/home/user/git/ga-flasher-py}"
+FLASHER_DIR="${FLASHER_DIR:-${GA_REPOS_DIR:-$HOME/git}/ga-flasher-py}"
 SERIAL_TMUX="$FLASHER_DIR/work/serial-tmux.sh"
 
 # Power control variables (set by resolve_power_method)

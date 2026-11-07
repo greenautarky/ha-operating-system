@@ -21,7 +21,7 @@
 #      bake log, not from this run): a test that quietly turned into a SKIP or vanished is red.
 #   3. the SKIP set is exactly expected/<board>.skip (the build_board_skips.tsv rows + what the real bake
 #      skipped): a new skip must be reviewed.
-#   ENV_DEP tests look for a developer's checkout under /home/user/git (SRC-14..16, BLD-ADMIN, supervisor
+#   ENV_DEP tests look for a developer checkout under $GA_SIBLING_REPOS (unset on CI and here) (SRC-14..16, BLD-ADMIN, supervisor
 #   DNS): PASS/SKIP on CI, anything on a laptop -- excluded, listed here, not hidden.
 #   Then red proofs: the historical board-unaware bugs are re-introduced into a COPY of the runner and
 #   the matrix must go red on the named test of the right board.
