@@ -65,6 +65,8 @@ done
 # older build whenever both sit in images/ — and ga-builder keeps several.
 # shellcheck source=lib/os-version.sh
 . "${SCRIPT_DIR}/lib/os-version.sh"
+# shellcheck source=lib/sha-sidecar.sh
+. "${SCRIPT_DIR}/lib/sha-sidecar.sh"
 IMG_XZ="$(newest_bos_image "${BUILD_DIR}/images/"bos_*.img.xz || true)"
 if [[ -z "$IMG_XZ" ]]; then
   echo "ERROR: No bos_*.img.xz found in ${BUILD_DIR}/images/" >&2
@@ -176,5 +178,5 @@ tar -tzf "$RELEASE_FILE" | sed 's|^./||' | grep -v '/$' | sort | sed 's/^/    /'
 echo ""
 
 # Generate SHA256 for the release archive
-sha256sum "$RELEASE_FILE" > "${RELEASE_FILE}.sha256"
+ga_write_sha_sidecar "$RELEASE_FILE" || exit 1   # "<sha256>  <basename>" (Odoo #1663)
 echo "  SHA256: $(cat "${RELEASE_FILE}.sha256")"

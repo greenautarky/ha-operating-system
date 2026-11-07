@@ -34,4 +34,17 @@ printf '%s  /build/ga_output/images/os-1.raucb\n' "$(sha256sum "$I/os-1.raucb" |
 [[ "$(awk '{print $1}' "$legacy/os-1.raucb.sha256")" == "$(awk '{print $1}' "$I/os-1.raucb.sha256")" ]] && _pass "legacy and new shape: same token 1 (consumers tolerate both)" || _fail "token 1 differs"
 # missing file fails closed
 ga_write_sha_sidecar "$I/nope" 2>/dev/null && _fail "missing file did not fail" || _pass "missing file fails closed"
+# create-release.sh (Odoo #1663): run its REAL sidecar step (extracted from the live script,
+# never re-declared) for a release archive in an output dir outside cwd; FAIL if not found.
+CR="$(cd "$HERE/../../../.." && pwd)/scripts/create-release.sh"
+step="$(sed -n '/^# Generate SHA256 for the release archive/,/^echo "  SHA256:/p' "$CR")"
+if [[ -z "$step" ]]; then _fail "create-release.sh sidecar step not found"; else
+  mkdir -p "$W/rel"; printf 'tarball\n' > "$W/rel/bos_x_release.tar.gz"
+  ( RELEASE_FILE="$W/rel/bos_x_release.tar.gz"; . "$LIB"; eval "$step" ) >/dev/null 2>&1
+  # a consumer has the pair in ANOTHER dir (download/unpack): an absolute path would still resolve in place
+  mkdir -p "$W/dl"; mv "$W/rel/bos_x_release.tar.gz" "$W/rel/bos_x_release.tar.gz.sha256" "$W/dl/"
+  (cd "$W/dl" && sha256sum -c --quiet bos_x_release.tar.gz.sha256 >/dev/null 2>&1) \
+    && _pass "create-release.sh sidecar verifies with sha256sum -c next to the archive" \
+    || _fail "create-release.sh sidecar does not verify next to the archive: $(cat "$W/dl/bos_x_release.tar.gz.sha256" 2>&1)"
+fi
 echo "=== $pass passed, $fail failed ==="; [[ $fail -eq 0 ]]
