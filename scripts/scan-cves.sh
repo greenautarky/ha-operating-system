@@ -79,6 +79,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# THE BOARD whose images the registry-mode image scan (--images) looks at (GA_BOARD, as ga_build.sh and
+# check-images.sh; the iHost when unset). It decides, from ONE source (scripts/lib/tree-paths.sh + the
+# board's defconfig, the same pattern as check-images.sh), which add-on pin file is scanned, the CPU arch
+# (BR2_PACKAGE_HASSIO_ARCH) and the HA machine (BR2_PACKAGE_HASSIO_MACHINE) - so a DSGW-210 bake's aarch64
+# images are scanned as strictly as the iHost's armv7 ones (Odoo #1618). No arch list lives here: the
+# platform is derived from the arch below. --image-tars (the bake) scans what was baked and needs no board.
+BOARD="${GA_BOARD:-ihost}"
+# shellcheck source=lib/tree-paths.sh
+. "$SCRIPT_DIR/lib/tree-paths.sh"
+
 # Defaults
 SCAN_IMAGES=true
 SCAN_SBOM=true
@@ -592,9 +602,12 @@ scan_one_image() {
 
 # Channel the bake uses, from the defconfig — so the scheduled scan follows it.
 build_channel() {
-  local dc="${REPO_ROOT}/buildroot-ihost/configs/ga_ihost_full_defconfig" c
-  c=$(sed -n 's/^BR2_PACKAGE_HASSIO_CHANNEL_\(STABLE\|BETA\|DEV\)=y$/\1/p' "$dc" 2>/dev/null | head -n1)
-  [[ -n "$c" ]] && echo "${c,,}"
+  local dc="${REPO_ROOT}/$(ga_board_var DEFCONFIG "$BOARD" || true)" c
+  c=$(sed -n 's/^BR2_PACKAGE_HASSIO_CHANNEL_\(STABLE\|BETA\|DEV\)=y$/\1/p' "$dc" 2>/dev/null | head -n1 || true)
+  # (explicit if: a bare `[[ ]] && echo` returns 1 on "no channel" and set -e ended the script
+  # before the "no channel" ERROR below could say so)
+  if [[ -n "$c" ]]; then echo "${c,,}"; fi
+  return 0
 }
 
 if [[ "$SCAN_IMAGES" == "true" ]]; then
@@ -635,9 +648,37 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
     done
   else
     echo "=== Scanning Container Images ==="
-    ADDON_JSON="${REPO_ROOT}/buildroot-external/package/hassio/addon-images.json"
-    ARCH="armv7"
-    MACHINE="tinker"
+    # Board-aware (Odoo #1618): pins, arch and machine come from the board's own entries, never an iHost
+    # constant. A board that cannot be resolved is a BROKEN scan - only the iHost keeps its old defaults.
+    _bpins="$(ga_board_var ADDON_PINS "$BOARD" || true)"
+    _bdc="${REPO_ROOT}/$(ga_board_var DEFCONFIG "$BOARD" || true)"
+    _dcv() { sed -n "s/^$1=\"\(.*\)\"\$/\1/p" "$_bdc" 2>/dev/null | head -n 1 || true; }
+    ADDON_JSON="${REPO_ROOT}/${_bpins}"
+    ARCH="$(_dcv BR2_PACKAGE_HASSIO_ARCH)"
+    MACHINE="$(_dcv BR2_PACKAGE_HASSIO_MACHINE)"
+    if [[ -z "$_bpins" || ! -f "$_bdc" ]]; then
+      echo "  ERROR: unknown board '${BOARD}' (known: ${GA_BOARDS}) or its defconfig is missing - cannot tell which images ship"
+      SCAN_BROKEN=true
+    fi
+    if [[ -z "$ARCH" || -z "$MACHINE" ]]; then
+      if [[ "$BOARD" == ihost ]]; then
+        ARCH="${ARCH:-armv7}"; MACHINE="${MACHINE:-tinker}"
+        echo "  NOTE: no BR2_PACKAGE_HASSIO_ARCH/MACHINE readable from ${_bdc} - using the iHost defaults (${ARCH}/${MACHINE})"
+      else
+        echo "  ERROR: board ${BOARD}: BR2_PACKAGE_HASSIO_ARCH/MACHINE not readable from ${_bdc} - refusing to assume an arch"
+        SCAN_BROKEN=true
+      fi
+    fi
+    # trivy/syft platform for that arch (an index without it looks for the runner's linux/amd64 and fails)
+    case "$ARCH" in
+      armv7)   PLATFORM="linux/arm/v7" ;;
+      aarch64) PLATFORM="linux/arm64" ;;
+      amd64)   PLATFORM="linux/amd64" ;;
+      *) echo "  ERROR: board ${BOARD}: arch '${ARCH}' has no known scan platform - refusing to guess"
+         SCAN_BROKEN=true; PLATFORM="linux/amd64" ;;
+    esac
+    IMG_BOARD="$BOARD"; IMG_ARCH="$ARCH"
+    echo "  Board:    ${BOARD}  arch: ${ARCH}  machine: ${MACHINE}  platform: ${PLATFORM}  pins: ${_bpins}"
     [[ -n "$CHANNEL" ]] || CHANNEL="$(build_channel)"
     if [[ -z "$CHANNEL" ]]; then
       echo "  ERROR: no channel given and none found in the defconfig — cannot tell which images ship"
@@ -664,7 +705,8 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
     # known channel is a broken scan, never a silent fall back to stable.
     BAKE_SRC="$CHANNEL"
     if [[ "$CHANNEL" != "unknown" && -x "${REPO_ROOT}/buildroot-external/package/hassio/bake-source-file.sh" ]]; then
-      _rel="${GA_RELEASE:-$(awk '/^gaos_release:/{print $2; exit}' "${REPO_ROOT}/version.yaml" 2>/dev/null)}"
+      _rkey="gaos_release"; [[ "$BOARD" == ihost ]] || _rkey="gaos_release_${BOARD}"
+      _rel="${GA_RELEASE:-$(awk -v k="^${_rkey}:" '$0 ~ k {print $2; exit}' "${REPO_ROOT}/version.yaml" 2>/dev/null)}"
       if ! BAKE_SRC="$("${REPO_ROOT}/buildroot-external/package/hassio/bake-source-file.sh" "$_rel" "$CHANNEL")"; then
         echo "  ERROR: bake-source-file.sh failed for release '${_rel}' channel '${CHANNEL}' - cannot tell which file the bake reads"
         SCAN_BROKEN=true
@@ -680,7 +722,7 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
     if [[ -n "$STABLE" ]]; then
       # Core: the template may use {machine} or {arch}
       CORE_TMPL=$(echo "$STABLE" | jq -r '.images.core // empty')
-      CORE_VER=$(echo "$STABLE" | jq -r ".homeassistant.${MACHINE} // .homeassistant.default // empty")
+      CORE_VER=$(echo "$STABLE" | jq -r --arg m "$MACHINE" '.homeassistant[$m] // .homeassistant.default // empty')
       CORE_IMG="${CORE_TMPL//\{machine\}/$MACHINE}"; CORE_IMG="${CORE_IMG//\{arch\}/$ARCH}"
       [[ -n "$CORE_IMG" && -n "$CORE_VER" ]] && IMAGES+=("${CORE_IMG}:${CORE_VER}")
 
@@ -710,11 +752,11 @@ if [[ "$SCAN_IMAGES" == "true" ]]; then
     fi
 
     IMG_TOTAL=${#IMAGES[@]}
-    # The images are armv7-only indexes (plus attestation entries). Without an
+    # The images are single-arch indexes (plus attestation entries). Without an
     # explicit platform trivy looks for the runner's own (linux/amd64), finds
     # none and fails — that alone made every armv7-only index "unscannable"
-    # while single-manifest images of the same arch scanned fine.
-    PLATFORM="linux/arm/v7"
+    # while single-manifest images of the same arch scanned fine. PLATFORM is
+    # the board's arch (above), not a constant.
     SYFT_PLATFORM="$PLATFORM"
     for img in ${IMAGES[@]+"${IMAGES[@]}"}; do
       scan_one_image "$img" "registry:${img}" --platform "$PLATFORM" "$img"
@@ -1251,6 +1293,8 @@ jq -n \
   --argjson go_blind "${GO_BLIND:-0}" \
   --argjson go_gap "${GO_INVENTORY_GAP:-0}" \
   --arg img_source "${IMG_SOURCE:-none}" \
+  --arg img_board "${IMG_BOARD:-}" \
+  --arg img_arch "${IMG_ARCH:-}" \
   --arg policy "$POLICY" \
   --argjson allow_expired "${allow_expired:-0}" \
   --argjson allow_invalid "${allow_invalid:-0}" \
@@ -1294,7 +1338,7 @@ jq -n \
             by_grype:$rfs_grype, blind:$rfs_blind, expected:($rfs_expected | split(" ") | map(select(length > 0))),
             missing_expected:($rfs_missing | split(" ") | map(select(length > 0))),
             findings:$rfs_findings, suppressed:$rfs_suppressed, blocking:$rfs_blocking, list:$rfs_list},
-    images:{source:$img_source, total:$img_total, clean:$img_clean, with_findings:$img_with,
+    images:{source:$img_source, board:$img_board, arch:$img_arch, total:$img_total, clean:$img_clean, with_findings:$img_with,
             blind:$img_blind, unscannable:$img_unscannable, findings:$img_findings,
             suppressed:$img_suppressed, blocking:$img_blocking, blocked_images:$img_blocked,
             go_binaries:{inventoried:$go_bin, by_trivy:$go_trivy, by_grype:$go_grype, blind:$go_blind, inventory_gap:$go_gap},
