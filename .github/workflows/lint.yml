@@ -1132,6 +1132,9 @@ jobs:
       - name: Slot-pair gate (red on an empty second slot, green on identical pairs)
         run: ./tests/gates/slot_pairs/selftest.sh
 
+      - name: No compiled Python tracked (Odoo #1632; red on a tracked .pyc, green on a clean tree)
+        run: ./tests/gates/tracked_pyc/selftest.sh
+
       # The tree layout is about to move (HAOS 18.x lift). A gate that names a
       # path that is gone inspects zero files and reports green, so the path map
       # (scripts/lib/tree-paths.sh) is held to the tree: every mapped path exists

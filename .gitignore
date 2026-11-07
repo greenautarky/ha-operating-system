@@ -78,3 +78,7 @@ buildroot-external/rootfs-overlay/etc/systemd/system/ga-bootstrap.service
 buildroot-external/rootfs-overlay/etc/systemd/system/multi-user.target.wants/ga-bootstrap.service
 # Private CVE allowlist — placed by the ops bake, never committed (scan-cves.sh)
 /.cve-allowlist.private
+
+# Compiled Python (rewritten whenever a gate imports a script; Odoo #1632) -- scripts/check-no-tracked-pyc.sh guards it
+__pycache__/
+*.py[co]
