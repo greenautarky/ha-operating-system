@@ -220,7 +220,8 @@ esac
 NMEOF
 chmod +x "$FAKENM"
 # Never the real iw / NetworkManager on a dev machine: fakes for both.
-FAKEIW="$TMPD/fakeiw"; printf '#!/bin/sh\ncase "$*" in *"get power_save"*) echo "Power save: on" ;; esac\n' > "$FAKEIW"; chmod +x "$FAKEIW"
+# Stateful: reads "on" until `set power_save off` ran, then "off" (the assert re-reads after the set, #1572).
+FAKEIW="$TMPD/fakeiw"; printf '#!/bin/sh\ncase "$*" in *"set power_save off"*) echo off > "%s/iw_state" ;; *"get power_save"*) echo "Power save: $(cat "%s/iw_state" 2>/dev/null || echo on)" ;; esac\n' "$TMPD" "$TMPD" > "$FAKEIW"; chmod +x "$FAKEIW"
 FAKENMBIN="$TMPD/fakenmbin"; printf '#!/bin/sh\nexit 0\n' > "$FAKENMBIN"; chmod +x "$FAKENMBIN"
 
 echo 1 > "$TMPD/ps_state"   # start with powersave WRONG (1=ignore)
