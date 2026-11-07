@@ -5199,7 +5199,7 @@ if [[ ! -x "$_fwb_chk" ]]; then
 else
   _fwb_rc=0; _fwb_out="$("$_fwb_chk" "$_RBT_BOARD" "$TARGET" 2>&1)" || _fwb_rc=$?   # a failing checker must not end the runner (a sourced lib sets -e)
   if [[ "$_fwb_rc" == 0 ]] && ! grep -q '^FAIL' <<<"$_fwb_out"; then
-    _pass "FWB-00: ga-firewall enabled on ${_RBT_BOARD}, LAN limited to 22222/80/8123, add-on ports closed ($(grep -c '^PASS' <<<"$_fwb_out") checks)"
+    _pass "FWB-00: ga-firewall enabled on ${_RBT_BOARD}, LAN limited to 22222/80/8123, add-on ports closed, uplinks default-deny ($(grep -c '^PASS' <<<"$_fwb_out") checks)"
   else
     _fail "FWB-00: host firewall wrong on ${_RBT_BOARD}: $(grep '^FAIL' <<<"$_fwb_out" | head -n 4 | tr '\n' ';')"
   fi
