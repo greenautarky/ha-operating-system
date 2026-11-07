@@ -2279,76 +2279,39 @@ if [[ -n "$SRC" ]]; then
   # stock Core pins stock home-assistant-frontend itself. Frontend version
   # correctness is now covered by VER-11 (Core io.hass.version label).
 
-  # Locate the frontend repo checkout (legacy — frontend fork is retired by
-  # V1.2-clean T3, so this is normally absent). Kept defined for the
-  # still-present SRC-14/15/16 frontend checks below, which _skip cleanly
-  # when no checkout is found. These remaining frontend checks are out of
-  # this rewrite's scope (T2/T3 named families only).
-  # Sibling checkouts (frontend / core / supervisor forks) are found ONLY under GA_SIBLING_REPOS, the
-  # directory that holds them. Nothing is guessed (no workstation path, no "next to the source tree"):
-  # a guess made these checks SKIP on CI and judge some other checkout on a laptop (Odoo #1632).
-  # Unset or without the repo -> the checks skip, and say so once, loudly.
-  _sibling_repo() {  # _sibling_repo <dirname> <marker-subdir>  -> prints the checkout, or nothing
-    local d="${GA_SIBLING_REPOS:+${GA_SIBLING_REPOS%/}/$1}"
-    [[ -n "$d" && -d "$d/$2" ]] && printf '%s' "$d"
-    return 0
-  }
-  if [[ -z "${GA_SIBLING_REPOS:-}" ]]; then
-    echo "  NOTE: GA_SIBLING_REPOS is not set -- the checks that read the retired frontend/core/supervisor forks (SRC-14/15/16, BLD-ADMIN, BLD-SUP-DNS, INT-05) are SKIPPED, not judged. Set it to the directory holding those checkouts to run them."
-  elif [[ ! -d "${GA_SIBLING_REPOS}" ]]; then
-    echo "  NOTE: GA_SIBLING_REPOS='${GA_SIBLING_REPOS}' is not a directory -- those checks are SKIPPED."
-  fi
-  FE_ROOT="$(_sibling_repo homeassistant_frontend src)"
-  # CORE_ROOT discovery — the SRC-14d..e / BLD-ADMIN checks below reference it.
-  # (Restored here after the de-fork removed the SRC-11 block that used to
-  # define it; the ha-core fork is retired so this is never found and those
-  # checks _skip cleanly, but the var must exist under `set -u`.)
-  CORE_ROOT="$(_sibling_repo homeassisant_core .github)"
+  # SRC-14 / SRC-15 / SRC-16 (frontend sources) and SRC-14d..e / BLD-ADMIN-01..04 (Core component)
+  # used to read sibling checkouts of the retired frontend / Core forks, found only under
+  # GA_SIBLING_REPOS -- a variable no bake or CI job ever set, so all of them were SKIP in every run
+  # (a check that can never pass or fail, Odoo #1649). They now read what the bake actually ships:
+  #   * the Core-component checks: the vendored greenautarky_site component in the rootfs-overlay
+  #     (the same tree BLD-FE-02/03 judge; the component is synced from GHCR before the build);
+  #   * the wizard-feature checks (PIN step, QR auto-PIN, Ethernet step): BLD-FE-04, on the BUILT
+  #     wizard bundle inside that component. The per-source-file assertions SRC-14a..c, 15a..d and
+  #     16a..c are deleted: their source files live in the frontend repo, not in the shipped
+  #     artefact; the behaviour is driven end to end by tests/e2e pin-verification / ethernet-consent.
+  CORE_COMP="${GA_ONBOARD_DIR:-}"
 
-  # SRC-14: PIN verification integration (frontend + core)
-  if [[ -n "$FE_ROOT" ]]; then
-    # SRC-14a: Frontend has PIN step component
-    [[ -f "${FE_ROOT}/src/panels/greenautarky-setup/ga-setup-pin.ts" ]] \
-      && _pass "SRC-14a: ga-setup-pin.ts component exists" \
-      || _fail "SRC-14a: ga-setup-pin.ts missing — PIN step not in frontend"
-
-    # SRC-14b: Wizard includes PIN step
-    grep -q '"pin"' "${FE_ROOT}/src/panels/greenautarky-setup/ha-panel-greenautarky-setup.ts" 2>/dev/null \
-      && _pass "SRC-14b: wizard STEPS includes pin" \
-      || _fail "SRC-14b: wizard STEPS missing pin step"
-
-    # SRC-14c: API client has verifyGASetupPin
-    grep -q 'verifyGASetupPin' "${FE_ROOT}/src/data/greenautarky_setup.ts" 2>/dev/null \
-      && _pass "SRC-14c: verifyGASetupPin API function exists" \
-      || _fail "SRC-14c: verifyGASetupPin missing from API client"
-  else
-    _skip "SRC-14a..c" "frontend repo not found; GA_SIBLING_REPOS=${GA_SIBLING_REPOS:-unset}"
-  fi
-
-  if [[ -n "$CORE_ROOT" ]]; then
-    # Component source was split from a single http.py into packages
-    # (onboarding/ household/ scoping/ + store.py console_login.py
-    # consent_views.py) as part of the greenautarky_onboarding ->
-    # greenautarky_site rename (#574). These checks assert the feature
-    # SYMBOLS still exist somewhere in the component tree, so they grep the
-    # whole component dir recursively instead of a single (now absent) file.
-    GA_COMP_DIR="${CORE_ROOT}/homeassistant/components/greenautarky_site"
+  if [[ -n "$CORE_COMP" && -d "$CORE_COMP" ]]; then
+    # The component source is split into packages (onboarding/ household/ scoping/ + store.py
+    # console_login.py consent_views.py), so the feature SYMBOLS are grepped over the whole tree.
+    GA_COMP_DIR="$CORE_COMP"
 
     # SRC-14d: Core has verify_pin endpoint
-    grep -rq 'verify_pin' "${GA_COMP_DIR}" 2>/dev/null \
+    grep -rq 'verify_pin' "${GA_COMP_DIR}" --include='*.py' 2>/dev/null \
       && _pass "SRC-14d: Core has verify_pin endpoint" \
       || _fail "SRC-14d: Core missing verify_pin endpoint"
 
     # SRC-14e: Core has PIN rate limiting (exponential backoff)
-    grep -rq 'pin_locked_until' "${GA_COMP_DIR}" 2>/dev/null \
+    grep -rq 'pin_locked_until' "${GA_COMP_DIR}" --include='*.py' 2>/dev/null \
       && _pass "SRC-14e: Core has PIN rate limiting" \
       || _fail "SRC-14e: Core missing PIN rate limiting"
 
-    # Locate the module that defines GAAdminBypassView (post-split it may live
-    # in any package module, no longer http.py) so the context-anchored greps
-    # below still run against a single file (grep -r would prefix context lines
-    # with a filename and break the ^-anchored url match).
-    GA_ADMIN_FILE="$(grep -rl 'class GAAdminBypassView' "${GA_COMP_DIR}" 2>/dev/null | head -1)"
+    # The module that defines GAAdminBypassView (it may live in any package module). Its CLASS BODY is
+    # cut out (up to the next top-level definition) so the greps below judge the class and nothing
+    # after it. A fixed `grep -A 30` window used to cut the class off before its redirect_uri line.
+    GA_ADMIN_FILE="$(grep -rl --include='*.py' 'class GAAdminBypassView' "${GA_COMP_DIR}" 2>/dev/null | head -1)"
+    GA_ADMIN_BODY=""
+    [[ -n "$GA_ADMIN_FILE" ]] && GA_ADMIN_BODY="$(awk '/^class GAAdminBypassView/{f=1;print;next} f&&/^(class|def|async def|@)/{exit} f{print}' "$GA_ADMIN_FILE")"
 
     # BLD-ADMIN-01: Core has GAAdminBypassView (the /admin endpoint)
     [[ -n "$GA_ADMIN_FILE" ]] \
@@ -2356,70 +2319,40 @@ if [[ -n "$SRC" ]]; then
       || _fail "BLD-ADMIN-01: GAAdminBypassView missing — /admin endpoint not implemented"
 
     # BLD-ADMIN-02: /admin URL is bound to the bypass view
-    grep -A 30 'class GAAdminBypassView' "$GA_ADMIN_FILE" 2>/dev/null \
-      | grep -qE '^\s*url\s*=\s*"/admin"' \
+    grep -qE '^\s*url\s*=\s*"/admin"' <<<"$GA_ADMIN_BODY" \
       && _pass "BLD-ADMIN-02: GAAdminBypassView is bound to /admin" \
       || _fail "BLD-ADMIN-02: GAAdminBypassView is NOT bound to /admin"
 
     # BLD-ADMIN-03: redirect_uri uses /config (not /lovelace) — avoids GA panel auto-default
-    grep -A 30 'class GAAdminBypassView' "$GA_ADMIN_FILE" 2>/dev/null \
-      | grep -qE 'redirect_uri.*\{origin\}/config' \
+    grep -qE 'redirect_uri.*\{origin\}/config' <<<"$GA_ADMIN_BODY" \
       && _pass "BLD-ADMIN-03: GAAdminBypassView uses /config (not /lovelace) so admin lands in HA Settings" \
       || _fail "BLD-ADMIN-03: GAAdminBypassView redirect_uri does not point to /config — admin lands back on GA panel"
 
     # BLD-ADMIN-04: GAAdminBypassView is registered in the component __init__.py
-    # (otherwise the URL is dead). Registration stays in the component entry
-    # point even after the package split, so this still targets __init__.py.
-    GA_INIT="${GA_COMP_DIR}/__init__.py"
-    grep -q 'GAAdminBypassView' "$GA_INIT" 2>/dev/null \
+    # (otherwise the URL is dead). Registration stays in the component entry point.
+    grep -q 'GAAdminBypassView' "${GA_COMP_DIR}/__init__.py" 2>/dev/null \
       && _pass "BLD-ADMIN-04: GAAdminBypassView is registered in greenautarky_site/__init__.py" \
       || _fail "BLD-ADMIN-04: GAAdminBypassView is NOT registered — /admin will return 404"
+
+    # BLD-FE-04: the BUILT wizard bundle still carries the PIN step, the QR auto-PIN and the Ethernet
+    # step. Element names and property names survive minification, so these are read from the
+    # shipped entry bundle of EVERY flavour (frontend_latest + frontend_es5). Zero bundles is a FAIL.
+    FE4_N=0; FE4_BAD=""
+    while IFS= read -r _bundle; do
+      FE4_N=$((FE4_N+1))
+      for _tok in ga-setup-pin ga-setup-ethernet autoPin replaceState; do
+        grep -q -- "$_tok" "$_bundle" 2>/dev/null || FE4_BAD="${FE4_BAD} $(basename "$_bundle"):${_tok}"
+      done
+    done < <(find "${GA_COMP_DIR}/frontend_bundle" -type f -name 'greenautarky-setup.*.js' 2>/dev/null | sort)
+    if [[ "$FE4_N" -eq 0 ]]; then
+      _fail "BLD-FE-04: no greenautarky-setup.*.js entry bundle in the vendored component — nothing was inspected"
+    elif [[ -n "$FE4_BAD" ]]; then
+      _fail "BLD-FE-04: wizard bundle lacks PIN/QR/Ethernet markers:${FE4_BAD}"
+    else
+      _pass "BLD-FE-04: ${FE4_N} wizard entry bundle(s) carry the PIN step, QR auto-PIN (autoPin, replaceState) and Ethernet step"
+    fi
   else
-    _skip "SRC-14d..e + BLD-ADMIN-01..04" "ha-core repo not found; GA_SIBLING_REPOS=${GA_SIBLING_REPOS:-unset}"
-  fi
-
-  # SRC-15: QR code PIN auto-injection (frontend)
-  if [[ -n "$FE_ROOT" ]]; then
-    # SRC-15a: PIN component accepts autoPin property
-    grep -q 'autoPin' "${FE_ROOT}/src/panels/greenautarky-setup/ga-setup-pin.ts" 2>/dev/null \
-      && _pass "SRC-15a: ga-setup-pin has autoPin property (QR support)" \
-      || _fail "SRC-15a: ga-setup-pin missing autoPin — QR auto-inject won't work"
-
-    # SRC-15b: Wizard parses ?pin= URL parameter
-    grep -q "getParam.*pin\|URLSearchParams.*pin\|\.get.*pin" "${FE_ROOT}/src/panels/greenautarky-setup/ha-panel-greenautarky-setup.ts" 2>/dev/null \
-      && _pass "SRC-15b: wizard parses ?pin= from URL" \
-      || _fail "SRC-15b: wizard not parsing ?pin= URL parameter"
-
-    # SRC-15c: Wizard cleans URL after parsing (removes pin from address bar)
-    grep -q 'replaceState' "${FE_ROOT}/src/panels/greenautarky-setup/ha-panel-greenautarky-setup.ts" 2>/dev/null \
-      && _pass "SRC-15c: wizard cleans PIN from URL (history.replaceState)" \
-      || _fail "SRC-15c: wizard not cleaning PIN from URL — security risk"
-
-    # SRC-15d: E2E tests for QR auto-inject exist
-    # SCRIPT_DIR was never defined — fall back to this script's own dir so
-    # the check is robust under `set -u` (pre-existing latent bug).
-    grep -q 'QR auto-inject' "${SCRIPT_DIR:-$(dirname "$0")}/../../e2e/tests/pin-verification.spec.ts" 2>/dev/null \
-      && _pass "SRC-15d: QR auto-inject E2E tests exist" \
-      || _fail "SRC-15d: QR auto-inject E2E tests missing"
-  else
-    _skip "SRC-15a..d" "frontend repo not found; GA_SIBLING_REPOS=${GA_SIBLING_REPOS:-unset}"
-  fi
-
-  # SRC-16: Ethernet consent integration (frontend + core)
-  if [[ -n "$FE_ROOT" ]]; then
-    [[ -f "${FE_ROOT}/src/panels/greenautarky-setup/ga-setup-ethernet.ts" ]] \
-      && _pass "SRC-16a: ga-setup-ethernet.ts component exists" \
-      || _fail "SRC-16a: ga-setup-ethernet.ts missing"
-
-    grep -q '"ethernet"' "${FE_ROOT}/src/panels/greenautarky-setup/ha-panel-greenautarky-setup.ts" 2>/dev/null \
-      && _pass "SRC-16b: wizard STEPS includes ethernet" \
-      || _fail "SRC-16b: wizard STEPS missing ethernet step"
-
-    grep -q 'setEthernetPreference' "${FE_ROOT}/src/data/greenautarky_setup.ts" 2>/dev/null \
-      && _pass "SRC-16c: setEthernetPreference API function exists" \
-      || _fail "SRC-16c: setEthernetPreference missing from API client"
-  else
-    _skip "SRC-16a..c" "frontend repo not found; GA_SIBLING_REPOS=${GA_SIBLING_REPOS:-unset}"
+    _skip "SRC-14d..e + BLD-ADMIN-01..04 + BLD-FE-04" "greenautarky_site not vendored in the source tree (BLD-FE-02 owns that failure)"
   fi
 
   # SRC-17: the RAUC keyring audit exists and is wired fail-closed.
@@ -2806,37 +2739,46 @@ if [[ -n "$SRC" ]]; then
     _skip "GAOS-07" "ga-bootstrap.service not found in overlay"
   fi
 
-  # BLD-SUP-DNS: Supervisor fork has GA DNS entries in dns.py
-  SUP_ROOT="$(_sibling_repo supervisor supervisor)"
-  if [[ -n "$SUP_ROOT" ]]; then
-    DNS_PY="${SUP_ROOT}/supervisor/plugins/dns.py"
-    if [[ -f "$DNS_PY" ]]; then
-      grep -q 'ota.greenautarky.com' "$DNS_PY" 2>/dev/null \
+  # BLD-SUP-DNS: the Supervisor the image BAKES has the GA DNS entries in dns.py.
+  # Read from the baked Supervisor image archive (the file the device runs), not from a sibling
+  # checkout of the fork: that lookup (GA_SIBLING_REPOS) was never set by any bake or CI job, so
+  # these checks, SVC-09* and INT-05 were SKIP in every run (Odoo #1649). Present only after a full
+  # build (the image archives are pulled by the bake); an archive that is there but yields no
+  # dns.py is a FAIL, not a skip.
+  SUP_ARCHIVE="$(ls "${OUT}/build/hassio-1.0.0/images/"*hassio-supervisor*.tar 2>/dev/null | head -n 1 || true)"
+  DNS_SRC=""; DNS_RC=1
+  if [[ -n "$SUP_ARCHIVE" ]]; then
+    DNS_SRC="$(python3 "${SRC}/scripts/archive-extract-file.py" "$SUP_ARCHIVE" usr/src/supervisor/supervisor/plugins/dns.py 2>/dev/null)"; DNS_RC=$?
+  fi
+  _dns_has() { grep -qF -- "$1" <<<"$DNS_SRC"; }
+  if [[ -n "$SUP_ARCHIVE" ]]; then
+    if [[ "$DNS_RC" -eq 0 && -n "$DNS_SRC" ]]; then
+      _dns_has 'ota.greenautarky.com' \
         && _pass "BLD-SUP-DNS-a: dns.py has ota.greenautarky.com" \
         || _fail "BLD-SUP-DNS-a: dns.py missing ota.greenautarky.com — Supervisor won't inject GA DNS"
 
-      grep -q 'influx.greenautarky.com' "$DNS_PY" 2>/dev/null \
+      _dns_has 'influx.greenautarky.com' \
         && _pass "BLD-SUP-DNS-b: dns.py has influx.greenautarky.com" \
         || _fail "BLD-SUP-DNS-b: dns.py missing influx.greenautarky.com"
 
-      grep -q 'loki.greenautarky.com' "$DNS_PY" 2>/dev/null \
+      _dns_has 'loki.greenautarky.com' \
         && _pass "BLD-SUP-DNS-c: dns.py has loki.greenautarky.com" \
         || _fail "BLD-SUP-DNS-c: dns.py missing loki.greenautarky.com"
 
       # SVC-09: Supervisor dns.py reads ga-services.conf (not hardcoded IP)
-      grep -q '_load_ga_services_ip' "$DNS_PY" 2>/dev/null \
+      _dns_has '_load_ga_services_ip' \
         && _pass "SVC-09: dns.py uses _load_ga_services_ip (centralized config)" \
         || _fail "SVC-09: dns.py does NOT use _load_ga_services_ip — IP may be hardcoded"
 
       # SVC-09b: Supervisor dns.py uses dynamic OTA picker (consistent with host)
-      grep -q '_load_ga_ota_ip' "$DNS_PY" 2>/dev/null \
+      _dns_has '_load_ga_ota_ip' \
         && _pass "SVC-09b: dns.py uses _load_ga_ota_ip (dynamic ota failover)" \
         || _fail "SVC-09b: dns.py does NOT use _load_ga_ota_ip — ota may diverge from host /etc/hosts"
 
       # SVC-09c: Supervisor dns.py hardcoded fallback matches current GA_SERVICES_IP
-      EXPECTED_IP=$(grep '^GA_SERVICES_IP=' "$BASE_DIR/buildroot-external/rootfs-overlay/etc/ga-services.conf" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'" | tr -d ' ')
+      EXPECTED_IP=$(grep '^GA_SERVICES_IP=' "${SRC}/buildroot-external/rootfs-overlay/etc/ga-services.conf" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'" | tr -d ' ')
       if [ -n "$EXPECTED_IP" ]; then
-        if grep -q "_GA_HARDCODED_FALLBACK_IP = \"$EXPECTED_IP\"" "$DNS_PY" 2>/dev/null; then
+        if _dns_has "_GA_HARDCODED_FALLBACK_IP = \"$EXPECTED_IP\""; then
           _pass "SVC-09c: dns.py hardcoded fallback ($EXPECTED_IP) matches ga-services.conf"
         else
           _fail "SVC-09c: dns.py hardcoded fallback does NOT match ga-services.conf ($EXPECTED_IP)"
@@ -2845,10 +2787,10 @@ if [[ -n "$SRC" ]]; then
         _skip "SVC-09c" "could not parse GA_SERVICES_IP from ga-services.conf"
       fi
     else
-      _skip "BLD-SUP-DNS-a..c" "dns.py not found in supervisor fork"
+      _fail "BLD-SUP-DNS-a..c: usr/src/supervisor/supervisor/plugins/dns.py could not be read from $(basename "$SUP_ARCHIVE") (rc=${DNS_RC}) — nothing was inspected"
     fi
   else
-    _skip "BLD-SUP-DNS-a..c" "supervisor repo not found; GA_SIBLING_REPOS=${GA_SIBLING_REPOS:-unset}"
+    _skip "BLD-SUP-DNS-a..c + SVC-09/09b/09c" "no Supervisor image archive in the build output (only present after full build)"
   fi
 
   # =========================================================================
@@ -2907,10 +2849,10 @@ if [[ -n "$SRC" ]]; then
     fi
 
     # INT-05: Supervisor dns.py has all three hostnames from ga-services.conf
-    if [[ -n "$SUP_ROOT" && -f "${SUP_ROOT}/supervisor/plugins/dns.py" ]]; then
+    if [[ "$DNS_RC" -eq 0 && -n "$DNS_SRC" ]]; then
       _dns_ok=true
       for _host in "$_INFLUX_HOST" "$_LOKI_HOST" "$_OTA_HOST"; do
-        grep -q "$_host" "${SUP_ROOT}/supervisor/plugins/dns.py" 2>/dev/null || _dns_ok=false
+        _dns_has "$_host" || _dns_ok=false
       done
       if $_dns_ok; then
         _pass "INT-05: dns.py has all 3 hostnames from ga-services.conf"
@@ -2918,7 +2860,7 @@ if [[ -n "$SRC" ]]; then
         _fail "INT-05: dns.py missing hostnames from ga-services.conf — containers won't resolve GA services"
       fi
     else
-      _skip "INT-05" "supervisor dns.py not available"
+      _skip "INT-05" "no readable Supervisor dns.py (BLD-SUP-DNS owns that failure; image archive only after full build)"
     fi
 
     # INT-06: ga-update-hosts script references all hostnames from ga-services.conf

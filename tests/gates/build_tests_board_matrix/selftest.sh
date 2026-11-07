@@ -25,12 +25,12 @@
 #      bake log, not from this run): a test that quietly turned into a SKIP or vanished is red.
 #   3. the SKIP set is exactly expected/<board>.skip (the build_board_skips.tsv rows + what the real bake
 #      skipped): a new skip must be reviewed.
-#   ENV_DEP tests look for a developer checkout under $GA_SIBLING_REPOS (unset on CI and here) (SRC-14..16, BLD-ADMIN, supervisor
-#   DNS): PASS/SKIP on CI, anything on a laptop -- excluded, listed here, not hidden.
+#   (There is no environment-dependent set any more: the checks that used to read sibling checkouts of the
+#   retired forks now read the vendored component and the baked Supervisor archive, so they are pinned in
+#   expected/<board>.pass like every other test, Odoo #1649.)
 #   Then red proofs: the historical board-unaware bugs are re-introduced into a COPY of the runner and
 #   the matrix must go red on the named test of the right board.
 set -u
-unset GA_SIBLING_REPOS   # hermetic: ENV_DEP tests must SKIP here, whatever the caller exported
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/../../.." && pwd)"
 # shellcheck source=../../../scripts/lib/tree-paths.sh
 . "$ROOT/scripts/lib/tree-paths.sh"
@@ -41,7 +41,6 @@ fails=0; ran=0
 ok()  { ran=$((ran+1)); echo "  ok    $1"; }
 bad() { ran=$((ran+1)); fails=$((fails+1)); echo "  FAIL  $1"; }
 NOT_COVERED='^(RAUC-SIG-01)$'
-ENV_DEP='^(SRC-1[456].*|BLD-ADMIN-0[1-4]|BLD-SUP-DNS-a\.\.c|INT-05)$'
 ids() { "$HERE/ids.sh" "$1" < "$2"; }
 
 declare -A LOG
@@ -54,14 +53,14 @@ for b in $GA_BOARDS; do
   n="$(grep -cE '^ +(PASS|FAIL|SKIP) ' "${LOG[$b]}")"
   if [ "$n" -ge 300 ] && grep -q '^=== Build tests:' "${LOG[$b]}"; then ok "$b: the runner ran to its summary ($n verdicts)"
   else bad "$b: the runner did not finish or judged only $n tests (floor 300) -- tail: $(tail -n 3 "${LOG[$b]}" | tr '\n' '|' | cut -c1-300)"; continue; fi
-  f="$(ids FAIL "${LOG[$b]}" | grep -vE "$NOT_COVERED|$ENV_DEP" || true)"
-  [ -z "$f" ] && ok "$b: no test fails (outside NOT_COVERED / ENV_DEP)" || bad "$b: FAILS: $(echo $f)"
+  f="$(ids FAIL "${LOG[$b]}" | grep -vE "$NOT_COVERED" || true)"
+  [ -z "$f" ] && ok "$b: no test fails (outside NOT_COVERED)" || bad "$b: FAILS: $(echo $f)"
   for id in $(echo "$NOT_COVERED" | tr -d '^()$' | tr '|' ' '); do
     grep -qE "^ +FAIL +${id}[: ]" "${LOG[$b]}" || bad "$b: $id no longer fails on the fixture -- the fixture grew a bundle: move it out of NOT_COVERED"
   done
   lost="$(LC_ALL=C comm -23 "$HERE/expected/$b.pass" <(ids PASS "${LOG[$b]}") | tr '\n' ' ')"
   [ -z "$lost" ] && ok "$b: every test that passed in the real bake still passes ($(wc -l < "$HERE/expected/$b.pass") ids)" || bad "$b: passed in the real bake, not now: $lost"
-  sk="$(LC_ALL=C diff <(ids SKIP "${LOG[$b]}" | grep -vE "$NOT_COVERED|$ENV_DEP") "$HERE/expected/$b.skip" | grep '^[<>]' | tr '\n' ' ')"
+  sk="$(LC_ALL=C diff <(ids SKIP "${LOG[$b]}" | grep -vE "$NOT_COVERED") "$HERE/expected/$b.skip" | grep '^[<>]' | tr '\n' ' ')"
   [ -z "$sk" ] && ok "$b: the SKIP set is the pinned one" || bad "$b: SKIP set differs from expected/$b.skip: $sk"
 done
 
@@ -160,6 +159,34 @@ synth_red SYNTH_RELEASE=BOSv0.0.1 RFLOOR-01 floor-release-differs
 synth_red SYNTH_NO_META=1       RFLOOR-01 floor-no-meta
 synth_red SYNTH_IMG_BLANK1=1    IMG-01    img-slot1-blank
 
+# ---- Odoo #1649: the checks that read the vendored component / the baked Supervisor archive can go red ----
+# (they read sibling checkouts that no job provided and were SKIP in every run). Injected into the
+# fixture, asserting THE named test goes red (not just something), the known-good run being the matrix above.
+inj() {  # <label> <board> <test id> <env VAR=VAL...>
+  local l="$1" b="$2" id="$3"; shift 3
+  out="$(env "$@" "$HERE/run-board.sh" "$b" "$W/wm-$l-$b" 2>&1)"
+  echo "$out" | grep -qE "^ +FAIL +${id}[: ]" && ok "red proof $l: $b goes red on $id" || bad "red proof $l: $b did NOT go red on $id"
+}
+sed -E 's/influx\.greenautarky\.com/influx.example.invalid/' "$HERE/fixtures/supervisor-dns.py" > "$W/dns-nohost.py"
+sed -E 's/(_GA_HARDCODED_FALLBACK_IP = ")[^"]+/\1192.0.2.1/' "$HERE/fixtures/supervisor-dns.py" > "$W/dns-badip.py"
+sed -E 's/_load_ga_ota_ip/_load_other/g' "$HERE/fixtures/supervisor-dns.py" > "$W/dns-noota.py"
+for b in $GA_BOARDS; do
+  inj sup-dns-nohost "$b" 'BLD-SUP-DNS-b' FIXTURE_SUP_DNS="$W/dns-nohost.py"
+  inj int05-nohost   "$b" 'INT-05'        FIXTURE_SUP_DNS="$W/dns-nohost.py"
+  inj svc09c-badip   "$b" 'SVC-09c'       FIXTURE_SUP_DNS="$W/dns-badip.py"
+  inj svc09b-noota   "$b" 'SVC-09b'       FIXTURE_SUP_DNS="$W/dns-noota.py"
+  inj fe04-nomarkers "$b" 'BLD-FE-04'     FIXTURE_WIZARD_MARKERS=''
+  inj fe04-noautopin "$b" 'BLD-FE-04'     FIXTURE_WIZARD_MARKERS='ga-setup-pin ga-setup-ethernet replaceState'
+done
+# a Supervisor archive that yields no dns.py must FAIL, never skip (zero inspected is a failure)
+MUT='s#usr/src/supervisor/supervisor/plugins/dns\.py#usr/src/supervisor/supervisor/plugins/dns-gone.py#'
+expect_red dns-unreadable ihost 'BLD-SUP-DNS-a\.\.c'
+# Core component: the symbol checks read the vendored tree
+MUT='s/grep -rq .verify_pin. /grep -rq verify_pin_gone /'
+expect_red src14d-symbol ihost SRC-14d
+MUT='s#redirect_uri\.\*\\\{origin\\\}/config#redirect_uri.*\\{origin\\}/lovelace#'
+expect_red admin03-lovelace ihost BLD-ADMIN-03
+
 # ---- the fixtures are committed to a PUBLIC repo: nothing key- or hash-shaped but the fake values -----
 leak=""
 for b in $GA_BOARDS; do
@@ -177,5 +204,5 @@ for b in $GA_BOARDS; do
 done
 [ ! -s "$W/leaks.txt" ] && ok "fixtures: no key/hash/token-shaped value" || { bad "fixtures: secret-shaped content:"; cut -c1-120 "$W/leaks.txt"; }
 
-[ "$ran" -ge 43 ] || { echo "FAIL: only $ran cases ran (floor 43)"; exit 1; }
+[ "$ran" -ge 60 ] || { echo "FAIL: only $ran cases ran (floor 60)"; exit 1; }
 echo "$ran cases ran, $fails failed"; exit $((fails>0))
