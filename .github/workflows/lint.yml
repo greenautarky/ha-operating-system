@@ -613,6 +613,9 @@ jobs:
           git submodule update --init --depth 1 haos
           bash tests/gates/build_tests_board_arch/selftest.sh
 
+      - name: Install squashfs-tools for the matrix's synthetic release artefacts
+        run: command -v mksquashfs >/dev/null && command -v unsquashfs >/dev/null || sudo apt-get install -y -qq squashfs-tools
+
       - name: build tests - host firewall on every board (Odoo #1591)
         # tests/gates/board_firewall: the image of each board, assembled from the overlay roots its
         # defconfig names, has ga-firewall enabled and a ruleset that opens only 22222/80/8123 to the
@@ -999,6 +1002,12 @@ jobs:
       # bundle that carries the release — the transition.
       - name: OS update release floor through a real RAUC
         run: ./tests/gates/rauc_release_floor/rauc_e2e.sh
+
+      # RAUC-SIG-01's REAL code (extracted from the live runner) against bundles signed by a
+      # throwaway CA with the real rauc installed above (Odoo #1632): right CA passes, another CA,
+      # a stale bundle, no bundle and an output-format drift fail with their specific reason.
+      - name: RAUC-SIG-01 build check (real rauc, extracted from the live runner)
+        run: ./tests/gates/rauc_sig_runner/selftest.sh
 
       # Tier-0 (the only log stream on a device without consent) ships the OS
       # update host path: ga-rauc-install.service at every priority and PID 1's
