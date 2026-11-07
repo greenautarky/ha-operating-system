@@ -543,6 +543,11 @@ jobs:
         # `make` stubbed; a names-only fingerprint (mutant) must be caught.
         run: bash tests/ga_tests/build/pkg_inputs/selftest.sh
 
+      - name: bake .sha256 sidecars hold the basename so sha256sum -c works next to the file
+        # Odoo #1657. Drives the LIVE ga_write_sha_sidecar; the legacy container-path
+        # shape must not verify (red proof) and token-1 readers must still work.
+        run: bash tests/ga_tests/build/sha_sidecar/selftest.sh
+
       - name: every suite directory is registered or explicitly excluded
         run: sh tests/ga_tests/run_all.sh --selftest
 

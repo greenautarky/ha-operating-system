@@ -135,6 +135,8 @@ ga_parse_build_args "$@" || exit 1
 . "${SCRIPT_DIR}/lib/go-toolchain.sh"
 # shellcheck source=lib/pkg-inputs.sh
 . "${SCRIPT_DIR}/lib/pkg-inputs.sh"
+# shellcheck source=lib/sha-sidecar.sh
+. "${SCRIPT_DIR}/lib/sha-sidecar.sh"
 echo "Building with MODE=$MODE (one build mode, ADR-0027 D9)"
 
 # ---- Paths inside container (layout from scripts/lib/tree-paths.sh) ----
@@ -1922,7 +1924,7 @@ rename_images_with_build_id() {
   echo "Generating sha256 checksums..."
   for img in "${new_base}.img.xz" "${new_base}.img" "${new_base}.raucb"; do
     if [[ -f "$img" ]]; then
-      sha256sum "$img" > "${img}.sha256"
+      ga_write_sha_sidecar "$img" || exit 1
       echo "  $(basename "${img}.sha256")"
     fi
   done
