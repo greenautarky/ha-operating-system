@@ -110,6 +110,24 @@ run_case "expired hold -> invalid, fails" \
 run_case "open-ended hold (> 30 days) -> invalid, fails" \
     "0.239.0" "$T" '{"reason":"r","until":"2026-12-31"}' 1 'HOLD INVALID.*more than 30 days'
 
+# Revision tags (upstream version + add-on revision, e.g. 2.12.1-11) used to be dropped by the tag filter, so the
+# drift gate never examined such an add-on (Odoo #1616). Canary tags carry LETTERS after the dash and stay excluded.
+R='"2.12.0","2.12.1-10","2.12.1-11","2.12.1-12"'
+echo "== revision tags: must PASS =="
+run_case "revision pin == newest revision -> OK" \
+    "2.12.1-12" "$R" "" 0 'OK.*ga_manager pinned 2.12.1-12 == newest'
+run_case "plain semver unchanged" \
+    "0.248.0" "$T" "" 0 'OK.*ga_manager pinned 0.248.0 == newest'
+run_case "revision pin behind but held -> HOLD" \
+    "2.12.1-11" "$R" '{"reason":"r","until":"2026-10-20"}' 0 'HOLD.*ga_manager pinned 2.12.1-11, 2.12.1-12'
+run_case "canary tags (-dev, -rc1, -ga.1) newer than the pin are not the newest release" \
+    "2.12.1-12" "$R,\"2.12.1-13-dev\",\"2.12.2-rc1\",\"2.12.2-ga.1\"" "" 0 'OK.*ga_manager pinned 2.12.1-12 == newest'
+echo "== revision tags: must FAIL =="
+run_case "revision pin behind newest revision -> DRIFT" \
+    "2.12.1-11" "$R" "" 1 'DRIFT.*ga_manager pinned 2.12.1-11 but 2.12.1-12'
+run_case "pin 2.12.1 behind 2.12.1-12 -> DRIFT" \
+    "2.12.1" "$R,\"2.12.1\"" "" 1 'DRIFT.*ga_manager pinned 2.12.1 but 2.12.1-12'
+
 echo
 echo "ran $ran, failed $fails"
 [ "$ran" -gt 0 ] || { echo "FATAL: no case ran"; exit 1; }

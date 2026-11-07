@@ -282,6 +282,11 @@ _read_addon_field() {
 # (upstream version plus add-on revision) and treating that as a canary would
 # silently stop pinning z2m forever. Our canary tags carry LETTERS after the
 # dash (`1.3.0-ga.1`); a plain numeric suffix is a release revision.
+# The RELEASE tag grammar: dotted numeric version plus an optional numeric add-on revision (`2.12.1-11`).
+# Letters after the dash make it a canary (_is_prerelease), so they never match. Anchored with $ on purpose.
+# This was `^[0-9]+([.][0-9]+)+$`, which silently dropped every revision tag, so the drift gate never
+# examined ga_zigbee2mqtt (Odoo #1616). sort -V orders `2.12.1-12` after `2.12.1-11` and after `2.12.1`.
+RELEASE_TAG_RE='^[0-9]+([.][0-9]+)+(-[0-9]+)?$'
 _is_prerelease() {
     _ipr_suffix="${1#*-}"
     [ "$_ipr_suffix" = "$1" ] && return 1          # no dash at all
@@ -458,7 +463,7 @@ if [ -f "$ADDON_IMAGES_JSON" ] && command -v skopeo >/dev/null 2>&1; then
         # while master's last run was still green.
         newest=$(skopeo list-tags "docker://${image}" 2>/dev/null \
             | jq -r '.Tags[]?' 2>/dev/null \
-            | grep -E '^[0-9]+([.][0-9]+)+$' \
+            | grep -E "$RELEASE_TAG_RE" \
             | sort -V | tail -1) || newest=""
 
         # Anchored with $ so a PRE-RELEASE tag is not counted as the newest
