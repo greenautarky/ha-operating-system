@@ -9,7 +9,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 D="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT="$ROOT/buildroot-external/rootfs-overlay/usr/sbin/ga-rauc-install"
-W="${TMPDIR:-/home/user/.cache/claude-tmp}/otabn.$$"; mkdir -p "$W/bin"; trap 'rm -rf "$W"' EXIT
+W="$(mktemp -d)" || { echo "ERROR (could not check): mktemp failed" >&2; exit 2; }; mkdir -p "$W/bin" || exit 2; trap 'rm -rf "$W"' EXIT
 printf '#!/bin/sh\nfor a; do case "$a" in https://*) echo "$a" >> "%s/urls";; esac; done\nexit 22\n' "$W" > "$W/bin/curl"; chmod +x "$W/bin/curl"
 printf '%s\n' "$(printf '100.%d.0.9' 100)" > "$W/active"
 pass=0; fail=0
