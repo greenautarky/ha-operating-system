@@ -2695,6 +2695,7 @@ if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]];
   CVE_ALLOWLIST_PRIVATE="${GA_CVE_ALLOWLIST_PRIVATE:-}" \
   GA_SBOM="${OUT}/images/sbom-cyclonedx.json" \
   OUTPUT_DIR="${OUT}/images/reports" \
+  GA_BOARD="$BOARD" \
     "${SCRIPT_DIR:-/build/scripts}/scan-cves.sh" --sbom --strict --package-coverage --severity CRITICAL,HIGH \
       2>&1 | tee "${OUT}/images/reports/cve-scan-sbom.txt"
   _cve_rc=${PIPESTATUS[0]}
@@ -2731,6 +2732,7 @@ if command -v trivy &>/dev/null && [[ -f "${OUT}/images/sbom-cyclonedx.json" ]];
   set +e
   CVE_ALLOWLIST_PRIVATE="${GA_CVE_ALLOWLIST_PRIVATE:-}" \
   OUTPUT_DIR="${OUT}/images/reports/rootfs" \
+  GA_BOARD="$BOARD" \
     "${SCRIPT_DIR:-/build/scripts}/scan-cves.sh" --rootfs "${OUT}/target" --severity CRITICAL,HIGH \
       2>&1 | tee "$_rfs_report"
   _rfs_rc=${PIPESTATUS[0]}

@@ -139,7 +139,11 @@ ROOTFS_GO_EXPECTED="netbird telegraf os-agent runc dockerd containerd"
 # Per-package coverage of the GA defconfig delta (--package-coverage).
 PACKAGE_COVERAGE=false
 COVERAGE_CONF="${COVERAGE_CONF:-${SCRIPT_DIR}/cve-package-coverage.conf}"
-GA_DEFCONFIG="${GA_DEFCONFIG:-${REPO_ROOT}/buildroot-ihost/configs/ga_ihost_full_defconfig}"
+# The GA defconfig whose delta the package coverage asserts: the BOARD's own (GA_BOARD -> tree-paths.sh), the
+# same source as --images and ga_build.sh. It used to default to the iHost defconfig for EVERY board, so a
+# DSGW-210 bake judged its SBOM against the iHost's package list (Odoo #1644). An explicit GA_DEFCONFIG still
+# wins (fixtures); an unmapped board is refused below (exit 2) before any scan runs.
+GA_DEFCONFIG="${GA_DEFCONFIG:-${REPO_ROOT}/$(ga_board_var DEFCONFIG "$BOARD" || true)}"
 # The "upstream" side of the delta: since the HAOS 18.x lift, haos/ is upstream
 # Home Assistant OS and the packages it ships are the BR2_PACKAGE_*=y symbols of
 # its defconfigs. There is no upstream armv7 iHost board, so the base is the
@@ -192,6 +196,19 @@ done
 if [[ "$POLICY" == "d1" && ( "$SCAN_IMAGES" == "true" || -n "$ROOTFS" ) && ",${SEVERITY}," != *",CRITICAL,"* ]]; then
   echo "ERROR: --severity '${SEVERITY}' leaves out CRITICAL — the image policy could not see what it has to block"
   exit 2
+fi
+
+# Board gate (Odoo #1644): every mode that judges THIS board's build (--sbom, --rootfs, --package-coverage)
+# refuses a board it cannot resolve to a defconfig, exit 2 like --images does - never a silent iHost scan.
+# --image-tars (the bake's own tarballs) and a combined/--images run (which reports it as a BROKEN scan in the
+# summary) are exempt here. The board is printed so a log shows which board a verdict is about.
+if [[ -z "$IMAGE_TARS" && ( "$SCAN_IMAGES" == "false" || "$PACKAGE_COVERAGE" == "true" ) ]]; then
+  _bd_rel="$(ga_board_var DEFCONFIG "$BOARD" || true)"
+  if [[ -z "$_bd_rel" || ! -f "${REPO_ROOT}/${_bd_rel}" ]]; then
+    echo "ERROR: unknown board '${BOARD}' (known: ${GA_BOARDS}) or its defconfig is missing - cannot tell which board this scan is about"
+    exit 2
+  fi
+  echo "Board: ${BOARD} (defconfig ${_bd_rel})"
 fi
 
 # trivy is required for the container images and for the OS fallback path, but
@@ -1294,6 +1311,7 @@ jq -n \
   --argjson go_gap "${GO_INVENTORY_GAP:-0}" \
   --arg img_source "${IMG_SOURCE:-none}" \
   --arg img_board "${IMG_BOARD:-}" \
+  --arg board "$BOARD" \
   --arg img_arch "${IMG_ARCH:-}" \
   --arg policy "$POLICY" \
   --argjson allow_expired "${allow_expired:-0}" \
@@ -1324,7 +1342,7 @@ jq -n \
   --argjson rfs_suppressed "${RFS_SUPPRESSED:-0}" \
   --argjson rfs_blocking "${RFS_BLOCKING:-0}" \
   --argjson rfs_list "${RFS_LIST:-[]}" \
-  '{date:$date, severity:$severity, strict:$strict, policy:$policy, scan_broken:$broken,
+  '{date:$date, board:$board, severity:$severity, strict:$strict, policy:$policy, scan_broken:$broken,
     allowlist_expired:$allow_expired, allowlist_invalid:$allow_invalid,
     allowlist_private:{state:$allow_private_state, active:$allow_private_active},
     os:{status:$sbom_status, components:$sbom_components, scanned:$sbom_scanned,
