@@ -32,6 +32,19 @@ cp -a "$ROOT/buildroot-external" "$W/src/buildroot-external"
 tar -xJf "$FX/synced.tar.xz" -C "$W/src/buildroot-external/rootfs-overlay" --strip-components=1
 OUT="$W/src/ga_output"
 tar -xJf "$FX/ga_output.tar.xz" -C "$W/src"
+# Verbatim overlay scripts whose RULE changed after the fixture's bake: the fixture target holds
+# the old copy, and a check on it (e.g. RAUC-03/04 on ga-rauc-install, #1631) would judge the old
+# file against today's rule. Only files listed in overlay-refresh.txt are refreshed from the live
+# overlay; most overlay files are NOT copied 1:1 by the bake (keys, PSKs, perms), so no blanket copy.
+# Drop an entry once the fixtures are re-captured from a bake that already carries it.
+_ovl="$ROOT/buildroot-external/rootfs-overlay"; _tgt="$OUT/target"; _n=0
+while IFS= read -r _f; do
+  case "$_f" in ''|'#'*) continue ;; esac
+  [ -f "$_ovl/$_f" ] && [ -f "$_tgt/$_f" ] || { echo "make-fixture: overlay-refresh entry '$_f' missing in overlay or fixture target" >&2; exit 2; }
+  # keep the fixture file's own mtime: SRC-19 flags target files newer than the sealed rootfs
+  cp "$_ovl/$_f" "$_tgt/$_f.new" && touch -r "$_tgt/$_f" "$_tgt/$_f.new" && chmod --reference="$_tgt/$_f" "$_tgt/$_f.new" && mv "$_tgt/$_f.new" "$_tgt/$_f" || exit 2; _n=$((_n+1))
+done < "$HERE/overlay-refresh.txt"
+[ "$_n" -gt 0 ] || { echo "make-fixture: overlay-refresh.txt lists no file" >&2; exit 2; }
 cp "$FX/go.mk" "$W/buildroot/package/go/go.mk"
 HV="$OUT/build/hassio-1.0.0"; IMG="$HV/images"; mkdir -p "$IMG" "$OUT/host/bin"
 cp "$FX/version.json" "$HV/version.json"
