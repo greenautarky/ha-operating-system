@@ -18,7 +18,7 @@
 # Part C — the build gate over fixture build outputs: a bundle without the
 #          release, with the wrong release, a system.conf without the handler,
 #          a missing handler must go red; a correct output must go green.
-# Part D — ga-rauc-install's release label: BOSvX.Y.Z[-rcN] or nothing (the
+# Part D — ga-rauc-install's release label: BOSvX.Y.Z[-rcN|-devN] or nothing (the
 #          prod slot); anything else refused before a download starts.
 #
 # Offline except for fetching the pinned tempio binary when it is not on PATH.
@@ -327,7 +327,12 @@ B=https://ota.greenautarky.com/releases/16.3.1.9
 label ok     ""             "(none: prod flat slot)" "$B/haos_ihost-16.3.1.9.raucb"
 label ok     BOSv1.4.0-rc2  BOSv1.4.0-rc2            "$B/BOSv1.4.0-rc2/haos_ihost-16.3.1.9.raucb"
 label ok     BOSv1.4.0      BOSv1.4.0                "$B/BOSv1.4.0/haos_ihost-16.3.1.9.raucb"
-label refuse BOSv1.4.0-dev1 BOSv1.4.0-dev1
+label ok     BOSv1.4.0-dev1  BOSv1.4.0-dev1           "$B/BOSv1.4.0-dev1/haos_ihost-16.3.1.9.raucb"
+label ok     BOSv1.6.0-dev4  BOSv1.6.0-dev4           "$B/BOSv1.6.0-dev4/haos_ihost-16.3.1.9.raucb"
+label refuse BOSv1.4.0-dev   "BOSv1.4.0-dev (no number)"
+label refuse BOSv1.4.0-dev1x "BOSv1.4.0-dev1x"
+label refuse BOSv1.4.0-Dev1  "BOSv1.4.0-Dev1 (case)"
+label refuse BOSv1.4.0-dev1-rc1 "BOSv1.4.0-dev1-rc1"
 label refuse BOSv1.4.0-rc2x BOSv1.4.0-rc2x
 label refuse BOSv1.4-rc1    BOSv1.4-rc1
 label refuse bosv1.4.0-rc1  "bosv1.4.0-rc1 (case)"
