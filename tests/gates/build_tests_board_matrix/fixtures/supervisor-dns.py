@@ -433,7 +433,7 @@ class PluginDns(PluginBase):
     # Last-resort hardcoded IP — must match the latest GA_SERVICES_IP value in
     # buildroot-external/rootfs-overlay/etc/ga-services.conf (ha-operating-system).
     # Only kicks in if every config-file lookup fails (rare).
-    _GA_HARDCODED_FALLBACK_IP = "100.126.129.116"
+    _GA_HARDCODED_FALLBACK_IP = "@GA_SERVICES_IP@"
 
     _GA_CONF_PATHS = (
         Path("/mnt/data/ga-services.conf"),  # runtime override (persistent)

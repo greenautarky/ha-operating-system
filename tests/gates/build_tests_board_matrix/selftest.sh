@@ -168,7 +168,7 @@ inj() {  # <label> <board> <test id> <env VAR=VAL...>
   echo "$out" | grep -qE "^ +FAIL +${id}[: ]" && ok "red proof $l: $b goes red on $id" || bad "red proof $l: $b did NOT go red on $id"
 }
 sed -E 's/influx\.greenautarky\.com/influx.example.invalid/' "$HERE/fixtures/supervisor-dns.py" > "$W/dns-nohost.py"
-sed -E 's/(_GA_HARDCODED_FALLBACK_IP = ")[0-9.]+/\1192.0.2.1/' "$HERE/fixtures/supervisor-dns.py" > "$W/dns-badip.py"
+sed -E 's/(_GA_HARDCODED_FALLBACK_IP = ")[^"]+/\1192.0.2.1/' "$HERE/fixtures/supervisor-dns.py" > "$W/dns-badip.py"
 sed -E 's/_load_ga_ota_ip/_load_other/g' "$HERE/fixtures/supervisor-dns.py" > "$W/dns-noota.py"
 for b in $GA_BOARDS; do
   inj sup-dns-nohost "$b" 'BLD-SUP-DNS-b' FIXTURE_SUP_DNS="$W/dns-nohost.py"

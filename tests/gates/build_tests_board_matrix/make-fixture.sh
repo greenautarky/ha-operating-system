@@ -59,7 +59,7 @@ HV="$OUT/build/hassio-1.0.0"; IMG="$HV/images"; mkdir -p "$IMG" "$OUT/host/bin"
 cp "$FX/version.json" "$HV/version.json"
 # the baked image archives (names exactly as the real bake wrote them); content only where a test reads it
 while IFS= read -r n; do [ -n "$n" ] && : > "$IMG/$n"; done < "$FX/images.txt"
-python3 - "$FX" "$IMG" <<'PY'
+FIXTURE_SERVICES_CONF="$ROOT/buildroot-external/rootfs-overlay/etc/ga-services.conf" python3 - "$FX" "$IMG" <<'PY'
 import glob, hashlib, io, json, sys, tarfile
 fx, img = sys.argv[1], sys.argv[2]
 def add(t, name, data):
@@ -106,6 +106,13 @@ with tarfile.open(gm, "w") as t:
 # INT-05 read out of the baked archive (Odoo #1649). FIXTURE_SUP_DNS=<file> swaps the file (red proofs).
 (sup,) = glob.glob(f"{img}/*hassio-supervisor*.tar")
 dns = open(os.environ.get("FIXTURE_SUP_DNS") or f"{fx}/../supervisor-dns.py", "rb").read()
+# the file carries @GA_SERVICES_IP@ where the image has its hardcoded fallback address (this repo is public:
+# the address is not repeated in the fixture); the fixture stands for an image whose fallback equals the
+# tree's ga-services.conf. The red proofs (SVC-09c) put a different address in.
+import re
+m_ = re.search(rb"^GA_SERVICES_IP=[\"']?([0-9.]+)", open(os.environ["FIXTURE_SERVICES_CONF"], "rb").read(), re.M)
+assert m_, "GA_SERVICES_IP not readable from ga-services.conf"
+dns = dns.replace(b"@GA_SERVICES_IP@", m_.group(1))
 lay = io.BytesIO()
 with tarfile.open(fileobj=lay, mode="w") as lt:
     add(lt, "usr/src/supervisor/supervisor/plugins/dns.py", dns)
