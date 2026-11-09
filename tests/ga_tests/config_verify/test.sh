@@ -105,7 +105,7 @@ run_test "CFG-39" "fluent-bit.service has anonymous-safe LOKI defaults" \
 # (ga-fluent-bit-env CRED_GLOB), not named in the unit file itself — the old
 # assertion grepped the wrong file and was red on a correct device.
 run_test "CFG-40" "fluent-bit env-builder reads the loki cred sidecar via the addon-data glob" \
-  "systemctl cat fluent-bit-tier0 2>/dev/null | grep -q 'ExecStartPre=/usr/libexec/ga-fluent-bit-env' && grep -q '_ga_manager/ga-fleet-loki.yaml' /usr/libexec/ga-fluent-bit-env"
+  "systemctl cat fluent-bit-tier0 2>/dev/null | grep -q 'ExecStartPre=/usr/libexec/ga-fluent-bit-env' && grep -q 'ga-fleet-loki.yaml' /usr/libexec/ga-fluent-bit-env && grep -q '/\\*_ga_manager' /usr/libexec/ga-fluent-bit-env"
 
 # If a cred was delivered, the built env must carry the parsed values (a device
 # without the sidecar legitimately runs on defaults — skip, don't fail).
