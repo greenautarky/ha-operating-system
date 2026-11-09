@@ -5019,7 +5019,9 @@ fi
 
 # SLOT-08: rauc output is parsed, never executed. raucdb-update does
 # `eval "$(rauc status ...)"`; new root services should not copy that.
-if col_code | grep -Eq '(^|[^[:alnum:]_])(eval|source)[[:space:]]|^[[:space:]]*\.[[:space:]]'; then
+# The one sanctioned `.` is the fixed-path data-root resolver (Odoo #1610): a file shipped
+# in the image, not command output.
+if col_code | grep -v 'GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh' | grep -Eq '(^|[^[:alnum:]_])(eval|source)[[:space:]]|^[[:space:]]*\.[[:space:]]'; then
   _fail "SLOT-08: collector evals/sources command output — root code-execution surface"
 else
   _pass "SLOT-08: collector parses rauc output instead of eval'ing it"
