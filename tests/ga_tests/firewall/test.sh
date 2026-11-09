@@ -28,6 +28,19 @@ POLICY_FILE="$SHARE_DIR/ga-firewall-policy.json"
 STATUS_FILE="$SHARE_DIR/ga-firewall-status.json"
 TABLE="inet ga_firewall"
 
+# BEGIN fw_chain (read out of this file by tests/gates/fw_forward_dnat/selftest.sh -- keep the markers)
+# Print ONE chain of the live table, from its "chain <name> {" line to the chain's own closing
+# brace (a tab-indented "}" -- nft list indents chains by one tab and prints the table brace at
+# column 0). The old sed range (chain line to first closing brace) ended at the FIRST "}" -- the one closing the
+# set in `iifname { "wt0", "tailscale0" } accept` -- so FW-25..29b could never pass (Odoo #1610).
+fw_chain() {
+  nft list table $TABLE | awk -v want="chain $1 {" '
+    index($0, want) { p = 1 }
+    p { print }
+    p && /^\t}[[:space:]]*$/ { exit }'
+}
+# END fw_chain
+
 # =========================================================================
 # A. Control-plane / static (safe everywhere)
 # =========================================================================
@@ -73,13 +86,13 @@ else
 
   # --- invariants: these must hold or a device becomes unreachable --------
   run_test "FW-21" "mesh invariant — wt0 accepted in input" \
-    "nft list table $TABLE | sed -n '/chain input/,/}/p' | grep -q 'wt0'"
+    "fw_chain input | grep -q 'wt0'"
 
   run_test "FW-22" "loopback invariant — lo accepted in input" \
     "nft list table $TABLE | grep -q 'iif \"lo\" accept'"
 
   run_test "FW-23" "mesh invariant — wt0 accepted in forward" \
-    "nft list table $TABLE | sed -n '/chain forward/,/}/p' | grep -q 'wt0'"
+    "fw_chain forward | grep -q 'wt0'"
 
   # An inet table that drops ICMPv6 discovery kills IPv6 outright: no address
   # resolution, and no router advertisement means no default route. This is the
@@ -89,26 +102,34 @@ else
 
   # --- the allowlist itself ----------------------------------------------
   run_test "FW-25" "SSH (:22222) reachable from the LAN (host/input)" \
-    "nft list table $TABLE | sed -n '/chain input/,/}/p' | grep -Eq '22222.*accept'"
+    "fw_chain input | grep -Eq '22222.*accept'"
 
   # In the input chain, not just forward: HA Core listens on the HOST
   # (0.0.0.0:8123, host networking), and published add-on ports are terminated
   # by docker-proxy on the host too. A forward-only allowlist blackholes the UI
   # while reading as correct — measured on a bench device 2026-07-29.
   run_test "FW-26" "HA UI (:8123) reachable from the LAN (input chain)" \
-    "nft list table $TABLE | sed -n '/chain input/,/}/p' | grep -Eq '8123.*accept'"
+    "fw_chain input | grep -Eq '8123.*accept'"
 
   # :80 is the current HA Core default UI port (older frozen Core used :8123).
   # Added to the allowlist 2026-08-21; both must be reachable.
   run_test "FW-26b" "HA UI (:80) reachable from the LAN (input chain)" \
-    "nft list table $TABLE | sed -n '/chain input/,/}/p' | grep -Eq 'dport.*(\\b80\\b).*accept|,\\s*80[,\\s]'"
+    "fw_chain input | grep -Eq 'dport.*(\\b80\\b).*accept|,\\s*80[,\\s]'"
 
   # --- default-deny -------------------------------------------------------
   run_test "FW-27" "LAN ingress otherwise dropped (input)" \
-    "nft list table $TABLE | sed -n '/chain input/,/}/p' | grep -Eq 'eth0.*drop|drop.*eth0'"
+    "fw_chain input | grep -Eq 'eth0.*drop|drop.*eth0'"
 
   run_test "FW-28" "LAN ingress to container ports otherwise dropped (forward)" \
-    "nft list table $TABLE | sed -n '/chain forward/,/}/p' | grep -Eq 'dnat.*drop'"
+    "fw_chain forward | grep -Eq 'dnat.*drop'"
+
+  # Odoo #1610: published container ports are DNAT'd in PREROUTING, so forward sees the container-side
+  # port. The accept must match the ORIGINAL port; matching `dport 80` opened :4357 (observer -> :80).
+  run_test "FW-28b" "forward accepts DNAT'd LAN traffic by ORIGINAL port (80/8123)" \
+    "fw_chain forward | grep -Eq 'ct status dnat .*ct original proto-dst \\{ *80, 8123 *\\} accept'"
+
+  run_test "FW-28c" "forward never matches the post-DNAT port (no 'dnat ... tcp dport' accept)" \
+    "! fw_chain forward | grep -E 'ct status dnat' | grep -E 'tcp dport' | grep -q accept"
 
   # Container bridges must never be filtered here — a rule naming hassio or
   # docker0 would break add-on traffic in a way that looks like a broken add-on.
@@ -117,7 +138,7 @@ else
 
   # Odoo #1647: the table ends in a default drop, so uplinks (ppp0/wwan0/usb0) and unknown NICs get nothing.
   run_test "FW-29b" "default-deny: input chain ends in a bare drop (uplinks closed)" \
-    "nft list table $TABLE | sed -n '/chain input/,/}/p' | grep -E '^[[:space:]]*(counter )?drop' | tail -n1 | grep -Eq '^[[:space:]]*(counter )?drop[[:space:]]*\$'"
+    "fw_chain input | grep -E '^[[:space:]]*(counter )?drop' | tail -n1 | grep -Eq '^[[:space:]]*(counter )?drop[[:space:]]*\$'"
 
   run_test "FW-30" "status JSON reports the allowlist mode" \
     "grep -q '\"enabled\": true' $STATUS_FILE && grep -q 'allowlist' $STATUS_FILE"
