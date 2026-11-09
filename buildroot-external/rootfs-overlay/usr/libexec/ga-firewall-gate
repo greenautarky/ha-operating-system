@@ -55,17 +55,14 @@
 #   anything else (ppp0, wwan0, usb0, ...)   uplink / unknown: dropped, except
 #           replies to connections the device itself opened.
 #
-# HOST vs CONTAINER — measured, not assumed (corrected 2026-11-09, Odoo #1610):
-# Docker's PREROUTING DNAT rewrites a published container port BEFORE routing,
-# so traffic from the LAN to a published port (e.g. :4357 -> observer :80) is
-# DNAT'd FORWARD traffic. docker-proxy exists, but the DNAT rule takes the
-# packet first; the `input` chain is not the deciding hook for those ports.
-# Plain host ports (sshd :22222) and host-network HA Core (:80/:8123) do hit
-# `input`, which carries the allowlist for them.
-# The `forward` chain therefore must match the ORIGINAL destination port
-# (`ct original proto-dst`), never the post-DNAT one: after DNAT every :80
-# container looks like "dport 80", which would open any published port that
-# maps to 80/8123 (the unauthenticated observer on :4357 was reachable).
+# HOST vs CONTAINER (Odoo #1610):
+# Docker's PREROUTING DNAT rewrites a published container port before routing,
+# so LAN traffic to a published port is DNAT'd FORWARD traffic and the `input`
+# chain is not the deciding hook for it. Plain host ports and host-network HA
+# Core do hit `input`, which carries the allowlist for them.
+# The `forward` chain must match the ORIGINAL destination port
+# (`ct original proto-dst`): the post-DNAT port also matches published
+# container ports that map to 80/8123.
 # `input` stays allowlisted for the host ports, both UI ports (:80 on Core
 # 2026.8+, :8123 before — see CONTAINER_ALLOW_TCP).
 #

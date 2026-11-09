@@ -632,7 +632,7 @@ jobs:
 
       - name: build tests - firewall forward rule + on-device suite parser (Odoo #1610)
         # tests/gates/fw_forward_dnat: the forward chain must accept DNAT'd LAN traffic by its ORIGINAL port
-        # (a published port mapping to :80 such as the observer :4357 must NOT be accepted), and the live
+        # (a published container port mapping to :80 must NOT be accepted), and the live
         # tests/ga_tests/firewall/test.sh must parse recorded real `nft list` output (FW-25..29b could never
         # pass with the first-brace sed). Red on the pre-change gate and the pre-change suite.
         run: bash tests/gates/fw_forward_dnat/selftest.sh

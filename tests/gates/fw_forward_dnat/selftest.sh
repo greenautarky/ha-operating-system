@@ -2,7 +2,7 @@
 # fw_forward_dnat/selftest.sh -- red/green proof for the host-firewall forward rule + the on-device suite (Odoo #1610).
 # Two defects, one cause class: a check that cannot pass / a rule that cannot discriminate.
 #  1. forward accepted `ct status dnat tcp dport { 80, 8123 }`: after Docker's PREROUTING DNAT every :80 container
-#     looks like dport 80, so a published port mapping to :80 (observer :4357) was open from the LAN. Must match the
+#     looks like dport 80, so a published port mapping to :80 (any published container port) was open from the LAN. Must match the
 #     ORIGINAL port. Walked per packet below (pinned verdicts, not read from the gate).
 #  2. tests/ga_tests/firewall/test.sh extracted chains with sed '/chain input/,/}/p', which stops at the first set
 #     brace, so FW-25/26/26b/27/28/29b could never pass on real nft output. The LIVE test.sh is RUN here against
@@ -68,13 +68,13 @@ else ok "OLD sed '/chain input/,/}/p' never reaches the 22222 accept on real out
 chain() { awk '/^\tchain forward/{p=1} p{print} p&&/^\t}/{exit}' "$1"; }
 walk() { chain "$1" > "$W/chain"; python3 -I "$HERE/walk_forward.py" "$W/chain" "$2" "$3" "$4"; }
 check() { local got; got="$(walk "$1" "$2" "$3" "$4")"; if [ "$got" = "$5" ]; then ok "$6: $2 orig:$3 -> :$4 = $5"; else no "$6: $2 orig:$3 -> :$4 expected $5 got '$got'"; fi; }
-check "$NEW" wlan0 4357 80  drop   "NEW rule, observer DNAT 4357->80 is NOT accepted"
-check "$NEW" eth0  4357 80  drop   "NEW rule, observer DNAT 4357->80 is NOT accepted"
+check "$NEW" wlan0 9999 80  drop   "NEW rule, published-port DNAT 9999->80 is NOT accepted"
+check "$NEW" eth0  9999 80  drop   "NEW rule, published-port DNAT 9999->80 is NOT accepted"
 check "$NEW" wlan0 8086 8086 drop  "NEW rule, influx DNAT dropped"
 check "$NEW" wlan0 80   80  accept "NEW rule, original :80 (HA UI) accepted"
 check "$NEW" wlan0 8123 8123 accept "NEW rule, original :8123 accepted"
-check "$NEW" ppp0  4357 80  drop   "NEW rule, other-uplink DNAT dropped (final dnat drop)"
-check "$OLD" wlan0 4357 80  accept "OLD rule (red proof): 4357->80 accepted = the measured exposure"
+check "$NEW" ppp0  9999 80  drop   "NEW rule, other-uplink DNAT dropped (final dnat drop)"
+check "$OLD" wlan0 9999 80  accept "OLD rule (red proof): 9999->80 accepted = the flaw"
 
 # ---- 3. the LIVE gate renders the rule (no copy): rule text == the recorded new rule, and nothing matches the post-DNAT port
 mkdir -p "$W/g"

@@ -105,9 +105,8 @@ else
     "fw_chain input | grep -Eq '22222.*accept'"
 
   # In the input chain, not just forward: HA Core listens on the HOST
-  # (0.0.0.0:8123, host networking), and published add-on ports are terminated
-  # by docker-proxy on the host too. A forward-only allowlist blackholes the UI
-  # while reading as correct — measured on a bench device 2026-07-29.
+  # (host networking), so its UI port hits `input`. Published container ports
+  # are DNAT'd and take the forward chain instead (matched by original port).
   run_test "FW-26" "HA UI (:8123) reachable from the LAN (input chain)" \
     "fw_chain input | grep -Eq '8123.*accept'"
 
@@ -124,7 +123,7 @@ else
     "fw_chain forward | grep -Eq 'dnat.*drop'"
 
   # Odoo #1610: published container ports are DNAT'd in PREROUTING, so forward sees the container-side
-  # port. The accept must match the ORIGINAL port; matching `dport 80` opened :4357 (observer -> :80).
+  # port. The accept must match the ORIGINAL port; matching the post-DNAT `dport 80` also matches published container ports that map to :80.
   run_test "FW-28b" "forward accepts DNAT'd LAN traffic by ORIGINAL port (80/8123)" \
     "fw_chain forward | grep -Eq 'ct status dnat .*ct original proto-dst \\{ *80, 8123 *\\} accept'"
 
@@ -160,7 +159,7 @@ fi
 # =========================================================================
 # C. Reachability permutations (E2E — external prober needed, documented)
 # =========================================================================
-skip_test "FW-40" "LAN client CANNOT reach :22222/:4357 when blocked"      "E2E: needs a LAN prober host"
+skip_test "FW-40" "LAN client CANNOT reach :22222 or a published container port when blocked"      "E2E: needs a LAN prober host"
 skip_test "FW-41" "mesh peer CAN still reach :8099/:8123 when firewall on" "E2E: needs a NetBird peer"
 skip_test "FW-42" "WiFi ingress behaves same as wired ingress (both LAN)"  "E2E: needs a WiFi LAN prober"
 skip_test "FW-43" "device stays fleet-reachable after enable (no lockout)" "E2E: fleet-manager poll check"
