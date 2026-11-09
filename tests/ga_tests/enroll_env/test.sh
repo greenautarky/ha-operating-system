@@ -16,6 +16,9 @@
 #   ENV-FE-09  a PARTIAL override (only GA_FLEET_ENV) still enrols — it LAYERS on
 #              the baked default instead of replacing it
 #   ENV-FE-10  …and keeps the baked host, so the request still has a destination
+#   ENV-FE-14..21  board seed requirement (Odoo #1700): the DSGW board file (read LIVE)
+#              makes an absent/empty GA_FLEET_ENV a loud refusal, never prod; staging and
+#              explicit prod still enrol; the iHost (no board file) is unchanged
 #   ENV-FE-11  with the key in NEITHER file the skip is LOUD and names the cause
 #
 # Needs sh, jq, coreutils. No device.
@@ -65,6 +68,7 @@ run_enroll() {   # run_enroll <override-file-or-empty> <logname>
   GA_ENROLL_CREDS_FILE="$W/ghcr-creds.json" GA_ENROLL_STATE_FILE="$W/share/ga-enroll-state.json" \
   GA_ENROLL_NB_ENV="$W/no-nb-env" GA_ENROLL_HA_UUID_STORE="$W/no-uuid" \
   GA_SHARE_PUBLISH="$PUB" GA_SHARE_STAGE_DIR="$W/stage" \
+  GA_BOARD_CONF="${BOARD_CONF:-$W/no-board}" GA_ENROLL_REFUSED_FILE="$W/share/ga-enroll-refused.json" \
   GA_ENROLL_SSH_POSTURE="${SSH_POSTURE_STUB:-$W/no-posture}" GA_ENROLL_SSH_HOST_PUB="${SSH_HOST_PUB:-$W/no-host-pub}" \
   sh "$ENROLL" > "$W/$2.out" 2>&1
   echo $? > "$W/$2.rc"
@@ -149,6 +153,35 @@ run_test "ENV-FE-12" "certificate plane → bridge carries ssh_host_key as '<typ
 SSH_POSTURE_STUB="$W/posture-shared" SSH_HOST_PUB="$W/host.pub" run_enroll "" hk-shared
 run_test "ENV-FE-13" "shared plane → ssh_host_key empty (nothing new pushed at the pre-cut fleet)" \
   "[ \"\$(cat '$W/hk-shared.rc')\" = 0 ] && [ \"\$(jq -r .ssh_host_key '$W/share/ga-enroll-state.json')\" = '' ]"
+
+# --- ENV-FE-14..21: DSGW must not default into PROD (Odoo #1700) ----------------
+# The board file is the REAL shipped DSGW overlay file, never a copy (a copy would
+# stay green while the real one rots).
+DSGW_CONF="$SCRIPT_DIR/../../../buildroot-dsgw210/board/dusun/dsgw210/rootfs-overlay/usr/share/ga-board.conf"
+run_test "ENV-FE-14" "DSGW board file present and declares GA_FLEET_ENV_REQUIRED=1" \
+  "grep -qE '^: \"\\$\{GA_FLEET_ENV_REQUIRED:=1\}\"' '$DSGW_CONF'"
+rm -f "$W/share/ga-enroll-refused.json"
+BOARD_CONF="$DSGW_CONF" run_enroll "" dsgw-noseed
+run_test "ENV-FE-15" "DSGW + no seed -> exit 1 and NO request made (must-refuse)" \
+  "[ \"\$(cat '$W/dsgw-noseed.rc')\" = 1 ] && [ ! -s '$W/dsgw-noseed.log' ]"
+run_test "ENV-FE-16" "…and the journal error names the missing seed and the override file" \
+  "grep -q 'FLEET ENV SEED MISSING' '$W/dsgw-noseed.out' && grep -q 'GA_FLEET_ENV=staging' '$W/dsgw-noseed.out' && grep -q 'no-such-override' '$W/dsgw-noseed.out'"
+run_test "ENV-FE-17" "…and a status file the device can surface says refused/fleet_env_seed_missing" \
+  "[ \"\$(jq -r '.status+\"/\"+.reason' '$W/share/ga-enroll-refused.json')\" = refused/fleet_env_seed_missing ]"
+printf 'GA_FLEET_ENV=\n' > "$W/override-empty.conf"
+BOARD_CONF="$DSGW_CONF" run_enroll "$W/override-empty.conf" dsgw-empty
+run_test "ENV-FE-18" "DSGW + EMPTY GA_FLEET_ENV= -> refused too" \
+  "[ \"\$(cat '$W/dsgw-empty.rc')\" = 1 ] && [ ! -s '$W/dsgw-empty.log' ] && grep -q 'FLEET ENV SEED MISSING' '$W/dsgw-empty.out'"
+BOARD_CONF="$DSGW_CONF" run_enroll "$W/override-staging.conf" dsgw-staging
+run_test "ENV-FE-19" "DSGW + staging seed -> enrols as staging (must-pass); stale refusal status cleared" \
+  "[ \"\$(cat '$W/dsgw-staging.rc')\" = 0 ] && [ \"\$(jq -r .fleet_env '$W/dsgw-staging.log')\" = staging ] && [ ! -e '$W/share/ga-enroll-refused.json' ]"
+printf 'GA_FLEET_ENV=prod\n' > "$W/override-prod.conf"
+BOARD_CONF="$DSGW_CONF" run_enroll "$W/override-prod.conf" dsgw-prod
+run_test "ENV-FE-20" "DSGW + EXPLICIT prod seed -> enrols as prod (the pilot path, must-pass)" \
+  "[ \"\$(cat '$W/dsgw-prod.rc')\" = 0 ] && [ \"\$(jq -r .fleet_env '$W/dsgw-prod.log')\" = prod ]"
+run_enroll "" ihost-noseed
+run_test "ENV-FE-21" "iHost (no board file) + no seed -> prod exactly as before (must-pass, field behaviour)" \
+  "[ \"\$(cat '$W/ihost-noseed.rc')\" = 0 ] && [ \"\$(jq -r .fleet_env '$W/ihost-noseed.log')\" = prod ] && [ ! -e '$W/share/ga-enroll-refused.json' ]"
 
 rm -rf "$W" 2>/dev/null
 suite_end
