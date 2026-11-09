@@ -43,7 +43,7 @@ expect() {  # <results> <id> <PASS|FAIL> <label>
 grep -q '^# BEGIN fw_chain' "$SUITE" && grep -q '^# END fw_chain' "$SUITE" && ok "suite defines fw_chain (markers found)" || no "fw_chain markers missing in test.sh"
 ! grep -n "sed -n '/chain " "$SUITE" >/dev/null && ok "suite has no first-brace sed chain extraction left" || no "suite still uses sed '/chain X/,/}/p'"
 
-# ---- 1. MUST-PASS: recorded real nft output, new rule: every firewall assertion that reads the ruleset is green
+# ---- 1. MUST-PASS fixture, recorded real nft output, new rule: every firewall assertion that reads the ruleset is green
 R_NEW="$(suite "$NEW")"
 [ "$(wc -l <<<"$R_NEW")" -ge 15 ] && ok "suite produced results for the fixture ($(wc -l <<<"$R_NEW") lines)" || no "suite produced too few results: $R_NEW"
 for id in FW-21 FW-22 FW-23 FW-24 FW-25 FW-26 FW-26b FW-27 FW-28 FW-28b FW-28c FW-29 FW-29b; do
