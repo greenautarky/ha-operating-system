@@ -294,3 +294,15 @@ Must run on real iHost hardware. Needs network, Docker, HA running.
 - FC-11: wlan0 uses openstick-auto (not Install WiFi)
 - FC-12: Persistent connection file exists
 - FC-13: Connection has autoconnect=yes
+
+### Fixture independence (Odoo #1610, review round 2)
+
+`tests/gates/build_tests_board_matrix` refreshes 15+ shipped files from the LIVE overlay
+(`overlay-refresh.txt`) before it runs `run_build_tests.sh`. For those files the matrix
+therefore no longer compares the runner against an independent captured bake: a runner
+check and its file are both current, so the board matrix cannot catch a runner check that
+asserts something the shipped file never had. Independence is restored by the strict,
+line-exact checks themselves (CFG-28b, STAGE-05, SLOT-08 each reject a mutated file; see
+the PR's red proof) and by `tests/ga_tests/data_root`. An independent snapshot of the
+refreshed files is NOT kept; re-capture the fixtures (`capture-fixture.py`) from the next
+bake that contains the resolver to get it back.

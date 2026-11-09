@@ -255,7 +255,16 @@ grep -q 'ga-fleet-influx.yaml' "$TG_ENV_SH" 2>/dev/null \
 
 # CFG-28b: the influx cred is read from the addon-PRIVATE /data sidecar, not only
 # the legacy /share view that any share:rw addon can read (Vuln-8).
-grep -q 'ga-fleet-influx.yaml' "$TG_ENV_SH" 2>/dev/null && grep -q '_ga_manager/\$CRED_NAME' "$TG_ENV_SH" 2>/dev/null && grep -q 'ga-data-root.sh' "$TG_ENV_SH" 2>/dev/null \
+# Strict (Odoo #1610 review): the BODY of find_influx_cred must take its root from the
+# resolver (ga_data_root, falling back to the unresolvable path) and glob
+# "$_root"/*_ga_manager/$CRED_NAME; CRED_NAME is the sidecar; the resolver is sourced
+# from its fixed path; and no hard-coded supervisor/addons|apps path is left.
+_fic_body="$(sed -n '/^find_influx_cred()/,/^}/p' "$TG_ENV_SH" 2>/dev/null)"
+grep -qx 'CRED_NAME=ga-fleet-influx.yaml' "$TG_ENV_SH" 2>/dev/null \
+  && grep -qx '\. "\${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"' "$TG_ENV_SH" 2>/dev/null \
+  && grep -qxF '    _root=$(ga_data_root 2>/dev/null) || _root=$GA_DATA_ROOT_UNRESOLVED' <<<"$_fic_body" \
+  && grep -qxF '    for c in "$_root"/*_ga_manager/$CRED_NAME; do' <<<"$_fic_body" \
+  && ! grep -v '^[[:space:]]*#' "$TG_ENV_SH" 2>/dev/null | grep -qE 'supervisor/(addons|apps)' \
   && _pass "CFG-28b: ga-telegraf-env prefers the /data influx sidecar (off /share)" \
   || _fail "CFG-28b: ga-telegraf-env still reads the influx cred only from /share (Vuln-8)"
 
@@ -4241,8 +4250,11 @@ fi
 # Pinned separately from STAGE-04 so that dropping the trusted destination and
 # keeping the compat one — which would look like a tidy-up — fails loudly.
 if [[ -f "$STAGE_BIN" ]] \
-   && grep -qF 'GA_STAGE_PRIV_GLOB' "$STAGE_BIN" 2>/dev/null \
-   && grep -qF 'ga_data_root_or_unresolved)/*_ga_manager' "$STAGE_BIN" 2>/dev/null \
+   && grep -qE '^[[:space:]]*if \[ -n "\$\{GA_STAGE_PRIV_GLOB:-\}" \]; then$' "$STAGE_BIN" 2>/dev/null \
+   && grep -qE '^[[:space:]]*PRIV_PARENT_GLOB="\$GA_STAGE_PRIV_GLOB"$' "$STAGE_BIN" 2>/dev/null \
+   && grep -qE '^[[:space:]]*\. "\$\{GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh\}"$' "$STAGE_BIN" 2>/dev/null \
+   && grep -qE '^[[:space:]]*PRIV_PARENT_GLOB="\$\(ga_data_root_or_unresolved\)/\*_ga_manager"$' "$STAGE_BIN" 2>/dev/null \
+   && ! grep -v '^[[:space:]]*#' "$STAGE_BIN" 2>/dev/null | grep -qE 'supervisor/(addons|apps)' \
    && grep -qE 'stage_tree "\$priv_parent/ga-custom-components"' "$STAGE_BIN" 2>/dev/null; then
   _pass "STAGE-05: also stages into the add-on-private dir (not add-on-writable)"
 else
@@ -5021,7 +5033,8 @@ fi
 # `eval "$(rauc status ...)"`; new root services should not copy that.
 # The one sanctioned `.` is the fixed-path data-root resolver (Odoo #1610): a file shipped
 # in the image, not command output.
-if col_code | grep -v 'GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh' | grep -Eq '(^|[^[:alnum:]_])(eval|source)[[:space:]]|^[[:space:]]*\.[[:space:]]'; then
+# Exact allow-list: a line is exempt only if it IS that sourcing line, nothing else on it.
+if col_code | grep -Ev '^[[:space:]]*\. "\$\{GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root\.sh\}"[[:space:]]*$' | grep -Eq '(^|[^[:alnum:]_])(eval|source)[[:space:]]|^[[:space:]]*\.[[:space:]]'; then
   _fail "SLOT-08: collector evals/sources command output — root code-execution surface"
 else
   _pass "SLOT-08: collector parses rauc output instead of eval'ing it"
