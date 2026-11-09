@@ -65,7 +65,7 @@
 # everywhere downstream; FORGED data is a different problem, and the only real
 # fix is a channel the attacker cannot reach.
 #
-# `/mnt/data/supervisor/addons/data/<slug>/` is that channel: Supervisor gives
+# `<supervisor data root>/<slug>/` is that channel: Supervisor gives
 # each add-on a private data dir, no other add-on maps it, and the ga_manager
 # container sees it as plain `/data`. Same channel the per-device Loki
 # credential, the GHCR creds and auth.token already use (ARCHITECTURE.md);
@@ -174,7 +174,8 @@
 #                         /dev/disk/by-partlabel/<partlabel> devices
 
 # Add-on-private target. Glob because the slug carries a repository hash.
-ADDON_DATA_GLOB="/mnt/data/supervisor/addons/data/*_ga_manager"
+. "${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"
+ADDON_DATA_GLOB="$(ga_data_root_or_unresolved)/*_ga_manager"
 OUT_BASENAME="ga-rauc-slots.json"
 
 # Healthy-boot record. /mnt/data survives an OTA (it is not a slot) and is wiped

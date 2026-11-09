@@ -30,7 +30,7 @@
 # to the Supervisor API. So the question for the staging tree is not who can
 # read it, but who can write it.
 #
-#   1. addons/data/*_ga_manager/ga-custom-components  — TRUSTED, preferred.
+#   1. <supervisor data root>/*_ga_manager/ga-custom-components  — TRUSTED, preferred.
 #      The add-on's private data dir. No other add-on is given a path to it,
 #      so what the placer reads is what the OS wrote. Same trust channel the
 #      per-device Loki credential and the device identity already use.
@@ -65,7 +65,12 @@ SRC="${GA_STAGE_SRC:-/usr/share/ga/custom_components}"
 SHARE_DST="${GA_STAGE_SHARE_DST:-/mnt/data/supervisor/share/ga-custom-components}"
 # The addon's private data dir. The slug carries a per-device repository hash
 # prefix, hence the glob.
-PRIV_PARENT_GLOB="${GA_STAGE_PRIV_GLOB:-/mnt/data/supervisor/addons/data/*_ga_manager}"
+if [ -n "${GA_STAGE_PRIV_GLOB:-}" ]; then
+	PRIV_PARENT_GLOB="$GA_STAGE_PRIV_GLOB"
+else
+	. "${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"
+	PRIV_PARENT_GLOB="$(ga_data_root_or_unresolved)/*_ga_manager"
+fi
 
 log() { echo "ga-stage-vendored-components: $*"; }
 

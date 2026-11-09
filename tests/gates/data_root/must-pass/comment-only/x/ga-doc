@@ -1,0 +1,3 @@
+#!/bin/sh
+# the old path was /mnt/data/supervisor/addons/data/x, now <root>
+exit 0

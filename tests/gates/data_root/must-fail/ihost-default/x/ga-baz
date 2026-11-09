@@ -1,0 +1,3 @@
+#!/bin/sh
+# header comment mentions apps/data
+V=${GA_V:-/mnt/data/supervisor/apps/data/99f1cad4_ga_manager/v.json}

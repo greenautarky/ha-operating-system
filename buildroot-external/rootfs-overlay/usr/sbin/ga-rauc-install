@@ -6,7 +6,7 @@
 # by an operator on the host. The request file lives in ga_manager's OWN
 # data directory, under its pinned slug (ADR-0041):
 #
-#   /mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-rauc-install-request
+#   <supervisor data root>/99f1cad4_ga_manager/ga-rauc-install-request
 #
 # (the add-on writes /data/ga-rauc-install-request). Only ga_manager mounts
 # that directory; no other add-on is given a path to it. The path is static on
@@ -50,7 +50,15 @@ set -eu
 
 # GA_GM_DATA_DIR relocates ga_manager's data directory (host tests only;
 # nothing on a device sets it).
-GM_DATA_DIR="${GA_GM_DATA_DIR:-/mnt/data/supervisor/addons/data/99f1cad4_ga_manager}"
+if [ -n "${GA_GM_DATA_DIR:-}" ]; then
+	GM_DATA_DIR="$GA_GM_DATA_DIR"
+else
+	# Lenient: with a VERSION argument no request file is read at all; without one
+	# the unresolved path makes "request absent" the loud FATAL below, next to the
+	# resolver's own ERROR on stderr.
+	. "${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"
+	GM_DATA_DIR="$(ga_data_root_or_unresolved)/99f1cad4_ga_manager"
+fi
 # GA_RESOLVE_OTA_BIN and GA_OTA_ACTIVE_FILE relocate the resolver and its pick
 # (host tests only; nothing on a device sets them).
 RESOLVE_OTA_BIN="${GA_RESOLVE_OTA_BIN:-/usr/sbin/ga-resolve-ota}"

@@ -1,0 +1,3 @@
+#!/bin/sh
+. /usr/libexec/ga-data-root.sh
+GM="$(ga_data_root)/99f1cad4_ga_manager"

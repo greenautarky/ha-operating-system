@@ -1,0 +1,2 @@
+#!/bin/sh
+GM=${GA_GM:-/mnt/data/supervisor/addons/data/99f1cad4_ga_manager}

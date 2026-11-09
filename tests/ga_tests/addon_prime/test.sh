@@ -77,6 +77,11 @@ apps_cmd() {  # apps_cmd <update|start> <slug>
         noupdate) echo "Error: No update available for $2" >&2; exit 1 ;;
         missing) echo "Error: App $2 does not exist in the store" >&2; exit 1 ;;
         auth) echo "Error: Supervisor error: pull access denied for ghcr.io/greenautarky/x, repository does not exist or may require authorization" >&2; exit 1 ;;
+        notready) # refused 3 times, then accepted (state: attempt counter file)
+          _n=$(cat "$STUB_CALLS.n" 2>/dev/null || echo 0); _n=$((_n + 1)); echo "$_n" > "$STUB_CALLS.n"
+          [ "$_n" -gt 3 ] && exit 0
+          echo "Error: Supervisor is not ready to perform this operation, please try again later" >&2; exit 1 ;;
+        notready_forever) echo "Error: Supervisor is not ready to perform this operation, please try again later" >&2; exit 1 ;;
         other) echo "Error: Can't update $2: image pull failed (no space left on device)" >&2; exit 1 ;;
       esac ;;
   esac
@@ -106,7 +111,7 @@ printf 'GA-FAKE_ga_manager\n' > "$W/prime.conf"
 
 # prime <gen> <scenario> <name> — run the script; leaves $W/<name>.{log,rc,calls,marker}
 prime() {
-  rm -f "$W/$3.marker" "$W/$3.calls"; : > "$W/$3.calls"
+  rm -f "$W/$3.marker" "$W/$3.calls" "$W/$3.calls.n"; : > "$W/$3.calls"
   PATH="$W/bin:$PATH" TMPDIR="$W" STUB_GEN="$1" STUB_SCEN="$2" STUB_CALLS="$W/$3.calls" \
     GA_PRIME_CONF="$W/prime.conf" GA_PRIME_MARKER="$W/$3.marker" \
     $SH "$SUT" > "$W/$3.log" 2>&1
@@ -157,5 +162,18 @@ run_test "APRIME-25" "new CLI, unclassified error: the full output is logged aft
   "grep -A3 'FAILED (rc=' '$W/new_other.log' | grep -q '|.*image pull failed'"
 run_test "APRIME-24" "run exercised 15+ stub calls (the harness ran the script, not nothing)" \
   "[ \$(cat '$W'/*.calls | wc -l) -ge 15 ]"
+
+# --- APRIME-3x: "not ready to perform" is retried (Odoo #1610 finding C) -----
+prime new notready nr_ok
+prime old notready nr_old
+GA_PRIME_RETRY_BUDGET_S=40 prime new notready_forever nr_forever
+run_test "APRIME-30" "refused 3x with 'not ready to perform', then accepted: primed, marker, rc 0, 4 update calls" \
+  "[ \"\$(rc nr_ok)\" = 0 ] && [ -f '$W/nr_ok.marker' ] && [ \"\$(grep -c '^ha apps update' '$W/nr_ok.calls')\" = 4 ] && grep -qx 'ha apps start GA-FAKE_ga_manager' '$W/nr_ok.calls'"
+run_test "APRIME-31" "same on the old CLI generation, and the retries are logged" \
+  "[ \"\$(rc nr_old)\" = 0 ] && [ -f '$W/nr_old.marker' ] && grep -q 'retry in' '$W/nr_old.log'"
+run_test "APRIME-32" "never ready: bounded (budget 40 s = 5+10+20+30 waited, 5 attempts), then loud FAILED, rc 1, NO marker" \
+  "[ \"\$(rc nr_forever)\" = 1 ] && [ ! -f '$W/nr_forever.marker' ] && [ \"\$(grep -c '^ha apps update' '$W/nr_forever.calls')\" = 5 ] && grep -q 'giving up' '$W/nr_forever.log' && grep -q 'FAILED (rc=1)' '$W/nr_forever.log'"
+run_test "APRIME-33" "other errors are NOT retried: exactly one update call (unclassified, auth, missing)" \
+  "[ \"\$(grep -c '^ha apps update' '$W/new_other.calls')\" = 1 ] && [ \"\$(grep -c '^ha apps update' '$W/new_auth.calls')\" = 1 ] && [ \"\$(grep -c '^ha apps update' '$W/new_miss.calls')\" = 1 ]"
 
 suite_end

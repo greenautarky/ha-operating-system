@@ -8,7 +8,7 @@
 #
 # ga_manager publishes a single verdict for the standby (seam S2) in its OWN
 # data directory, read here under the add-on's pinned slug (ADR-0041):
-#   /mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-lte-standby.json
+#   <supervisor data root>/99f1cad4_ga_manager/ga-lte-standby.json
 #     {usable, since, reason, updated_at}
 # Only ga_manager mounts that directory. A verdict in /share is NOT read: /share
 # is mounted into every add-on that declares `share:rw`, and a file there must
@@ -31,7 +31,12 @@
 # are env-overridable so the decision logic runs host-side.
 set -u
 
-VERDICT="${GA_STANDBY_VERDICT:-/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-lte-standby.json}"
+if [ -n "${GA_STANDBY_VERDICT:-}" ]; then
+	VERDICT="$GA_STANDBY_VERDICT"
+else
+	. "${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"
+	VERDICT="$(ga_data_root_or_unresolved)/99f1cad4_ga_manager/ga-lte-standby.json"
+fi
 IFACE="${GA_STANDBY_IFACE:-wlan0}"
 # The dongle's AP gateway on the wlan0 subnet, and the metric the standby route
 # uses. Both match the shipped OpenStick hop (192.168.100.1, high metric so the

@@ -13,7 +13,13 @@ Description=Watch for ga_manager's data directory (ADR-0041 host release)
 After=mnt-data.mount
 
 [Path]
+# Supervisor 2025.11 keeps add-on data under addons/, 2026.10+ under apps/
+# (Odoo #1610). A .path unit cannot call the resolver (ga-data-root.sh), so it
+# watches BOTH literal paths; whichever exists fires the same service, and the
+# service resolves the real data root itself. Watching the absent one is
+# harmless: systemd watches the nearest existing parent until it appears.
 PathExists=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager
+PathExists=/mnt/data/supervisor/apps/data/99f1cad4_ga_manager
 Unit=ga-gm-host-release-install.service
 
 [Install]

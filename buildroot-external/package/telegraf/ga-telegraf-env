@@ -43,8 +43,10 @@ TENV_BIN="${GA_TELEMETRY_ENV_BIN:-/usr/libexec/ga-telemetry-env}"
 # root-only via the slug-tolerant glob, exactly like ga-fluent-bit-env does for
 # loki. Falls back to the LEGACY /share file during the transition (ga_manager
 # < 0.99.0 that has not written the sidecar yet); ADR-0003 Step 5 drops it.
-# shellcheck disable=SC2125  # expanded unquoted in find_influx_cred(), by design
-CRED_GLOB=/mnt/data/supervisor/addons/data/*_ga_manager/ga-fleet-influx.yaml
+# Data root (addons/ on Supervisor 2025.11, apps/ on 2026.10+): the one resolver,
+# re-asked inside the finder because the directory may appear while we wait.
+. "${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"
+CRED_NAME=ga-fleet-influx.yaml
 LEGACY_CRED=/mnt/data/supervisor/share/ga-fleet-influx.yaml
 
 mkdir -p "$TG_DIR" "$TG_DIR/buffer"
@@ -75,7 +77,8 @@ LABEL=$(cat /mnt/data/ga-device-label 2>/dev/null)
 # writable by every add-on declaring `share:rw`, and whoever writes there
 # dictates the label this device reports its metrics under.
 if [ -z "$LABEL" ]; then
-    for _idf in /mnt/data/supervisor/addons/data/*_ga_manager/ga-identity.json; do
+    _root=$(ga_data_root) || _root=$GA_DATA_ROOT_UNRESOLVED   # loud on stderr when unresolved
+    for _idf in "$_root"/*_ga_manager/ga-identity.json; do
         [ -r "$_idf" ] || continue
         LABEL=$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
                 "$_idf" 2>/dev/null | head -1)
@@ -109,7 +112,8 @@ fi
 # 2026-07-09): bounded wait, loud journal lines either way, creds written only
 # when BOTH fields are non-empty. Same find+wait shape as ga-fluent-bit-env.
 find_influx_cred() {
-    for c in $CRED_GLOB; do
+    _root=$(ga_data_root 2>/dev/null) || _root=$GA_DATA_ROOT_UNRESOLVED
+    for c in "$_root"/*_ga_manager/$CRED_NAME; do
         [ -f "$c" ] && { printf '%s' "$c"; return 0; }
     done
     [ -f "$LEGACY_CRED" ] && { printf '%s' "$LEGACY_CRED"; return 0; }
@@ -117,7 +121,7 @@ find_influx_cred() {
 }
 
 CRED_FILE=$(find_influx_cred) || CRED_FILE=""
-if [ -z "$CRED_FILE" ] && [ -d /mnt/data/supervisor/addons/data ]; then
+if [ -z "$CRED_FILE" ] && ga_data_root >/dev/null 2>&1; then
     n=1
     while [ "$n" -le 6 ]; do
         sleep 5

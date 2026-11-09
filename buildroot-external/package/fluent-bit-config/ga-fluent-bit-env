@@ -46,11 +46,12 @@ SHARE_PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
 # dictates the label this device reports its logs and metrics under. The
 # private dir is writable by ga_manager alone — the same channel the Loki
 # credential below already travels. Used as the DEVICE_LABEL fallback.
-# shellcheck disable=SC2125  # expanded unquoted in find_identity(), by design
-IDENTITY_GLOB=/mnt/data/supervisor/addons/data/*_ga_manager/ga-identity.json
+# Data root (addons/ on Supervisor 2025.11, apps/ on 2026.10+) from the one
+# resolver, re-asked inside each finder: the directory may appear while we wait.
+. "${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"
+IDENTITY_NAME=ga-identity.json
 UUID_FILE=/mnt/data/supervisor/homeassistant/.storage/core.uuid
-# shellcheck disable=SC2125  # expanded unquoted in find_cred(), by design
-CRED_GLOB=/mnt/data/supervisor/addons/data/*_ga_manager/ga-fleet-loki.yaml
+CRED_NAME=ga-fleet-loki.yaml
 
 log() { echo "ga-fluent-bit-env: $*"; }
 
@@ -84,7 +85,8 @@ LABEL=$(cat "$LABEL_FILE" 2>/dev/null)
 # devices, 2026-07-15). The addon cannot write /mnt/data/ga-device-label (no
 # mount), so the host-side env-builder heals it here instead.
 if [ -z "$LABEL" ]; then
-    for _idf in $IDENTITY_GLOB; do
+    _root=$(ga_data_root) || _root=$GA_DATA_ROOT_UNRESOLVED   # loud on stderr when unresolved
+    for _idf in "$_root"/*_ga_manager/$IDENTITY_NAME; do
         [ -r "$_idf" ] || continue
         LABEL=$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
                 "$_idf" 2>/dev/null | head -1)
@@ -102,14 +104,15 @@ fi
 # telegraf.service): only wait when the addon data root exists but the cred does
 # not, so a device that will never have a cred does not pay 30s every boot.
 find_cred() {
-    for c in $CRED_GLOB; do
+    _root=$(ga_data_root 2>/dev/null) || return 1
+    for c in "$_root"/*_ga_manager/$CRED_NAME; do
         [ -f "$c" ] && { printf '%s' "$c"; return 0; }
     done
     return 1
 }
 
 CRED=$(find_cred) || CRED=""
-if [ -z "$CRED" ] && [ -d /mnt/data/supervisor/addons/data ]; then
+if [ -z "$CRED" ] && ga_data_root >/dev/null 2>&1; then
     n=1
     while [ "$n" -le 6 ]; do
         sleep 5

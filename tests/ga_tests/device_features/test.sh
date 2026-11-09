@@ -135,7 +135,7 @@ run_test "FEAT-10" "telegraf is gated on an explicit metrics consent marker" \
 # ga_default_addon 1.4.0 stopped baking cloud database credentials into the
 # image. Assert on the SHAPE (no password-bearing key), never on a value.
 run_test_show "FEAT-11" "ga_default_addon carries no cloud DB password in its options" \
-  '! grep -qiE "\"(DB_PASSWORD|POSTGRES_PASSWORD|CLOUD_DB_PASSWORD)\"[[:space:]]*:[[:space:]]*\"[^\"]+\"" /mnt/data/supervisor/addons/data/*_ga_default_addon/options.json 2>/dev/null'
+  '! grep -qiE "\"(DB_PASSWORD|POSTGRES_PASSWORD|CLOUD_DB_PASSWORD)\"[[:space:]]*:[[:space:]]*\"[^\"]+\"" /mnt/data/supervisor/*/data/*_ga_default_addon/options.json 2>/dev/null'
 
 # --- Home Assistant's OWN onboarding (ga_manager 0.130.0, #215) ------------
 # Provisioning owns this, not the resident. Core's onboarding has four steps and

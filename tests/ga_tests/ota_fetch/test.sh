@@ -157,6 +157,7 @@ sbx() {  # <cmd...>
     --ro-bind "$STUBS" /mnt/.stubs --ro-bind "$EXT" /mnt/.ext --ro-bind "$IHOST" /mnt/.ihost \
     --setenv PATH "/mnt/.stubs:/usr/sbin:/usr/bin:/sbin:/bin" \
     --setenv GA_SERVICES_CONF_LIB /mnt/.ext/usr/libexec/ga-services-conf.sh \
+    --setenv GA_DATA_ROOT_LIB /mnt/.ext/usr/libexec/ga-data-root.sh \
     "$@"
 }
 resolve() { sbx sh /mnt/.ext/usr/sbin/ga-resolve-ota > "$C/out" 2>&1; echo $? > "$C/rc"; }

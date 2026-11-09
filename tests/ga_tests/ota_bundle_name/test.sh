@@ -7,6 +7,7 @@
 # Real script, only curl stubbed (records the URL, always fails -> exit 3).
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+export GA_DATA_ROOT_LIB="$ROOT/buildroot-external/rootfs-overlay/usr/libexec/ga-data-root.sh"
 D="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT="$ROOT/buildroot-external/rootfs-overlay/usr/sbin/ga-rauc-install"
 W="$(mktemp -d)" || { echo "ERROR (could not check): mktemp failed" >&2; exit 2; }; mkdir -p "$W/bin" || exit 2; trap 'rm -rf "$W"' EXIT

@@ -103,7 +103,7 @@ fi
 # ga_manager's converged marker in its own data directory (ADR-0041, from
 # BOSv1.4.0-rc3). Older images watched the /share copy; fall back to it only to
 # JUDGE such an image, never to act.
-CONVERGED=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/.ga_converged
+CONVERGED=${GA_T_DATA_ROOT}/99f1cad4_ga_manager/.ga_converged
 if ! grep -q "PathExists=$CONVERGED" /etc/systemd/system/ga-ethernet-retire.path 2>/dev/null; then
     CONVERGED=/mnt/data/supervisor/share/.ga_converged
 fi
@@ -150,8 +150,8 @@ fi
 # file, which is copied aside and restored by a trap.
 MANAGE=/usr/sbin/ga-manage-ethernet
 LABEL_FILE=/mnt/data/ga-device-label
-IDENTITY=$(ls /mnt/data/supervisor/addons/data/*_ga_manager/ga-identity.json 2>/dev/null | head -1)
-REMOTE=$(ls /mnt/data/supervisor/addons/data/*_ga_manager/ga-ethernet-force 2>/dev/null | head -1)
+IDENTITY=$(ls ${GA_T_DATA_ROOT}/*_ga_manager/ga-identity.json 2>/dev/null | head -1)
+REMOTE=$(ls ${GA_T_DATA_ROOT}/*_ga_manager/ga-ethernet-force 2>/dev/null | head -1)
 
 if grep -q 'ga-identity.json' "$MANAGE" 2>/dev/null; then
     run_test "ETHF-07" "ga-manage-ethernet derives the label from ga-identity.json" "true"

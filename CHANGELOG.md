@@ -12,6 +12,14 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): OS files find Supervisor's add-on data under apps/ as well as addons/ (Odoo #1610)
+
+Supervisor 2026.10 renamed the host data root `/mnt/data/supervisor/addons/` to `apps/`, and 15 OS files still named the old one. On a BOSv1.6.0-rc6 device that meant device label `unknown`, Loki user `anonymous`, no RAUC slot picture published, and five `.path` units (OS install request, Ethernet override retire, telemetry profile, host release, SSH principal label) watching paths that never appear. `ga-telegraf-env` carried the same defect.
+
+One resolver, `/usr/libexec/ga-data-root.sh`, prefers `apps/data`, falls back to `addons/data` (BOSv1.5.x images and any rollback still use it), and fails loudly on stderr when neither exists; it never invents a default. Every consumer asks it (the three iHost-only scripts too). A `.path` unit cannot call a function, so each lists both literal paths and whichever exists triggers the same service, which resolves the root itself. Gate `scripts/check-data-root.py` (`tests/gates/data_root`) fails when any shipped file outside the resolver names the root, or a `.path` unit names only one variant.
+
+`ga-addon-prime` retries the per-slug update while Supervisor answers "not ready to perform this operation" (5, 10, 20, then 30 s steps, 600 s in total, the budget the script already gives its readiness probe); every other error is as loud as before.
+
 ## Unreleased (feat/1.6-haos18): the host firewall drops ingress on EVERY non-trusted interface, uplinks included (Odoo #1647)
 
 `ga-firewall-gate` named the interfaces to drop on (the LAN ones), so an interface nobody listed, such as the modem uplink, was outside the filter. The model is inverted to default-deny: lo, the mesh (wt0, tailscale0) and the container bridges (hassio, docker0, br-*, veth*, wpan0) are accepted first, the LAN interfaces get the 22222/80/8123 allowlist, every other interface is dropped; replies to the device's own connections pass (ct established,related). The chain policy stays at accept because nft loads atomically and a fail-closed policy could cut the only management path; a load failure is now logged at err level and published as `ruleset_loaded: false`. Proof: board_firewall FWB-16/17/18 plus four must-flag fixtures, and a kernel-netns run of the real gate (uplink ports dropped, LAN 22222/8123 unchanged).

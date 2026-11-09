@@ -41,7 +41,7 @@ MARK_BASE="$SHARE/.ga_converged_base"
 IDENTITY="$SHARE/ga-identity.json"
 PIN_CANON="$HA_CFG/.storage/greenautarky_secrets/onboarding_pin"
 PIN_COMPAT="$HA_CFG/ga-onboarding-pin"
-GM_DATA=$(ls -d "$ROOT"/mnt/data/supervisor/addons/data/*ga_manager 2>/dev/null | head -1)
+GM_DATA=$(ls -d "$ROOT"/mnt/data/supervisor/*/data/*ga_manager 2>/dev/null | head -1)
 
 emit() { printf '%s %s %s\n' "$1" "$2" "$3"; }
 

@@ -26,7 +26,13 @@ Description=Retire the flash-time Ethernet override once ga_manager has converge
 ConditionPathExists=/mnt/boot/ga-ethernet-force
 
 [Path]
+# Supervisor 2025.11 keeps add-on data under addons/, 2026.10+ under apps/
+# (Odoo #1610). A .path unit cannot call the resolver (ga-data-root.sh), so it
+# watches BOTH literal paths; whichever exists fires the same service, and the
+# service resolves the real data root itself. Watching the absent one is
+# harmless: systemd watches the nearest existing parent until it appears.
 PathExists=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/.ga_converged
+PathExists=/mnt/data/supervisor/apps/data/99f1cad4_ga_manager/.ga_converged
 Unit=ga-ethernet-retire.service
 
 [Install]

@@ -109,7 +109,7 @@ run_test "CFG-40" "fluent-bit env-builder reads the loki cred sidecar via the ad
 
 # If a cred was delivered, the built env must carry the parsed values (a device
 # without the sidecar legitimately runs on defaults — skip, don't fail).
-if ls /mnt/data/supervisor/addons/data/*_ga_manager/ga-fleet-loki.yaml >/dev/null 2>&1; then
+if ls ${GA_T_DATA_ROOT}/*_ga_manager/ga-fleet-loki.yaml >/dev/null 2>&1; then
   run_test "CFG-41" "fluent-bit env has per-device LOKI_USER (cred delivered)" \
     "grep -q '^LOKI_USER=dev_' /mnt/data/fluent-bit/env"
 else
@@ -131,7 +131,7 @@ else
   # shipper starts before the identity lands and nothing bounces it (measured
   # K31 rc18, 2026-09-02). Subject is fluent-bit's env: tier-0 is the always-on
   # shipper, whereas telegraf is tier-2 opt-in and may not exist at all.
-  if ls /mnt/data/supervisor/addons/data/*_ga_manager/ga-identity.json >/dev/null 2>&1; then
+  if ls ${GA_T_DATA_ROOT}/*_ga_manager/ga-identity.json >/dev/null 2>&1; then
     run_test_show "CFG-12" "DEVICE_LABEL derived from identity (no label file)" \
       "grep -q '^DEVICE_LABEL=KIB-SON-' /mnt/data/fluent-bit/env"
   else

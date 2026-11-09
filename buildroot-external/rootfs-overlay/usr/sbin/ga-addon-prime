@@ -25,6 +25,21 @@ MARKER="${GA_PRIME_MARKER:-/mnt/data/.ga-addon-primed}"
 
 log() { echo "[ga-addon-prime] $*"; }
 
+# Per-slug update retry (Odoo #1610, finding C). `ha store reload` (the
+# readiness probe below) passes while Supervisor is still starting Core, but the
+# update itself is then refused: "Supervisor is not ready to perform this
+# operation, please try again later" (measured on a fresh BOSv1.6.0-rc6 flash:
+# probe passed at :18, Core start issued at :13, update refused at :20).
+# That one error text means "try again", so the update is retried with
+# exponential backoff (5, 10, 20, then 30 s steps) until RETRY_BUDGET_S of
+# waiting has passed. 600 s is the same budget this script already gives the
+# readiness probe below (120 x 5 s); the real Supervisor start-up time is not
+# measured, the budget is a bound, not a claim. Every OTHER error is not
+# retried and keeps its own classification below; an exhausted budget falls
+# through to the generic FAILED branch, loudly.
+# GA_PRIME_RETRY_BUDGET_S: test hook, never set on a device.
+RETRY_BUDGET_S="${GA_PRIME_RETRY_BUDGET_S:-600}"
+
 # --- ha CLI generations -------------------------------------------------------
 # Supervisor 2025.11.x (iHost today): the CLI knows only `ha addons ...`.
 # Supervisor 2026.10+ (DSGW-210, later iHost): `ha apps ...`; `ha addons ...`
@@ -72,6 +87,27 @@ run_ha() {
 log_full() {
     printf '%s\n' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' | head -n 20 | \
     while IFS= read -r _l; do log "     | $(printf '%s' "$_l" | cut -c1-200)"; done
+}
+
+# update_with_retry <slug> — `run_ha <apps-cmd> update <slug>`, repeated while
+# (and only while) the refusal is Supervisor's "not ready to perform".
+update_with_retry() {
+    _waited=0
+    _delay=5
+    while :; do
+        run_ha "$APPS_CMD" update "$1"
+        [ "$RUN_RC" -ne 0 ] || return 0
+        printf '%s\n%s\n' "$RUN_OUT" "$RUN_ERR" | grep -qi 'not ready to perform' || return 0
+        if [ "$_waited" -ge "$RETRY_BUDGET_S" ]; then
+            log "  → $1: Supervisor still 'not ready to perform' after ${_waited}s of retries — giving up"
+            return 0
+        fi
+        log "  → $1: Supervisor not ready to perform the update — retry in ${_delay}s (waited ${_waited}/${RETRY_BUDGET_S}s)"
+        sleep "$_delay"
+        _waited=$((_waited + _delay))
+        _delay=$((_delay * 2))
+        [ "$_delay" -le 30 ] || _delay=30
+    done
 }
 
 # last_line <text> — last non-empty line, whitespace trimmed, max 160 chars.
@@ -180,7 +216,7 @@ while IFS= read -r SLUG; do
     [ -z "$SLUG" ] && continue
 
     log "priming addon: $SLUG"
-    run_ha "$APPS_CMD" update "$SLUG"
+    update_with_retry "$SLUG"
     UPDATE_RC=$RUN_RC
     # Classify on the real output only: stdout + stderr minus the deprecation
     # notice (a 2026.10 CLI writes its errors to stderr, behind the notice

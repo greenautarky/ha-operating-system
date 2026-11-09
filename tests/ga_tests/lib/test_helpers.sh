@@ -3,6 +3,14 @@
 # Source this from each test suite script.
 # BusyBox /bin/sh compatible (no bash-isms).
 
+# Where Supervisor keeps add-on data on THIS image: apps/ (Supervisor 2026.10+,
+# BOSv1.6) wins over addons/ (2025.11, BOSv1.5.x), like the OS-side resolver
+# (/usr/libexec/ga-data-root.sh). Tests run against any image, so this is probed
+# here and not sourced from the image under test. Neither present = the addons/
+# path, so a check reports an absent directory instead of an empty variable.
+if [ -d /mnt/data/supervisor/apps/data ]; then GA_T_DATA_ROOT=/mnt/data/supervisor/apps/data
+else GA_T_DATA_ROOT=/mnt/data/supervisor/addons/data; fi
+export GA_T_DATA_ROOT
 _PASS=0
 _FAIL=0
 _SKIP=0

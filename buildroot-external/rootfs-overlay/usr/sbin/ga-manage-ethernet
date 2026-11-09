@@ -83,14 +83,14 @@
 #                                      host — the same channel the per-device
 #                                      Loki credential already travels.
 #                                      Read under the add-on's PINNED slug
-#                                      (addons/data/99f1cad4_ga_manager,
+#                                      (<supervisor data root>/99f1cad4_ga_manager,
 #                                      ADR-0041), never a *_ga_manager glob,
 #                                      which would match any add-on whose slug
 #                                      merely ends that way.
 #
 #   The device-bound check needs the device's label. It comes from
 #   /mnt/data/ga-device-label (the flasher's legacy stage-72b file) or, when
-#   that is absent, from the device_id in addons/data/99f1cad4_ga_manager/
+#   that is absent, from the device_id in <supervisor data root>/99f1cad4_ga_manager/
 #   ga-identity.json — the ADR-0010 identity that self-enrolment and the
 #   fleet-manager's identity backfill write (same pinned directory). Nothing in the current
 #   provisioning path writes the legacy file any more (the add-on has no
@@ -117,7 +117,14 @@ PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
 FORCE_BOOT="${GA_FORCE_BOOT:-/mnt/boot/ga-ethernet-force}"
 # ga_manager's own data directory under its pinned slug (ADR-0041). Only
 # ga_manager mounts it; /share is mounted into every `share:rw` add-on.
-GM_DATA_DIR="${GA_GM_DATA_DIR:-/mnt/data/supervisor/addons/data/99f1cad4_ga_manager}"
+if [ -n "${GA_GM_DATA_DIR:-}" ]; then
+	GM_DATA_DIR="$GA_GM_DATA_DIR"
+else
+	# Supervisor 2025.11 keeps add-on data under addons/, 2026.10+ under apps/:
+	# ask the one resolver (Odoo #1610).
+	. "${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"
+	GM_DATA_DIR="$(ga_data_root_or_unresolved)/99f1cad4_ga_manager"
+fi
 CONVERGED_MARKER="$GM_DATA_DIR/.ga_converged"
 REMOTE_FORCE="$GM_DATA_DIR/ga-ethernet-force"
 LABEL_FILE="${GA_LABEL_FILE:-/mnt/data/ga-device-label}"
