@@ -1,0 +1,33 @@
+table inet ga_firewall {
+	chain input {
+		type filter hook input priority filter; policy accept;
+		iifname "wt0" counter packets 2147 bytes 398587 accept
+		iif "lo" accept
+		iifname { "wt0", "tailscale0" } accept
+		iifname { "wpan0", "hassio", "docker0" } accept
+		iifname "br-*" accept
+		iifname "veth*" accept
+		ct state established,related accept
+		icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, echo-request, echo-reply, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+		icmp type { echo-reply, destination-unreachable, echo-request, time-exceeded } accept
+		udp sport 67 udp dport 68 accept
+		udp sport 547 udp dport 546 accept
+		iifname { "eth0", "wlan0" } tcp dport { 80, 8123, 22222 } accept
+		iifname { "eth0", "wlan0" } drop
+		drop
+	}
+
+	chain forward {
+		type filter hook forward priority filter - 5; policy accept;
+		oifname "wt0" ct state established,related counter packets 3951 bytes 1073846 accept
+		iifname "wt0" counter packets 5022 bytes 438157 accept
+		iifname { "wt0", "tailscale0" } accept
+		iifname { "wpan0", "hassio", "docker0" } accept
+		iifname "br-*" accept
+		iifname "veth*" accept
+		ct state established,related accept
+		iifname { "eth0", "wlan0" } ct status dnat tcp dport { 80, 8123 } accept
+		iifname { "eth0", "wlan0" } ct status dnat drop
+		ct status dnat drop
+	}
+}

@@ -1,6 +1,6 @@
 import { test, expect, sshJump } from '../fixtures/device';
 import { getGAOnboardingStatus, waitForHA } from '../helpers/ha-api';
-import { haPort } from '../helpers/ha-url';
+import { adminAccessToken } from '../helpers/auth';
 
 /**
  * Telemetry Consent — E2E tests
@@ -138,13 +138,26 @@ test.describe('Telemetry Consent — Wizard flow', () => {
   test.skip(!process.env.RESET_ONBOARDING, 'Set RESET_ONBOARDING=1 for destructive tests');
   test.skip(!DEVICE_IP, 'DEVICE_IP required for onboarding reset');
 
+  // Onboarding >= 2.12.11 (Odoo #1695 / #1704): the reset also clears
+  // pin_verified and the consents and puts telemetry back to Tier 1 on /
+  // Tier 2 off. So after it the wizard asks for the PIN again, and GDPR has to
+  // be ticked again. The PIN is the device's own (DEVICE_PIN, exported by
+  // run-with-device-secrets.sh) - never a literal in the spec.
+  const DEVICE_PIN = process.env.DEVICE_PIN;
+
   test.beforeEach(async ({ deviceUrl }) => {
-    // Reset onboarding via admin API
-    const { execSync } = await import('child_process');
-    execSync(
-      `${SSH_CMD} 'curl -sf -X POST http://localhost:${haPort()}/api/greenautarky_site/reset -H "Authorization: Bearer $(cat /mnt/data/supervisor/homeassistant/.storage/auth 2>/dev/null | grep -o \\"[a-f0-9]\\{64\\}\\" | head -1)" 2>/dev/null || true'`,
-      { timeout: 30_000 },
-    );
+    test.skip(!DEVICE_PIN, 'DEVICE_PIN required: the reset clears pin_verified, the wizard asks for the PIN again');
+    // The reset must be LOUD. This used to be `curl -sf ... || true` over SSH,
+    // which swallowed a 500 telemetry_component_outdated (telemetry < 0.2.4) and
+    // any auth failure, and let the test walk a wizard that was never reset.
+    const token = await adminAccessToken(deviceUrl);
+    const res = await fetch(`${deviceUrl}/api/greenautarky_site/reset`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const body = await res.text();
+    expect(res.status, `onboarding reset failed: ${body}`).toBe(200);
+    expect(JSON.parse(body).status, `onboarding reset body: ${body}`).toBe('ok');
     await waitForHA(deviceUrl, 30_000);
   });
 
@@ -157,13 +170,18 @@ test.describe('Telemetry Consent — Wizard flow', () => {
     const weiterButtons = page.getByRole('button', { name: /weiter|continue|next/i });
     await weiterButtons.first().click();
 
-    // PIN step (skip if not required)
-    // GDPR step — accept and continue
-    const gdprCheckbox = page.locator('ha-checkbox, ha-switch, input[type="checkbox"]').first();
-    if (await gdprCheckbox.isVisible({ timeout: 5_000 }).catch(() => false)) {
-      await gdprCheckbox.click();
-      await weiterButtons.first().click();
-    }
+    // PIN step: required again after every reset (pin_verified is cleared).
+    // The step auto-submits after 6 digits and forwards to the next one.
+    const pinInput = page.locator('ga-setup-pin input').first();
+    await expect(pinInput, 'PIN step must appear after the reset').toBeVisible({ timeout: 20_000 });
+    await pinInput.fill(DEVICE_PIN!);
+    await expect(page.locator('ga-setup-pin')).toBeHidden({ timeout: 20_000 });
+
+    // GDPR step: the reset cleared consents.gdpr, so tick it again and continue.
+    const gdprCheckbox = page.locator('ga-setup-gdpr ha-checkbox').first();
+    await expect(gdprCheckbox, 'GDPR step must appear after the PIN').toBeVisible({ timeout: 20_000 });
+    await gdprCheckbox.click();
+    await page.locator('ga-setup-gdpr ha-button:not(.back)').first().click();
 
     // Navigate until we find analytics step text
     // Look for telemetry-related text
@@ -184,5 +202,16 @@ test.describe('Telemetry Consent — Wizard flow', () => {
     }
 
     expect(found, 'Analytics step with telemetry toggles not found in wizard').toBe(true);
+
+    // Answer the telemetry step. The reset put the toggles back to Tier 1 on /
+    // Tier 2 off, so continuing records exactly those defaults as the answer;
+    // the backend lists the step as done only once it has been answered.
+    await weiterButtons.first().click();
+    await expect
+      .poll(async () => (await getGAOnboardingStatus(deviceUrl)).steps_done, {
+        message: 'telemetry step must be recorded after answering it',
+        timeout: 20_000,
+      })
+      .toContain('telemetry');
   });
 });
