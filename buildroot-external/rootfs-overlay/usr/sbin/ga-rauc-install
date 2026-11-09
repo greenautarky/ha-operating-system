@@ -111,7 +111,8 @@ esac
 
 # Validate the optional ga_release label (defence in depth — the worker
 # validates it too). Empty means the version-only PROD
-# slot. Otherwise it must be a GA release label, BOSvX.Y.Z or BOSvX.Y.Z-rcN —
+# slot. Otherwise it must be a GA release label, BOSvX.Y.Z, BOSvX.Y.Z-rcN or BOSvX.Y.Z-devN (dev
+# builds such as the DSGW's BOSv1.6.0-dev4 carry a -devN label, #1641) —
 # the only names a release slot on the OTA server has. Anything else is
 # REFUSED: silently substituting the prod slot for a label we could not read
 # would install something nobody asked for. (Which releases may be installed
@@ -120,14 +121,14 @@ esac
 if [ -n "$GA_RELEASE" ]; then
     case "$GA_RELEASE" in
         *[!A-Za-z0-9.-]* ) GA_RELEASE_OK=no ;;
-        * ) if printf '%s\n' "$GA_RELEASE" | grep -Eq '^BOSv[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$'; then
+        * ) if printf '%s\n' "$GA_RELEASE" | grep -Eq '^BOSv[0-9]+\.[0-9]+\.[0-9]+(-(rc|dev)[0-9]+)?$'; then
                 GA_RELEASE_OK=yes
             else
                 GA_RELEASE_OK=no
             fi ;;
     esac
     if [ "$GA_RELEASE_OK" != yes ]; then
-        echo "[ga-rauc-install] FATAL: refusing ga_release '$GA_RELEASE' — not BOSvX.Y.Z[-rcN]" >&2
+        echo "[ga-rauc-install] FATAL: refusing ga_release '$GA_RELEASE' — not BOSvX.Y.Z[-rcN|-devN]" >&2
         exit 2
     fi
 fi
