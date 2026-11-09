@@ -1,0 +1,3 @@
+#!/bin/sh
+ls /mnt/data/supervisor/"add""ons"/data
+ls /mnt/data/'supervisor/ap'ps/data

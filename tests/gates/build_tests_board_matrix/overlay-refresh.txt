@@ -3,3 +3,16 @@
 usr/sbin/ga-rauc-install
 # usr/libexec/ga-firewall-gate: default-deny ingress on every non-trusted interface, Odoo #1647 (fixtures predate it)
 usr/libexec/ga-firewall-gate
+# Odoo #1610: Supervisor 2026.10 renamed addons/ to apps/; the files below now resolve the data root
+# (fixtures predate it). "SRC=DEST" = SRC is relative to buildroot-external (package files). "new:" = not in the fixture's bake, added from the live overlay.
+new:usr/libexec/ga-data-root.sh
+package/telegraf/ga-telegraf-env=usr/libexec/ga-telegraf-env
+package/fluent-bit-config/ga-fluent-bit-env=usr/libexec/ga-fluent-bit-env
+usr/libexec/ga-gm-host-release
+usr/libexec/ga-ssh-principal-label
+usr/sbin/ga-manage-ethernet
+usr/sbin/ga-telemetry-profile-apply
+usr/libexec/ga-rauc-slots
+usr/libexec/ga-stage-vendored-components
+etc/systemd/system/ga-ethernet-retire.path
+usr/lib/systemd/system/ga-rauc-install.path

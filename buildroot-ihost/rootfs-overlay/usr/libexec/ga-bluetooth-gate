@@ -7,7 +7,7 @@
 #      directory (the add-on's `/data/ga-bluetooth-enabled`, written from the
 #      per-device `bluetooth.enabled` config option). The host reads it under
 #      the add-on's pinned slug (ADR-0041):
-#        /mnt/data/supervisor/addons/data/99f1cad4_ga_manager/
+#        <supervisor data root>/99f1cad4_ga_manager/
 #      Only ga_manager mounts that directory. A flag in /share is NOT read:
 #      /share is mounted into every add-on that declares `share:rw`.
 #   2. Manual/recovery — /mnt/boot/ga-bluetooth
@@ -37,7 +37,14 @@
 set -eu
 
 # GA_GM_DATA_DIR relocates ga_manager's data directory (host tests only).
-GM_DATA_DIR="${GA_GM_DATA_DIR:-/mnt/data/supervisor/addons/data/99f1cad4_ga_manager}"
+if [ -n "${GA_GM_DATA_DIR:-}" ]; then
+	GM_DATA_DIR="$GA_GM_DATA_DIR"
+else
+	# Supervisor 2025.11 keeps add-on data under addons/, 2026.10+ under apps/:
+	# ask the one resolver (Odoo #1610).
+	. "${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"
+	GM_DATA_DIR="$(ga_data_root_or_unresolved)/99f1cad4_ga_manager"
+fi
 FLEET_FLAG="$GM_DATA_DIR/ga-bluetooth-enabled"
 FLEET_MODE="$GM_DATA_DIR/ga-bluetooth-mode"
 BOOT_MARKER=/mnt/boot/ga-bluetooth

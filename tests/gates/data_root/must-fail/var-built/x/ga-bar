@@ -1,0 +1,3 @@
+#!/bin/sh
+SUP=/mnt/data/supervisor
+D=$SUP/apps/data/x

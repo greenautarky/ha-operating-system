@@ -6,7 +6,13 @@ Description=Re-apply the telemetry profile when ga_manager changes it
 After=mnt-data.mount
 
 [Path]
+# Supervisor 2025.11 keeps add-on data under addons/, 2026.10+ under apps/
+# (Odoo #1610). A .path unit cannot call the resolver (ga-data-root.sh), so it
+# watches BOTH literal paths; whichever exists fires the same service, and the
+# service resolves the real data root itself. Watching the absent one is
+# harmless: systemd watches the nearest existing parent until it appears.
 PathChanged=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-telemetry-profile.json
+PathChanged=/mnt/data/supervisor/apps/data/99f1cad4_ga_manager/ga-telemetry-profile.json
 Unit=ga-telemetry-profile-runtime.service
 
 [Install]

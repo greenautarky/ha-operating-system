@@ -47,7 +47,7 @@ suite_start "Cloud Lane (device -> MQTT cloud transport, synthetic batch to PUBA
 
 CL_TABLE="${CL_TABLE:-fact_device_count_summary}"
 GM=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^addon_.*_ga_manager$' | head -1)
-GMDATA=$(ls -d /mnt/data/supervisor/addons/data/*_ga_manager 2>/dev/null | head -1)
+GMDATA=$(ls -d ${GA_T_DATA_ROOT}/*_ga_manager 2>/dev/null | head -1)
 
 if [ -z "$GM" ] || [ -z "$GMDATA" ]; then
   show_verdict "CL-00" "ga_manager container and data dir present" 1 \

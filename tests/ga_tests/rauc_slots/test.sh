@@ -22,6 +22,10 @@ suite_start "RAUC slots"
 COL="/usr/libexec/ga-rauc-slots"
 [ -x "$COL" ] || COL="$SCRIPT_DIR/../../../buildroot-external/rootfs-overlay/usr/libexec/ga-rauc-slots"
 FIX="$SCRIPT_DIR/fixtures"
+# The collector sources the data-root resolver (Odoo #1610): the installed one on
+# a device, the overlay one in-repo.
+[ -f /usr/libexec/ga-data-root.sh ] || GA_DATA_ROOT_LIB="$SCRIPT_DIR/../../../buildroot-external/rootfs-overlay/usr/libexec/ga-data-root.sh"
+export GA_DATA_ROOT_LIB
 
 run_test "SLOT-20" "collector present + executable" "test -x '$COL'"
 
@@ -205,7 +209,7 @@ fi
 # slot is empty and have an operator brick it. The add-on-private data dir is
 # the one channel they cannot reach.
 run_test "SLOT-33a" "publishes into the add-on-private data dir" \
-  "grep -v '^[[:space:]]*#' '$COL' | grep -q '/mnt/data/supervisor/addons/data/\*_ga_manager'"
+  "grep -v '^[[:space:]]*#' '$COL' | grep -q 'ga_data_root_or_unresolved)/\*_ga_manager' && grep -v '^[[:space:]]*#' '$COL' | grep -q 'ga-data-root.sh'"
 
 run_test "SLOT-33b" "never writes the slot picture into the add-on-writable /share" \
   "! grep -v '^[[:space:]]*#' '$COL' | grep -q 'supervisor/share'"
@@ -217,7 +221,7 @@ run_test "SLOT-33b" "never writes the slot picture into the add-on-writable /sha
 # anyway made it fail on every provisioned device — a red check that says nothing
 # about the device. It stays a real test on the build host, where the glob is
 # genuinely empty.
-if ls -d /mnt/data/supervisor/addons/data/*_ga_manager >/dev/null 2>&1; then
+if ls -d /mnt/data/supervisor/addons/data/*_ga_manager /mnt/data/supervisor/apps/data/*_ga_manager >/dev/null 2>&1; then
   skip_test "SLOT-34" "no-add-on-dir behaviour" "ga_manager IS installed here — the not-yet-installed case cannot be constructed on a live device"
 elif command -v jq >/dev/null 2>&1; then
   NODIR="$(mktemp -d 2>/dev/null || echo /tmp/rslots_nodir_$$)"
@@ -237,7 +241,7 @@ fi
 # deliberately does not: it runs as root and the habit is worth keeping out of
 # new code. Cheap static guard so it cannot creep back in.
 run_test "SLOT-32" "collector never evals or sources rauc output" \
-  "! grep -v '^[[:space:]]*#' '$COL' | grep -Eq '(^|[^[:alnum:]_])(eval|source)[[:space:]]|^[[:space:]]*\\.[[:space:]]'"
+  "! grep -v '^[[:space:]]*#' '$COL' | grep -v 'GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh' | grep -Eq '(^|[^[:alnum:]_])(eval|source)[[:space:]]|^[[:space:]]*\\.[[:space:]]'"
 
 # =========================================================================
 # Healthy-boot evidence (2026-08-19) — the second, independent rollback ground

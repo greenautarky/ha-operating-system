@@ -25,6 +25,48 @@ MARKER="${GA_PRIME_MARKER:-/mnt/data/.ga-addon-primed}"
 
 log() { echo "[ga-addon-prime] $*"; }
 
+# --- ONE global deadline (Odoo #1610, review round 2) --------------------------
+# The stages below can each wait for minutes (hassio_cli 300 s, readiness probe
+# 600 s, then up to RETRY_BUDGET_S per slug), so their sum exceeds the unit's
+# TimeoutStartSec (10 min): systemd killed the script silently, before it could
+# print its loud give-up line, and no outcome was visible. Now the WHOLE script
+# gets TOTAL_BUDGET_S, kept below TimeoutStartSec with margin (the unit and this
+# default are checked against each other by tests/ga_tests/addon_prime APRIME-41):
+#   - every wait loop below stops at the deadline and takes its own FAILED path;
+#   - a hung `docker exec` cannot outlive it: the script re-runs itself under
+#     `timeout`, and when that fires it says so loudly and exits 1 (no marker).
+# GA_PRIME_TOTAL_BUDGET_S, GA_PRIME_SH: test hooks, never set on a device.
+TOTAL_BUDGET_S="${GA_PRIME_TOTAL_BUDGET_S:-540}"
+if [ -z "${GA_PRIME_INNER:-}" ] && command -v timeout >/dev/null 2>&1; then
+    set +e
+    # shellcheck disable=SC2086  # GA_PRIME_SH may be two words ("busybox sh") in tests
+    GA_PRIME_INNER=1 timeout -s TERM "$TOTAL_BUDGET_S" ${GA_PRIME_SH:-/bin/sh} "$0" "$@"
+    _rc=$?
+    set -e
+    if [ "$_rc" -eq 124 ] || [ "$_rc" -eq 143 ]; then
+        log "ERROR: FAILED — global deadline of ${TOTAL_BUDGET_S}s reached (a docker call hung or the waits ran out); no marker written, the prime retries on the next boot"
+        exit 1
+    fi
+    exit "$_rc"
+fi
+DEADLINE=$(( $(date +%s) + TOTAL_BUDGET_S ))
+past_deadline() { [ "$(date +%s)" -ge "$DEADLINE" ]; }
+
+# Per-slug update retry (Odoo #1610, finding C). `ha store reload` (the
+# readiness probe below) passes while Supervisor is still starting Core, but the
+# update itself is then refused: "Supervisor is not ready to perform this
+# operation, please try again later" (measured on a fresh BOSv1.6.0-rc6 flash:
+# probe passed at :18, Core start issued at :13, update refused at :20).
+# That one error text means "try again", so the update is retried with
+# exponential backoff (5, 10, 20, then 30 s steps) until RETRY_BUDGET_S of
+# waiting has passed. 600 s is the same budget this script already gives the
+# readiness probe below (120 x 5 s); the real Supervisor start-up time is not
+# measured, the budget is a bound, not a claim. Every OTHER error is not
+# retried and keeps its own classification below; an exhausted budget falls
+# through to the generic FAILED branch, loudly.
+# GA_PRIME_RETRY_BUDGET_S: test hook, never set on a device.
+RETRY_BUDGET_S="${GA_PRIME_RETRY_BUDGET_S:-600}"
+
 # --- ha CLI generations -------------------------------------------------------
 # Supervisor 2025.11.x (iHost today): the CLI knows only `ha addons ...`.
 # Supervisor 2026.10+ (DSGW-210, later iHost): `ha apps ...`; `ha addons ...`
@@ -74,6 +116,31 @@ log_full() {
     while IFS= read -r _l; do log "     | $(printf '%s' "$_l" | cut -c1-200)"; done
 }
 
+# update_with_retry <slug> — `run_ha <apps-cmd> update <slug>`, repeated while
+# (and only while) the refusal is Supervisor's "not ready to perform".
+update_with_retry() {
+    _waited=0
+    _delay=5
+    while :; do
+        run_ha "$APPS_CMD" update "$1"
+        [ "$RUN_RC" -ne 0 ] || return 0
+        printf '%s\n%s\n' "$RUN_OUT" "$RUN_ERR" | grep -qi 'not ready to perform' || return 0
+        if [ "$_waited" -ge "$RETRY_BUDGET_S" ]; then
+            log "  → $1: Supervisor still 'not ready to perform' after ${_waited}s of retries — giving up"
+            return 0
+        fi
+        if [ $(( $(date +%s) + _delay )) -ge "$DEADLINE" ]; then
+            log "  → $1: Supervisor still 'not ready to perform' and the global ${TOTAL_BUDGET_S}s deadline is next — giving up"
+            return 0
+        fi
+        log "  → $1: Supervisor not ready to perform the update — retry in ${_delay}s (waited ${_waited}/${RETRY_BUDGET_S}s)"
+        sleep "$_delay"
+        _waited=$((_waited + _delay))
+        _delay=$((_delay * 2))
+        [ "$_delay" -le 30 ] || _delay=30
+    done
+}
+
 # last_line <text> — last non-empty line, whitespace trimmed, max 160 chars.
 last_line() {
     printf '%s\n' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' | tail -n 1 | cut -c1-160
@@ -92,11 +159,12 @@ for i in $(seq 1 60); do
     if docker exec hassio_cli /bin/true >/dev/null 2>&1; then
         break
     fi
+    past_deadline && break
     log "waiting for hassio_cli (${i}/60)…"
     sleep 5
 done
 if ! docker exec hassio_cli /bin/true >/dev/null 2>&1; then
-    log "ERROR: hassio_cli not reachable after 5 min — bailing (no marker written)"
+    log "ERROR: FAILED — hassio_cli not reachable (5 min wait or the ${TOTAL_BUDGET_S}s global deadline) — bailing (no marker written)"
     exit 1
 fi
 
@@ -132,10 +200,11 @@ for i in $(seq 1 120); do
     # Surface the actual error so first-boot debugging is easy.
     ERR_SHORT=$(echo "$PROBE_OUT" | head -1 | cut -c1-80)
     log "  Supervisor not ready (rc=$PROBE_RC, $ERR_SHORT) — waiting (${i}/120)…"
+    past_deadline && break
     sleep 5
 done
 if [ "$SUP_READY" -ne 1 ]; then
-    log "ERROR: Supervisor did not become ready within 10 min — bailing (no marker written)"
+    log "ERROR: FAILED — Supervisor did not become ready (10 min probe or the ${TOTAL_BUDGET_S}s global deadline) — bailing (no marker written)"
     exit 1
 fi
 # Store-reload already succeeded as the probe — no need to re-call.
@@ -180,7 +249,7 @@ while IFS= read -r SLUG; do
     [ -z "$SLUG" ] && continue
 
     log "priming addon: $SLUG"
-    run_ha "$APPS_CMD" update "$SLUG"
+    update_with_retry "$SLUG"
     UPDATE_RC=$RUN_RC
     # Classify on the real output only: stdout + stderr minus the deprecation
     # notice (a 2026.10 CLI writes its errors to stderr, behind the notice

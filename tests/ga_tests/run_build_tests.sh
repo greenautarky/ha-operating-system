@@ -255,7 +255,16 @@ grep -q 'ga-fleet-influx.yaml' "$TG_ENV_SH" 2>/dev/null \
 
 # CFG-28b: the influx cred is read from the addon-PRIVATE /data sidecar, not only
 # the legacy /share view that any share:rw addon can read (Vuln-8).
-grep -q 'addons/data/\*_ga_manager/ga-fleet-influx.yaml' "$TG_ENV_SH" 2>/dev/null \
+# Strict (Odoo #1610 review): the BODY of find_influx_cred must take its root from the
+# resolver (ga_data_root, falling back to the unresolvable path) and glob
+# "$_root"/*_ga_manager/$CRED_NAME; CRED_NAME is the sidecar; the resolver is sourced
+# from its fixed path; and no hard-coded supervisor/addons|apps path is left.
+_fic_body="$(sed -n '/^find_influx_cred()/,/^}/p' "$TG_ENV_SH" 2>/dev/null)"
+grep -qx 'CRED_NAME=ga-fleet-influx.yaml' "$TG_ENV_SH" 2>/dev/null \
+  && grep -qx '\. "\${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"' "$TG_ENV_SH" 2>/dev/null \
+  && grep -qxF '    _root=$(ga_data_root 2>/dev/null) || _root=$GA_DATA_ROOT_UNRESOLVED' <<<"$_fic_body" \
+  && grep -qxF '    for c in "$_root"/*_ga_manager/$CRED_NAME; do' <<<"$_fic_body" \
+  && ! grep -v '^[[:space:]]*#' "$TG_ENV_SH" 2>/dev/null | grep -qE 'supervisor/(addons|apps)' \
   && _pass "CFG-28b: ga-telegraf-env prefers the /data influx sidecar (off /share)" \
   || _fail "CFG-28b: ga-telegraf-env still reads the influx cred only from /share (Vuln-8)"
 
@@ -667,8 +676,19 @@ grep -q '^ConditionPathExists=/mnt/boot/ga-ethernet-force' "${TARGET}/etc/system
 # under the pinned slug, and the unit re-checks it before retiring. The /share
 # copy is mounted into every share:rw add-on and must not reach /mnt/boot.
 grep -qx 'PathExists=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/.ga_converged' "${TARGET}/etc/systemd/system/ga-ethernet-retire.path" 2>/dev/null \
+  && grep -qx 'PathExists=/mnt/data/supervisor/apps/data/99f1cad4_ga_manager/.ga_converged' "${TARGET}/etc/systemd/system/ga-ethernet-retire.path" 2>/dev/null \
   && _pass "CFG-49i: retire.path watches ga_manager's pinned data dir, not /share" \
-  || _fail "CFG-49i: retire.path does not watch addons/data/99f1cad4_ga_manager/.ga_converged"
+  || _fail "CFG-49i: retire.path does not watch addons/data|apps/data/99f1cad4_ga_manager/.ga_converged (both, Supervisor 2025.11 and 2026.10+)"
+# DR-B01 (Odoo #1610): the Supervisor data-root resolver is shipped, and the
+# shipped files that depend on it ask it, in the shape the gate pins
+# (scripts/check-data-root.py runs on the sources in CI; this is the image half).
+_DR_LIB="${TARGET}/usr/libexec/ga-data-root.sh"
+_dr_users="$(grep -l 'ga-data-root.sh' "${TARGET}"/usr/libexec/* "${TARGET}"/usr/sbin/* 2>/dev/null | wc -l)"
+if [[ -s "$_DR_LIB" ]] && bash -n "$_DR_LIB" 2>/dev/null && grep -q '^ga_data_root()' "$_DR_LIB" && [[ "$_dr_users" -ge 8 ]]; then
+  _pass "DR-B01: /usr/libexec/ga-data-root.sh installed; ${_dr_users} shipped scripts source it"
+else
+  _fail "DR-B01: ga-data-root.sh missing/invalid or too few consumers (${_dr_users}, want >= 8, the DSGW board has no iHost overlay) — Supervisor 2026.10 data root unresolved"
+fi
 grep -qE '^ExecStart=/usr/sbin/ga-manage-ethernet retire-if-converged$' "${TARGET}/etc/systemd/system/ga-ethernet-retire.service" 2>/dev/null \
   && grep -q '^  retire-if-converged)' "${TARGET}/usr/sbin/ga-manage-ethernet" 2>/dev/null \
   && _pass "CFG-49j: retire.service runs retire-if-converged, and the script implements it" \
@@ -4124,6 +4144,7 @@ RAUC_PATH="${TARGET}/usr/lib/systemd/system/ga-rauc-install.path"
 [[ -f "$RAUC_PATH" ]] || RAUC_PATH="${OVL}/usr/lib/systemd/system/ga-rauc-install.path"
 if [[ -f "$RAUC_PATH" ]] \
    && grep -qx 'PathChanged=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-rauc-install-request' "$RAUC_PATH" 2>/dev/null \
+   && grep -qx 'PathChanged=/mnt/data/supervisor/apps/data/99f1cad4_ga_manager/ga-rauc-install-request' "$RAUC_PATH" 2>/dev/null \
    && grep -q 'WantedBy=multi-user.target' "$RAUC_PATH" 2>/dev/null; then
   _pass "RAUC-05: ga-rauc-install.path watches the request file in ga_manager's pinned data dir, not /share (ADR-0041)"
 else
@@ -4229,7 +4250,11 @@ fi
 # Pinned separately from STAGE-04 so that dropping the trusted destination and
 # keeping the compat one — which would look like a tidy-up — fails loudly.
 if [[ -f "$STAGE_BIN" ]] \
-   && grep -qF 'GA_STAGE_PRIV_GLOB:-/mnt/data/supervisor/addons/data/*_ga_manager' "$STAGE_BIN" 2>/dev/null \
+   && grep -qE '^[[:space:]]*if \[ -n "\$\{GA_STAGE_PRIV_GLOB:-\}" \]; then$' "$STAGE_BIN" 2>/dev/null \
+   && grep -qE '^[[:space:]]*PRIV_PARENT_GLOB="\$GA_STAGE_PRIV_GLOB"$' "$STAGE_BIN" 2>/dev/null \
+   && grep -qE '^[[:space:]]*\. "\$\{GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh\}"$' "$STAGE_BIN" 2>/dev/null \
+   && grep -qE '^[[:space:]]*PRIV_PARENT_GLOB="\$\(ga_data_root_or_unresolved\)/\*_ga_manager"$' "$STAGE_BIN" 2>/dev/null \
+   && ! grep -v '^[[:space:]]*#' "$STAGE_BIN" 2>/dev/null | grep -qE 'supervisor/(addons|apps)' \
    && grep -qE 'stage_tree "\$priv_parent/ga-custom-components"' "$STAGE_BIN" 2>/dev/null; then
   _pass "STAGE-05: also stages into the add-on-private dir (not add-on-writable)"
 else
@@ -4992,10 +5017,10 @@ fi
 # of the bus is not ours to control, because a community add-on the customer
 # installs joins it by declaring one line of metadata. Same reasoning and same
 # channel as the per-device Loki credential and the device identity (OS#280).
-if col_code | grep -q '/mnt/data/supervisor/addons/data/\*_ga_manager'; then
+if col_code | grep -qF 'ga_data_root_or_unresolved)/*_ga_manager'; then
   _pass "SLOT-07a: publishes to the add-on-private data dir (slug-tolerant glob)"
 else
-  _fail "SLOT-07a: collector does not target /mnt/data/supervisor/addons/data/*_ga_manager"
+  _fail "SLOT-07a: collector does not target <resolved data root>/*_ga_manager"
 fi
 
 if col_code | grep -q 'supervisor/share'; then
@@ -5006,7 +5031,10 @@ fi
 
 # SLOT-08: rauc output is parsed, never executed. raucdb-update does
 # `eval "$(rauc status ...)"`; new root services should not copy that.
-if col_code | grep -Eq '(^|[^[:alnum:]_])(eval|source)[[:space:]]|^[[:space:]]*\.[[:space:]]'; then
+# The one sanctioned `.` is the fixed-path data-root resolver (Odoo #1610): a file shipped
+# in the image, not command output.
+# Exact allow-list: a line is exempt only if it IS that sourcing line, nothing else on it.
+if col_code | grep -Ev '^[[:space:]]*\. "\$\{GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root\.sh\}"[[:space:]]*$' | grep -Eq '(^|[^[:alnum:]_])(eval|source)[[:space:]]|^[[:space:]]*\.[[:space:]]'; then
   _fail "SLOT-08: collector evals/sources command output — root code-execution surface"
 else
   _pass "SLOT-08: collector parses rauc output instead of eval'ing it"

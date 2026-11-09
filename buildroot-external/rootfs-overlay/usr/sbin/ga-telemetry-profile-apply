@@ -5,7 +5,7 @@
 # SEAM (contract v2, ~/cve-work/TELEMETRY-PROFILES-SEAM-2026-10-10.md):
 #   request   <gm data dir>/ga-telemetry-profile.json          written by ga_manager
 #   read-back <gm data dir>/ga-telemetry-profile.applied.json  written HERE
-#   <gm data dir> = /mnt/data/supervisor/addons/data/99f1cad4_ga_manager, the
+#   <gm data dir> = <supervisor data root>/99f1cad4_ga_manager, the
 #   ADR-0041 channel. Not /share: every share:rw add-on runs as host uid 0 and
 #   could otherwise choose this host's telemetry profile.
 #
@@ -56,7 +56,14 @@
 #   ga-telemetry-profile-apply render <profile> <dir>  render only (tests, CI)
 set -u
 
-GM_DATA_DIR="${GA_GM_DATA_DIR:-/mnt/data/supervisor/addons/data/99f1cad4_ga_manager}"
+if [ -n "${GA_GM_DATA_DIR:-}" ]; then
+	GM_DATA_DIR="$GA_GM_DATA_DIR"
+else
+	# Supervisor 2025.11 keeps add-on data under addons/, 2026.10+ under apps/:
+	# ask the one resolver (Odoo #1610).
+	. "${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"
+	GM_DATA_DIR="$(ga_data_root_or_unresolved)/99f1cad4_ga_manager"
+fi
 REQ="$GM_DATA_DIR/ga-telemetry-profile.json"
 APPLIED="$GM_DATA_DIR/ga-telemetry-profile.applied.json"
 RUN_DIR="${GA_PROFILE_RUN_DIR:-/run/ga-telemetry}"

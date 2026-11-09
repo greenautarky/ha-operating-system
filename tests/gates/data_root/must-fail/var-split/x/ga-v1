@@ -1,0 +1,3 @@
+#!/bin/sh
+SUP=/mnt/data/supervisor; A=$SUP/addons
+ls "$A"

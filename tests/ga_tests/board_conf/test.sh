@@ -18,6 +18,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+export GA_DATA_ROOT_LIB="$ROOT/buildroot-external/rootfs-overlay/usr/libexec/ga-data-root.sh"
 GA="$ROOT/buildroot-external/rootfs-overlay"
 DSGW="$ROOT/buildroot-dsgw210/board/dusun/dsgw210/rootfs-overlay"
 BOARD_CONF="$DSGW/usr/share/ga-board.conf"

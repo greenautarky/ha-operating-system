@@ -15,7 +15,7 @@
 #      writes it as the single line content of /data/ga-rauc-install-request.
 #   2. ga-rauc-install.path notices the file changed + triggers this unit.
 #   3. This unit invokes /usr/sbin/ga-rauc-install (no arg → it reads
-#      /mnt/data/supervisor/addons/data/99f1cad4_ga_manager/
+#      <supervisor data root>/99f1cad4_ga_manager/
 #      ga-rauc-install-request itself, deletes
 #      the file as the first step, then proceeds with download + rauc
 #      install + scheduled reboot).

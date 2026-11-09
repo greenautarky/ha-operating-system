@@ -374,6 +374,16 @@ jobs:
         # stable slot regardless of what runs fails three cases.
         run: sh tests/ga_tests/config_verify/selftest.sh
 
+      - name: DR no OS file hard-codes Supervisor's add-on data root; the resolver follows the running Supervisor
+        # Supervisor 2026.10 renamed /mnt/data/supervisor/addons/ to apps/ and 15 OS
+        # files still named the old one (Odoo #1610, BOSv1.6.0-rc6). Gate = scripts/check-data-root.py
+        # (fixtures must-fail 10 / must-pass 5, incl. variable-built, quote-split and continued spellings; the live tree incl. scripts/ and workflows; empty root fails closed);
+        # resolver test drives the real fluent-bit-env, telegraf-env and ga-rauc-slots on an apps-only tree.
+        run: |
+          sh tests/gates/data_root/selftest.sh
+          sh tests/ga_tests/data_root/test.sh
+          GA_T_SHELL="busybox sh" sh tests/ga_tests/data_root/test.sh
+
       - name: SUP-LAYOUT the Supervisor-layout check flags an add-on base and passes the real Supervisors
         # Fixtures are listings exported from the real images: the broken
         # armv7 2026.10.5.1 (must fail), the shipping armv7 2025.11.5.10 and the

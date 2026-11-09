@@ -33,6 +33,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 APPLY="$ROOT/buildroot-external/rootfs-overlay/usr/sbin/ga-telemetry-profile-apply"
+export GA_DATA_ROOT_LIB="$ROOT/buildroot-external/rootfs-overlay/usr/libexec/ga-data-root.sh"   # the apply script sources the data-root resolver (Odoo #1610)
 T0_UNIT="$ROOT/buildroot-external/rootfs-overlay/etc/systemd/system/fluent-bit-tier0.service"
 OVERLAY_ETC="$ROOT/buildroot-external/rootfs-overlay/etc/fluent-bit"
 PKG_FB="$ROOT/buildroot-external/package/fluent-bit-config"

@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 suite_start "Telemetry profile (ADR-0045)"
 
-GM_DIR="/mnt/data/supervisor/addons/data/99f1cad4_ga_manager"
+GM_DIR="${GA_T_DATA_ROOT}/99f1cad4_ga_manager"
 RB="$GM_DIR/ga-telemetry-profile.applied.json"
 REQ="$GM_DIR/ga-telemetry-profile.json"
 DROP="/run/systemd/system"

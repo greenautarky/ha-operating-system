@@ -106,7 +106,7 @@ run_test_show "ADR-12" "influxdb: /ping answers inside the container" \
 INFLUX_URL="http://127.0.0.1:8086"   # ga_influxdbv1 maps 8086/tcp:8086 onto the host (store config.yaml:31)
 FRESH_DB="gd_data"
 FRESH_WINDOW="10m"
-ADDON_DATA="/mnt/data/supervisor/addons/data"   # <repo>_<slug>/options.json, host side
+ADDON_DATA="${GA_T_DATA_ROOT}"   # <repo>_<slug>/options.json, host side
 
 # _fresh_row <slug> <measurement> — 0 iff gd_data.<measurement> holds a row
 # younger than FRESH_WINDOW, queried under <slug>'s own credential. The

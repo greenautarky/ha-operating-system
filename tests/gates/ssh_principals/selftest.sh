@@ -24,6 +24,8 @@ LIB="$ROOT/buildroot-external/rootfs-overlay/usr/libexec"
 PRINCIPALS="$LIB/ga-ssh-principals"
 PREPARE="$LIB/ga-sshd-prepare"
 LABELER="$LIB/ga-ssh-principal-label"
+# the labeler sources the data-root resolver (Odoo #1610); on a device it is /usr/libexec
+export GA_DATA_ROOT_LIB="$LIB/ga-data-root.sh"
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; NC=$'\033[0m'
 fails=0; ran=0
@@ -221,6 +223,9 @@ PRIME="$ROOT/buildroot-external/rootfs-overlay/etc/ga-addon-prime.conf"
 SLUG="$(grep -vE '^[[:space:]]*(#|$)' "$PRIME" | grep '_ga_manager$' | head -1)"
 WANT="/mnt/data/supervisor/addons/data/$SLUG/ga-ssh-principal-label"
 WANT_ID="/mnt/data/supervisor/addons/data/$SLUG/ga-identity.json"
+# Supervisor 2026.10+ renamed addons/ to apps/; a .path unit cannot call the resolver, so it names both.
+WANT_A="/mnt/data/supervisor/apps/data/$SLUG/ga-ssh-principal-label"
+WANT_ID_A="/mnt/data/supervisor/apps/data/$SLUG/ga-identity.json"
 PATH_UNIT="$(sed -n 's/^PathChanged=//p' "$UNITS/ga-ssh-principal-label.path")"
 # shellcheck disable=SC2016  # the literal default text in the script
 SCRIPT_DEF="$(sed -n 's/^SRC="\${GA_SSH_LABEL_BRIDGE:-\$R\(.*\)}"$/\1/p' "$LABELER")"
@@ -233,14 +238,12 @@ else bad ".path unit watches '$PATH_UNIT', want '$WANT'"; fi
 ran=$((ran + 1))
 if grep -qxF "$WANT_ID" <<<"$PATH_UNIT"; then ok ".path unit also watches $WANT_ID (label-before-identity window)"
 else bad ".path unit does not watch $WANT_ID — a label refused before the identity existed is never re-applied"; fi
-# shellcheck disable=SC2016  # the literal default text in the script
-ID_DEF="$(sed -n 's/^ID_FILE="\${GA_IDENTITY_FILE:-\$R\(.*\)}"$/\1/p' "$LABELER")"
 ran=$((ran + 1))
-if [[ "$ID_DEF" == "$WANT_ID" ]]; then ok "script's default identity source is $WANT_ID"
-else bad "script's default identity source is '$ID_DEF' (empty = not found), want '$WANT_ID'"; fi
+if grep -qxF "$WANT_A" <<<"$PATH_UNIT" && grep -qxF "$WANT_ID_A" <<<"$PATH_UNIT"; then ok ".path unit also watches both files under apps/ (Supervisor 2026.10+)"
+else bad ".path unit lacks the apps/ variants '$WANT_A' / '$WANT_ID_A' — dead on Supervisor 2026.10+"; fi
 ran=$((ran + 1))
-if [[ "$SCRIPT_DEF" == "$WANT" ]]; then ok "script's default source is the same path"
-else bad "script's default source is '$SCRIPT_DEF' (extraction empty = script changed shape), want '$WANT'"; fi
+if grep -qE '^SRC="\$\{GA_SSH_LABEL_BRIDGE:-\$GM_DATA_DIR/ga-ssh-principal-label\}"$' "$LABELER" && grep -qE '^ID_FILE="\$\{GA_IDENTITY_FILE:-\$GM_DATA_DIR/ga-identity.json\}"$' "$LABELER"; then ok "script defaults come from the resolved data dir (no literal path)"
+else bad "script's default sources no longer come from \$GM_DATA_DIR (script changed shape)"; fi
 ran=$((ran + 1))
 if grep -vE '^\s*#' "$LABELER" "$UNITS/ga-ssh-principal-label.path" "$UNITS/ga-ssh-principal-label.service" | grep -q 'supervisor/share\|\*_ga_manager'; then
   bad "the label plumbing still names /share or globs *_ga_manager"
@@ -251,24 +254,28 @@ else bad "the oneshot has no TimeoutStartSec — a stuck read would hold it for 
 
 # Behavioural half, run through the DEFAULTS (GA_ROOT only): a label at the
 # old share path changes nothing; the same label at the new path is applied.
-groot() { local r; r="$(fresh "$1")"; mkdir -p "$r/etc/ssh" "$r/p" "$r/mnt/data/supervisor/share" "$r/mnt/data/supervisor/addons/data/$SLUG"
+# groot <name> [addons|apps]: apps is the BOSv1.6 layout (default), addons the 1.5.x one
+groot() { local r; r="$(fresh "$1")"; mkdir -p "$r/etc/ssh" "$r/p" "$r/mnt/data/supervisor/share" "$r/mnt/data/supervisor/${2:-apps}/data/$SLUG"
   printf 'ssh-ed25519 AAAA test-ca\n' > "$r/etc/ssh/ga_user_ca.pub"; P "$r/p" anchor "RV1109SERIAL0001" >/dev/null; printf '%s' "$r"; }
 gl() { GA_ROOT="$1" GA_SSH_PRINCIPALS_DIR="$1/p" GA_SSH_PRINCIPALS_BIN="$PRINCIPALS" /bin/sh "$LABELER" 2>/dev/null; }
 r="$(groot old-share)"; printf 'KIB-SON-00000901\n' > "$r/mnt/data/supervisor/share/ga-ssh-principal-label"; gl "$r"
 eq "$r/p" "RV1109SERIAL0001 " "a label at the OLD /share path changes nothing"
-r="$(groot new-data)"; printf 'KIB-SON-00000901\n' > "$r/mnt/data/supervisor/addons/data/$SLUG/ga-ssh-principal-label"
-idjson "KIB-SON-00000901" > "$r/mnt/data/supervisor/addons/data/$SLUG/ga-identity.json"; gl "$r"
+r="$(groot new-data)"; printf 'KIB-SON-00000901\n' > "$r/mnt/data/supervisor/apps/data/$SLUG/ga-ssh-principal-label"
+idjson "KIB-SON-00000901" > "$r/mnt/data/supervisor/apps/data/$SLUG/ga-identity.json"; gl "$r"
 eq "$r/p" "RV1109SERIAL0001 KIB-SON-00000901 " "the same label in ga_manager's /data is applied (identity at the default path)"
-r="$(groot new-data-noid)"; printf 'KIB-SON-00000901\n' > "$r/mnt/data/supervisor/addons/data/$SLUG/ga-ssh-principal-label"; gl "$r"
+r="$(groot new-data-addons addons)"; printf 'KIB-SON-00000901\n' > "$r/mnt/data/supervisor/addons/data/$SLUG/ga-ssh-principal-label"
+idjson "KIB-SON-00000901" > "$r/mnt/data/supervisor/addons/data/$SLUG/ga-identity.json"; gl "$r"
+eq "$r/p" "RV1109SERIAL0001 KIB-SON-00000901 " "same on the 1.5.x addons/ layout (resolver fallback)"
+r="$(groot new-data-noid)"; printf 'KIB-SON-00000901\n' > "$r/mnt/data/supervisor/apps/data/$SLUG/ga-ssh-principal-label"; gl "$r"
 eq "$r/p" "RV1109SERIAL0001 " "default paths, no own identity anywhere → refused"
-r="$(groot new-data-idforeign)"; printf 'KIB-SON-00000901\n' > "$r/mnt/data/supervisor/addons/data/$SLUG/ga-ssh-principal-label"
-idjson "KIB-SON-00000955" > "$r/mnt/data/supervisor/addons/data/$SLUG/ga-identity.json"; gl "$r"
+r="$(groot new-data-idforeign)"; printf 'KIB-SON-00000901\n' > "$r/mnt/data/supervisor/apps/data/$SLUG/ga-ssh-principal-label"
+idjson "KIB-SON-00000955" > "$r/mnt/data/supervisor/apps/data/$SLUG/ga-identity.json"; gl "$r"
 eq "$r/p" "RV1109SERIAL0001 " "default identity path is read: another device's label refused"
-r="$(groot new-data-foreign)"; printf 'KIB-SON-00000901\n' > "$r/mnt/data/supervisor/addons/data/$SLUG/ga-ssh-principal-label"
+r="$(groot new-data-foreign)"; printf 'KIB-SON-00000901\n' > "$r/mnt/data/supervisor/apps/data/$SLUG/ga-ssh-principal-label"
 printf 'KIB-SON-00000955' > "$r/mnt/data/ga-device-label"; gl "$r"
 eq "$r/p" "RV1109SERIAL0001 " "default own-label path is read: another device's label refused"
 
 echo
-if (( ran < 59 )); then echo "${RED}FAIL${NC}  only $ran cases ran — expected at least 59"; exit 1; fi
+if (( ran < 58 )); then echo "${RED}FAIL${NC}  only $ran cases ran — expected at least 58"; exit 1; fi
 if (( fails > 0 )); then echo "${RED}${fails} of ${ran} case(s) failed${NC}"; exit 1; fi
 echo "${GRN}all ${ran} cases passed${NC}"

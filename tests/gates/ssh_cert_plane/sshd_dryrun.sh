@@ -126,7 +126,7 @@ printf '%s\n' "$LABEL" > "$W/gm-label"         # what ga_manager's ssh-principal
 printf '%s\n' "$LABEL" > "$W/ga-device-label"  # this device's own label, which it must equal
 GA_SSH_CA_PUB="$R/etc/ssh/ga_user_ca.pub" GA_SSH_LABEL_BRIDGE="$W/gm-label" GA_DEVICE_LABEL_FILE="$W/ga-device-label" \
 GA_SSH_PRINCIPALS_DIR="$R/etc/ssh/principals" GA_SSH_PRINCIPALS_USER="$ME" \
-GA_SSH_PRINCIPALS_BIN="$OVL/usr/libexec/ga-ssh-principals" sh "$OVL/usr/libexec/ga-ssh-principal-label" 2>&1 | sed 's/^/  /'
+GA_DATA_ROOT_LIB="$OVL/usr/libexec/ga-data-root.sh" GA_SSH_PRINCIPALS_BIN="$OVL/usr/libexec/ga-ssh-principals" sh "$OVL/usr/libexec/ga-ssh-principal-label" 2>&1 | sed 's/^/  /'
 echo "  principals file: $(tr '\n' ' ' < "$R/etc/ssh/principals/$ME")"
 
 # Relocate the device paths into $R; everything else in the config is verbatim.

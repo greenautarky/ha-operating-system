@@ -6,7 +6,7 @@
 # addon container never can). It writes the label into its OWN data directory,
 # which the host sees under the pinned slug listed in /etc/ga-addon-prime.conf:
 #
-#   /mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-ssh-principal-label
+#   <supervisor data root>/99f1cad4_ga_manager/ga-ssh-principal-label
 #
 # The path is static on purpose — no glob over *_ga_manager, which would match
 # any add-on whose slug merely ends that way. Only ga_manager writes there.
@@ -46,9 +46,12 @@
 set -u
 R="${GA_ROOT:-}"
 CA_PUB="${GA_SSH_CA_PUB:-$R/etc/ssh/ga_user_ca.pub}"
-SRC="${GA_SSH_LABEL_BRIDGE:-$R/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-ssh-principal-label}"
+# Data root from the one resolver (Odoo #1610); GA_ROOT is the fixture prefix.
+. "${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"
+GM_DATA_DIR="$(GA_SUPERVISOR_DIR="${GA_SUPERVISOR_DIR:-$R/mnt/data/supervisor}" ga_data_root_or_unresolved)/99f1cad4_ga_manager"
+SRC="${GA_SSH_LABEL_BRIDGE:-$GM_DATA_DIR/ga-ssh-principal-label}"
 OWN_FILE="${GA_DEVICE_LABEL_FILE:-$R/mnt/data/ga-device-label}"
-ID_FILE="${GA_IDENTITY_FILE:-$R/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-identity.json}"
+ID_FILE="${GA_IDENTITY_FILE:-$GM_DATA_DIR/ga-identity.json}"
 ID_MAX=4096
 PRINCIPALS_BIN="${GA_SSH_PRINCIPALS_BIN:-/usr/libexec/ga-ssh-principals}"
 MAX=32

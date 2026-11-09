@@ -40,7 +40,11 @@ IHOST_UNITS="$IHOST/etc/systemd/system"
 # Units that moved into the GA layer (every board): ethernet retire, resolve-ota, ...
 EXT_ETC_UNITS="$EXT/etc/systemd/system"
 # Pinned here, not derived from the tree under test (working-method rule 7).
-GM_HOST=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager
+# Supervisor 2025.11 = addons/, 2026.10+ = apps/ (Odoo #1610): a .path unit cannot
+# call the resolver, so it must watch BOTH, in this order.
+GM_HOST_OLD=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager
+GM_HOST_NEW=/mnt/data/supervisor/apps/data/99f1cad4_ga_manager
+GM_HOST="$GM_HOST_OLD"
 SHARE_HOST=/mnt/data/supervisor/share
 
 pass=0; fail=0
@@ -52,14 +56,14 @@ ok() { if eval "$2"; then PASS "$1"; else FAIL "$1" "${3:-}"; fi; }
 echo "--- path units watch ga_manager's pinned data directory ---"
 unit_key() {  # <unit file> <key> -> value(s)
   [ -f "$1" ] || return 0
-  sed -n "s/^$2=//p" "$1"
+  sed -n "s/^$2=//p" "$1" | tr '\n' ' ' | sed 's/ $//'
 }
 v=$(unit_key "$EXT_UNITS/ga-rauc-install.path" PathChanged)
-ok "HCTL-01 ga-rauc-install.path watches $GM_HOST/ga-rauc-install-request" \
-   "[ '$v' = '$GM_HOST/ga-rauc-install-request' ]" "watches '$v'"
+ok "HCTL-01 ga-rauc-install.path watches the request file under addons/ AND apps/" \
+   "[ '$v' = '$GM_HOST_OLD/ga-rauc-install-request $GM_HOST_NEW/ga-rauc-install-request' ]" "watches '$v'"
 v=$(unit_key "$EXT_ETC_UNITS/ga-ethernet-retire.path" PathExists)
-ok "HCTL-02 ga-ethernet-retire.path watches $GM_HOST/.ga_converged" \
-   "[ '$v' = '$GM_HOST/.ga_converged' ]" "watches '$v'"
+ok "HCTL-02 ga-ethernet-retire.path watches .ga_converged under addons/ AND apps/" \
+   "[ '$v' = '$GM_HOST_OLD/.ga_converged $GM_HOST_NEW/.ga_converged' ]" "watches '$v'"
 share_watchers=""
 n_units=0
 for u in "$EXT_UNITS"/*.path "$EXT_ETC_UNITS"/*.path "$IHOST_UNITS"/*.path; do
@@ -73,7 +77,7 @@ done
 ok "HCTL-03 no path unit watches the shared directory ($n_units units scanned)" \
    "[ $n_units -ge 3 ] && [ -z '$share_watchers' ]" "scanned $n_units, watching share:$share_watchers"
 v=$(unit_key "$EXT_UNITS/ga-gm-host-release.path" PathExists)
-ok "HCTL-04 ga-gm-host-release.path watches $GM_HOST" "[ '$v' = '$GM_HOST' ]" "watches '$v'"
+ok "HCTL-04 ga-gm-host-release.path watches the data dir under addons/ AND apps/" "[ '$v' = '$GM_HOST_OLD $GM_HOST_NEW' ]" "watches '$v'"
 ok "HCTL-05 ga-gm-host-release service and path are enabled" \
    "[ -L '$EXT_UNITS/multi-user.target.wants/ga-gm-host-release.service' ] && [ -L '$EXT_UNITS/multi-user.target.wants/ga-gm-host-release.path' ]"
 

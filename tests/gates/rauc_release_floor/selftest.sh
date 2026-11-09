@@ -312,7 +312,7 @@ chmod +x "$DS/mkdir" "$DS/curl"
 printf '100.%d.0.21\n' 100 > "$W/ota.active"
 label() {  # <want: ok|refuse> <label> <desc> [<expected first URL>]
   rm -f "$W/curl.log"
-  local rc=0; PATH="$DS:$PATH" GA_OTA_ACTIVE_FILE="$W/ota.active" GA_RESOLVE_OTA_BIN=/bin/false \
+  local rc=0; PATH="$DS:$PATH" GA_OTA_ACTIVE_FILE="$W/ota.active" GA_RESOLVE_OTA_BIN=/bin/false GA_DATA_ROOT_LIB="$OVL/usr/libexec/ga-data-root.sh" \
     sh "$INSTALL" 16.3.1.9 "$2" >"$W/d.out" 2>&1 || rc=$?
   if [[ "$1" == refuse ]]; then
     if [[ "$rc" == 2 ]] && grep -q 'refusing ga_release' "$W/d.out" && [[ ! -s "$W/curl.log" ]]; then ok "label $3 → refused, nothing downloaded"

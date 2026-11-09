@@ -111,7 +111,7 @@ in the rootfs-overlay and the baked Supervisor image archive. Pinned in `tests/g
 - SLOT-04: collector calls `rauc status --detailed` (without it, install history is empty and every slot looks never-installed)
 - SLOT-05a/b: collector uses `--output-format=shell`, cross-checked against `BR2_PACKAGE_RAUC_JSON` in the build config (json is compiled out; asking for it aborts rauc)
 - SLOT-06: publishes through ga-share-publish (atomic, symlink-safe)
-- SLOT-07a/b: publishes to the **add-on-private** `/mnt/data/supervisor/addons/data/*_ga_manager/` and never to `/share` — the file is the input to a rollback decision, and `/share` is mapped rw by every add-on that declares `share:rw`, so a forged `rollback.possible: true` there would let an operator brick a device
+- SLOT-07a/b: publishes to the **add-on-private** `<supervisor data root>/*_ga_manager/` (apps/data on Supervisor 2026.10+, addons/data before; resolved by ga-data-root.sh) and never to `/share` — the file is the input to a rollback decision, and `/share` is mapped rw by every add-on that declares `share:rw`, so a forged `rollback.possible: true` there would let an operator brick a device
 - SLOT-08: parses rauc output instead of eval'ing it
 
 ### Go toolchain consistency (scripts/lib/go-toolchain.sh)
@@ -294,3 +294,15 @@ Must run on real iHost hardware. Needs network, Docker, HA running.
 - FC-11: wlan0 uses openstick-auto (not Install WiFi)
 - FC-12: Persistent connection file exists
 - FC-13: Connection has autoconnect=yes
+
+### Fixture independence (Odoo #1610, review round 2)
+
+`tests/gates/build_tests_board_matrix` refreshes 15+ shipped files from the LIVE overlay
+(`overlay-refresh.txt`) before it runs `run_build_tests.sh`. For those files the matrix
+therefore no longer compares the runner against an independent captured bake: a runner
+check and its file are both current, so the board matrix cannot catch a runner check that
+asserts something the shipped file never had. Independence is restored by the strict,
+line-exact checks themselves (CFG-28b, STAGE-05, SLOT-08 each reject a mutated file; see
+the PR's red proof) and by `tests/ga_tests/data_root`. An independent snapshot of the
+refreshed files is NOT kept; re-capture the fixtures (`capture-fixture.py`) from the next
+bake that contains the resolver to get it back.

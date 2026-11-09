@@ -13,9 +13,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 suite_start "host control via ga_manager's data directory (ADR-0041)"
 
-GM=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager
+GM=${GA_T_DATA_ROOT}/99f1cad4_ga_manager
 SHARE=/mnt/data/supervisor/share
-ADDONS=/mnt/data/supervisor/addons/data
+ADDONS=${GA_T_DATA_ROOT}
 
 if [ ! -d "$ADDONS" ] || [ ! -r /etc/ga-release ]; then
   skip_test "HCD-01" "ga_manager data dir under the pinned slug" "not a GA device (host run)"

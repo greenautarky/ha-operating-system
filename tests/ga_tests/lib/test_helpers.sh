@@ -3,6 +3,27 @@
 # Source this from each test suite script.
 # BusyBox /bin/sh compatible (no bash-isms).
 
+# Where Supervisor keeps add-on data on THIS image. Same rule as the OS-side resolver
+# (/usr/libexec/ga-data-root.sh), probed here and not sourced from the image under test:
+# the RUNNING Supervisor decides (io.hass.version label of hassio_supervisor: >= 2026.10
+# -> apps/data, below -> addons/data), because a rolled-back device keeps a stale apps/.
+# Supervisor not running: the tree holding a *_ga_manager dir, the newer one if both.
+# Nothing decidable = the addons/ path, so a check reports an absent directory
+# instead of an empty variable.
+_ga_t_sv="$(docker inspect -f '{{index .Config.Labels "io.hass.version"}}' hassio_supervisor 2>/dev/null)" || _ga_t_sv=""
+_ga_t_ym="$(printf '%s\n' "$_ga_t_sv" | sed -n 's/^\([0-9]\{4\}\)\.\([0-9]\{1,2\}\)\..*/\1 \2/p')"
+if [ -n "$_ga_t_ym" ]; then
+    _ga_t_y="${_ga_t_ym% *}"; _ga_t_m="${_ga_t_ym#* }"
+    if [ "$_ga_t_y" -gt 2026 ] || { [ "$_ga_t_y" -eq 2026 ] && [ "$_ga_t_m" -ge 10 ]; }; then GA_T_DATA_ROOT=/mnt/data/supervisor/apps/data
+    else GA_T_DATA_ROOT=/mnt/data/supervisor/addons/data; fi
+else
+    _ga_t_a=""; _ga_t_o=""
+    for _ga_t_d in /mnt/data/supervisor/apps/data/*_ga_manager; do [ -d "$_ga_t_d" ] && _ga_t_a="$_ga_t_d"; done
+    for _ga_t_d in /mnt/data/supervisor/addons/data/*_ga_manager; do [ -d "$_ga_t_d" ] && _ga_t_o="$_ga_t_d"; done
+    if [ -n "$_ga_t_a" ] && { [ -z "$_ga_t_o" ] || [ "$_ga_t_a" -nt "$_ga_t_o" ]; }; then GA_T_DATA_ROOT=/mnt/data/supervisor/apps/data
+    else GA_T_DATA_ROOT=/mnt/data/supervisor/addons/data; fi
+fi
+export GA_T_DATA_ROOT
 _PASS=0
 _FAIL=0
 _SKIP=0

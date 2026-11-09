@@ -49,9 +49,16 @@ tar -xJf "$FX/ga_output.tar.xz" -C "$W/src"
 _ovl="$ROOT/buildroot-external/rootfs-overlay"; _tgt="$OUT/target"; _n=0
 while IFS= read -r _f; do
   case "$_f" in ''|'#'*) continue ;; esac
-  [ -f "$_ovl/$_f" ] && [ -f "$_tgt/$_f" ] || { echo "make-fixture: overlay-refresh entry '$_f' missing in overlay or fixture target" >&2; exit 2; }
+  case "$_f" in new:*)  # a file the fixture's bake does not have: add it from the live overlay
+    _f="${_f#new:}"; [ -f "$_ovl/$_f" ] || { echo "make-fixture: new-file entry '$_f' missing in overlay" >&2; exit 2; }
+    mkdir -p "$(dirname "$_tgt/$_f")" && cp "$_ovl/$_f" "$_tgt/$_f" && chmod 0644 "$_tgt/$_f" && touch -r "$_tgt/usr/libexec/ga-services-conf.sh" "$_tgt/$_f" || exit 2;  # old mtime: SRC-19 flags files newer than the sealed rootfs
+     _n=$((_n+1)); continue ;;
+  esac
+  _src="$_ovl/$_f"
+  case "$_f" in *=*) _src="$ROOT/buildroot-external/${_f%%=*}"; _f="${_f#*=}" ;; esac  # SRC=DEST: package file
+  [ -f "$_src" ] && [ -f "$_tgt/$_f" ] || { echo "make-fixture: overlay-refresh entry '$_f' missing in overlay or fixture target" >&2; exit 2; }
   # keep the fixture file's own mtime: SRC-19 flags target files newer than the sealed rootfs
-  cp "$_ovl/$_f" "$_tgt/$_f.new" && touch -r "$_tgt/$_f" "$_tgt/$_f.new" && chmod --reference="$_tgt/$_f" "$_tgt/$_f.new" && mv "$_tgt/$_f.new" "$_tgt/$_f" || exit 2; _n=$((_n+1))
+  cp "$_src" "$_tgt/$_f.new" && touch -r "$_tgt/$_f" "$_tgt/$_f.new" && chmod --reference="$_tgt/$_f" "$_tgt/$_f.new" && mv "$_tgt/$_f.new" "$_tgt/$_f" || exit 2; _n=$((_n+1))
 done < "$HERE/overlay-refresh.txt"
 [ "$_n" -gt 0 ] || { echo "make-fixture: overlay-refresh.txt lists no file" >&2; exit 2; }
 cp "$FX/go.mk" "$W/buildroot/package/go/go.mk"

@@ -158,7 +158,7 @@ if command -v netbird >/dev/null 2>&1; then
   # one of them with label='empty'.
   DEV_LABEL=$(cat /etc/ga-device-label 2>/dev/null || cat /mnt/data/ga-device-label 2>/dev/null || true)
   [ -z "$DEV_LABEL" ] && DEV_LABEL=$(sed -n 's/.*"device_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-      /mnt/data/supervisor/addons/data/*_ga_manager/ga-identity.json 2>/dev/null | head -1)
+      ${GA_T_DATA_ROOT}/*_ga_manager/ga-identity.json 2>/dev/null | head -1)
   [ -z "$DEV_LABEL" ] && DEV_LABEL=$(grep 'DEVICE_LABEL=' /etc/default/telegraf 2>/dev/null | cut -d= -f2 || true)
   DEV_LABEL=$(echo "$DEV_LABEL" | tr -d ' \t\r')
   if [ -n "$NB_HOST" ] && [ -n "$DEV_LABEL" ]; then

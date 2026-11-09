@@ -1,0 +1,4 @@
+#!/bin/sh
+. /usr/libexec/ga-data-root.sh
+R="$(ga_data_root)" || exit 1
+ls "$R/apps_of_the_day" "${R}/x"

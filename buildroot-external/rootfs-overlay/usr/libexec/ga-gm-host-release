@@ -18,7 +18,7 @@
 # BOSv1.4.0-rc3 never writes this file; its absence is how ga_manager knows it
 # may be talking to such a host.
 #
-#   /mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-host-release
+#   <supervisor data root>/99f1cad4_ga_manager/ga-host-release
 #     one line: the content of /etc/ga-release, e.g. "BOSv1.4.0-rc3" — the
 #     same grammar the release floor (/usr/lib/rauc/ga-release-floor) accepts
 #
@@ -31,7 +31,14 @@
 # tests only; nothing on a device sets them).
 set -u
 
-GM_DATA_DIR="${GA_GM_DATA_DIR:-/mnt/data/supervisor/addons/data/99f1cad4_ga_manager}"
+if [ -n "${GA_GM_DATA_DIR:-}" ]; then
+	GM_DATA_DIR="$GA_GM_DATA_DIR"
+else
+	# Supervisor 2025.11 keeps add-on data under addons/, 2026.10+ under apps/:
+	# ask the one resolver (Odoo #1610).
+	. "${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"
+	GM_DATA_DIR="$(ga_data_root_or_unresolved)/99f1cad4_ga_manager"
+fi
 RELEASE_FILE="${GA_RELEASE_FILE:-/etc/ga-release}"
 PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
 TARGET="$GM_DATA_DIR/ga-host-release"

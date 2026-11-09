@@ -360,7 +360,7 @@ while :; do
   # is exactly how the 2026-08-18 run spent 25 minutes blaming the device.
   facts="$(serial_read FACTS_OK \
     "\"S=/mnt/data/supervisor/share; H=/mnt/data/supervisor/homeassistant; \
-      G=\\\$(ls -d /mnt/data/supervisor/addons/data/*ga_manager 2>/dev/null | head -1); \
+      G=\\\$(ls -d /mnt/data/supervisor/*/data/*ga_manager 2>/dev/null | head -1); \
       echo FULL=\\\$([ -f \\\$S/.ga_converged ] && echo 1 || echo 0); \
       echo BASE=\\\$([ -f \\\$S/.ga_converged_base ] && echo 1 || echo 0); \
       echo PIN=\\\$([ -s \\\$H/.storage/greenautarky_secrets/onboarding_pin ] || [ -s \\\$H/ga-onboarding-pin ] && echo 1 || echo 0); \
