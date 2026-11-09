@@ -55,16 +55,16 @@
 #   anything else (ppp0, wwan0, usb0, ...)   uplink / unknown: dropped, except
 #           replies to connections the device itself opened.
 #
-# HOST vs CONTAINER — measured, not assumed:
-# Docker here runs with userland-proxy at its default (enabled), so a published
-# container port is terminated by a docker-proxy process ON THE HOST. That
-# traffic hits the `input` hook and is never DNAT'd forward traffic. The
-# allowlist therefore lives in `input` and covers both the host port (sshd
-# :22222) and the HA Core UI port (:80 on Core 2026.8+, :8123 before — both
-# stay allowed while the fleet is mixed, see CONTAINER_ALLOW_TCP).
-# The `forward` chain is kept as defence in depth for the case where
-# userland-proxy is turned off — then the same connections really do arrive as
-# DNAT'd forward traffic and would otherwise be unfiltered.
+# HOST vs CONTAINER (Odoo #1610):
+# Docker's PREROUTING DNAT rewrites a published container port before routing,
+# so LAN traffic to a published port is DNAT'd FORWARD traffic and the `input`
+# chain is not the deciding hook for it. Plain host ports and host-network HA
+# Core do hit `input`, which carries the allowlist for them.
+# The `forward` chain must match the ORIGINAL destination port
+# (`ct original proto-dst`): the post-DNAT port also matches published
+# container ports that map to 80/8123.
+# `input` stays allowlisted for the host ports, both UI ports (:80 on Core
+# 2026.8+, :8123 before — see CONTAINER_ALLOW_TCP).
 #
 # Consumer of the status file: ga_manager healthchecks/ga_specific.check_firewall
 # reads /share/ga-firewall-status.json (= this file over the share map).
@@ -168,12 +168,9 @@ RULES="$(mktemp /tmp/ga-firewall.XXXXXX)" || {
 	# DHCP/DHCPv6 client replies arrive before conntrack has a flow.
 	echo "    udp sport 67 udp dport 68 accept"
 	echo "    udp sport 547 udp dport 546 accept"
-	# Both allowlisted ports are accepted HERE, including the container one.
-	# Docker runs with userland-proxy enabled (the default), so a published
-	# container port is terminated by docker-proxy ON THE HOST: that traffic
-	# reaches the input hook and never becomes DNAT'd forward traffic. An
-	# allowlist that only whitelisted container ports in `forward` would
-	# therefore blackhole the HA UI while looking correct on paper.
+	# HA Core runs with host networking, so its UI ports (:80/:8123) arrive
+	# HERE, next to the host port (sshd). Published container ports do NOT:
+	# they are DNAT'd and filtered in `forward` by their ORIGINAL port.
 	echo "    iifname { $LAN_IFACES } tcp dport { $HOST_ALLOW_TCP, $CONTAINER_ALLOW_TCP } accept"
 	echo "    iifname { $LAN_IFACES } drop"
 	# Default deny for every other interface (uplinks, unknown NICs).
@@ -187,7 +184,7 @@ RULES="$(mktemp /tmp/ga-firewall.XXXXXX)" || {
 	echo "    iifname \"br-*\" accept"
 	echo "    iifname \"veth*\" accept"
 	echo "    ct state established,related accept"
-	echo "    iifname { $LAN_IFACES } ct status dnat tcp dport { $CONTAINER_ALLOW_TCP } accept"
+	echo "    iifname { $LAN_IFACES } ct status dnat meta l4proto tcp ct original proto-dst { $CONTAINER_ALLOW_TCP } accept"
 	echo "    iifname { $LAN_IFACES } ct status dnat drop"
 	echo "    ct status dnat drop"
 	echo "  }"
