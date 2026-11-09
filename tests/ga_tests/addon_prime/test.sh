@@ -88,7 +88,10 @@ apps_cmd() {  # apps_cmd <update|start> <slug>
   exit 0
 }
 case "$1" in
-  store) exit 0 ;;
+  store)
+    [ "${STUB_STORE:-ok}" = fail ] && { echo "Error: System is not ready with state: setup" >&2; exit 1; }
+    [ -n "${STUB_HANG:-}" ] && /bin/sleep 8
+    exit 0 ;;
   docker) echo '{"data":{"registries":{}}}'; exit 0 ;;
   apps)
     case "$GEN" in
@@ -105,14 +108,25 @@ case "$1" in
 esac
 exit 0
 STUB
-printf '#!/bin/sh\nexit 0\n' > "$W/bin/sleep"
-chmod +x "$W/bin/docker" "$W/bin/sleep"
+# Fake clock: `sleep N` advances $FAKE_CLOCK by N instead of waiting, and `date +%s`
+# reports real time + that offset, so the script's deadline logic runs in milliseconds.
+REAL_DATE="$(command -v date)"
+cat > "$W/bin/sleep" <<'STUB'
+#!/bin/sh
+[ -n "${FAKE_CLOCK:-}" ] && echo $(( $(cat "$FAKE_CLOCK" 2>/dev/null || echo 0) + ${1:-0} )) > "$FAKE_CLOCK"
+exit 0
+STUB
+cat > "$W/bin/date" <<STUB
+#!/bin/sh
+if [ "\$1" = +%s ]; then echo \$(( \$($REAL_DATE +%s) + \$(cat "\${FAKE_CLOCK:-/dev/null}" 2>/dev/null || echo 0) )); else exec $REAL_DATE "\$@"; fi
+STUB
+chmod +x "$W/bin/docker" "$W/bin/sleep" "$W/bin/date"
 printf 'GA-FAKE_ga_manager\n' > "$W/prime.conf"
 
 # prime <gen> <scenario> <name> — run the script; leaves $W/<name>.{log,rc,calls,marker}
 prime() {
-  rm -f "$W/$3.marker" "$W/$3.calls" "$W/$3.calls.n"; : > "$W/$3.calls"
-  PATH="$W/bin:$PATH" TMPDIR="$W" STUB_GEN="$1" STUB_SCEN="$2" STUB_CALLS="$W/$3.calls" \
+  rm -f "$W/$3.marker" "$W/$3.calls" "$W/$3.calls.n" "$W/$3.clock"; : > "$W/$3.calls"
+  FAKE_CLOCK="$W/$3.clock" GA_PRIME_SH="$SH" PATH="$W/bin:$PATH" TMPDIR="$W" STUB_GEN="$1" STUB_SCEN="$2" STUB_CALLS="$W/$3.calls" \
     GA_PRIME_CONF="$W/prime.conf" GA_PRIME_MARKER="$W/$3.marker" \
     $SH "$SUT" > "$W/$3.log" 2>&1
   echo $? > "$W/$3.rc"
@@ -175,5 +189,22 @@ run_test "APRIME-32" "never ready: bounded (budget 40 s = 5+10+20+30 waited, 5 a
   "[ \"\$(rc nr_forever)\" = 1 ] && [ ! -f '$W/nr_forever.marker' ] && [ \"\$(grep -c '^ha apps update' '$W/nr_forever.calls')\" = 5 ] && grep -q 'giving up' '$W/nr_forever.log' && grep -q 'FAILED (rc=1)' '$W/nr_forever.log'"
 run_test "APRIME-33" "other errors are NOT retried: exactly one update call (unclassified, auth, missing)" \
   "[ \"\$(grep -c '^ha apps update' '$W/new_other.calls')\" = 1 ] && [ \"\$(grep -c '^ha apps update' '$W/new_auth.calls')\" = 1 ] && [ \"\$(grep -c '^ha apps update' '$W/new_miss.calls')\" = 1 ]"
+
+
+# --- APRIME-4x: ONE global deadline, below the unit's TimeoutStartSec (Odoo #1610 review) ---
+# clock <name> = seconds the fake clock advanced (the script's own waiting) in that run.
+clock() { cat "$W/$1.clock" 2>/dev/null || echo 0; }
+STUB_STORE=fail GA_PRIME_TOTAL_BUDGET_S=100 prime new ok dl_probe
+run_test "APRIME-40" "Supervisor never ready, 100 s budget: stops at the deadline (not after 120 probes = 600 s), loud FAILED, rc 1, NO marker" \
+  "[ \"\$(rc dl_probe)\" = 1 ] && [ ! -f '$W/dl_probe.marker' ] && [ \"\$(clock dl_probe)\" -le 110 ] && grep -q 'FAILED' '$W/dl_probe.log' && grep -q 'global deadline' '$W/dl_probe.log'"
+GA_PRIME_TOTAL_BUDGET_S=60 GA_PRIME_RETRY_BUDGET_S=600 prime new notready_forever dl_retry
+run_test "APRIME-42" "update refused 'not ready' forever, retry budget 600 s but global 60 s: gives up inside the global budget, loud FAILED, rc 1, NO marker" \
+  "[ \"\$(rc dl_retry)\" = 1 ] && [ ! -f '$W/dl_retry.marker' ] && [ \"\$(clock dl_retry)\" -le 65 ] && grep -q 'global' '$W/dl_retry.log' && grep -q 'FAILED (rc=1)' '$W/dl_retry.log'"
+STUB_HANG=1 GA_PRIME_TOTAL_BUDGET_S=2 prime new ok dl_hang
+run_test "APRIME-43" "a hung docker call cannot outlive the budget: hard timeout, loud 'global deadline' FAILED line, rc 1, NO marker" \
+  "[ \"\$(rc dl_hang)\" = 1 ] && [ ! -f '$W/dl_hang.marker' ] && grep -q 'FAILED — global deadline of 2s' '$W/dl_hang.log'"
+UNIT="$R/buildroot-external/rootfs-overlay/usr/lib/systemd/system/ga-addon-prime.service"
+run_test "APRIME-41" "the script's default budget is at least 30 s below the unit's TimeoutStartSec (both read from the live files)" \
+  "t=\$(sed -n 's/^TimeoutStartSec=\\([0-9][0-9]*\\)min\$/\\1/p' '$UNIT'); b=\$(sed -n 's/^TOTAL_BUDGET_S=\"\\\${GA_PRIME_TOTAL_BUDGET_S:-\\([0-9][0-9]*\\)}\"\$/\\1/p' '$SUT'); [ -n \"\$t\" ] && [ -n \"\$b\" ] && [ \$((b + 30)) -le \$((t * 60)) ]"
 
 suite_end

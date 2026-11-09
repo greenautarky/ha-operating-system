@@ -31,6 +31,8 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/ga-addon-prime
 # Allow some time — addon update pulls a few-MB image.
+# The script bounds ITSELF to 540 s (GA_PRIME_TOTAL_BUDGET_S default in ga-addon-prime) so its
+# loud FAILED line always comes before this kill; tests/ga_tests/addon_prime APRIME-41 keeps the two apart.
 TimeoutStartSec=10min
 
 [Install]
