@@ -426,14 +426,16 @@ jobs:
         # cooldown, refused=dead, RECOVERED at info) each go red on their cases.
         run: sh tests/ga_tests/mesh_watchdog/selftest.sh
 
-      - name: Supervisor first-boot deadlock watchdog (Odoo #1706 — one restart per boot, only on the deadlock signature)
+      - name: Supervisor cli-install watchdog (Odoo #1706 — one restart per boot, only on the install-retry signature)
         # Drives the LIVE ga-supervisor-cli-watchdog with a fake docker and
-        # systemctl. Must-act: supervisor up >= 240 s, no hassio_cli, install
-        # retries in the log -> exactly one restart, again after a new boot.
+        # systemctl. Must-act: supervisor up >= 150 s (monotonic), no hassio_cli,
+        # install retries in the log -> exactly one restart, then ga-addon-prime
+        # restarted once, again after a new boot; wall-clock steps either way.
         # Must-not-act: healthy, young first boot, no signature, supervisor down,
         # Core stopped on purpose, cli up with old retries in the log, already
-        # restarted this boot. Red-proven by mutants (no marker, no age gate,
-        # no signature gate, no cli check, no script). Busybox sh as on the device.
+        # restarted this boot, marker not writable. Also pins the log signature
+        # to supervisor-signature.pin / version.yaml. Red-proven by mutants.
+        # Busybox sh as on the device.
         run: |
           set -eu
           sh tests/ga_tests/supervisor_cli_watchdog/selftest.sh
