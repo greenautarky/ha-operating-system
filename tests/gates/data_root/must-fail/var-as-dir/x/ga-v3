@@ -1,0 +1,3 @@
+#!/bin/sh
+B=apps; X=/mnt/data/supervisor/${B}/data
+ls "$X"

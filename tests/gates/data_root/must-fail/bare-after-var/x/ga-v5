@@ -1,0 +1,2 @@
+#!/bin/sh
+ls "$BASE/apps/data/x"

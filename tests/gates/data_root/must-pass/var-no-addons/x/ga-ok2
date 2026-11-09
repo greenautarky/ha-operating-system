@@ -1,0 +1,3 @@
+#!/bin/sh
+SUP=/mnt/data/supervisor; S=$SUP/share
+ls "$S" "${SUP}/homeassistant"

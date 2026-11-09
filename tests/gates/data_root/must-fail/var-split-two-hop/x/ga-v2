@@ -1,0 +1,4 @@
+#!/bin/sh
+SUP=/mnt/data/supervisor
+BASE=${SUP}
+cat "${BASE}/apps/ga-x"
