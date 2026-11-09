@@ -11,6 +11,11 @@ Scope (see tests/gates/data_root/selftest.sh): the OS overlays, scripts/ and the
 workflows. tests/ is exempt: it builds fake Supervisor trees to drive the resolver.
 This file is skipped (it spells the patterns).
 
+Limits: this is a regex heuristic against ACCIDENTAL regressions (contiguous,
+variable-split, quote-split and continued spellings). It is not bypass-proof:
+printf/array/brace-expansion/glob/`cd` + relative-path spellings are not caught
+(independent review 2026-11-09). Review such constructs by hand.
+
 Usage: check-data-root.py ROOT [ROOT...]   (each ROOT is scanned recursively)
 Exit 0 clean, 1 violations, 2 nothing inspected (a scan over zero files is a
 failure, not a pass).

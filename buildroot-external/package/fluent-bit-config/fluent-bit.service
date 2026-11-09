@@ -5,7 +5,7 @@ Description=Fluent Bit log agent
 # on: ordering after haos-supervisor.service would hold this unit until the
 # Supervisor's whole start chain is through (docker, time sync, the OTA endpoint
 # probe), which delays the log stream at boot. Open decision, see CHANGELOG.
-After=network-online.target netbird.service ga-telemetry-consent.service
+After=network-online.target netbird.service ga-telemetry-consent.service docker.service
 Wants=network-online.target
 # Only start if user consented to error log collection (marker written by ga-telemetry-consent.service)
 ConditionPathExists=/mnt/data/.ga-consent-error_logs
