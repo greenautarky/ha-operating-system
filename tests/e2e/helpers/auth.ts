@@ -49,6 +49,21 @@ export async function haLogin(page: Page, hassUrl: string): Promise<void> {
   await injectToken(page, hassUrl, tokens);
 }
 
+/**
+ * An admin access token for direct API calls (no browser): HA_TOKEN, else a
+ * login with HA_ADMIN_USER + HA_ADMIN_PASS/HA_ADMIN_PASSWORD. Throws when
+ * neither is set, so a caller can never run unauthenticated by omission.
+ */
+export async function adminAccessToken(hassUrl: string): Promise<string> {
+  if (process.env.HA_TOKEN) return process.env.HA_TOKEN;
+  const password = process.env.HA_ADMIN_PASS || process.env.HA_ADMIN_PASSWORD;
+  if (!password) {
+    throw new Error('Authentication required: set HA_TOKEN or HA_ADMIN_USER + HA_ADMIN_PASS (or HA_ADMIN_PASSWORD)');
+  }
+  const tokens = await loginWithCredentials(hassUrl, process.env.HA_ADMIN_USER || 'admin', password);
+  return tokens.access_token;
+}
+
 async function loginWithCredentials(
   hassUrl: string,
   username: string,

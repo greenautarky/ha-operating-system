@@ -1,0 +1,208 @@
+#!/bin/sh
+# ga-supervisor-cli-watchdog — heal a persistent Supervisor cli-plugin install
+# failure (Odoo #1706) by restarting hassos-supervisor ONCE per boot, then
+# making sure ga-addon-prime runs after it.
+#
+# THE FAULT. The Supervisor's plugin install loop (plugins/base.py install())
+# retries every 30 s for ever when _install() raises PluginError, and logs
+# "Error on installing cli plugin, retrying in 30sec". hassio_cli is then never
+# created and nothing that needs it (ga-addon-prime, Core, ga_manager,
+# provisioning) comes up. The trigger is ANY persistent cli-install failure.
+# The case measured on a fresh flash was a first version fetch that raced the
+# network and left "no connectivity" cached, which only a Supervisor restart
+# clears; a failure whose cause survives a restart (registry down, bad image)
+# is NOT healed by this and is reported once at ERROR, not looped.
+# Fix at the source: the Supervisor fork (greenautarky/ha-supervisor). This is
+# the OS-side net under it for images that ship an affected Supervisor.
+#
+# CONDITION (all four, every tick; otherwise no action):
+#   1. the hassio_supervisor container is running and the Supervisor unit has
+#      been active for >= N s of MONOTONIC time (N = GA_SCW_MIN_UPTIME,
+#      default 150; see TIMING and CLOCKS);
+#   2. hassio_cli is NOT running (`docker inspect` fails or State.Running is
+#      not true);
+#   3. the Supervisor's own log carries the signature (SIGNATURE below) inside
+#      its last GA_SCW_LOG_TAIL lines (default 500; a line count, not a time
+#      window, so a wall-clock step cannot hide it). The signature is pinned to
+#      the Supervisor source, see tests/ga_tests/supervisor_cli_watchdog/
+#      supervisor-signature.pin. Without it the cli is missing for some other
+#      reason and a restart would be a guess: log, do not restart;
+#   4. no attempt has been made in THIS boot (marker keyed by the kernel
+#      boot id, on tmpfs /run, so a reboot gives one new attempt and a failed
+#      or hanging restart is never retried). If the marker cannot be written
+#      there is NO restart (fail closed): a broken /run must not turn this into
+#      a restart every minute.
+# Core is deliberately NOT part of the condition: Core can be stopped on
+# purpose (and a first boot can take 8+ min to start it), a missing Core is not
+# evidence of this fault, while a missing hassio_cli with that log signature is.
+#
+# TIMING (measured). Fresh-flash gate run of BOSv1.6.0-rc6 on the bench unit
+# (2026-11-09): kernel 14:03:20, hassos-supervisor start 14:04:07 (+47 s),
+# "Starting CLI plugin" 14:04:32 (+25 s after the container started). The
+# Supervisor retries the plugin install every 30 s, so a healthy boot has the
+# cli ~25-55 s after container start. N = 150 s is 3-6x that. ga-addon-prime
+# waits for hassio_cli 60 x 5 s = 5 min from ITS start (right after the
+# Supervisor unit, ~+47 s), i.e. until ~+350 s after boot. The timer's first
+# look is OnBootSec=2min and it then ticks every minute: the gate opens at
+# ~+197 s (47 + 150), the first effective tick is +240 s, the restart brings
+# the cli up ~25-60 s later (~+270-300 s), inside prime's window. (The earlier
+# 240 s / 4 min pair acted at ~+300 s and the cli appeared at ~+360 s, after
+# prime had given up, so add-ons were not primed on a healed boot.)
+#
+# CLOCKS. The age is monotonic: uptime (/proc/uptime) minus the unit's
+# ActiveEnterTimestampMonotonic, so an NTP step in either direction (a first
+# boot syncs time minutes in) cannot open or close the gate. If systemd cannot
+# give the monotonic stamp the age falls back to the host uptime, an UPPER
+# bound of the container age (the gate may open up to ~47 s early; the cli and
+# signature conditions still apply). Nothing here compares wall-clock times.
+#
+# AFTER THE SUPERVISOR RESTART ga-addon-prime must run. Its unit has
+# Requires=haos-supervisor.service; hassos-supervisor.service is a symlink in
+# /etc/systemd/system to /usr/lib/systemd/system/haos-supervisor.service, i.e.
+# the same unit under a second name, so a restart of either name is a restart
+# of the unit and systemd restarts every Requires= dependent that is active or
+# activating. That covers prime while it is still waiting for the cli (it
+# restarts and waits afresh) or after it succeeded (restarted, then skipped by
+# its marker condition). It does NOT cover a prime that already gave up
+# ("failed", exit 1 after 5 min) or was skipped: a failed unit is not
+# restarted by propagation. So the watchdog checks ga-addon-prime.service
+# after the restart: active/activating -> leave it (systemd restarted it or it
+# is done); otherwise, and only if its done-marker is absent, ONE explicit
+# `systemctl restart --no-block ga-addon-prime.service`.
+#
+# ACTION, in this order, so a hang can never loop: write the attempt marker,
+# log at ERROR (journal priority err -> tier-0 Loki), publish status JSON via
+# ga-share-publish to /mnt/data/supervisor/share/ga-supervisor-cli-watchdog.json,
+# `systemctl restart hassos-supervisor.service`, prime check, publish outcome.
+# Reporting: ONE ERROR per boot for "cli missing, no signature" (later ticks
+# log it at WARNING), one ERROR for the restart.
+#
+# POSIX /bin/sh (busybox). Every command and path is overridable for the host
+# suite tests/ga_tests/supervisor_cli_watchdog.
+set -u
+
+DOCKER="${GA_SCW_DOCKER:-docker}"
+SYSTEMCTL="${GA_SCW_SYSTEMCTL:-systemctl}"
+PUBLISH="${GA_SCW_PUBLISH:-/usr/libexec/ga-share-publish}"
+SHARE_FILE="${GA_SCW_SHARE_FILE:-/mnt/data/supervisor/share/ga-supervisor-cli-watchdog.json}"
+STATE_DIR="${GA_SCW_STATE_DIR:-/run}"
+BOOT_ID_FILE="${GA_SCW_BOOTID:-/proc/sys/kernel/random/boot_id}"
+MIN_UPTIME="${GA_SCW_MIN_UPTIME:-150}"
+LOG_TAIL="${GA_SCW_LOG_TAIL:-500}"
+UPTIME_FILE="${GA_SCW_UPTIME_FILE:-/proc/uptime}"
+PRIME_UNIT="${GA_SCW_PRIME_UNIT:-ga-addon-prime.service}"
+PRIME_MARKER="${GA_SCW_PRIME_MARKER:-/mnt/data/.ga-addon-primed}"
+SETTLE="${GA_SCW_SETTLE:-5}"
+# Pinned to supervisor/plugins/base.py:221-223 (ga/2026.10.5-wp9-3); see the .pin file.
+SIGNATURE='Error on installing cli plugin, retrying'
+UNIT="${GA_SCW_UNIT:-hassos-supervisor.service}"
+NOW="${GA_SCW_NOW:-$(date -u +%s)}"
+MARKER="$STATE_DIR/ga-supervisor-cli-watchdog.attempted"
+NOSIG_MARKER="$STATE_DIR/ga-supervisor-cli-watchdog.nosig-logged"
+
+# systemd priority prefixes: <3> err, <4> warning, <6> info
+loge() { echo "<3>ga-supervisor-cli-watchdog: ERROR: $*"; }
+logw() { echo "<4>ga-supervisor-cli-watchdog: $*"; }
+logi() { echo "<6>ga-supervisor-cli-watchdog: $*"; }
+
+BOOT_ID="$(tr -d '-' < "$BOOT_ID_FILE" 2>/dev/null | cut -c1-32)"
+[ -n "$BOOT_ID" ] || BOOT_ID=unknown
+
+# publish STATE DETAIL
+publish() {
+    _d="$(printf '%s' "$2" | tr '"\\' "''")"
+    _j="$(printf '{"schema_version":1,"ts":%s,"state":"%s","detail":"%s","boot_id":"%s","min_uptime_s":%s}\n' \
+        "$NOW" "$1" "$_d" "$BOOT_ID" "$MIN_UPTIME")"
+    if [ -x "$PUBLISH" ]; then
+        printf '%s' "$_j" | "$PUBLISH" "$SHARE_FILE" 2>/dev/null \
+            || logw "could not publish $SHARE_FILE"
+    fi
+}
+
+# Monotonic seconds the Supervisor has been up; empty if the container is not
+# running. No wall-clock value is read (see CLOCKS).
+supervisor_uptime() {
+    [ "$(timeout 20 "$DOCKER" inspect -f '{{.State.Running}}' hassio_supervisor 2>/dev/null)" = true ] || return 0
+    _u="$(cut -d' ' -f1 "$UPTIME_FILE" 2>/dev/null)"; _u="${_u%%.*}"
+    case "$_u" in ''|*[!0-9]*) return 0 ;; esac
+    _m="$(timeout 20 "$SYSTEMCTL" show -p ActiveEnterTimestampMonotonic --value "$UNIT" 2>/dev/null)"
+    case "$_m" in
+        ''|*[!0-9]*|0) echo "$_u" ;;
+        *) _a=$((_u - _m / 1000000)); [ "$_a" -ge 0 ] || _a=0; echo "$_a" ;;
+    esac
+}
+
+cli_running() {
+    [ "$(timeout 20 "$DOCKER" inspect -f '{{.State.Running}}' hassio_cli 2>/dev/null)" = true ]
+}
+
+if [ -f "$MARKER" ] && [ "$(cat "$MARKER" 2>/dev/null)" = "$BOOT_ID" ]; then
+    # Quiet: this tick repeats every minute for the rest of the boot.
+    exit 0
+fi
+
+up="$(supervisor_uptime)"
+if [ -z "$up" ]; then
+    logi "hassio_supervisor container not running — nothing to watch"
+    exit 0
+fi
+if [ "$up" -lt "$MIN_UPTIME" ]; then
+    logi "hassio_supervisor up ${up}s < ${MIN_UPTIME}s — too early to judge"
+    exit 0
+fi
+if cli_running; then
+    publish ok "hassio_cli running (supervisor up ${up}s)"
+    exit 0
+fi
+
+sig="$(timeout 30 "$DOCKER" logs --tail "$LOG_TAIL" hassio_supervisor 2>&1 | grep -c "$SIGNATURE")"
+if [ "${sig:-0}" -lt 1 ]; then
+    _msg="hassio_cli is not running ${up}s after the Supervisor started, but the Supervisor log shows no plugin-install retries in its last $LOG_TAIL lines — not a persistent cli-install failure, NOT restarting (needs a human)"
+    # One ERROR per boot, WARNING on the later ticks.
+    if [ -f "$NOSIG_MARKER" ] && [ "$(cat "$NOSIG_MARKER" 2>/dev/null)" = "$BOOT_ID" ]; then
+        logw "$_msg"
+    else
+        loge "$_msg"
+        printf '%s\n' "$BOOT_ID" > "$NOSIG_MARKER" 2>/dev/null || true
+    fi
+    publish cli_missing_no_signature "hassio_cli missing, supervisor up ${up}s, no install-retry signature; no action"
+    exit 0
+fi
+
+# Marker FIRST: whatever happens next, this boot never tries again. If it cannot
+# be written, do NOT restart (fail closed): nothing would stop a restart on every tick.
+mkdir -p "$STATE_DIR" 2>/dev/null
+if ! printf '%s\n' "$BOOT_ID" > "$MARKER"; then
+    loge "cannot write the attempt marker $MARKER — NOT restarting $UNIT (fail closed: without the marker it would restart every minute); hassio_cli is missing ${up}s after the Supervisor started with $sig plugin-install retries, needs a human"
+    publish marker_write_failed "cannot write $MARKER; hassio_cli missing, supervisor up ${up}s; NOT restarting (fail closed)"
+    exit 0
+fi
+loge "persistent cli-plugin install failure: hassio_cli missing ${up}s after the Supervisor started and the log shows $sig plugin-install retries — restarting $UNIT ONCE (Odoo #1706)"
+publish restarting "supervisor up ${up}s, $sig install retries, restarting $UNIT"
+if timeout 180 "$SYSTEMCTL" restart "$UNIT"; then
+    logw "$UNIT restarted by the watchdog (once per boot)"
+    prime="prime not checked"
+    if [ -e "$PRIME_MARKER" ]; then
+        prime="prime already done (marker present), left alone"
+    else
+        sleep "$SETTLE"
+        _ps="$(timeout 20 "$SYSTEMCTL" is-active "$PRIME_UNIT" 2>/dev/null)"
+        case "$_ps" in
+            active|activating)
+                prime="$PRIME_UNIT is $_ps (restarted by systemd via Requires=, or done), left alone" ;;
+            *)
+                if timeout 20 "$SYSTEMCTL" restart --no-block "$PRIME_UNIT"; then
+                    prime="$PRIME_UNIT was '${_ps:-unknown}', restarted once"
+                else
+                    prime="$PRIME_UNIT was '${_ps:-unknown}', restart FAILED"
+                    loge "$prime"
+                fi ;;
+        esac
+    fi
+    logw "$prime"
+    publish restarted "restarted $UNIT at $NOW; no further attempt this boot; $prime"
+else
+    loge "restart of $UNIT FAILED — no further attempt this boot"
+    publish restart_failed "restart of $UNIT failed; no further attempt this boot"
+fi
+exit 0

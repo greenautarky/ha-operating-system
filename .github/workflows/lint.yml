@@ -436,6 +436,21 @@ jobs:
         # cooldown, refused=dead, RECOVERED at info) each go red on their cases.
         run: sh tests/ga_tests/mesh_watchdog/selftest.sh
 
+      - name: Supervisor cli-install watchdog (Odoo #1706 — one restart per boot, only on the install-retry signature)
+        # Drives the LIVE ga-supervisor-cli-watchdog with a fake docker and
+        # systemctl. Must-act: supervisor up >= 150 s (monotonic), no hassio_cli,
+        # install retries in the log -> exactly one restart, then ga-addon-prime
+        # restarted once, again after a new boot; wall-clock steps either way.
+        # Must-not-act: healthy, young first boot, no signature, supervisor down,
+        # Core stopped on purpose, cli up with old retries in the log, already
+        # restarted this boot, marker not writable. Also pins the log signature
+        # to supervisor-signature.pin / version.yaml. Red-proven by mutants.
+        # Busybox sh as on the device.
+        run: |
+          set -eu
+          sh tests/ga_tests/supervisor_cli_watchdog/selftest.sh
+          GA_T_SHELL="busybox sh" sh tests/ga_tests/supervisor_cli_watchdog/selftest.sh
+
       # A torn disk-buffer WAL (hard reset) made telegraf panic at config load on
       # every start ("failed to open wal file: log corrupt") and the device sent
       # no metrics for days. Runs the LIVE ga-telegraf-buffer-check against the
@@ -582,7 +597,8 @@ jobs:
           npx playwright test --project=desktop --reporter=line \
             tests/heating-cards-gate.spec.ts \
             tests/resident-surface-gate.spec.ts \
-            tests/destructive-fixture-gate.spec.ts
+            tests/destructive-fixture-gate.spec.ts \
+            tests/reset-walk-gate.spec.ts
 
       - name: ga-telemetry-gate + consent-apply (consent markers and shippers)
         # Fixture-driven: the gate against v1/v2/stale stores, and the apply
@@ -639,6 +655,13 @@ jobs:
         run: |
           git submodule update --init --depth 1 haos
           bash tests/gates/board_firewall/selftest.sh
+
+      - name: build tests - firewall forward rule + on-device suite parser (Odoo #1610)
+        # tests/gates/fw_forward_dnat: the forward chain must accept DNAT'd LAN traffic by its ORIGINAL port
+        # (a published container port mapping to :80 must NOT be accepted), and the live
+        # tests/ga_tests/firewall/test.sh must parse recorded real `nft list` output (FW-25..29b could never
+        # pass with the first-brace sed). Red on the pre-change gate and the pre-change suite.
+        run: bash tests/gates/fw_forward_dnat/selftest.sh
 
       - name: build tests - board matrix (ALL build tests on fixture outputs of EVERY board)
         # Runs the live tests/ga_tests/run_build_tests.sh on fixture build outputs captured from
