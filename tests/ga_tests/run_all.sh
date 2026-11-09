@@ -54,6 +54,7 @@ SUITES_EXCLUDED="
   ota_bundle_name host suite: CI lint.yml host-suites — ga-rauc-install asks for the bundle name of its board (#1631)
   telemetry_env   host suite: CI lint.yml host-suites — env label from the fleet env (#1191); the device half is TEL-13..16 in telemetry
   addon_prime     host suite: CI lint.yml host-suites — ga-addon-prime against both ha CLI generations (stub hassio_cli)
+  data_root       host suite: CI lint.yml (step DR) — ga-data-root.sh resolver (apps/addons/both/neither) + real consumers on an apps-only tree (#1610)
   ihost_root_password host suite: CI lint.yml host-suites — the iHost root-password bake wiring (static, no device)
   dsgw_console    host suite: CI lint.yml host-suites — DSGW-210 consoles follow the iHost model (ADR-0039), static + fixture
   wifi_probe_verdict host suite: CI lint.yml host-suites — HW-02b's fixtures
