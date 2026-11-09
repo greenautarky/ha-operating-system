@@ -1,0 +1,19 @@
+# The log line ga-supervisor-cli-watchdog keys on, pinned to the Supervisor source.
+#
+# Source: supervisor/plugins/base.py:221-223 in greenautarky/ha-supervisor,
+# branch ga/2026.10.5-wp9-3 (= homeassistant_supervisor 2026.10.5.3):
+#     _LOGGER.warning("Error on installing %s plugin, retrying in 30sec", self.slug)
+# with slug "cli" for the CLI plugin. The Supervisor source is NOT vendored in
+# this repo, so selftest.sh checks (a) this pin == the live script's SIGNATURE,
+# (b) CHECKED_SUPERVISOR_VERSION == version.yaml homeassistant_supervisor, and
+# (c) when GA_SCW_SUPERVISOR_BASE_PY points at that file, the source still
+# contains the format string.
+#
+# NEXT SUPERVISOR BUMP: (b) goes red on purpose. Re-check the line in the new
+# fork (git grep "Error on installing" -- supervisor/plugins/base.py; run the
+# selftest with GA_SCW_SUPERVISOR_BASE_PY=<that file>), fix SIGNATURE here and in
+# the script if it moved, then update CHECKED_* below.
+SIGNATURE=Error on installing cli plugin, retrying
+SOURCE_FORMAT=Error on installing %s plugin, retrying in 30sec
+CHECKED_FORK_BRANCH=ga/2026.10.5-wp9-3
+CHECKED_SUPERVISOR_VERSION=2026.10.5.3
