@@ -1,0 +1,15 @@
+[Unit]
+Description=Heal the Supervisor first-boot deadlock (hassio_cli never created) by one restart per boot
+After=hassos-supervisor.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-supervisor-cli-watchdog
+Nice=10
+# docker inspect x2 (20 s each), docker logs 30 s, restart 180 s, publishes.
+TimeoutStartSec=300
+SyslogIdentifier=ga-supervisor-cli-watchdog
+SyslogFacility=daemon
+# A one-minute timer: keep the quiet info ticks out of the journal; the ERROR
+# and warning lines (<3>/<4>) pass.
+LogLevelMax=notice

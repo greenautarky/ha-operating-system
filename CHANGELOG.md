@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): watchdog for the Supervisor first-boot deadlock (Odoo #1706)
+
+A Supervisor whose first version fetch raced the network keeps "no connectivity" cached and never creates hassio_cli (log: "Error on installing cli plugin, retrying"); nothing else starts. `ga-supervisor-cli-watchdog` (timer +4 min, then every minute) restarts hassos-supervisor ONCE per boot when the Supervisor container has run >= 240 s, hassio_cli is not running and the Supervisor log carries that signature; ERROR line, status in `/share/ga-supervisor-cli-watchdog.json`, attempt marker per boot id on /run. Core is not part of the condition. Proof: host suite `supervisor_cli_watchdog` (18 checks, mutants red). The source fix is greenautarky/ha-supervisor#53 (waits for the next Supervisor bump).
+
 ## Unreleased (feat/1.6-haos18): the host firewall drops ingress on EVERY non-trusted interface, uplinks included (Odoo #1647)
 
 `ga-firewall-gate` named the interfaces to drop on (the LAN ones), so an interface nobody listed, such as the modem uplink, was outside the filter. The model is inverted to default-deny: lo, the mesh (wt0, tailscale0) and the container bridges (hassio, docker0, br-*, veth*, wpan0) are accepted first, the LAN interfaces get the 22222/80/8123 allowlist, every other interface is dropped; replies to the device's own connections pass (ct established,related). The chain policy stays at accept because nft loads atomically and a fail-closed policy could cut the only management path; a load failure is now logged at err level and published as `ruleset_loaded: false`. Proof: board_firewall FWB-16/17/18 plus four must-flag fixtures, and a kernel-netns run of the real gate (uplink ports dropped, LAN 22222/8123 unchanged).

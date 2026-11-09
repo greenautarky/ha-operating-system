@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodic check for the Supervisor first-boot deadlock (acts at most once per boot)
+
+[Timer]
+# See ga-supervisor-cli-watchdog for N: the script itself requires the
+# Supervisor container to have run >= 240 s; +4 min after boot is the first look.
+OnBootSec=4min
+OnUnitActiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
