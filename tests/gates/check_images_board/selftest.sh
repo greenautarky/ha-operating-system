@@ -90,7 +90,10 @@ git -C "$W/store" -c user.email=t@e -c user.name=t commit -qam skew
 for k in ga_default_addon ga_hmvapp_addon; do jq -r ".addons.$k.version" "$pins" > "$W/newest/$(jq -r ".addons.$k.image" "$pins" | sed 's|.*/||; s|{arch}|aarch64|')"; done
 for k in $(jq -r '.addons|keys[]' "$pins"); do [ -s "$W/newest/$(jq -r ".addons.\"$k\".image" "$pins" | sed 's|.*/||; s|{arch}|aarch64|')" ] || jq -r ".addons.\"$k\".version" "$pins" > "$W/newest/$(jq -r ".addons.\"$k\".image" "$pins" | sed 's|.*/||; s|{arch}|aarch64|')"; done
 run dsgw210 "$ROOT/scripts/check-images.sh"
-{ [ "$RC" = 0 ] && [ "$(grep -c AHEAD-OF-STORE "$W/out")" = 2 ]; } && ok "dsgw210: the real file vs a store on the iHost's versions passes, loudly (2 x AHEAD-OF-STORE)" || { bad "dsgw210 real file vs old store: rc=$RC"; grep -E 'FAIL|AHEAD|INVALID' "$W/out" | sed 's/^/          /'; }
+# Since the store cut (Odoo #1584) the DSGW file no longer runs ahead of the store: both boards pin the same
+# versions, so against a store on the iHost's versions the real file passes with NO AHEAD-OF-STORE excuse.
+# (The mechanism itself - valid / invalid declarations - is proven by the decl cases below.)
+{ [ "$RC" = 0 ] && [ "$(grep -c AHEAD-OF-STORE "$W/out")" = 0 ]; } && ok "dsgw210: the real file vs a store on the iHost's versions passes with no store_ahead excuse (in lockstep)" || { bad "dsgw210 real file vs the iHost-version store: rc=$RC (want 0 and no AHEAD-OF-STORE)"; grep -E 'FAIL|AHEAD|INVALID' "$W/out" | sed 's/^/          /'; }
 # scratch tree for the declaration rules
 mkdir -p "$W/r/buildroot-dsgw210/configs"; cp "$ROOT/$(ga_board_var DEFCONFIG dsgw210)" "$W/r/buildroot-dsgw210/configs/"
 decl() {  # <label> <declaration json or ""> <pinned> <store> <expect-rc> <regex>
