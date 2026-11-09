@@ -64,6 +64,8 @@ HA_UUID_STORE="${GA_ENROLL_HA_UUID_STORE:-/mnt/data/supervisor/homeassistant/.st
 SHARE_PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
 SSH_POSTURE="${GA_ENROLL_SSH_POSTURE:-/usr/libexec/ga-ssh-posture}"
 SSH_HOST_PUB="${GA_ENROLL_SSH_HOST_PUB:-/etc/ssh/keys/ssh_host_ed25519_key.pub}"
+GA_BOARD_CONF="${GA_BOARD_CONF:-/usr/share/ga-board.conf}"
+REFUSED_FILE="${GA_ENROLL_REFUSED_FILE:-/mnt/data/supervisor/share/ga-enroll-refused.json}"
 
 log()  { echo "${LOG_TAG}: $*"; }
 warn() { echo "${LOG_TAG}: WARNING: $*" >&2; }
@@ -103,6 +105,26 @@ FLEET_URL="http://${GA_FLEET_HOST}:${GA_FLEET_PORT:-8090}"
 # than the two known values is a provisioning error, refused before any
 # request is made: better a device that visibly fails to enrol than one that
 # quietly enrols into the wrong fleet.
+#
+# BOARD-SPECIFIC SEED REQUIREMENT (Odoo #1700). The staging seed is written
+# only by the iHost flasher (--fleet-env); a DSGW image has no such writer, so
+# "absent = prod" would enrol every freshly flashed DSGW into PRODUCTION.
+# A board opts in with GA_FLEET_ENV_REQUIRED=1 in /usr/share/ga-board.conf
+# (shipped by the DSGW overlay only): there an absent or empty GA_FLEET_ENV is
+# refused, loudly, before any request. An EXPLICIT prod or staging still
+# works. The iHost ships no board file, so it keeps "absent = prod" unchanged.
+# shellcheck disable=SC1090
+[ -r "$GA_BOARD_CONF" ] && . "$GA_BOARD_CONF"
+if [ "${GA_FLEET_ENV_REQUIRED:-0}" = 1 ] && [ -z "${GA_FLEET_ENV:-}" ]; then
+    mkdir -p "$(dirname "$REFUSED_FILE")" 2>/dev/null || true
+    # Status the device can surface (metadata only, no secrets). Best-effort:
+    # the refusal below must happen even if /share is not writable yet.
+    jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg conf "$CONF_OVERRIDE" \
+        '{status:"refused", reason:"fleet_env_seed_missing", refused_at:$at, fix:("set GA_FLEET_ENV=staging or GA_FLEET_ENV=prod in " + $conf)}' \
+        | "$SHARE_PUBLISH" "$REFUSED_FILE" 0644 2>/dev/null || true
+    die "FLEET ENV SEED MISSING: this board has no default fleet and GA_FLEET_ENV is absent or empty — refusing to enrol (it would otherwise join PRODUCTION). Provide GA_FLEET_ENV=staging (or an explicit GA_FLEET_ENV=prod) in ${CONF_OVERRIDE} on the data partition, then the unit retries within 60 s"
+fi
+rm -f "$REFUSED_FILE" 2>/dev/null || true
 fleet_env="${GA_FLEET_ENV:-prod}"
 case "$fleet_env" in
     prod|staging) ;;
