@@ -93,7 +93,9 @@ for line in open(script):
     if name == "bootargs" and ("rauc.slot=%s " % slot) in val:
         target = val            # the slot's assembled command line
     elif name != "bootargs":
-        env[name] = val
+        # hush expands at execution time: a self-referencing append
+        # (setenv bootargs_ga "${bootargs_ga} ...", Odoo #1723) needs the old value.
+        env[name] = re.sub(r'\$\{(\w+)\}', lambda m: env.get(m.group(1), m.group(0)), val)
 if target is None:
     print("NO-BOOTARGS-LINE"); sys.exit(0)
 out = re.sub(r'\$\{(\w+)\}', lambda m: env.get(m.group(1), ""), target)

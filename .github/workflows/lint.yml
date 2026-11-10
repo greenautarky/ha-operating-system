@@ -992,6 +992,11 @@ jobs:
       - name: USB host lock reaches a device updated over the air (ADR-0029 D3)
         run: ./tests/gates/ota_usb_lock/selftest.sh
 
+      # Odoo #1723: the iHost boot script gives the g_serial gadget an
+      # iSerialNumber (= serial#), guarded so an empty serial# emits nothing.
+      - name: iHost USB gadget serial number on the kernel command line (Odoo #1723)
+        run: ./tests/gates/ihost_gadget_serial/selftest.sh
+
       # The iHost boot script's slot fallback (upstream HAOS #4832): a kernel
       # that fails to LOAD must still cost its slot an attempt, and the counters
       # re-arm only once both slots are spent. Runs the slot-selection tail of

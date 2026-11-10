@@ -24,6 +24,7 @@ regressions from kernel updates, device tree changes, and firmware issues.
 | HW-08 | USB devices enumerated | Lists USB devices via `lsusb` or sysfs fallback |
 | HW-08a | USB host port disabled | `/sys/bus/usb/devices/usb*/authorized_default` is 0 on every root hub (ADR-0029 D3) |
 | HW-08a3 | USB host lock on the kernel command line | The LAST `usbcore.authorized_default` in `/proc/cmdline` is 0 — also on a device updated over the air |
+| HW-08e | USB gadget iSerialNumber | Where `g_serial` is built in (iHost): the LAST `g_serial.iSerialNumber=` in `/proc/cmdline` equals the DT `serial-number` (Odoo #1723); skipped elsewhere |
 | HW-08b | USB gadget functional | Serial console gadget (dwc3 peripheral mode) working |
 | HW-09 | Zigbee serial device | Internal UART `/dev/ttyS4` (EFR32; ttyS3 is the LED MCU) |
 | HW-10 | eMMC block device | `/dev/mmcblk*` present |
