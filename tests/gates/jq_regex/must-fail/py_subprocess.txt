@@ -1,0 +1,3 @@
+# lint-kind: python
+import subprocess
+subprocess.run(["jq", "-r", ".a|test(\"x\")", "f"])

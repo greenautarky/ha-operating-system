@@ -1,0 +1,2 @@
+# fixture (no shebang: the shellcheck job selects files by shebang)
+if "$JQ_CLI" -e 'sub("a"; "b")' < in.json; then :; fi

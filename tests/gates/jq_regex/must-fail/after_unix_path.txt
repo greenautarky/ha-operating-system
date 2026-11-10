@@ -1,0 +1,2 @@
+# fixture (no shebang: the shellcheck job selects files by shebang)
+/usr/bin/jq -r '.a | test("x")' f

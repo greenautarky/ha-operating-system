@@ -1,0 +1,2 @@
+# fixture (no shebang: the shellcheck job selects files by shebang)
+while ! "$JQ_CLI" -e 'test("a")' < in.json; do :; done
