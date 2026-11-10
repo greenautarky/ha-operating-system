@@ -55,6 +55,10 @@ echo "── names the device must refuse ──"
 d="$(fresh refuse)"
 refuse "$d" label  "kibu"              "the name EVERY device ships with"
 refuse "$d" label  "*"                 "wildcard"
+refuse "$d" label  "KIB-DUS-1234567"   "DSGW label, 7 digits"
+refuse "$d" label  "KIB-XYZ-00000000"  "unknown device-class prefix"
+refuse "$d" label  "KIB-SON-*"         "wildcard in the id"
+refuse "$d" label  "KIB-DUS-*"         "wildcard in the id"
 refuse "$d" label  "KIB-SON-31"        "short form — not the 8-digit fleet id"
 refuse "$d" label  "KIB-SON-00000901 KIB-SON-00000902" "two ids in one value"
 refuse "$d" label  $'KIB-SON-00000901\nKIB-SON-00000902' "newline injection"
@@ -70,6 +74,8 @@ echo "── the two writers must not clobber each other ──"
 d="$(fresh both)"
 P "$d" anchor "ABCDEF0123456789" >/dev/null
 eq "$d" "ABCDEF0123456789 " "anchor alone"
+P "$d" label "KIB-DUS-12345678" >/dev/null
+eq "$d" "ABCDEF0123456789 KIB-DUS-12345678 " "DSGW-210 label KIB-DUS-<8 digits> accepted"
 P "$d" label "KIB-SON-00000901" >/dev/null
 eq "$d" "ABCDEF0123456789 KIB-SON-00000901 " "label added, anchor kept"
 

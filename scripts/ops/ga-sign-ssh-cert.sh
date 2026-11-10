@@ -6,7 +6,7 @@
 # scoped and auditable are never left to memory:
 #
 #   -n  principals  which device this opens, and only that device: its
-#                   hardware anchor and/or its fleet label (KIB-SON-XXXXXXXX)
+#                   hardware anchor and/or its fleet label (KIB-SON-XXXXXXXX iHost, KIB-DUS-XXXXXXXX DSGW-210)
 #   -I  key id      WHO it was issued to. sshd logs it on every login at
 #                   LogLevel VERBOSE, so the device's own log names the person.
 #   -z  serial      a stable handle for one issuance (device log <-> ledger)
@@ -21,7 +21,7 @@
 # exists for the dry run and the self-test, never for a real issuance.
 #
 # Usage:
-#   ga-sign-ssh-cert.sh [--anchor <hw_serial>] [--no-label] <KIB-SON-XXXXXXXX> <user-key.pub>
+#   ga-sign-ssh-cert.sh [--anchor <hw_serial>] [--no-label] <KIB-SON-XXXXXXXX|KIB-DUS-XXXXXXXX> <user-key.pub>
 #
 # Principals: the label is always the device id given. The anchor comes from
 # --anchor, or — when GA_FLEET_URL + GA_FLEET_TOKEN are set — from the
@@ -30,7 +30,7 @@
 # names the label only (it works once the device has its label).
 # --no-label signs for the anchor alone (a fresh device before identity).
 #
-# --also <KIB-SON-XXXXXXXX>=<hw_serial>   (repeatable, at most 4)
+# --also <KIB-SON-XXXXXXXX|KIB-DUS-XXXXXXXX>=<hw_serial>   (repeatable, at most 4)
 # adds further devices to the SAME certificate, each with its label AND its
 # anchor (both required, both validated like the first device). One signature,
 # so one PIN + one touch for several devices. A lost certificate opens every
@@ -56,13 +56,13 @@ while [[ $# -gt 0 ]]; do
     *) break ;;
   esac
 done
-[[ $# -eq 2 ]] || die "usage: $(basename "$0") [--anchor <hw_serial>] [--no-label] <KIB-SON-XXXXXXXX> <user-key.pub>"
+[[ $# -eq 2 ]] || die "usage: $(basename "$0") [--anchor <hw_serial>] [--no-label] <KIB-SON-XXXXXXXX|KIB-DUS-XXXXXXXX> <user-key.pub>"
 LABEL="$1"; PUBKEY="$2"
 
 # The principals are the entire scoping mechanism: validated, never trusted.
 # `kibu` is the name EVERY device ships with; a wildcard opens everything.
-[[ "$LABEL" =~ ^KIB-SON-[0-9]{8}$ ]] \
-  || die "refusing device '$LABEL' — must match ^KIB-SON-[0-9]{8}$ (never 'kibu', never a wildcard)"
+[[ "$LABEL" =~ ^KIB-(SON|DUS)-[0-9]{8}$ ]] \
+  || die "refusing device '$LABEL' — must match ^KIB-(SON|DUS)-[0-9]{8}$ (never 'kibu', never a wildcard)"
 
 if [[ -z "$ANCHOR" && -n "${GA_FLEET_URL:-}" && -n "${GA_FLEET_TOKEN:-}" ]]; then
   ANCHOR=$(curl -fsS --max-time 10 -H "Authorization: Bearer ${GA_FLEET_TOKEN}" \
@@ -81,9 +81,9 @@ principals=()
 (( ${#ALSO[@]} <= 4 )) || die "refusing more than 4 --also devices in one certificate"
 also_labels=()
 for pair in "${ALSO[@]}"; do
-  [[ "$pair" =~ ^(KIB-SON-[0-9]{8})=([A-Za-z0-9._-]+)$ ]] \
-    || die "refusing --also '$pair' — must be KIB-SON-XXXXXXXX=<hw_serial>"
-  a_label="${BASH_REMATCH[1]}"; a_anchor="${BASH_REMATCH[2]}"
+  [[ "$pair" =~ ^(KIB-(SON|DUS)-[0-9]{8})=([A-Za-z0-9._-]+)$ ]] \
+    || die "refusing --also '$pair' — must be KIB-SON-XXXXXXXX=<hw_serial> or KIB-DUS-XXXXXXXX=<hw_serial>"
+  a_label="${BASH_REMATCH[1]}"; a_anchor="${BASH_REMATCH[3]}"
   [[ "$a_anchor" != "kibu" ]] || die "refusing anchor 'kibu' — the name every device ships with"
   [[ "$a_label" != "$LABEL" ]] || die "--also repeats the first device $LABEL"
   principals+=("$a_label" "$a_anchor"); also_labels+=("$a_label")

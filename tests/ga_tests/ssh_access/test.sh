@@ -143,9 +143,9 @@ if [ -s /etc/ssh/ga_user_ca.pub ]; then
     "mountpoint -q /etc/ssh/principals"
   run_test "SSH-D-22" "principals for root: hardware anchor present, no 'kibu', no wildcard" \
     "test -s /etc/ssh/principals/root && ! grep -qxE 'kibu|\\*' /etc/ssh/principals/root \
-     && grep -qvE '^KIB-SON-' /etc/ssh/principals/root"
-  run_test "SSH-D-23" "principals for root: fleet label KIB-SON-XXXXXXXX present (from ga_manager)" \
-    "grep -qxE 'KIB-SON-[0-9]{8}' /etc/ssh/principals/root"
+     && grep -qvE '^KIB-(SON|DUS)-' /etc/ssh/principals/root"
+  run_test "SSH-D-23" "principals for root: fleet label KIB-SON-/KIB-DUS-XXXXXXXX present (from ga_manager)" \
+    "grep -qxE 'KIB-(SON|DUS)-[0-9]{8}' /etc/ssh/principals/root"
   # SSH-D-24/27/28/29 hold on a device updated over the air as well as on a
   # fresh flash: its overlay authorized_keys was seeded by an older image (the
   # pre-cut fleet key, no break-glass), and the image enforces the plane in
