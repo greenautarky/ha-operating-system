@@ -1,6 +1,6 @@
 [Unit]
 Description=Heal the Supervisor first-boot deadlock (hassio_cli never created) by one restart per boot
-After=hassos-supervisor.service
+After=haos-supervisor.service
 
 [Service]
 Type=oneshot

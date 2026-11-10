@@ -911,6 +911,18 @@ jobs:
           ./tests/gates/unit_refs/selftest.sh
           ./scripts/check-unit-refs.py
 
+      # HAOS 18 renamed its units hassos-* -> haos-*; only hassos-supervisor and
+      # hassos-config still resolve, through shipped aliases (Odoo #1738). The
+      # gate refuses hassos-* unit references in device-side files of this
+      # branch (explicit allowlist in the script). The self-test runs the live
+      # gate over must-fail/must-pass fixtures, the allowlist, the fail-closed
+      # paths and the live tree. Red-proven on origin/feat/1.6-haos18.
+      - name: no hassos-* unit names in device-side files (HAOS 18 names them haos-*)
+        run: |
+          set -eu
+          ./tests/gates/haos_unit_names/selftest.sh
+          ./scripts/check-haos-unit-names.sh
+
       # The device-test runner ran run_all.sh with `|| true` and exited 0 on a
       # red device run (measured: 3 failures, RC=0). Drives the REAL runner
       # with a stub ssh (remote 1/2/3/255 must go red, 0 stays green, cleanup

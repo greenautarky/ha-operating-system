@@ -8,14 +8,14 @@
 # `|| true` and the script still logged "injected entries". Measured on a
 # canary running BOSv1.4.0-rc5 (2026-10-06): six apparmor="DENIED" lines on
 # /etc/hosts, zero GA entries in the container; names the DNS plugin does
-# not carry (mqtt, fleet) resolved elsewhere or not at all. Now hassos-supervisor mounts a host-managed file read-only at
+# not carry (mqtt, fleet) resolved elsewhere or not at all. Now haos-supervisor mounts a host-managed file read-only at
 # /etc/hosts and ga-update-hosts writes it and verifies from inside.
 #
 # Host-side: needs sh + awk + stat. Runs the LIVE ga-update-hosts (override
 # with GA_UPDATE_HOSTS=<path>) against a fake Docker CLI that models the
 # measured container (fake-docker: AppArmor denies /etc/hosts writes, no entry
 # = public DNS answer, a bind mount = the host file). Also sources the live
-# hassos-supervisor launcher functions-only for the mount helper.
+# haos-supervisor launcher functions-only for the mount helper.
 # Fixture addresses are RFC 5737 documentation space.
 #
 # Red-proven against the script and launcher before this change (the script's

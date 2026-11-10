@@ -1,7 +1,7 @@
 #!/bin/sh
-# hassos-supervisor asks the device's OWN channel file, not always stable.json.
+# haos-supervisor asks the device's OWN channel file, not always stable.json.
 #
-# hassos-supervisor re-pulls the Supervisor when its image is missing. With no
+# haos-supervisor re-pulls the Supervisor when its image is missing. With no
 # local version it used to ask a literal .../main/stable.json, whatever channel
 # the device follows, so a dev or beta device came back with the STABLE
 # Supervisor. The channel lives in /mnt/data/supervisor/updater.json, seeded by
