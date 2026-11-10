@@ -1,0 +1,4 @@
+# fixture (no shebang: the shellcheck job selects files by shebang)
+JQ=jq
+[ -x "$JQ" ] || exit 1
+"$JQ" -r '.a' f

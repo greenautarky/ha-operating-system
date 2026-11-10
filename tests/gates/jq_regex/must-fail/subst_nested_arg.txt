@@ -1,0 +1,2 @@
+# fixture (no shebang: the shellcheck job selects files by shebang)
+jq -n --arg v "$(jq -r '.a|test("x")' f)" '$v'

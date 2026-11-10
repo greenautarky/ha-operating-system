@@ -1,0 +1,3 @@
+# fixture (no shebang: the shellcheck job selects files by shebang)
+jq -r '.a # test("x") is only a comment
+' f

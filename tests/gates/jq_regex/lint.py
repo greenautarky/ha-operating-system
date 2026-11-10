@@ -4,51 +4,101 @@
 The image builds jq 1.7.1 WITHOUT oniguruma (BR2_PACKAGE_JQ=y, no BR2_PACKAGE_ONIGURUMA in
 buildroot-ihost/configs/ga_ihost_full_defconfig and buildroot-dsgw210/configs/dsgw210_defconfig),
 so every regex builtin (test, match, capture, scan, splits, sub, gsub, 2-arg split/2) exits 5 on
-the device while working on every laptop and CI runner. The extraction/lexing approach is ported
-from greenautarky/ga-bootstrap tests/test_jq_lint.py.
+the device while working on every laptop and CI runner. The shell-aware extraction is ported from
+greenautarky/ga-bootstrap tests/test_jq_lint.py and extended: jq inside "$(...)" / backticks /
+${..:-$(..)}, a command word that is or expands to jq ($JQ, "$JQ", ${JQ:-jq}, /usr/bin/jq),
+brace groups, VAR=x prefixes, and jq string literals are lexed before comments are stripped.
 
-WHAT IS SCANNED (the files installed into the image that runs on the device):
-  - buildroot-external/rootfs-overlay/**                  (GA layer overlay, both boards)
-  - buildroot-ihost/rootfs-overlay/**                     (iHost board overlay)
-  - buildroot-dsgw210/board/dusun/dsgw210/rootfs-overlay/** (DSGW210 board overlay)
-  - buildroot-{external,ihost,dsgw210}/package/** except external/package/hassio/ (installed units/scripts)
-  - buildroot-external/patches-haos/0130-ga-supervisor-launcher.patch (the launcher that runs on
-    the device; only context + added lines are scanned)
-NOT SCANNED (jq runs on the BUILDER there, where jq has oniguruma, regex is fine):
-  buildroot-external/package/hassio/** (check-supervisor-image.sh, check-core-image.sh: build host),
-  patches-haos/0131/0133/0134 (Makefile/bake recipes), scripts/** (check-images.sh, scan-cves.sh...).
-  Add a path to EXCLUDED below only with a reason.
+SCANNED (installed into the image that runs on the device), see SCAN_DIRS / PATCHES:
+  buildroot-external/rootfs-overlay (both boards), buildroot-ihost/rootfs-overlay,
+  buildroot-dsgw210/board/dusun/dsgw210/rootfs-overlay, buildroot-{external,ihost,dsgw210}/package
+  except external/package/hassio, and patch 0130 (the supervisor launcher, runs on the device;
+  context + added lines only). Read: the board dirs' other files (post-fakeroot.sh, haos-hook.sh,
+  post-build.d, indicator*.py) run on the BUILDER or contain no jq; the completeness check below
+  makes any future jq there a failure instead of a silent miss.
 
-Reads the LIVE tree, never a copy. FAILS (never skips) if it finds fewer than MIN_PROGRAMS jq
-programs or MIN_FILES scanned files, or if any jq token cannot be attributed to a program.
-Usage: lint.py [--root DIR]   |   lint.py --file F...  (lint given files, print findings)
+CHECKS (all fail closed):
+  1. every regex builtin in a jq program;  2. any jq token that cannot be attributed to a program;
+  3. PER FILE: a scanned file that mentions jq (outside comments) but yields no attributed program
+     and no lookup (`command -v jq`) fails, unless listed in ALLOW_MENTION with a reason;
+     non-shell files (python/perl/lua) that mention jq fail unless listed in ALLOW_NONSHELL;
+  4. PER FILE pinned program counts (EXPECTED_PROGRAMS): going blind on one file is red, and a
+     new jq call must be added to the table deliberately;
+  5. COMPLETENESS: every file in the repo that mentions jq is either scanned or classified in
+     NOT_DEVICE with a reason (a new jq user under board/, scripts/, post-build.d fails here);
+  6. totals: MIN_FILES scanned files.
+Reads the LIVE tree. Usage: lint.py [--root DIR] | lint.py --file F...
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
 
+SCAN_DIRS = [
+    "buildroot-external/rootfs-overlay",
+    "buildroot-ihost/rootfs-overlay",
+    "buildroot-dsgw210/board/dusun/dsgw210/rootfs-overlay",
+    "buildroot-external/package",
+    "buildroot-ihost/package",
+    "buildroot-dsgw210/package",
+]
+EXCLUDED = {
+    # build-host only: jq with oniguruma on the builder, never installed into the image
+    "buildroot-external/package/hassio",
+}
+PATCHES = ["buildroot-external/patches-haos/0130-ga-supervisor-launcher.patch"]
+
+# Everything else in the repo that mentions jq, and why it is not device-side. Prefix match.
+NOT_DEVICE = {
+    "buildroot-external/package/hassio/": "runs on the builder (image checks)",
+    "buildroot-external/patches-haos/0131-": "bake recipe, runs on the builder",
+    "buildroot-external/patches-haos/0133-": "Makefile recipe, runs on the builder",
+    "buildroot-external/patches-haos/0134-": "Makefile recipe, runs on the builder",
+    "patches/haos/": "patches to hassio build scripts, run on the builder",
+    "scripts/": "build host / CI tooling (check-images.sh, scan-cves.sh, ...)",
+    "Dockerfile": "build-container definition, installs jq for the builder",
+    "docs/": "prose",
+    "CHANGELOG.md": "prose",
+    "version.yaml": "prose / comments",
+}
+SKIP_WALK = {".git", "haos", "buildroot", "tests", ".github", "node_modules", "output"}
+
+# Scanned files that mention jq outside comments but legitimately have no program. Reason each.
+ALLOW_MENTION: dict[str, str] = {}
+# Non-shell scanned files that mention jq, after reading them. Reason each.
+ALLOW_NONSHELL: dict[str, str] = {}
+
+# Pinned per-file jq program counts in the scanned set (measured 2026-11-10).
+EXPECTED_PROGRAMS: dict[str, int] = {
+    "buildroot-external/patches-haos/0130-ga-supervisor-launcher.patch": 4,
+    "buildroot-external/rootfs-overlay/usr/libexec/ga-enroll": 8,
+    "buildroot-external/rootfs-overlay/usr/libexec/ga-ha-init": 1,
+    "buildroot-external/rootfs-overlay/usr/libexec/ga-host-stats": 1,
+    "buildroot-external/rootfs-overlay/usr/libexec/ga-rauc-slots": 11,
+    "buildroot-external/rootfs-overlay/usr/sbin/ga-mesh-watchdog": 3,
+    "buildroot-external/rootfs-overlay/usr/sbin/ga-telemetry-profile-apply": 1,
+}
+MIN_FILES = 200
+
 _REGEX_BUILTIN = re.compile(r'(?<![\w$.])(test|match|capture|scan|splits|sub|gsub)\s*\(')
 _SPLIT2 = re.compile(r'(?<![\w$.])split\s*\([^()]*;')
-# jq options that consume N following words
 _OPT_ARGS = {"--arg": 2, "--argjson": 2, "--slurpfile": 2, "--rawfile": 2,
              "--indent": 1, "-L": 1, "--seq": 0}
 _FROM_FILE = {"-f", "--from-file"}
-# pinned: real jq programs in the live script (addon_repo_present, step 1a,
-# parse check, creds host list + username + password, version, protected, state).
-# Update deliberately when a jq call is added or removed.
-
 TRUNCATED = "<<shell-quote-truncated-program>>"
+UNLINTED = "<<jq-call-the-lint-cannot-attribute-to-a-program>>"
+_CMD_PREFIX = {"if", "while", "until", "!", "env", "then", "do", "elif", "else", "time", "exec", "{"}
+_JQVAR = re.compile(r'^\$\{?\w*[jJ][qQ]\w*(:?[-=+?][^}]*)?\}?$')
+_WRAPPERS = {"xargs", "nohup", "sudo", "timeout", "nice", "setsid", "stdbuf", "command", "busybox"}
+_WORDBREAK = " \t\n|;&()<>`"
 
 
 def _lex(text: str):
-    """Tiny shell lexer. Yields ("op", str) or ("word", segs) where segs is a
-    list of (kind, text) with kind in {"s" single-quoted, "d" double-quoted,
-    "u" unquoted}. Comments are skipped only where a shell skips them (a '#'
-    at the start of a word outside quotes), so '#' inside a quoted jq program
-    is NOT treated as a shell comment and an apostrophe in a jq comment
-    closes the quote exactly as the real shell would."""
+    """Tiny shell lexer: ("op", str) or ("word", segs), segs = [(kind, text)], kind in
+    s (single-quoted) / d (double-quoted) / u (unquoted). Comments are skipped only where a shell
+    skips them (a '#' starting a word outside quotes)."""
     i, n = 0, len(text)
     while i < n:
         c = text[i]
@@ -62,12 +112,12 @@ def _lex(text: str):
         elif text.startswith("$(", i):
             yield ("op", "$(")
             i += 2
-        elif c in "\n|;&()<>":
+        elif c in "\n|;&()<>`":
             yield ("op", c)
             i += 1
         else:
             segs, buf = [], ""
-            while i < n and text[i] not in " \t\n|;&()<>":
+            while i < n and text[i] not in _WORDBREAK:
                 c = text[i]
                 if c == "'" or c == '"':
                     if buf:
@@ -75,7 +125,12 @@ def _lex(text: str):
                         buf = ""
                     e = i + 1
                     while e < n and text[e] != c:
-                        e += 2 if (c == '"' and text[e] == "\\") else 1
+                        if c == '"' and text.startswith("$(", e):
+                            e = _skip_sub(text, e)
+                        elif c == '"' and text[e] == "`":
+                            e = _skip_tick(text, e)
+                        else:
+                            e += 2 if (c == '"' and text[e] == "\\") else 1
                     segs.append(("s" if c == "'" else "d", text[i + 1:e]))
                     i = e + 1
                 elif c == "\\":
@@ -92,40 +147,94 @@ def _lex(text: str):
                 yield ("word", segs)
 
 
+def _skip_sub(s: str, i: int) -> int:
+    """s[i:] starts with '$(': index just after the balanced ')' (quotes respected)."""
+    depth, j, q, n = 1, i + 2, "", len(s)
+    while j < n and depth:
+        ch = s[j]
+        if q:
+            if ch == "\\" and q == '"':
+                j += 1
+            elif ch == q:
+                q = ""
+        elif ch in "'\"":
+            q = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        j += 1
+    return j
+
+
+def _skip_tick(s: str, i: int) -> int:
+    j = i + 1
+    while j < len(s) and s[j] != "`":
+        j += 2 if s[j] == "\\" else 1
+    return j + 1
+
+
+def _subs(s: str) -> list[str]:
+    """Command substitutions inside double-quoted text: $( ... ) (balanced) and `...`."""
+    out, i, n = [], 0, len(s)
+    while i < n:
+        if s.startswith("$(", i):
+            j = _skip_sub(s, i)
+            out.append(s[i + 2:j - 1])
+            i = j
+        elif s[i] == "`":
+            j = _skip_tick(s, i)
+            out.append(s[i + 1:j - 1])
+            i = j
+        elif s[i] == "\\":
+            i += 2
+        else:
+            i += 1
+    return out
+
+
 def _is_jq(segs) -> bool:
     plain = "".join(t for _, t in segs)
-    return plain in ("jq", "$JQ_CLI", "${JQ_CLI}") or _is_jq_path(segs)
+    return plain in ("jq",) or plain.endswith("/jq") and "=" not in plain
 
 
-_CMD_PREFIX = {"if", "while", "until", "!", "env", "then", "do", "elif", "else", "time", "exec"}
-UNLINTED = "<<jq-call-the-lint-cannot-attribute-to-a-program>>"
+def _is_jqvar(segs) -> bool:
+    return bool(_JQVAR.match("".join(t for _, t in segs)))
 
 
-def jq_programs(text: str) -> list[str]:
-    """Program text of each jq invocation. Command position = start of a
-    command, after an operator (| ; & && || $( newline) or after
-    if/while/until/!/env/then/do/... Programs may be single- or double-quoted.
-    A program whose shell quote is closed early (apostrophe in a jq comment)
-    gets a TRUNCATED marker. ANY other jq token (not at command position, -f
-    file, unquoted/variable program, no program) yields an UNLINTED marker, so
-    an unlinted jq call is red, never silently uncounted. Words in comments
-    are not tokens at all."""
+def analyze(text: str):
+    """-> (programs, lookups, mentions). programs: jq program text per invocation (UNLINTED /
+    TRUNCATED markers for ones that cannot be attributed); lookups: `command -v jq` style;
+    mentions: words outside comments that contain the token jq."""
     toks = list(_lex(text))
-    progs = []
+    progs: list[str] = []
+    lookups = mentions = 0
+    for kind, val in toks:  # command substitutions inside double quotes / backticks
+        if kind != "word":
+            continue
+        if re.search(r'\bjq\b', "".join(t for _, t in val)):
+            mentions += 1
+        for sk, st in val:
+            if sk == "d":
+                for sub in _subs(st):
+                    p, l, m = analyze(sub)
+                    progs += p
+                    lookups += l
+                    mentions += m
     cmd_pos = True
     k = 0
     while k < len(toks):
         kind, val = toks[k]
-        if kind == "word" and _is_jq(val):
+        wrapped = (k > 0 and toks[k - 1][0] == "word"
+                   and "".join(t for _, t in toks[k - 1][1]) in _WRAPPERS)
+        if kind == "word" and (_is_jq(val) or ((cmd_pos or wrapped) and _is_jqvar(val))):
             if not cmd_pos:
-                # `command -v jq` / `which jq` / `type jq` only look the binary up, no program
                 prev = [("".join(t for _, t in x[1]) if x[0] == "word" else x[1]) for x in toks[max(0, k - 3):k]]
                 if (prev[-2:] == ["command", "-v"] or prev[-3:] == ["command", "-p", "-v"]
                         or prev[-1:] in (["which"], ["type"])):
-                    k += 1
-                    continue
-                progs.append(UNLINTED)
-                cmd_pos = False
+                    lookups += 1
+                else:
+                    progs.append(UNLINTED)
                 k += 1
                 continue
             k += 1
@@ -145,6 +254,8 @@ def jq_programs(text: str) -> list[str]:
                             len(segs) == 1 and segs[0][0] == "d"
                             and re.fullmatch(r"\$\{?\w+\}?", segs[0][1])):
                         prog = segs[0][1]
+                        if segs[0][0] == "d":
+                            prog = re.sub(r'\\(["\\$`])', r'\1', prog)
                         if len(segs) > 1 and segs[1][0] == "u" and segs[1][1][:1].isalnum():
                             prog += TRUNCATED
                         progs.append(prog)
@@ -155,69 +266,114 @@ def jq_programs(text: str) -> list[str]:
                 progs.append(UNLINTED)
             cmd_pos = False
             continue
-        cmd_pos = kind == "op" or (
-            kind == "word" and len(val) == 1 and val[0][0] == "u" and val[0][1] in _CMD_PREFIX)
+        cmd_pos = kind == "op" or (kind == "word" and (
+            (len(val) == 1 and val[0][0] == "u" and (val[0][1] in _CMD_PREFIX
+                                                     or re.fullmatch(r"\w+=\S*", val[0][1])))))
         k += 1
-    return progs
+    return progs, lookups, mentions
+
+
+def jq_programs(text: str) -> list[str]:
+    return analyze(text)[0]
+
+
+def strip_jq(s: str) -> str:
+    """Lex jq strings BEFORE dropping comments: '#' inside a string is not a comment, and
+    string contents (regex names inside a literal) are blanked. \\( ... ) interpolation is code."""
+    out: list[str] = []
+    n = len(s)
+
+    def code(i: int, depth: int) -> int:
+        paren = 0
+        while i < n:
+            c = s[i]
+            if c == '"':
+                out.append('"')
+                i = string(i + 1)
+                out.append('"')
+            elif c == "#":
+                while i < n and s[i] != "\n":
+                    i += 1
+            elif depth and c == "(":
+                paren += 1
+                out.append(c)
+                i += 1
+            elif depth and c == ")":
+                if paren == 0:
+                    return i + 1
+                paren -= 1
+                out.append(c)
+                i += 1
+            else:
+                out.append(c)
+                i += 1
+        return i
+
+    def string(i: int) -> int:
+        while i < n:
+            c = s[i]
+            if c == "\\":
+                if s[i + 1:i + 2] == "(":
+                    out.append(" ")
+                    i = code(i + 2, 1)
+                    out.append(" ")
+                    continue
+                i += 2
+            elif c == '"':
+                return i + 1
+            else:
+                i += 1
+        return i
+
+    code(0, 0)
+    return "".join(out)
 
 
 def violations(prog: str) -> list[str]:
-    # drop jq comments (a '#' at line start or after whitespace)
     if prog == UNLINTED:
         return ["jq call the lint cannot attribute to a program (unlinted jq is red)"]
     if TRUNCATED in prog:
         return ["apostrophe closed the shell quote early (jq comment?)"]
-    stripped = re.sub(r'(^|\s)#[^\n]*', r'\1', prog)
-    return [m.group(0) for m in _REGEX_BUILTIN.finditer(stripped)] + \
-           [m.group(0) for m in _SPLIT2.finditer(stripped)]
+    code = strip_jq(prog)
+    return [m.group(0) for m in _REGEX_BUILTIN.finditer(code)] + \
+           [m.group(0) for m in _SPLIT2.finditer(code)]
 
 
+def _nonshell(text: str, rel: str) -> bool:
+    first = text.split("\n", 1)[0]
+    if rel.endswith((".py", ".pl", ".lua", ".js", ".rb")):
+        return True
+    if first.startswith("#!") and re.search(r"python|perl|lua|node|ruby", first):
+        return True
+    return bool(re.match(r"#\s*lint-kind:\s*python", first))  # fixtures carry no shebang
 
 
-def _is_jq_path(segs) -> bool:  # absolute path to the binary counts as jq too
-    plain = "".join(t for _, t in segs)
-    return plain.endswith("/jq") and "=" not in plain
+def lint_file(text: str, rel: str, patch: bool = False):
+    """-> (n_programs, [violation strings]) including the per-file coverage rule."""
+    if patch:  # keep context and added lines, drop removed lines and headers
+        text = "\n".join(l[1:] for l in text.splitlines() if l[:1] in (" ", "+") and not l.startswith("+++"))
+    if _nonshell(text, rel):
+        if re.search(r"\bjq\b", text) and rel not in ALLOW_NONSHELL:
+            return 0, ["non-shell file mentions jq; cannot be linted (read it, then list it in ALLOW_NONSHELL)"]
+        return 0, []
+    progs, lookups, mentions = analyze(text)
+    bad = [v for p in progs for v in violations(p)]
+    if mentions and not progs and not lookups and rel not in ALLOW_MENTION:
+        bad.append("mentions jq but no jq program was attributed (lint blind, or list in ALLOW_MENTION)")
+    return len(progs), bad
 
 
-SCAN_GLOBS = [
-    "buildroot-external/rootfs-overlay",
-    "buildroot-ihost/rootfs-overlay",
-    "buildroot-dsgw210/board/dusun/dsgw210/rootfs-overlay",
-    "buildroot-external/package",
-    "buildroot-ihost/package",
-    "buildroot-dsgw210/package",
-]
-EXCLUDED = {
-    # build-host only: jq with oniguruma on the builder, never installed into the image
-    "buildroot-external/package/hassio",
-}
-PATCHES = ["buildroot-external/patches-haos/0130-ga-supervisor-launcher.patch"]
-# Pinned from a measurement of the live tree (2026-11-10). Update deliberately when a device-side
-# jq call or file is added/removed; a drop means the extraction went blind.
-MIN_PROGRAMS = 21  # measured: 21 programs in 217 files
-MIN_FILES = 200
-
-
-def read_text(p: Path, patch: bool = False):
+def read_text(p: Path):
     try:
-        t = p.read_bytes().decode("utf-8")
+        return p.read_bytes().decode("utf-8")
     except UnicodeDecodeError:
         return None
-    if patch:  # keep context and added lines, drop removed lines and headers
-        t = "\n".join(l[1:] for l in t.splitlines() if l[:1] in (" ", "+") and not l.startswith("+++"))
-    return t
-
-
-def lint_text(text: str):
-    progs = jq_programs(text)
-    return len(progs), [v for p in progs for v in violations(p)]
 
 
 def scan(root: Path):
     files = []
-    for g in SCAN_GLOBS:
-        base = root / g
-        for p in sorted(base.rglob("*")):
+    for g in SCAN_DIRS:
+        for p in sorted((root / g).rglob("*")):
             rel = p.relative_to(root).as_posix()
             if p.is_symlink() or not p.is_file():
                 continue
@@ -225,36 +381,61 @@ def scan(root: Path):
                 continue
             files.append((rel, p, False))
     files += [(x, root / x, True) for x in PATCHES]
-    nprog, nfiles, bad = 0, 0, []
+    scanned = {r for r, _, _ in files}
+    counts: dict[str, int] = {}
+    bad: list[str] = []
+    nfiles = 0
     for rel, p, patch in files:
-        t = read_text(p, patch)
+        t = read_text(p)
         if t is None:
             continue
         nfiles += 1
-        n, v = lint_text(t)
-        nprog += n
+        n, v = lint_file(t, rel, patch)
+        if n:
+            counts[rel] = n
         bad += [f"{rel}: {x}" for x in v]
-    return nfiles, nprog, bad
+    for rel in sorted(set(counts) | set(EXPECTED_PROGRAMS)):
+        if counts.get(rel, 0) != EXPECTED_PROGRAMS.get(rel, 0):
+            bad.append(f"{rel}: expected {EXPECTED_PROGRAMS.get(rel, 0)} jq programs, found "
+                       f"{counts.get(rel, 0)} (update EXPECTED_PROGRAMS deliberately, or the lint went blind)")
+    # completeness: every jq-mentioning file in the repo is scanned or classified
+    for dp, dn, fn in os.walk(root):
+        dn[:] = [d for d in dn if d not in SKIP_WALK]
+        for f in fn:
+            p = Path(dp) / f
+            rel = p.relative_to(root).as_posix()
+            if p.is_symlink() or rel in scanned or p.stat().st_size > 2_000_000:
+                continue
+            if any(rel.startswith(g + "/") for g in SCAN_DIRS) and not any(
+                    rel == e or rel.startswith(e + "/") for e in EXCLUDED):
+                continue
+            t = read_text(p)
+            if t and re.search(r"\bjq\b", t) and not any(rel.startswith(k) for k in NOT_DEVICE):
+                bad.append(f"{rel}: mentions jq, is neither scanned nor classified in NOT_DEVICE "
+                           "(device-side? add its dir to SCAN_DIRS; builder-side? classify with a reason)")
+    return nfiles, counts, bad
 
 
 def main(argv):
     if argv[:1] == ["--file"]:
         rc = 0
         for f in argv[1:]:
-            n, bad = lint_text(Path(f).read_text())
+            n, bad = lint_file(Path(f).read_text(), Path(f).name)
             print(f"{f}: programs={n} violations={bad}")
-            if n < 1:
-                rc = 1
-            if bad:
-                rc = 1
+            rc |= 1 if bad else 0
         return rc
     root = Path(argv[1]) if argv[:1] == ["--root"] else Path(__file__).resolve().parents[3]
-    nfiles, nprog, bad = scan(root)
-    print(f"scanned files={nfiles} jq programs={nprog} violations={len(bad)}")
+    nfiles, counts, bad = scan(root)
+    print(f"scanned files={nfiles} jq programs={sum(counts.values())} violations={len(bad)}")
+    for rel in sorted(counts):
+        print(f"  {counts[rel]:3d}  {rel}")
     for b in bad:
         print(f"  VIOLATION {b}")
-    if nprog < MIN_PROGRAMS or nfiles < MIN_FILES:
-        print(f"FAIL: extraction blind (programs {nprog} < {MIN_PROGRAMS} or files {nfiles} < {MIN_FILES})")
+    if nfiles < MIN_FILES:
+        print(f"FAIL: extraction blind (files {nfiles} < {MIN_FILES})")
+        return 1
+    if not EXPECTED_PROGRAMS:
+        print("FAIL: EXPECTED_PROGRAMS is empty")
         return 1
     return 1 if bad else 0
 

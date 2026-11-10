@@ -1,0 +1,2 @@
+# fixture (no shebang: the shellcheck job selects files by shebang)
+x="$(printf %s "$y" | jq -r 'test("a")' 2>/dev/null)"

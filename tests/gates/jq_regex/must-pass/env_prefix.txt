@@ -1,0 +1,2 @@
+# fixture (no shebang: the shellcheck job selects files by shebang)
+LC_ALL=C jq -r '.a // empty' f
