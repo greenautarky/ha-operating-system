@@ -284,7 +284,7 @@ jobs:
         # Drives the REAL script against a stub hassio_cli in three flavours
         # (2025.11.x: addons only; 2026.10+: apps, with the addons deprecation
         # notice on stderr; an old CLI that answers an unknown word with its
-        # root help). Red-proven against the previous script (8 of 17 fail).
+        # root help). Red-proven against the previous script (GA_PRIME_BASELINE_REF; incl. the no-store-reload-probe cases).
         # Run under busybox sh as well, which is what the device has.
         run: |
           set -eu
