@@ -113,7 +113,7 @@ rec() {  # rec ID "MESSAGE suffix" FIELD=VALUE...
     echo "_BOOT_ID=$BOOT"; echo "_HOSTNAME=fixture"; printf '%s\n' "$@"
     echo "MESSAGE=FIXTURE-$id $msg"; echo; } >> "$W/fixture.export"
 }
-GM=app_99f1cad4_ga_manager
+GM=addon_99f1cad4_ga_manager
 # tier-0 sources
 rec E1 "kernel: Out of memory" _TRANSPORT=kernel PRIORITY=3 SYSLOG_IDENTIFIER=kernel
 rec E2 "ERROR (MainThread) [supervisor.addons] start failed" CONTAINER_NAME=hassio_supervisor _SYSTEMD_UNIT=docker.service PRIORITY=3
