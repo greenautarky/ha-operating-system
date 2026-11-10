@@ -221,7 +221,7 @@ expect_detail base "nothing to write to"
 # final_modes <fixture> → "entity=state ..." of the fake Core's rooms after the run
 final_modes() {
   PATH="$FIXTURES/shim:$PATH" GA_HEAT_FIXTURE="$FIXTURES/$1" GA_HEAT_LIVE="$GA_HEAT_TMP/live.$1.json" \
-    docker exec addon_x_ga_manager sh -c 'curl http://supervisor/core/api/states' \
+    docker exec app_x_ga_manager sh -c 'curl http://supervisor/core/api/states' \
     | jq -r '[ .[] | select(.attributes.valves != null) | "\(.entity_id)=\(.state)" ] | join(" ")'
 }
 expect_final() {

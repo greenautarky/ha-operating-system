@@ -44,7 +44,7 @@ DB="ga_homeassistant_db"
 USER_WANT="ga_ha_influx_user"
 LAG_MAX_S=900
 
-ctr_of() { docker ps --format '{{.Names}}' 2>/dev/null | grep -E "^addon_.*_$1\$" | head -1; }
+ctr_of() { ga_ctr_of "$1"; }   # app_ (BOSv1.6) or addon_ (BOSv1.5.x), see lib/test_helpers.sh
 
 # --- HAIX-01: the entry ------------------------------------------------------
 entry_line() {

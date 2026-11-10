@@ -305,7 +305,7 @@ preflight_wait_settled() {
     while [[ $SECONDS -lt $deadline ]]; do
         # shellcheck disable=SC2086
         not_up=$(ssh $SSH_OPTS "$SSH_TARGET" \
-            "docker ps -a --format '{{.Names}} {{.State}}' 2>/dev/null | grep '^addon_' | grep -v ' running\$' | cut -d' ' -f1" \
+            "docker ps -a --format '{{.Names}} {{.State}}' 2>/dev/null | grep -E '^(app|addon)_' | grep -v ' running\$' | cut -d' ' -f1" \
             2>/dev/null | tr -d '\r' | tr '\n' ' ')
         [[ -z "${not_up// /}" ]] && { echo "  Preflight: all add-on containers Up"; return 0; }
         if [[ $said -eq 0 ]]; then

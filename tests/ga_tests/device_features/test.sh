@@ -168,7 +168,7 @@ run_test_show "FEAT-16" "HA Core's own onboarding was finished by provisioning" 
 # check that goes red on a healthy device is worse than no check, because it
 # teaches people to ignore the colour. Measured on K31, 2026-08-25.
 run_test_show "FEAT-17" "Core is running on a real location, so nobody is asked for one" \
-  '_cfg=$(docker exec addon_99f1cad4_ga_manager sh -c "wget -qO- --header=\"Authorization: Bearer \$SUPERVISOR_TOKEN\" http://supervisor/core/api/config" 2>/dev/null);
+  '_cfg=$(docker exec "$(ga_ctr_exact 99f1cad4_ga_manager)" sh -c "wget -qO- --header=\"Authorization: Bearer \$SUPERVISOR_TOKEN\" http://supervisor/core/api/config" 2>/dev/null);
    [ -n "$_cfg" ] || { echo "could not read Core config — not a pass"; exit 1; };
    _lat=$(echo "$_cfg" | tr "," "\n" | sed -n "s/.*\"latitude\":\([-0-9.]*\).*/\1/p" | head -1);
    _lon=$(echo "$_cfg" | tr "," "\n" | sed -n "s/.*\"longitude\":\([-0-9.]*\).*/\1/p" | head -1);
@@ -227,10 +227,12 @@ _influx_write_probe_script() {
 #!/bin/sh
 # Read a consumer's own options through the docker socket — ga_manager has it,
 # and the add-on's /data is not mounted anywhere else.
-opts() { docker exec "addon_99f1cad4_$1" cat /data/options.json 2>/dev/null; }
+# container prefix: app_ on Supervisor 2026.10+ (BOSv1.6), addon_ before
+cn()   { for _p in app addon; do docker inspect "${_p}_99f1cad4_$1" >/dev/null 2>&1 && { echo "${_p}_99f1cad4_$1"; return 0; }; done; echo "no app_/addon_ container for $1" >&2; return 1; }
+opts() { docker exec "$(cn "$1")" cat /data/options.json 2>/dev/null; }
 val()  { sed -n "s/.*\"$1\": *\"\([^\"]*\)\".*/\1/p" | head -1; }
 IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
-     addon_99f1cad4_ga_influxdbv1 2>/dev/null)
+     "$(cn ga_influxdbv1)" 2>/dev/null)
 [ -n "$IP" ] || { echo "influx container has no address — is it running?"; exit 1; }
 
 # The address is RESOLVED, never assumed. It changes on every restart, and a
@@ -279,8 +281,9 @@ PROBE
 
 _influx_probe() {
   _influx_write_probe_script > /tmp/ga-influx-probe.sh
-  docker cp /tmp/ga-influx-probe.sh addon_99f1cad4_ga_manager:/tmp/p.sh >/dev/null 2>&1 || return 1
-  docker exec addon_99f1cad4_ga_manager sh /tmp/p.sh "$1"
+  _gm=$(ga_ctr_exact 99f1cad4_ga_manager) || return 1
+  docker cp /tmp/ga-influx-probe.sh "$_gm":/tmp/p.sh >/dev/null 2>&1 || return 1
+  docker exec "$_gm" sh /tmp/p.sh "$1"
 }
 run_test_show "FEAT-19" "the add-on's own credentials can actually write to the local InfluxDB" \
   '_influx_probe write'

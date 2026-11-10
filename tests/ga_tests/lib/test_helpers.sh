@@ -39,6 +39,42 @@ else
   _GREEN='' _RED='' _YELLOW='' _RESET=''
 fi
 
+# Add-on container names. Supervisor 2025.11.x (BOSv1.5.x) names them
+# addon_<hash>_<slug>; Supervisor 2026.10+ (BOSv1.6) names them app_<hash>_<slug>
+# (measured on a BOSv1.6 device, Supervisor 2026.10.5.3, 2026-11-10). A rolled-back
+# device can hold both, so the NEW name wins. Anything that anchors on one prefix
+# is blind on the other release (tests/gates/container_names guards that).
+#   ga_ctr_names          all add-on container names, one per line (app_ first)
+#   ga_ctr_of <slug>      running container whose name ends _<slug>; empty (rc 1) if absent
+#   ga_ctr_exact <h_slug> running container <prefix>_<h_slug> e.g. 99f1cad4_ga_manager
+# When there is NO app_/addon_ container at all the naming scheme itself is
+# unknown (Supervisor down, or a third scheme): that is said LOUDLY on stderr.
+# An absent slug under a known scheme is silent - callers use it as a probe.
+ga_ctr_names() {
+  _gct_all=$(docker ps --format '{{.Names}}' 2>/dev/null)
+  _gct_n=$(printf '%s\n' "$_gct_all" | grep -E '^app_'; printf '%s\n' "$_gct_all" | grep -E '^addon_')
+  if [ -z "$_gct_n" ]; then
+    echo "ga-test: ERROR: no app_* and no addon_* container is running - add-on container naming unresolved" >&2
+    return 1
+  fi
+  printf '%s\n' "$_gct_n"
+}
+ga_ctr_of() {
+  _gco_n=$(ga_ctr_names) || return 1
+  _gco_r=$(printf '%s\n' "$_gco_n" | grep -E "^(app|addon)_.*_$1\$" | head -1)
+  [ -n "$_gco_r" ] && { printf '%s\n' "$_gco_r"; return 0; }
+  return 1
+}
+ga_ctr_exact() {
+  for _gce_p in app addon; do
+    if docker inspect -f '{{.State.Running}}' "${_gce_p}_$1" >/dev/null 2>&1; then
+      printf '%s_%s\n' "$_gce_p" "$1"; return 0
+    fi
+  done
+  echo "ga-test: ERROR: neither app_$1 nor addon_$1 exists" >&2
+  return 1
+}
+
 # Run a test: pass description + command string
 # Usage: run_test "TEST-01" "description" "command that returns 0 on success"
 run_test() {

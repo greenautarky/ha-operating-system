@@ -82,8 +82,8 @@ LIVENESS_WINDOW="5m"                   # HEAT-07: one row per room per 60 s cycl
 INFLUX_URL="http://127.0.0.1:8086"     # ga_influxdbv1 maps 8086/tcp:8086 onto the host (store config.yaml:31)
 INFLUX_DB="gd_data"
 
-# Supervisor names add-on containers addon_<hash>_<slug>.
-ctr_of() { docker ps --format '{{.Names}}' 2>/dev/null | grep -E "^addon_.*_$1\$" | head -1; }
+# Supervisor names add-on containers app_<hash>_<slug> (addon_ before 2026.10).
+ctr_of() { ga_ctr_of "$1"; }   # app_ (BOSv1.6) or addon_ (BOSv1.5.x), see lib/test_helpers.sh
 # "Up 3 minutes" / "Up About a minute" / "Up 2 hours" for a container name.
 status_of() { docker ps --format '{{.Names}} {{.Status}}' 2>/dev/null | grep "^$1 " | head -1 | cut -d' ' -f2-; }
 

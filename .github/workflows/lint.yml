@@ -384,6 +384,13 @@ jobs:
           sh tests/ga_tests/data_root/test.sh
           GA_T_SHELL="busybox sh" sh tests/ga_tests/data_root/test.sh
 
+      - name: CTR-NAMES device tests accept app_* (BOSv1.6) as well as addon_* container names
+        # Supervisor 2026.10+ names add-on containers app_<hash>_<slug>. Gate fixtures: 3 must-fail / 2 must-pass,
+        # live device-side tree clean (non-zero count), empty root fails closed; the resolver is driven against a
+        # docker shim that knows only app_*, only addon_*, both (app_ wins) and neither (loud).
+        run: |
+          sh tests/gates/container_names/selftest.sh
+
       - name: SUP-LAYOUT the Supervisor-layout check flags an add-on base and passes the real Supervisors
         # Fixtures are listings exported from the real images: the broken
         # armv7 2026.10.5.1 (must fail), the shipping armv7 2025.11.5.10 and the
