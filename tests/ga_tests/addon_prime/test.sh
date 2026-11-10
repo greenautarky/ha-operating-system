@@ -40,10 +40,9 @@ case "$MODE" in
   old)
     REF="${GA_PRIME_BASELINE_REF:?old mode needs GA_PRIME_BASELINE_REF (a git ref with the previous script)}"
     git -C "$R" show "$REF:$REL" > "$W/old-script" || { echo "cannot read $REF:$REL"; exit 2; }
-    sed -e 's|^PRIME_CONF="/etc/ga-addon-prime.conf"|PRIME_CONF="${GA_PRIME_CONF:-/etc/ga-addon-prime.conf}"|' \
-        -e 's|^MARKER="/mnt/data/.ga-addon-primed"|MARKER="${GA_PRIME_MARKER:-/mnt/data/.ga-addon-primed}"|' \
-        "$W/old-script" > "$W/sut"
-    [ "$(grep -c 'GA_PRIME_' "$W/sut")" -eq 2 ] || { echo "baseline path hooks not applied"; exit 2; }
+    # The baseline already carries the two path hooks; copy it unchanged.
+    cp "$W/old-script" "$W/sut"
+    [ "$(grep -c 'GA_PRIME_CONF\|GA_PRIME_MARKER' "$W/sut")" -ge 2 ] || { echo "baseline path hooks missing"; exit 2; }
     SUT="$W/sut"; echo "RED PROOF: baseline $REF" ;;
   *) echo "mode: new | old"; exit 2 ;;
 esac
@@ -88,8 +87,17 @@ apps_cmd() {  # apps_cmd <update|start> <slug>
   exit 0
 }
 case "$1" in
-  store)
-    [ "${STUB_STORE:-ok}" = fail ] && { echo "Error: System is not ready with state: setup" >&2; exit 1; }
+  info)  # readiness: .data.state; STUB_STATE=startup stays there, STUB_STARTUP_N=n = startup for n calls
+    _n=$(cat "$STUB_CALLS.i" 2>/dev/null || echo 0); _n=$((_n + 1)); echo "$_n" > "$STUB_CALLS.i"
+    _st="${STUB_STATE:-running}"
+    [ -n "${STUB_STARTUP_N:-}" ] && { [ "$_n" -le "$STUB_STARTUP_N" ] && _st=startup || _st=running; }
+    printf '{"result":"ok","data":{"state":"%s","version":"x"}}\n' "$_st"; exit 0 ;;
+  store)  # a store call while Supervisor is not running is refused, as the real one is
+    _s="${STUB_STATE:-running}"
+    # startup phase counted in store calls too (the old probe never calls `info`): refuse the first STUB_STARTUP_N calls
+    if [ -n "${STUB_STARTUP_N:-}" ]; then _k=$(cat "$STUB_CALLS.s" 2>/dev/null || echo 0); _k=$((_k + 1)); echo "$_k" > "$STUB_CALLS.s"; [ "$_k" -le "$STUB_STARTUP_N" ] && _s=startup; fi
+    [ "$_s" = running ] || { echo "Error: System is not ready with state: $_s" >&2; exit 1; }
+    [ "${STUB_STORE:-ok}" = fail ] && { echo "Error: store reload failed: HTTP 429" >&2; exit 1; }
     [ -n "${STUB_HANG:-}" ] && /bin/sleep 8
     exit 0 ;;
   docker) echo '{"data":{"registries":{}}}'; exit 0 ;;
@@ -125,7 +133,7 @@ printf 'GA-FAKE_ga_manager\n' > "$W/prime.conf"
 
 # prime <gen> <scenario> <name> — run the script; leaves $W/<name>.{log,rc,calls,marker}
 prime() {
-  rm -f "$W/$3.marker" "$W/$3.calls" "$W/$3.calls.n" "$W/$3.clock"; : > "$W/$3.calls"
+  rm -f "$W/$3.marker" "$W/$3.calls" "$W/$3.calls.n" "$W/$3.calls.i" "$W/$3.calls.s" "$W/$3.clock"; : > "$W/$3.calls"
   FAKE_CLOCK="$W/$3.clock" GA_PRIME_SH="$SH" PATH="$W/bin:$PATH" TMPDIR="$W" STUB_GEN="$1" STUB_SCEN="$2" STUB_CALLS="$W/$3.calls" \
     GA_PRIME_CONF="$W/prime.conf" GA_PRIME_MARKER="$W/$3.marker" \
     $SH "$SUT" > "$W/$3.log" 2>&1
@@ -194,7 +202,7 @@ run_test "APRIME-33" "other errors are NOT retried: exactly one update call (unc
 # --- APRIME-4x: ONE global deadline, below the unit's TimeoutStartSec (Odoo #1610 review) ---
 # clock <name> = seconds the fake clock advanced (the script's own waiting) in that run.
 clock() { cat "$W/$1.clock" 2>/dev/null || echo 0; }
-STUB_STORE=fail GA_PRIME_TOTAL_BUDGET_S=100 prime new ok dl_probe
+STUB_STATE=startup GA_PRIME_TOTAL_BUDGET_S=100 prime new ok dl_probe
 run_test "APRIME-40" "Supervisor never ready, 100 s budget: stops at the deadline (not after 120 probes = 600 s), loud FAILED, rc 1, NO marker" \
   "[ \"\$(rc dl_probe)\" = 1 ] && [ ! -f '$W/dl_probe.marker' ] && [ \"\$(clock dl_probe)\" -le 110 ] && grep -q 'FAILED' '$W/dl_probe.log' && grep -q 'global deadline' '$W/dl_probe.log'"
 GA_PRIME_TOTAL_BUDGET_S=60 GA_PRIME_RETRY_BUDGET_S=600 prime new notready_forever dl_retry
@@ -206,5 +214,20 @@ run_test "APRIME-43" "a hung docker call cannot outlive the budget: hard timeout
 UNIT="$R/buildroot-external/rootfs-overlay/usr/lib/systemd/system/ga-addon-prime.service"
 run_test "APRIME-41" "the script's default budget is at least 30 s below the unit's TimeoutStartSec (both read from the live files)" \
   "t=\$(sed -n 's/^TimeoutStartSec=\\([0-9][0-9]*\\)min\$/\\1/p' '$UNIT'); b=\$(sed -n 's/^TOTAL_BUDGET_S=\"\\\${GA_PRIME_TOTAL_BUDGET_S:-\\([0-9][0-9]*\\)}\"\$/\\1/p' '$SUT'); [ -n \"\$t\" ] && [ -n \"\$b\" ] && [ \$((b + 30)) -le \$((t * 60)) ]"
+# --- APRIME-5x: readiness is `ha info` state, never a store reload (Odoo #1752) ---
+nreload() { grep -c '^ha store reload' "$W/$1.calls" || true; }
+STUB_STARTUP_N=4 prime new ok rdy
+STUB_STATE=startup GA_PRIME_TOTAL_BUDGET_S=100 prime new ok never
+STUB_STORE=fail prime new ok f429
+run_test "APRIME-50" "readiness: state startup x4 then running -> polls 'ha info' 5 times, primes, marker, rc 0, log names state=running" \
+  "[ \"\$(rc rdy)\" = 0 ] && [ -f '$W/rdy.marker' ] && [ \"\$(grep -c '^ha info --raw-json' '$W/rdy.calls')\" = 5 ] && grep -q 'state=running' '$W/rdy.log' && grep -q 'state=startup' '$W/rdy.log'"
+run_test "APRIME-51" "readiness wait (5 polls) issues at most ONE 'ha store reload' (old script: one per probe try)" \
+  "[ \"\$(nreload rdy)\" -le 1 ]"
+run_test "APRIME-52" "Supervisor stuck in startup until the deadline: ZERO store reloads, loud FAILED, rc 1, NO marker" \
+  "[ \"\$(rc never)\" = 1 ] && [ \"\$(nreload never)\" = 0 ] && [ ! -f '$W/never.marker' ] && grep -q 'FAILED' '$W/never.log'"
+run_test "APRIME-53" "the single reload comes AFTER readiness (after the last startup poll, before the first update)" \
+  "[ \"\$(nreload new_ok)\" = 1 ] && [ \"\$(grep -n '^ha store reload' '$W/rdy.calls' | cut -d: -f1)\" -gt \"\$(grep -n '^ha info' '$W/rdy.calls' | tail -n 1 | cut -d: -f1)\" ]"
+run_test "APRIME-54" "a failing (429) reload is loud, not retried (1 call), and the prime still proceeds on cached metadata" \
+  "[ \"\$(nreload f429)\" = 1 ] && grep -q 'WARNING: single store reload failed' '$W/f429.log' && [ \"\$(rc f429)\" = 0 ] && [ -f '$W/f429.marker' ]"
 
 suite_end

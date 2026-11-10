@@ -75,6 +75,7 @@ EXPECTED_PROGRAMS: dict[str, int] = {
     "buildroot-external/patches-haos/0130-ga-supervisor-launcher.patch": 4,
     "buildroot-external/rootfs-overlay/usr/libexec/ga-enroll": 8,
     "buildroot-external/rootfs-overlay/usr/libexec/ga-ha-init": 1,
+    "buildroot-external/rootfs-overlay/usr/sbin/ga-addon-prime": 1,
     "buildroot-external/rootfs-overlay/usr/libexec/ga-host-stats": 1,
     "buildroot-external/rootfs-overlay/usr/libexec/ga-rauc-slots": 11,
     "buildroot-external/rootfs-overlay/usr/sbin/ga-mesh-watchdog": 3,

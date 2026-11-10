@@ -8,7 +8,7 @@
 # running until an explicit `ha addons|apps update` (CLI generation: see below) fires.
 #
 # Reads `/etc/ga-addon-prime.conf` (one slug per line, '#' comments OK),
-# runs `docker exec hassio_cli ha store reload` once, then `ha addons
+# waits for `ha info` state running, runs `ha store reload` ONCE, then `ha addons
 # update <slug>` per entry. On success, writes the marker file
 # `/mnt/data/.ga-addon-primed` so the gating service does not re-run.
 #
@@ -52,8 +52,8 @@ fi
 DEADLINE=$(( $(date +%s) + TOTAL_BUDGET_S ))
 past_deadline() { [ "$(date +%s)" -ge "$DEADLINE" ]; }
 
-# Per-slug update retry (Odoo #1610, finding C). `ha store reload` (the
-# readiness probe below) passes while Supervisor is still starting Core, but the
+# Per-slug update retry (Odoo #1610, finding C). The
+# readiness probe below can pass while Supervisor is still starting Core, but the
 # update itself is then refused: "Supervisor is not ready to perform this
 # operation, please try again later" (measured on a fresh BOSv1.6.0-rc6 flash:
 # probe passed at :18, Core start issued at :13, update refused at :20).
@@ -176,30 +176,35 @@ fi
 # and the prime fails, marker not written, retry-loop next boot — but
 # next boot has the same race, so the prime never succeeds.
 #
-# Probe: try `ha store reload` until it returns rc=0. This call returns
-# the same "System is not ready" error pre-setup-complete that addons
-# update does, but it's idempotent + cheap + the operation we're about
-# to do anyway. Once it succeeds, Supervisor is ready for the per-slug
-# updates. Poll up to 10 min total (= plenty of slack for cold-boot
-# supervisor-update racing scenarios).
-log "waiting for Supervisor to be ready (= store reload succeeds)"
+# Probe (Odoo #1752): `ha info --raw-json` -> .data.state == "running". This is a
+# plain read of Supervisor's own state (measured on a BOSv1.6 device: the state
+# lives in `ha info`; `ha supervisor info` has no state field). The probe used to
+# be `ha store reload`, which on Supervisor 2026.10 runs ls-remote + fetch on 5
+# GitHub repositories anonymously per call: every 5 s on a fresh flash that
+# caused HTTP 429 and "store.git: already a task in progress" (BOSv1.6.0-rc9 K31
+# gate, 2026-11-10). The probe now never touches the store. Bounded by 120 tries
+# and the global deadline; every try is logged (rc + state). jq program is
+# regex-free (the image jq has no oniguruma; gate tests/gates/jq_regex).
+log "waiting for Supervisor to be ready (= ha info state running)"
 SUP_READY=0
 for i in $(seq 1 120); do
     # set +e / -e bracket: `OUT=$(failing-cmd)` triggers set -e in dash
     # (the HAOS /bin/sh), aborting the script before $? can be checked.
-    # POSIX-portable workaround.
     set +e
-    PROBE_OUT=$(docker exec hassio_cli ha store reload 2>&1)
+    PROBE_OUT=$(docker exec hassio_cli ha info --raw-json 2>&1)
     PROBE_RC=$?
     set -e
+    PROBE_STATE=""
     if [ "$PROBE_RC" -eq 0 ]; then
+        PROBE_STATE=$(printf '%s' "$PROBE_OUT" | jq -r '.data.state // empty' 2>/dev/null || true)
+    fi
+    if [ "$PROBE_STATE" = "running" ]; then
         SUP_READY=1
-        log "  → Supervisor ready after $((i * 5))s (store reload OK)"
+        log "  -> Supervisor ready after $((i * 5))s (state=running)"
         break
     fi
-    # Surface the actual error so first-boot debugging is easy.
     ERR_SHORT=$(echo "$PROBE_OUT" | head -1 | cut -c1-80)
-    log "  Supervisor not ready (rc=$PROBE_RC, $ERR_SHORT) — waiting (${i}/120)…"
+    log "  Supervisor not ready (rc=$PROBE_RC, state=${PROBE_STATE:-unknown}, $ERR_SHORT) — waiting (${i}/120)…"
     past_deadline && break
     sleep 5
 done
@@ -207,9 +212,20 @@ if [ "$SUP_READY" -ne 1 ]; then
     log "ERROR: FAILED — Supervisor did not become ready (10 min probe or the ${TOTAL_BUDGET_S}s global deadline) — bailing (no marker written)"
     exit 1
 fi
-# Store-reload already succeeded as the probe — no need to re-call.
 detect_apps_cmd
-log "addon store cache refreshed (= /store/reload OK during readiness probe)"
+
+# Exactly ONE store reload, after readiness. Why it is needed: after an OTA the
+# persisted store metadata can be older than the version this image pins, and
+# `update` compares against the store. Not retried: a failure (e.g. a 429) is
+# logged loudly and the updates proceed on the cached metadata (Supervisor
+# refreshes it on its own every 3 h); retrying is what caused the storm.
+run_ha store reload
+if [ "$RUN_RC" -eq 0 ]; then
+    log "addon store cache refreshed (single /store/reload after readiness)"
+else
+    log "WARNING: single store reload failed (rc=$RUN_RC: $(last_line "$RUN_OUT
+$RUN_ERR")) — continuing on cached store metadata, NOT retrying"
+fi
 
 # Registry-credential preflight (2026-07-29).
 #
