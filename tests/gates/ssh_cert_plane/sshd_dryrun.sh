@@ -242,13 +242,15 @@ sign "$W/keys/ca_a" c_label "$LABEL"                           ; sed -n '/Princi
 sign "$W/keys/ca_b" c_anchor --anchor "$ANCHOR" --no-label "$LABEL"
 sign "$W/keys/ca_a" c_both --anchor "$ANCHOR" "$LABEL"
 sign "$W/keys/ca_a" c_other "$OTHER"
+DUS="KIB-DUS-12345678"; sign "$W/keys/ca_a" c_dus --anchor "$ANCHOR" "$DUS"   # DSGW-210 label must sign
+ran=$((ran+1)); if ssh-keygen -L -f "$W/c_dus-cert.pub" 2>/dev/null | grep -qx "[[:space:]]*$DUS"; then ok "sign script signs a KIB-DUS label ($DUS)"; else bad "sign script did not sign for $DUS"; fi
 raw  "$W/keys/rogue" c_rogue "$LABEL" "+1h"
 raw  "$W/keys/ca_a" c_expired "$LABEL" "-2h:-1h"
 raw  "$W/keys/ca_a" c_kibu "kibu" "+1h"
 raw  "$W/keys/ca_a" c_star "*" "+1h"
 
 echo "── 5. sign-script refusals ──"
-for bad_args in "kibu" "*" "KIB-SON-31" "--anchor kibu $LABEL"; do
+for bad_args in "kibu" "*" "KIB-SON-31" "KIB-SON-*" "KIB-DUS-1234567" "KIB-DUS-123456789" "KIB-XYZ-00000000" "KIB-DUS-*" "--anchor kibu $LABEL"; do
   ran=$((ran+1)); cp "$W/keys/op.pub" "$W/x.pub"
   # shellcheck disable=SC2086
   if GA_SSH_CA_KEY="$W/keys/ca_b" GA_SSH_ALLOW_FILE_CA=1 GA_CERT_LEDGER="$W/l2" GA_CERT_SERIAL_STATE="$W/s2" "$SIGN" $bad_args "$W/x.pub" >/dev/null 2>&1

@@ -12,7 +12,7 @@
 # Usage:
 #   ga-issue-device-certs.sh [--token a|b] [--hours N] [--key <user-key>] [--one-cert] DEVICE...
 #
-#   DEVICE   K31 / 31 / KIB-SON-00000031  (any of these forms)
+#   DEVICE   K31 / 31 / KIB-SON-00000031 (iHost), or the full KIB-DUS-XXXXXXXX (DSGW-210)
 #   --token  which CA token is inserted: a (default) or b
 #   --hours  certificate lifetime, 1..24 (default 8)
 #   --key    the operator key pair to certify (default ~/.ssh/ga-operator-ed25519)
@@ -87,11 +87,12 @@ fi
 [[ -n "${GA_SSH_PKCS11:-}" && -r "$GA_SSH_PKCS11" ]] || die "no PKCS#11 module found — install yubico-piv-tool or set GA_SSH_PKCS11"
 fi
 
-# Normalise K31 / 31 / KIB-SON-00000031 → KIB-SON-00000031, and validate.
+# Normalise K31 / 31 / KIB-SON-00000031 → KIB-SON-00000031 (KIB-DUS-XXXXXXXX kept as is), and validate.
 labels=()
 for d in "${devices[@]}"; do
+  if [[ "$d" =~ ^KIB-DUS-[0-9]{8}$ ]]; then labels+=("$d"); continue; fi   # DSGW-210: full label only
   n="${d#KIB-SON-}"; n="${n#[Kk]}"
-  [[ "$n" =~ ^[0-9]{1,8}$ ]] || die "cannot read '$d' as a device (use K31, 31 or KIB-SON-00000031)"
+  [[ "$n" =~ ^[0-9]{1,8}$ ]] || die "cannot read '$d' as a device (use K31, 31, KIB-SON-00000031 or KIB-DUS-XXXXXXXX)"
   labels+=("$(printf 'KIB-SON-%08d' "$((10#$n))")")
 done
 
@@ -130,7 +131,7 @@ fail=0
 if (( ONE )); then
   first="${labels[0]}"; also=()
   for l in "${labels[@]:1}"; do also+=(--also "$l=${ANCHOR[$l]}"); done
-  short="multi-$(for l in "${labels[@]}"; do printf 'k%d' "$((10#${l#KIB-SON-}))"; done)"
+  short="multi-$(for l in "${labels[@]}"; do printf 'k%d' "$((10#${l#KIB-*-}))"; done)"
   tmp_pub="$work/$(basename "$KEY")-$short.pub"; cp "$KEY.pub" "$tmp_pub"
   if (( TEST_CA )); then
     sign=(env -u GA_SSH_PKCS11 GA_CERT_VALIDITY="+${HOURS}h" "$SIGNER" --anchor "${ANCHOR[$first]}" "${also[@]}" "$first" "$tmp_pub")
@@ -141,14 +142,14 @@ if (( ONE )); then
   multi="$KEY-$short-cert.pub"
   install -m 0644 "${tmp_pub%.pub}-cert.pub" "$multi"
   # Same file under every device's usual name, so existing ssh aliases work.
-  for l in "${labels[@]}"; do install -m 0644 "$multi" "$KEY-k$((10#${l#KIB-SON-}))-cert.pub"; done
+  for l in "${labels[@]}"; do install -m 0644 "$multi" "$KEY-k$((10#${l#KIB-*-}))-cert.pub"; done
   echo "   -> $multi (also copied to each <key>-k<NN>-cert.pub)"
   ssh-keygen -L -f "$multi" | sed -n '/Principals:/,/Critical/p' | sed '1d;$d' | xargs echo "      principals:"
   ssh-keygen -L -f "$multi" | sed -n 's/^ *Valid: /      valid:      /p'
   exit 0
 fi
 for label in "${labels[@]}"; do
-  short="k$((10#${label#KIB-SON-}))"
+  short="k$((10#${label#KIB-*-}))"
   tmp_pub="$work/$(basename "$KEY")-$short.pub"
   cp "$KEY.pub" "$tmp_pub"
   echo "== $label"
