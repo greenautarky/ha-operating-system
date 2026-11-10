@@ -1,6 +1,6 @@
 #!/bin/sh
 # ga-supervisor-cli-watchdog — heal a persistent Supervisor cli-plugin install
-# failure (Odoo #1706) by restarting hassos-supervisor ONCE per boot, then
+# failure (Odoo #1706) by restarting haos-supervisor ONCE per boot, then
 # making sure ga-addon-prime runs after it.
 #
 # THE FAULT. The Supervisor's plugin install loop (plugins/base.py install())
@@ -37,7 +37,7 @@
 # evidence of this fault, while a missing hassio_cli with that log signature is.
 #
 # TIMING (measured). Fresh-flash gate run of BOSv1.6.0-rc6 on the bench unit
-# (2026-11-09): kernel 14:03:20, hassos-supervisor start 14:04:07 (+47 s),
+# (2026-11-09): kernel 14:03:20, haos-supervisor start 14:04:07 (+47 s),
 # "Starting CLI plugin" 14:04:32 (+25 s after the container started). The
 # Supervisor retries the plugin install every 30 s, so a healthy boot has the
 # cli ~25-55 s after container start. N = 150 s is 3-6x that. ga-addon-prime
@@ -57,10 +57,9 @@
 # signature conditions still apply). Nothing here compares wall-clock times.
 #
 # AFTER THE SUPERVISOR RESTART ga-addon-prime must run. Its unit has
-# Requires=haos-supervisor.service; hassos-supervisor.service is a symlink in
-# /etc/systemd/system to /usr/lib/systemd/system/haos-supervisor.service, i.e.
-# the same unit under a second name, so a restart of either name is a restart
-# of the unit and systemd restarts every Requires= dependent that is active or
+# Requires=haos-supervisor.service (the HAOS 18.x name; the 16.x name stays
+# only as an alias symlink for synced units that still use it), so a restart of
+# the unit makes systemd restart every Requires= dependent that is active or
 # activating. That covers prime while it is still waiting for the cli (it
 # restarts and waits afresh) or after it succeeded (restarted, then skipped by
 # its marker condition). It does NOT cover a prime that already gave up
@@ -73,7 +72,7 @@
 # ACTION, in this order, so a hang can never loop: write the attempt marker,
 # log at ERROR (journal priority err -> tier-0 Loki), publish status JSON via
 # ga-share-publish to /mnt/data/supervisor/share/ga-supervisor-cli-watchdog.json,
-# `systemctl restart hassos-supervisor.service`, prime check, publish outcome.
+# `systemctl restart haos-supervisor.service`, prime check, publish outcome.
 # Reporting: ONE ERROR per boot for "cli missing, no signature" (later ticks
 # log it at WARNING), one ERROR for the restart.
 #
@@ -95,7 +94,7 @@ PRIME_MARKER="${GA_SCW_PRIME_MARKER:-/mnt/data/.ga-addon-primed}"
 SETTLE="${GA_SCW_SETTLE:-5}"
 # Pinned to supervisor/plugins/base.py:221-223 (ga/2026.10.5-wp9-3); see the .pin file.
 SIGNATURE='Error on installing cli plugin, retrying'
-UNIT="${GA_SCW_UNIT:-hassos-supervisor.service}"
+UNIT="${GA_SCW_UNIT:-haos-supervisor.service}"
 NOW="${GA_SCW_NOW:-$(date -u +%s)}"
 MARKER="$STATE_DIR/ga-supervisor-cli-watchdog.attempted"
 NOSIG_MARKER="$STATE_DIR/ga-supervisor-cli-watchdog.nosig-logged"

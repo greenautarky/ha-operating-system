@@ -30,7 +30,7 @@ case "$1" in
     [ -f "$S/running" ] || { echo "Error: No such object: $*" >&2; exit 1; }
     case "$*" in
       *State.Running*) cat "$S/running" ;;
-      *Mounts*RW*)  # the mount is read-only, as hassos-supervisor creates it
+      *Mounts*RW*)  # the mount is read-only, as haos-supervisor creates it
         src=$(cat "$S/mount_src" 2>/dev/null); [ -n "$src" ] && echo "$src rw=false" || echo ;;
       *Mounts*) cat "$S/mount_src" 2>/dev/null; echo ;;
       *) echo '[{}]' ;;

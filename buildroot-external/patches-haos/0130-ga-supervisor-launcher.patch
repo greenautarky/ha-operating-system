@@ -1,7 +1,7 @@
 From: GreenAutarky OS <noreply@greenautarky.invalid>
 Subject: [PATCH] haos-supervisor: GreenAutarky Supervisor, GA channel, never upstream
 
-GA delta of the Supervisor launcher (hassos-supervisor until HAOS 18.x):
+GA delta of the Supervisor launcher (named with the pre-18.x prefix until HAOS 18.x):
 - image ghcr.io/greenautarky/<arch>-hassio-supervisor (the bake tags :latest);
 - base URL from /etc/ga-version-url (baked from HASSIO_VERSION_URL, read by
   the GA Supervisor 2025.11.5.6+ as well) + the device's channel from

@@ -108,14 +108,14 @@ reset_boot() { rm -f "$W/run/"ga-supervisor-cli-watchdog.* "$W/share/"* "$W/prim
 BOOT1=11111111-1111-1111-1111-111111111111
 BOOT2=22222222-2222-2222-2222-222222222222
 
-SUPRESTARTS() { grep -c '^restart hassos-supervisor.service$' "$W/$1/systemctl.calls" 2>/dev/null; }
+SUPRESTARTS() { grep -c '^restart haos-supervisor.service$' "$W/$1/systemctl.calls" 2>/dev/null; }
 PRIMERESTARTS() { grep -c '^restart --no-block ga-addon-prime.service$' "$W/$1/systemctl.calls" 2>/dev/null; }
 
 # --- MUST-ACT: persistent cli-install failure -> exactly one restart, across many ticks
 reset_boot; scen deadlock 300 no signature
 tick $BOOT1; tick $BOOT1; tick $BOOT1; tick $BOOT1
 run_test "SCW-10" "failure: exactly ONE supervisor restart over four ticks" "[ \"\$(SUPRESTARTS deadlock)\" = 1 ]"
-run_test "SCW-11" "the restart is logged at ERROR (<3>), names the persistent cli-install failure and #1706" "grep -q '^<3>.*persistent cli-plugin install failure.*restarting hassos-supervisor.service ONCE.*#1706' '$W/deadlock/out'"
+run_test "SCW-11" "the restart is logged at ERROR (<3>), names the persistent cli-install failure and #1706" "grep -q '^<3>.*persistent cli-plugin install failure.*restarting haos-supervisor.service ONCE.*#1706' '$W/deadlock/out'"
 run_test "SCW-12" "status JSON published with state restarted + valid schema" "grep -q '\"state\":\"restarted\"' '$W/share/ga-supervisor-cli-watchdog.json' && grep -q '\"schema_version\":1' '$W/share/ga-supervisor-cli-watchdog.json'"
 run_test "SCW-13" "already restarted this boot: ticks 2-4 stayed silent (one ERROR line only)" "[ \"\$(grep -c '^<3>' '$W/deadlock/out')\" = 1 ]"
 run_test "SCW-14" "the age gate is 150 s: a supervisor up 160 s acts, one up 140 s does not" "reset_boot; scen g160 160 no signature; tick $BOOT1; reset_boot; scen g140 140 no signature; tick $BOOT1; [ \"\$(SUPRESTARTS g160)\" = 1 ] && [ ! -f '$W/g140/systemctl.calls' ]"
@@ -124,7 +124,7 @@ run_test "SCW-14" "the age gate is 150 s: a supervisor up 160 s acts, one up 140
 # prime failed/inactive: systemd does not restart a failed unit via Requires= -> the watchdog does, once
 reset_boot; scen prime_failed 300 no signature; echo failed > "$W/prime_failed/prime_state"
 tick $BOOT1; tick $BOOT1; tick $BOOT1
-run_test "SCW-15" "prime failed (gave up before the cli existed): restarted exactly ONCE after the supervisor restart, not on later ticks" "[ \"\$(PRIMERESTARTS prime_failed)\" = 1 ] && grep -n '' '$W/prime_failed/systemctl.calls' | head -1 | grep -q 'restart hassos-supervisor.service'"
+run_test "SCW-15" "prime failed (gave up before the cli existed): restarted exactly ONCE after the supervisor restart, not on later ticks" "[ \"\$(PRIMERESTARTS prime_failed)\" = 1 ] && grep -n '' '$W/prime_failed/systemctl.calls' | head -1 | grep -q 'restart haos-supervisor.service'"
 # prime activating/active: systemd already restarted it via Requires= (or it is done) -> no second restart
 reset_boot; scen prime_act 300 no signature; echo activating > "$W/prime_act/prime_state"; tick $BOOT1; tick $BOOT1
 run_test "SCW-16" "prime activating (restarted by systemd via Requires=): the watchdog adds no second restart" "[ \"\$(PRIMERESTARTS prime_act)\" = 0 ] && [ \"\$(SUPRESTARTS prime_act)\" = 1 ]"
@@ -181,7 +181,7 @@ run_test "SCW-37" "cli running although the log still holds old install retries:
 reset_boot; scen failing 300 no signature; : > "$W/failing/restart_fails"
 tick $BOOT1; tick $BOOT1; tick $BOOT1
 run_test "SCW-40" "restart fails: attempted once, never retried this boot" "[ \"\$(SUPRESTARTS failing)\" = 1 ]"
-run_test "SCW-41" "restart failure logged at ERROR, state restart_failed" "grep -q '^<3>.*restart of hassos-supervisor.service FAILED' '$W/failing/out' && grep -q 'restart_failed' '$W/share/ga-supervisor-cli-watchdog.json'"
+run_test "SCW-41" "restart failure logged at ERROR, state restart_failed" "grep -q '^<3>.*restart of haos-supervisor.service FAILED' '$W/failing/out' && grep -q 'restart_failed' '$W/share/ga-supervisor-cli-watchdog.json'"
 
 # --- marker not writable (fix 6): fail closed, loud, no restart on any tick
 reset_boot; scen nomarker 300 no signature
