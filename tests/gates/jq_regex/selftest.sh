@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # jq_regex/selftest.sh - device-side jq programs must not use regex builtins (Odoo #1720).
 # The image's jq has no oniguruma; see lint.py for the scanned set and the reason.
-# Fixtures: must-fail/*.sh must each yield >=1 program AND >=1 violation; must-pass/*.sh >=1
+# Fixtures: must-fail/*.txt must each yield >=1 program AND >=1 violation; must-pass/*.txt >=1
 # program and none. Live: lint.py over the real tree must be green. RED: a temp copy of the
 # scanned dirs with a regex jq injected into a real overlay script must make the gate fail.
 set -uo pipefail
@@ -14,7 +14,7 @@ command -v python3 >/dev/null || { echo "ERROR: python3 missing" >&2; exit 2; }
 
 echo "fixtures:"
 nf=0 np=0
-for f in "$HERE"/must-fail/*.sh; do
+for f in "$HERE"/must-fail/*.txt; do
   nf=$((nf + 1)); out="$(python3 "$HERE/lint.py" --file "$f")"
   case "$out" in
     *"programs=0 "*) bad "must-fail $(basename "$f"): no jq program extracted" ;;
@@ -22,7 +22,7 @@ for f in "$HERE"/must-fail/*.sh; do
     *) ok "must-fail $(basename "$f") flagged" ;;
   esac
 done
-for f in "$HERE"/must-pass/*.sh; do
+for f in "$HERE"/must-pass/*.txt; do
   np=$((np + 1)); out="$(python3 "$HERE/lint.py" --file "$f")"
   case "$out" in
     *"programs=0 "*) bad "must-pass $(basename "$f"): no jq program extracted" ;;
