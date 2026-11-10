@@ -719,6 +719,14 @@ jobs:
       - name: Journal is volatile; failure trail wired to 3 triggers and bounded
         run: ./tests/gates/journald_volatile/selftest.sh
 
+      # The image's jq is built WITHOUT oniguruma, so every regex builtin (test, match,
+      # capture, scan, splits, sub, gsub, split/2) exits 5 on the device (BOSv1.6.0-rc7 gate,
+      # Odoo #1720). Scans the LIVE device-side tree (rootfs overlays + installed package
+      # files), fails on zero programs / any unattributable jq call; build-host scripts are
+      # excluded by path. Fixtures: tests/gates/jq_regex/{must-fail,must-pass}.
+      - name: Device-side jq programs use no regex builtins (no oniguruma on the image)
+        run: bash tests/gates/jq_regex/selftest.sh
+
       # The reset drill is device-only, but its verdict logic is not: the LIVE
       # script runs against a stubbed transport and must go red on each missing
       # crash-evidence mechanism and green on a healthy / clean-reboot device.
