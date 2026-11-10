@@ -49,7 +49,8 @@ run_test "HLTH-06" "Supervisor API responds" \
 # --- Addon health ---
 
 # Check pre-baked addons are running (if installed)
-# Container names use a hash prefix: addon_<hash>_ga_mosquitto, addon_<hash>_ga_tailscale, etc.
+# Container names use a hash prefix: app_<hash>_ga_mosquitto (addon_<hash>_... before Supervisor 2026.10), etc.
+ga_require_addons HLTH ga_manager ga_mosquitto ga_influxdbv1   # missing = FAIL, not skip
 for addon_pattern in ga_mosquitto ga_tailscale ga_influxdbv1 ga_zigbee2mqtt; do
   match=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep "$addon_pattern" | head -1)
   if [ -n "$match" ]; then
@@ -127,8 +128,10 @@ fi
 
 if command -v curl >/dev/null 2>&1; then
   # Check if MQTT is configured by looking for the mosquitto addon listening
-  MQTT_LISTEN=$(docker exec addon_core_mosquitto netstat -tlnp 2>/dev/null | grep ':1883' || \
-    docker ps --format '{{.Names}}' 2>/dev/null | grep mosquitto)
+  # The GA broker is ga_mosquitto. No fallback to "a container named *mosquitto exists":
+  # that passed without anything listening. A resolver error stays visible (stderr).
+  MQTT_LISTEN=
+  _mq=$(ga_ctr_of ga_mosquitto) && MQTT_LISTEN=$(docker exec "$_mq" netstat -tlnp 2>/dev/null | grep ':1883')
   run_test "HLTH-13" "MQTT broker listening (port 1883)" \
     "[ -n \"$MQTT_LISTEN\" ]"
 else

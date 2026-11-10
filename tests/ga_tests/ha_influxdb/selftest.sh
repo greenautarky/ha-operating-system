@@ -64,6 +64,14 @@ expect_detail() {
   fi
 }
 
+echo "== required add-ons: app_ (base) and the BOSv1.5.x prefix pass; a missing one FAILS =="
+for _r in ga_manager ga_influxdbv1; do
+  expect base "HAIX-REQ-$_r" PASS
+  expect must-pass-addon-prefix "HAIX-REQ-$_r" PASS
+done
+expect must-fail-influx-missing HAIX-REQ-ga_influxdbv1 FAIL
+expect must-fail-influx-missing HAIX-REQ-ga_manager PASS
+
 echo "== base (the fixed device — must NOT be flagged) =="
 expect base HAIX-01 PASS
 expect base HAIX-02 PASS

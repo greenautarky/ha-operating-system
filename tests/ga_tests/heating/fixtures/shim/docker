@@ -98,7 +98,7 @@ case "$cmd" in
         cat "$(pick states.json)" ;;
     esac ;;
   logs)
-    name=""; for a in "$@"; do case "$a" in addon_*) name="$a" ;; esac; done
+    name=""; for a in "$@"; do case "$a" in app_*|addon_*) name="$a" ;; esac; done
     f="$(pick "logs/$name.log")"; [ -e "$f" ] && cat "$f"; : ;;
   inspect)
     f="$(pick engine-ip.txt)"; [ -e "$f" ] && cat "$f"; : ;;

@@ -187,6 +187,13 @@ expect must-skip-engine-young HEAT-06 SKIP
 expect_detail must-skip-engine-young "engine up < 15 min (Up 4 minutes)"
 expect must-skip-engine-young HEAT-07 PASS
 
+echo "== container prefix: BOSv1.6 app_ (base) AND the BOSv1.5.x prefix fallback; required add-ons missing = FAIL =="
+for _r in ga_manager ga_mosquitto ga_influxdbv1; do
+  expect base "HEAT-REQ-$_r" PASS
+  expect must-pass-addon-prefix "HEAT-REQ-$_r" PASS
+done
+expect must-fail-required-missing HEAT-REQ-ga_mosquitto FAIL
+expect must-fail-required-missing HEAT-REQ-ga_manager PASS
 echo "== must-skip-no-engine (ga_hmvapp_addon not installed) =="
 expect must-skip-no-engine HEAT-06 SKIP
 expect must-skip-no-engine HEAT-07 SKIP
@@ -221,7 +228,7 @@ expect_detail base "nothing to write to"
 # final_modes <fixture> → "entity=state ..." of the fake Core's rooms after the run
 final_modes() {
   PATH="$FIXTURES/shim:$PATH" GA_HEAT_FIXTURE="$FIXTURES/$1" GA_HEAT_LIVE="$GA_HEAT_TMP/live.$1.json" \
-    docker exec addon_x_ga_manager sh -c 'curl http://supervisor/core/api/states' \
+    docker exec app_x_ga_manager sh -c 'curl http://supervisor/core/api/states' \
     | jq -r '[ .[] | select(.attributes.valves != null) | "\(.entity_id)=\(.state)" ] | join(" ")'
 }
 expect_final() {

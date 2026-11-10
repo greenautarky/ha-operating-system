@@ -1,0 +1,3 @@
+addon_99f1cad4_ga_manager Up
+addon_99f1cad4_ga_mosquitto Up
+addon_99f1cad4_ga_influxdbv1 Up

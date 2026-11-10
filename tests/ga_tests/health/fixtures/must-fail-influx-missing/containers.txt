@@ -1,0 +1,2 @@
+app_99f1cad4_ga_manager Up
+app_99f1cad4_ga_mosquitto Up

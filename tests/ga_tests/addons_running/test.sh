@@ -28,10 +28,10 @@ if [ ! -s "$EXP" ]; then
 fi
 . "$EXP"
 
-# Container for a slug: Supervisor names them addon_<hash>_<slug> (config.yaml
+# Container for a slug: Supervisor names them app_<hash>_<slug> (addon_ before 2026.10) (config.yaml
 # slugs), but the STORE slug and the pin key differ for some add-ons
 # (ga_influxdbv1 pin -> store slug ga_influxdbv1, container matches too).
-ctr_of() { docker ps --format '{{.Names}}' 2>/dev/null | grep -E "^addon_.*_$1\$" | head -1; }
+ctr_of() { ga_ctr_of "$1"; }   # app_ (BOSv1.6) or addon_ (BOSv1.5.x), see lib/test_helpers.sh
 up() { [ -n "$(ctr_of "$1")" ]; }
 
 # READINESS: on a fresh flash converge installs and starts the managed add-ons
@@ -40,7 +40,7 @@ up() { [ -n "$(ctr_of "$1")" ]; }
 # simply still converging. On timeout the checks run anyway (a genuine
 # converge failure must fail loudly, not be skipped). 15 min covers a cold
 # fresh-flash converge incl. private-GHCR pulls.
-if ! wait_for 900 'test "$(docker ps --format "{{.Names}}" | grep -c "^addon_")" -ge 5'; then
+if ! wait_for 900 'test "$(docker ps --format "{{.Names}}" | grep -cE "^(app|addon)_")" -ge 5'; then
   echo "  (converge readiness timed out after 900s — asserting current state anyway)"
 fi
 
@@ -225,10 +225,12 @@ run_test_show "ADR-33" "no plugin container is restarting" \
 # --- restart-loop tripwire -------------------------------------------------
 # "Up 2 seconds" forever is a crash loop that up-ness alone cannot see.
 run_test_show "ADR-20" "no addon container restarted in the last check (RestartCount==0)" \
-  'for c in $(docker ps --format "{{.Names}}" | grep "^addon_"); do
+  'n=0; for c in $(ga_ctr_names); do
+     n=$((n + 1))
      rc=$(docker inspect "$c" --format "{{.RestartCount}}" 2>/dev/null || echo 1)
      [ "${rc:-1}" -eq 0 ] || exit 1
-   done'
+   done
+   [ "$n" -gt 0 ] || { echo "inspected 0 add-on containers - not a pass"; exit 1; }'
 
 # --- influxd hardware-float guard (PR #31, ga_influxdbv1 >= 0.0.19) ---------
 # The official influxdb 1.8.10 armhf .deb ships a GOARM=5 (softfloat) influxd:
