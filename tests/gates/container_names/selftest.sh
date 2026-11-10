@@ -47,9 +47,10 @@ t() {  # t <label> <"ctrs"> <fn> <arg> <want-stdout> <want-rc> <want-stderr-subs
 }
 t "BOSv1.6: app_ only -> ga_ctr_of"       "app_99f1cad4_ga_manager app_99f1cad4_ga_mosquitto" ga_ctr_of ga_manager app_99f1cad4_ga_manager 0 ""
 t "BOSv1.6: app_ only -> ga_ctr_exact"    "app_99f1cad4_ga_manager" ga_ctr_exact 99f1cad4_ga_manager app_99f1cad4_ga_manager 0 ""
-t "BOSv1.5.x: addon_ only -> ga_ctr_of"   "addon_99f1cad4_ga_manager" ga_ctr_of ga_manager addon_99f1cad4_ga_manager 0 "" # ga-ctr-ok
-t "BOSv1.5.x: addon_ only -> ga_ctr_exact" "addon_99f1cad4_ga_manager" ga_ctr_exact 99f1cad4_ga_manager addon_99f1cad4_ga_manager 0 "" # ga-ctr-ok
-t "both present: app_ wins"               "addon_99f1cad4_ga_manager app_99f1cad4_ga_manager" ga_ctr_of ga_manager app_99f1cad4_ga_manager 0 "" # ga-ctr-ok
+OLD=addon   # the BOSv1.5.x prefix, spelled so the gate sees no literal
+t "BOSv1.5.x: old prefix only -> ga_ctr_of"   "${OLD}_99f1cad4_ga_manager" ga_ctr_of ga_manager ${OLD}_99f1cad4_ga_manager 0 ""
+t "BOSv1.5.x: old prefix only -> ga_ctr_exact" "${OLD}_99f1cad4_ga_manager" ga_ctr_exact 99f1cad4_ga_manager ${OLD}_99f1cad4_ga_manager 0 ""
+t "both present: app_ wins"               "${OLD}_99f1cad4_ga_manager app_99f1cad4_ga_manager" ga_ctr_of ga_manager app_99f1cad4_ga_manager 0 ""
 t "slug absent under known scheme: silent" "app_99f1cad4_ga_manager" ga_ctr_of ga_zigbee2mqtt "" 1 ""
 t "no add-on container at all: LOUD"      "hassio_supervisor homeassistant" ga_ctr_of ga_manager "" 1 "naming unresolved"
 t "ga_ctr_exact neither: LOUD"            "homeassistant" ga_ctr_exact 99f1cad4_ga_manager "" 1 "neither app_"

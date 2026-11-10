@@ -1,0 +1,7 @@
+#!/bin/sh
+# docker shim for the health suite selftest: `docker ps` answers from the fixture's containers.txt
+# (names only); everything else fails, which is what a host without the suite's device state does.
+case "$1" in
+  ps) cut -d' ' -f1 "$GA_HEALTH_FIXTURE/containers.txt" ;;
+  *)  exit 1 ;;
+esac

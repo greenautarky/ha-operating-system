@@ -15,20 +15,28 @@ also mentions app_ does NOT excuse an addon_ on the same line. Shapes flagged:
 Not flagged: identifiers (addon_store_raw_url), REST/job names (addon_update), AppArmor profile
 names (addon_x), `all_addon_configs` - an identifier continues with letters after `addon_`.
 Whole-line `#` comments and trailing ` # ...` comments are ignored (prose). A line carrying
-the marker `ga-ctr-ok` is excused (use only where BOTH prefixes are accepted on purpose).
+the marker `ga-ctr-ok` is excused ONLY if the same logical line also contains app_ (both prefixes accepted on purpose).
 
 rc 0 clean, 1 hits, 2 inspected nothing (fails closed).
 """
 import os, re, sys
 
 EXTS = (".sh", ".bash", ".py", ".md", ".service", ".conf", ".yml", ".yaml", ".patch")
-# Builder/laptop-side files that legitimately keep `addon_` strings. NOTHING here runs on a
-# device. Empty on purpose: add an entry (path suffix -> reason) rather than skipping a root.
+# Files that legitimately keep `addon_` strings, as path suffix -> reason. Add an entry here
+# rather than skipping a whole root. Currently only the gate itself, which documents the shapes.
 ALLOW = {"scripts/check-container-names.py": "the gate itself documents the shapes"}
 
 OCC = re.compile(
-    r"(?<![A-Za-z0-9_])addon_(?:(?:[0-9a-f]{8}|x|deadbeef|core)_|(?=[\s\"')$*.{<|\\]|$))"
+    r"(?<![A-Za-z0-9_])addon_(?:(?:[0-9a-fA-F]{8}|x|deadbeef|core|local)_|(?=[\s\"')$*.{<|\\]|$))"
 )
+
+
+def has_shebang(path):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(2) == b"#!"
+    except OSError:
+        return False
 
 
 def logical_lines(path):
@@ -59,7 +67,8 @@ def scan(path):
     hits = []
     md = path.endswith(".md")
     for n, line in logical_lines(path):
-        if "ga-ctr-ok" in line:
+        # the marker excuses a line only if that same logical line also names app_
+        if "ga-ctr-ok" in line and "app_" in line:
             continue
         code = strip_comment(line, md)
         if OCC.search(code):
@@ -76,7 +85,7 @@ def main(argv):
             for d, dn, fn in os.walk(root):
                 dn[:] = [x for x in dn if x not in ("fixtures", "must-fail", "must-pass", ".git")]
                 files += [os.path.join(d, f) for f in fn
-                          if f.endswith(EXTS) or f.startswith("ga-")]
+                          if f.endswith(EXTS) or f.startswith("ga-") or has_shebang(os.path.join(d, f))]
     files = [f for f in files if os.path.isfile(f) and not any(f.endswith(k) for k in ALLOW)]
     if not files:
         print("check-container-names: ERROR: inspected 0 files", file=sys.stderr)

@@ -1192,6 +1192,8 @@ jobs:
       # (GAMCAP-01) over docker-archive tars built in the bake's layout.
       - name: "ha_influxdb suite selftest (rc2 shape must go red, fixed device green)"
         run: ./tests/ga_tests/ha_influxdb/selftest.sh
+      - name: "health suite required-add-on selftest (missing ga_mosquitto/ga_influxdbv1 must go red; both container prefixes green)"
+        run: ./tests/ga_tests/health/selftest.sh
       - name: "ga_manager capability gate selftest (a baked ga_manager without ha_influxdb must go red)"
         run: ./tests/gates/ga_manager_capabilities/selftest.sh
 
