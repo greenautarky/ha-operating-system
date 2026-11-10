@@ -71,5 +71,33 @@ check "mutation: guard removed" "$W/m2" flag
 sed 's/g_serial.iSerialNumber=/g_serial.serial=/' "$USH" > "$W/m3"
 check "mutation: wrong parameter name" "$W/m3" flag
 
+# --- acceptance 1 (flasher): ONLY iSerialNumber is added --------------------
+# The flasher keys on 0525:a4a7, product "Gadget Serial v2.4", the manufacturer
+# string (kernel version) and /dev/ttyGS0. Those come from g_serial's own
+# defaults, so they stay unchanged iff nothing overrides them.
+only_serial() {  # <file> -> 0 when no g_serial./usb-id override other than iSerialNumber
+  ! grep -E 'g_serial\.(idVendor|idProduct|bcdDevice|iManufacturer|iProduct|use_acm|use_obex|n_ports|[A-Za-z_]+)=' "$1" \
+      | grep -vE 'g_serial\.iSerialNumber=' | grep -q .
+}
+BOARD="$ROOT/buildroot-ihost/board/sonoff/ihost"
+for f in "$USH" "$BOARD/cmdline.txt" "$BOARD/boot-env.txt"; do
+  [[ -e "$f" ]] || { bad "input missing: $f"; continue; }
+  only_serial "$f" && ok "$(basename "$f"): no g_serial parameter besides iSerialNumber" || bad "$(basename "$f"): other g_serial parameter present"
+done
+{ cat "$USH"; echo 'setenv x "g_serial.idProduct=0x1"'; } > "$W/m4"
+only_serial "$W/m4" && bad "mutation: idProduct override NOT flagged" || ok "mutation: idProduct override flagged"
+if grep -rlE 'gadget/legacy/(serial|g_serial)' "$ROOT/buildroot-ihost" "$ROOT/buildroot-external" 2>/dev/null | grep -q .; then
+  bad "a repo patch/config touches drivers/usb/gadget/legacy/serial.c (VID:PID/strings would change)"
+else ok "no repo patch touches gadget/legacy/serial.c"; fi
+# Constants read from the kernel source when a tree is given (KSRC=<linux dir>);
+# CI has none, so the line says so instead of passing silently.
+K="${KSRC:-}/drivers/usb/gadget/legacy/serial.c"
+if [[ -n "${KSRC:-}" && -r "$K" ]]; then
+  grep -q 'GS_VENDOR_ID[[:space:]]*0x0525' "$K" && grep -q 'GS_CDC_PRODUCT_ID[[:space:]]*0xa4a7' "$K" \
+    && grep -q '"v2.4"' "$K" && ok "kernel source: 0525:a4a7 (CDC-ACM default), v2.4" || bad "kernel source: VID:PID/version differ from the flasher's 0525:a4a7 / v2.4"
+else
+  echo "  note  KSRC not set: kernel-source constants NOT checked here (device run: lsusb 0525:a4a7)"
+fi
+
 [[ $fails == 0 ]] && { echo "ihost_gadget_serial: PASS"; exit 0; }
 echo "ihost_gadget_serial: $fails FAIL"; exit 1

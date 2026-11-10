@@ -89,8 +89,8 @@ run_test "HW-08b" "USB gadget (serial console) functional" \
 # (uboot-boot.ush); the kernel exposes the same value as DT /serial-number.
 # Applies where g_serial is built in (iHost); other boards use configfs gadgets.
 if [ -d /sys/module/g_serial ]; then
-  run_test "HW-08e" "USB gadget iSerialNumber (g_serial) == DT serial-number" \
-    "dt=\$(tr -d '\\0' < /sys/firmware/devicetree/base/serial-number); [ -n \"\$dt\" ] && [ \"\$(tr ' ' '\\n' < /proc/cmdline | sed -n 's/^g_serial\\.iSerialNumber=//p' | tail -1)\" = \"\$dt\" ]"
+  run_test "HW-08e" "USB gadget iSerialNumber (g_serial) == DT serial-number (16 lowercase hex)" \
+    "dt=\$(tr -d '\\0' < /sys/firmware/devicetree/base/serial-number); echo \"\$dt\" | grep -qE '^[0-9a-f]{16}\$' && [ \"\$(tr ' ' '\\n' < /proc/cmdline | sed -n 's/^g_serial\\.iSerialNumber=//p' | tail -1)\" = \"\$dt\" ]"
 else
   skip_test "HW-08e" "USB gadget iSerialNumber (g_serial not built in on this board)"
 fi
