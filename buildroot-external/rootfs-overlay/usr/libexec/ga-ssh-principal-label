@@ -14,7 +14,7 @@
 # Before anything reaches ga-ssh-principals, this script requires:
 #   1. a regular file, not a symlink, not a device or FIFO;
 #   2. a bounded read (at most 32 bytes — a label is 16 plus a newline);
-#   3. exactly one label: charset [A-Za-z0-9-], shape ^KIB-SON-[0-9]{8}$;
+#   3. exactly one label: charset [A-Za-z0-9-], shape ^KIB-(SON|DUS)-[0-9]{8}$;
 #   4. equality with this device's OWN label, from every source that exists:
 #        - /mnt/data/ga-device-label (host-only; written by a flasher stage
 #          that is retired — absent on every fresh flash since), and
@@ -61,7 +61,7 @@ read_bounded() { _v=$(head -c "$MAX" "$1" 2>/dev/null; echo x); printf '%s' "${_
 
 valid_label() {
     case "$1" in ''|*[!A-Za-z0-9-]*) return 1 ;; esac
-    printf '%s' "$1" | grep -qE '^KIB-SON-[0-9]{8}$'
+    printf '%s' "$1" | grep -qE '^KIB-(SON|DUS)-[0-9]{8}$'
 }
 
 [ -s "$CA_PUB" ] || exit 0
@@ -77,7 +77,7 @@ nl='
 '
 label=${raw%"$nl"}           # exactly one trailing newline allowed
 if ! valid_label "$label"; then
-    log "refusing the delivered label (${#raw} bytes) — not exactly one KIB-SON-<8 digits> line; principals unchanged"
+    log "refusing the delivered label (${#raw} bytes) — not exactly one KIB-(SON|DUS)-<8 digits> line; principals unchanged"
     exit 2
 fi
 
