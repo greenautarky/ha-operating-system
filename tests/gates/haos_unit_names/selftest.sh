@@ -13,6 +13,7 @@ gate="$repo/scripts/check-haos-unit-names.sh"
 [ -x "$gate" ] || { echo "FAIL: gate missing or not executable: $gate"; exit 1; }
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 bad=0 nf=0 np=0
+indent() { sed 's/^/        /'; }
 scaffold() { # $1 dir: give it the three scan roots so only the fixture content differs
   mkdir -p "$1/buildroot-external" "$1/buildroot-ihost" "$1/tests/ga_tests"
   for r in buildroot-external buildroot-ihost tests/ga_tests; do : > "$1/$r/.keep"; done
@@ -25,11 +26,11 @@ for d in "$here"/must-fail/*/ "$here"/must-pass/*/; do
   if [ "$kind" = must-fail ]; then
     nf=$((nf+1))
     if [ "$rc" -eq 1 ] && grep -q '^FINDING:' <<<"$out"; then echo "  ok    must-fail/$name"
-    else echo "  FAIL  must-fail/$name (rc=$rc)"; sed 's/^/        /' <<<"$out"; bad=1; fi
+    else echo "  FAIL  must-fail/$name (rc=$rc)"; indent <<<"$out"; bad=1; fi
   else
     np=$((np+1))
     if [ "$rc" -eq 0 ]; then echo "  ok    must-pass/$name"
-    else echo "  FAIL  must-pass/$name (rc=$rc)"; sed 's/^/        /' <<<"$out"; bad=1; fi
+    else echo "  FAIL  must-pass/$name (rc=$rc)"; indent <<<"$out"; bad=1; fi
   fi
 done
 
@@ -59,8 +60,8 @@ for p in "${ALLOW[@]}"; do
   else echo "  FAIL  stale allowlist entry (missing or no longer matches): $p"; bad=1; fi
 done
 out="$("$gate" "$repo" 2>&1)"; rc=$?
-if [ "$rc" -eq 0 ]; then echo "  ok    live tree: $out"; else echo "  FAIL  live tree rc=$rc"; sed 's/^/        /' <<<"$out"; bad=1; fi
+if [ "$rc" -eq 0 ]; then echo "  ok    live tree: $out"; else echo "  FAIL  live tree rc=$rc"; indent <<<"$out"; bad=1; fi
 
-[ "$nf" -ge 7 ] && [ "$np" -ge 3 ] || { echo "FAIL: only $nf must-fail / $np must-pass fixtures inspected"; exit 1; }
+if [ "$nf" -lt 7 ] || [ "$np" -lt 3 ]; then echo "FAIL: only $nf must-fail / $np must-pass fixtures inspected"; exit 1; fi
 echo "$((nf+np)) fixtures inspected ($nf must-fail, $np must-pass) + allowlist, fail-closed and live-tree checks"
 exit "$bad"
