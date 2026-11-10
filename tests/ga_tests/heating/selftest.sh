@@ -187,7 +187,7 @@ expect must-skip-engine-young HEAT-06 SKIP
 expect_detail must-skip-engine-young "engine up < 15 min (Up 4 minutes)"
 expect must-skip-engine-young HEAT-07 PASS
 
-echo "== container prefix: BOSv1.6 app_ (base) AND the BOSv1.5.x addon_ fallback; required add-ons missing = FAIL =="
+echo "== container prefix: BOSv1.6 app_ (base) AND the BOSv1.5.x prefix fallback; required add-ons missing = FAIL =="
 for _r in ga_manager ga_mosquitto ga_influxdbv1; do
   expect base "HEAT-REQ-$_r" PASS
   expect must-pass-addon-prefix "HEAT-REQ-$_r" PASS
