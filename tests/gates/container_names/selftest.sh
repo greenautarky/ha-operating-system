@@ -7,23 +7,24 @@
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-CHECK="$REPO/scripts/check-container-names.sh"
+CHECK="$REPO/scripts/check-container-names.py"
 HELP="$REPO/tests/ga_tests/lib/test_helpers.sh"
 [ -f "$CHECK" ] && [ -f "$HELP" ] || { echo "FATAL: gate or helper missing"; exit 1; }
 fails=0
 ok()  { echo "  ok    $*"; }
 bad() { echo "  FAIL  $*"; fails=$((fails + 1)); }
 for f in "$HERE"/must-fail/*; do
-  d="$(mktemp -d)"; cp "$f" "$d/"; out="$(sh "$CHECK" "$d" 2>&1)"; rc=$?; rm -rf "$d"
+  d="$(mktemp -d)"; cp "$f" "$d/"; out="$(python3 "$CHECK" "$d" 2>&1)"; rc=$?; rm -rf "$d"
   [ "$rc" -eq 1 ] && ok "must-fail $(basename "$f")" || bad "must-fail $(basename "$f") rc=$rc: $out"
 done
 for f in "$HERE"/must-pass/*; do
-  d="$(mktemp -d)"; cp "$f" "$d/"; out="$(sh "$CHECK" "$d" 2>&1)"; rc=$?; rm -rf "$d"
+  d="$(mktemp -d)"; cp "$f" "$d/"; out="$(python3 "$CHECK" "$d" 2>&1)"; rc=$?; rm -rf "$d"
   [ "$rc" -eq 0 ] && ok "must-pass $(basename "$f")" || bad "must-pass $(basename "$f") rc=$rc: $out"
 done
-e="$(mktemp -d)"; sh "$CHECK" "$e" >/dev/null 2>&1; rc=$?; rmdir "$e"
+e="$(mktemp -d)"; python3 "$CHECK" "$e" >/dev/null 2>&1; rc=$?; rmdir "$e"
 [ "$rc" -eq 2 ] && ok "empty root fails closed (rc 2)" || bad "empty root rc=$rc, want 2"
-out="$(sh "$CHECK" "$REPO/tests/ga_tests" "$REPO/tests/run_device_tests.sh" "$REPO/buildroot-external/rootfs-overlay" "$REPO/buildroot-external/package" 2>&1)"; rc=$?
+# live roots: device tests, the OS tree, scripts/ and .github/ (builder-side exceptions live in ALLOW in the gate, commented)
+out="$(python3 "$CHECK" "$REPO/tests" "$REPO/buildroot-external" "$REPO/scripts" "$REPO/.github" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && ok "live device-side tree: $out" || bad "live tree rc=$rc: $out"
 
 # --- resolver against a docker shim
@@ -46,9 +47,9 @@ t() {  # t <label> <"ctrs"> <fn> <arg> <want-stdout> <want-rc> <want-stderr-subs
 }
 t "BOSv1.6: app_ only -> ga_ctr_of"       "app_99f1cad4_ga_manager app_99f1cad4_ga_mosquitto" ga_ctr_of ga_manager app_99f1cad4_ga_manager 0 ""
 t "BOSv1.6: app_ only -> ga_ctr_exact"    "app_99f1cad4_ga_manager" ga_ctr_exact 99f1cad4_ga_manager app_99f1cad4_ga_manager 0 ""
-t "BOSv1.5.x: addon_ only -> ga_ctr_of"   "addon_99f1cad4_ga_manager" ga_ctr_of ga_manager addon_99f1cad4_ga_manager 0 ""
-t "BOSv1.5.x: addon_ only -> ga_ctr_exact" "addon_99f1cad4_ga_manager" ga_ctr_exact 99f1cad4_ga_manager addon_99f1cad4_ga_manager 0 ""
-t "both present: app_ wins"               "addon_99f1cad4_ga_manager app_99f1cad4_ga_manager" ga_ctr_of ga_manager app_99f1cad4_ga_manager 0 ""
+t "BOSv1.5.x: addon_ only -> ga_ctr_of"   "addon_99f1cad4_ga_manager" ga_ctr_of ga_manager addon_99f1cad4_ga_manager 0 "" # ga-ctr-ok
+t "BOSv1.5.x: addon_ only -> ga_ctr_exact" "addon_99f1cad4_ga_manager" ga_ctr_exact 99f1cad4_ga_manager addon_99f1cad4_ga_manager 0 "" # ga-ctr-ok
+t "both present: app_ wins"               "addon_99f1cad4_ga_manager app_99f1cad4_ga_manager" ga_ctr_of ga_manager app_99f1cad4_ga_manager 0 "" # ga-ctr-ok
 t "slug absent under known scheme: silent" "app_99f1cad4_ga_manager" ga_ctr_of ga_zigbee2mqtt "" 1 ""
 t "no add-on container at all: LOUD"      "hassio_supervisor homeassistant" ga_ctr_of ga_manager "" 1 "naming unresolved"
 t "ga_ctr_exact neither: LOUD"            "homeassistant" ga_ctr_exact 99f1cad4_ga_manager "" 1 "neither app_"

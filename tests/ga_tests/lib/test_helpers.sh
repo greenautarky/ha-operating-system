@@ -52,9 +52,9 @@ fi
 # An absent slug under a known scheme is silent - callers use it as a probe.
 ga_ctr_names() {
   _gct_all=$(docker ps --format '{{.Names}}' 2>/dev/null)
-  _gct_n=$(printf '%s\n' "$_gct_all" | grep -E '^app_'; printf '%s\n' "$_gct_all" | grep -E '^addon_')
+  _gct_n=$(printf '%s\n' "$_gct_all" | grep -E '^app_'; printf '%s\n' "$_gct_all" | grep -E '^addon_') # ga-ctr-ok
   if [ -z "$_gct_n" ]; then
-    echo "ga-test: ERROR: no app_* and no addon_* container is running - add-on container naming unresolved" >&2
+    echo "ga-test: ERROR: no app_* and no addon_* container is running - add-on container naming unresolved" >&2 # ga-ctr-ok
     return 1
   fi
   printf '%s\n' "$_gct_n"
@@ -71,8 +71,18 @@ ga_ctr_exact() {
       printf '%s_%s\n' "$_gce_p" "$1"; return 0
     fi
   done
-  echo "ga-test: ERROR: neither app_$1 nor addon_$1 exists" >&2
+  echo "ga-test: ERROR: neither app_$1 nor addon_$1 exists" >&2 # ga-ctr-ok
   return 1
+}
+
+# ga_require_addons <ID-PREFIX> <slug>... : each add-on must EXIST and run - absent = FAIL
+# (never skip/pass: a device without ga_mosquitto / ga_influxdbv1 / ga_manager is broken,
+# and "not installed -> skip" made exactly that invisible). Resolves via ga_ctr_of.
+ga_require_addons() {
+  _gra_p="$1"; shift
+  for _gra_s in "$@"; do
+    run_test "${_gra_p}-REQ-${_gra_s}" "required add-on ${_gra_s} exists and is running" "ga_ctr_of ${_gra_s} >/dev/null"
+  done
 }
 
 # Run a test: pass description + command string

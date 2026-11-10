@@ -225,10 +225,12 @@ run_test_show "ADR-33" "no plugin container is restarting" \
 # --- restart-loop tripwire -------------------------------------------------
 # "Up 2 seconds" forever is a crash loop that up-ness alone cannot see.
 run_test_show "ADR-20" "no addon container restarted in the last check (RestartCount==0)" \
-  'for c in $(docker ps --format "{{.Names}}" | grep -E "^(app|addon)_"); do
+  'n=0; for c in $(ga_ctr_names); do
+     n=$((n + 1))
      rc=$(docker inspect "$c" --format "{{.RestartCount}}" 2>/dev/null || echo 1)
      [ "${rc:-1}" -eq 0 ] || exit 1
-   done'
+   done
+   [ "$n" -gt 0 ] || { echo "inspected 0 add-on containers - not a pass"; exit 1; }'
 
 # --- influxd hardware-float guard (PR #31, ga_influxdbv1 >= 0.0.19) ---------
 # The official influxdb 1.8.10 armhf .deb ships a GOARM=5 (softfloat) influxd:

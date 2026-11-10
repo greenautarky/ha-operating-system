@@ -228,7 +228,7 @@ _influx_write_probe_script() {
 # Read a consumer's own options through the docker socket — ga_manager has it,
 # and the add-on's /data is not mounted anywhere else.
 # container prefix: app_ on Supervisor 2026.10+ (BOSv1.6), addon_ before
-cn()   { for _p in app addon; do docker inspect "${_p}_99f1cad4_$1" >/dev/null 2>&1 && { echo "${_p}_99f1cad4_$1"; return 0; }; done; echo "no app_/addon_ container for $1" >&2; return 1; }
+cn()   { for _p in app addon; do docker inspect "${_p}_99f1cad4_$1" >/dev/null 2>&1 && { echo "${_p}_99f1cad4_$1"; return 0; }; done; echo "no app_/addon_ container for $1" >&2; return 1; } # ga-ctr-ok
 opts() { docker exec "$(cn "$1")" cat /data/options.json 2>/dev/null; }
 val()  { sed -n "s/.*\"$1\": *\"\([^\"]*\)\".*/\1/p" | head -1; }
 IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \

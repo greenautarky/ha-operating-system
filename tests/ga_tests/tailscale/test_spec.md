@@ -13,7 +13,7 @@ with the correct hostname matching the device label from provisioning.
 
 ### TS-01: ga_tailscale addon container running
 - **Command**: `docker ps --format '{{.Names}}' | grep -q 'ga_tailscale'`
-- **Expected**: Container `app_*_ga_tailscale` (`addon_*_ga_tailscale` before Supervisor 2026.10) is running
+- **Expected**: Container `app_*_ga_tailscale` (`addon_*_ga_tailscale` before Supervisor 2026.10) is running <!-- ga-ctr-ok -->
 
 ### TS-02: Tailscale daemon is connected
 - **Command**: `docker exec <container> /opt/tailscale status --json | grep -q '"Online":true'`

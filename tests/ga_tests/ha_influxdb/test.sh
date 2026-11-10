@@ -67,6 +67,7 @@ run_test_show "HAIX-01" "Core has one InfluxDB config entry -> $DB as $USER_WANT
 # --- Core's °C entities, through ga_manager (it holds the SUPERVISOR_TOKEN) ---
 : > "$STATES"
 GM="$(ctr_of ga_manager)"
+ga_require_addons HAIX ga_manager ga_influxdbv1   # missing = FAIL, not skip
 if [ -n "$GM" ]; then
   docker exec "$GM" sh -c \
     'curl -fsS -m 20 -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/api/states' 2>/dev/null \
@@ -116,7 +117,7 @@ if [ -z "$GM" ]; then
 elif [ "${CELSIUS:-0}" -eq 0 ]; then
   skip_test "HAIX-02" "$H02_DESC" "no °C entity in Core — nothing for Core to write"
 elif [ -z "$(ctr_of ga_influxdbv1)" ]; then
-  skip_test "HAIX-02" "$H02_DESC" "ga_influxdbv1 container absent (addons_running covers it)"
+  skip_test "HAIX-02" "$H02_DESC" "ga_influxdbv1 absent (HAIX-REQ-ga_influxdbv1 FAILS)"
 elif ! command -v curl >/dev/null 2>&1; then
   skip_test "HAIX-02" "$H02_DESC" "curl absent on the host"
 else

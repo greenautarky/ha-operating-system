@@ -31,6 +31,21 @@
 # Exit 0 = all green, 1 = a verdict failed, 2 = could not check (never green).
 set -uo pipefail
 
+# The container name differs by Supervisor generation: addon_<hash>_ga_manager
+# (BOSv1.5.x) and app_<hash>_ga_manager (Supervisor 2026.10+, BOSv1.6). Every
+# E/N case runs for BOTH. There is NO xfail mechanism in this gate on purpose:
+# with the pinned ga-telemetry-config 1.1.0 the app_ run is expected RED on E3
+# (tier-0 converge shipping is hard-wired to addon_; tracked as #1746). Do not
+# mask it; it goes green with the telemetry-config pin bump.
+if [ -z "${GA_TP_GM:-}" ]; then
+  drc=0
+  for g in addon_99f1cad4_ga_manager app_99f1cad4_ga_manager; do # ga-ctr-ok
+    echo "=== container name $g ==="
+    GA_TP_GM="$g" bash "$0" "$@" || { r=$?; echo "=== $g: exit $r ==="; [ "$r" -gt "$drc" ] && drc=$r; }
+  done
+  exit "$drc"
+fi
+
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 APPLY="$ROOT/buildroot-external/rootfs-overlay/usr/sbin/ga-telemetry-profile-apply"
 export GA_DATA_ROOT_LIB="$ROOT/buildroot-external/rootfs-overlay/usr/libexec/ga-data-root.sh"   # the apply script sources the data-root resolver (Odoo #1610)
@@ -113,7 +128,7 @@ rec() {  # rec ID "MESSAGE suffix" FIELD=VALUE...
     echo "_BOOT_ID=$BOOT"; echo "_HOSTNAME=fixture"; printf '%s\n' "$@"
     echo "MESSAGE=FIXTURE-$id $msg"; echo; } >> "$W/fixture.export"
 }
-GM=addon_99f1cad4_ga_manager
+GM=$GA_TP_GM
 # tier-0 sources
 rec E1 "kernel: Out of memory" _TRANSPORT=kernel PRIORITY=3 SYSLOG_IDENTIFIER=kernel
 rec E2 "ERROR (MainThread) [supervisor.addons] start failed" CONTAINER_NAME=hassio_supervisor _SYSTEMD_UNIT=docker.service PRIORITY=3

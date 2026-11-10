@@ -118,6 +118,7 @@ refresh_states() {
   mv "$STATES.new" "$STATES"
 }
 GM="$(ctr_of ga_manager)"
+ga_require_addons HEAT ga_manager ga_mosquitto ga_influxdbv1   # missing = FAIL (the skips below only avoid a second report)
 fetch_states "$STATES" || : > "$STATES"
 
 # --- every room's mode, BEFORE anything below writes (Odoo #1195) ------------
@@ -547,7 +548,7 @@ elif [ "$ROOMS_WITH_SENSOR" -eq 0 ]; then
 elif [ -z "$ENGINE" ]; then
   skip_test "HEAT-07" "$H07_DESC" "decision engine not installed — HEAT-07 needs $ENGINE_SLUG >= 2.0.0"
 elif [ -z "$(ctr_of ga_influxdbv1)" ]; then
-  skip_test "HEAT-07" "$H07_DESC" "ga_influxdbv1 container absent — nothing to query (addons_running ADR-03 covers it)"
+  skip_test "HEAT-07" "$H07_DESC" "ga_influxdbv1 absent (HEAT-REQ-ga_influxdbv1 FAILS)"
 elif ! command -v curl >/dev/null 2>&1; then
   skip_test "HEAT-07" "$H07_DESC" "no credential path for local InfluxDB from the host (curl absent)"
 elif ! influx_cred; then
@@ -584,7 +585,7 @@ heat08() {
 }
 H08_DESC="one long-lived MQTT client: <= $MQTT_CONNECT_MAX connects as ${ENGINE_CLIENT_PREFIX}* (and from the engine's address) in the mosquitto log, $SET_WINDOW"
 if [ -z "$(ctr_of ga_mosquitto)" ]; then
-  skip_test "HEAT-08" "$H08_DESC" "ga_mosquitto container absent — no broker log to inspect"
+  skip_test "HEAT-08" "$H08_DESC" "ga_mosquitto absent — no broker log (HEAT-REQ-ga_mosquitto FAILS)"
 elif [ -z "$ENGINE" ]; then
   skip_test "HEAT-08" "$H08_DESC" "decision engine not installed — HEAT-08 needs $ENGINE_SLUG >= 2.0.0"
 else
