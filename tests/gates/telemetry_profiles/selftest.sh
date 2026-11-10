@@ -33,10 +33,9 @@ set -uo pipefail
 
 # The container name differs by Supervisor generation: addon_<hash>_ga_manager
 # (BOSv1.5.x) and app_<hash>_ga_manager (Supervisor 2026.10+, BOSv1.6). Every
-# E/N case runs for BOTH. There is NO xfail mechanism in this gate on purpose:
-# with the pinned ga-telemetry-config 1.1.0 the app_ run is expected RED on E3
-# (tier-0 converge shipping is hard-wired to addon_; tracked as #1746). Do not
-# mask it; it goes green with the telemetry-config pin bump.
+# E/N case runs for BOTH. No xfail mechanism on purpose: a name the shipped tier-0
+# config does not match goes red here (it did with ga-telemetry-config 1.1.0 on app_, #1746;
+# fixed in 1.1.1).
 if [ -z "${GA_TP_GM:-}" ]; then
   drc=0
   for g in addon_99f1cad4_ga_manager app_99f1cad4_ga_manager; do # ga-ctr-ok
