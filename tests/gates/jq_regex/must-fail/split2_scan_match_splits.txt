@@ -1,4 +1,4 @@
-#!/bin/sh
+# fixture (no shebang: the shellcheck job selects files by shebang)
 jq -r '.a | split("a+"; "g")' f.json
 jq -r '.a | scan("x")' f.json
 jq -r '.a | match("x")' f.json

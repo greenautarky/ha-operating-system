@@ -1,2 +1,2 @@
-#!/bin/sh
+# fixture (no shebang: the shellcheck job selects files by shebang)
 "$JQ_CLI" -f prog.jq in.json

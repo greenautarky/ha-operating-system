@@ -1,3 +1,3 @@
-#!/bin/sh
+# fixture (no shebang: the shellcheck job selects files by shebang)
 if ! "$JQ_CLI" -e '.a | ltrimstr("x")' < in.json; then :; fi
 x="$("$JQ_CLI" -r "type" < in.json)"

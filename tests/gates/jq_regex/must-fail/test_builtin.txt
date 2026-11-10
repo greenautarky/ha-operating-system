@@ -1,2 +1,2 @@
-#!/bin/sh
+# fixture (no shebang: the shellcheck job selects files by shebang)
 printf '%s' "$x" | jq -r 'if test("^a") then 1 else 0 end'
