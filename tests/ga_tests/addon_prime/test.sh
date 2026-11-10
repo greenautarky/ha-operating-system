@@ -32,7 +32,7 @@ LIVE="$R/buildroot-external/rootfs-overlay/usr/sbin/ga-addon-prime"
 REL=buildroot-external/rootfs-overlay/usr/sbin/ga-addon-prime
 MODE="${1:-new}"
 SH="${GA_T_SHELL:-sh}"
-W="$(mktemp -d 2>/dev/null || echo /tmp/addon_prime_$$)"
+W=${KEEPW:-$(mktemp -d)}; mkdir -p "$W"
 mkdir -p "$W/bin"
 
 case "$MODE" in
@@ -89,13 +89,14 @@ apps_cmd() {  # apps_cmd <update|start> <slug>
 case "$1" in
   info)  # readiness: .data.state; STUB_STATE=startup stays there, STUB_STARTUP_N=n = startup for n calls
     _n=$(cat "$STUB_CALLS.i" 2>/dev/null || echo 0); _n=$((_n + 1)); echo "$_n" > "$STUB_CALLS.i"
+    case "${STUB_INFO_BAD:-}" in rc1) echo "Error: boom" >&2; exit 1 ;; empty) exit 0 ;; garbage) echo "<html>not json"; exit 0 ;; esac
     _st="${STUB_STATE:-running}"
     [ -n "${STUB_STARTUP_N:-}" ] && { [ "$_n" -le "$STUB_STARTUP_N" ] && _st=startup || _st=running; }
     printf '{"result":"ok","data":{"state":"%s","version":"x"}}\n' "$_st"; exit 0 ;;
   store)  # a store call while Supervisor is not running is refused, as the real one is
     _s="${STUB_STATE:-running}"
     # startup phase counted in store calls too (the old probe never calls `info`): refuse the first STUB_STARTUP_N calls
-    if [ -n "${STUB_STARTUP_N:-}" ]; then _k=$(cat "$STUB_CALLS.s" 2>/dev/null || echo 0); _k=$((_k + 1)); echo "$_k" > "$STUB_CALLS.s"; [ "$_k" -le "$STUB_STARTUP_N" ] && _s=startup; fi
+    if [ -n "${STUB_STARTUP_N:-}" ] && [ ! -f "$STUB_CALLS.i" ]; then _k=$(cat "$STUB_CALLS.s" 2>/dev/null || echo 0); _k=$((_k + 1)); echo "$_k" > "$STUB_CALLS.s"; [ "$_k" -le "$STUB_STARTUP_N" ] && _s=startup; fi
     [ "$_s" = running ] || { echo "Error: System is not ready with state: $_s" >&2; exit 1; }
     [ "${STUB_STORE:-ok}" = fail ] && { echo "Error: store reload failed: HTTP 429" >&2; exit 1; }
     [ -n "${STUB_HANG:-}" ] && /bin/sleep 8
@@ -227,7 +228,15 @@ run_test "APRIME-52" "Supervisor stuck in startup until the deadline: ZERO store
   "[ \"\$(rc never)\" = 1 ] && [ \"\$(nreload never)\" = 0 ] && [ ! -f '$W/never.marker' ] && grep -q 'FAILED' '$W/never.log'"
 run_test "APRIME-53" "the single reload comes AFTER readiness (after the last startup poll, before the first update)" \
   "[ \"\$(nreload new_ok)\" = 1 ] && [ \"\$(grep -n '^ha store reload' '$W/rdy.calls' | cut -d: -f1)\" -gt \"\$(grep -n '^ha info' '$W/rdy.calls' | tail -n 1 | cut -d: -f1)\" ]"
-run_test "APRIME-54" "a failing (429) reload is loud, not retried (1 call), and the prime still proceeds on cached metadata" \
-  "[ \"\$(nreload f429)\" = 1 ] && grep -q 'WARNING: single store reload failed' '$W/f429.log' && [ \"\$(rc f429)\" = 0 ] && [ -f '$W/f429.marker' ]"
+run_test "APRIME-54" "reload fails (429): called once (not retried), NO marker, rc 1, distinct 'store reload failed — prime incomplete' line" \
+  "[ \"\$(nreload f429)\" = 1 ] && [ \"\$(rc f429)\" = 1 ] && [ ! -f '$W/f429.marker' ] && grep -q 'store reload failed — prime incomplete, retry next start' '$W/f429.log'"
+STUB_STORE=fail prime new noupdate f429_nu
+run_test "APRIME-55" "reload fails + 'no update available': NOT classified as OK (no marker, rc 1, 'NOT trusted' logged)" \
+  "[ \"\$(rc f429_nu)\" = 1 ] && [ ! -f '$W/f429_nu.marker' ] && grep -q 'NOT trusted' '$W/f429_nu.log' && ! grep -q 'already at pinned version' '$W/f429_nu.log'"
+run_test "APRIME-56" "reload OK + 'no update available': unchanged happy path (marker, rc 0, already pinned)" \
+  "[ \"\$(rc new_noupd)\" = 0 ] && [ -f '$W/new_noupd.marker' ] && grep -q 'already at pinned version' '$W/new_noupd.log' && [ \"\$(nreload new_noupd)\" = 1 ]"
+for m in rc1 empty garbage; do STUB_INFO_BAD=$m GA_PRIME_TOTAL_BUDGET_S=100 prime new ok info_$m; done
+run_test "APRIME-57" "'ha info' failing (rc!=0) / empty / non-JSON: loops to the deadline, FAILED, rc 1, NO marker, zero store reloads" \
+  "for m in rc1 empty garbage; do [ \"\$(rc info_\$m)\" = 1 ] && [ ! -f \"$W/info_\$m.marker\" ] && grep -q 'FAILED' \"$W/info_\$m.log\" && [ \"\$(nreload info_\$m)\" = 0 ] && [ \"\$(clock info_\$m)\" -le 110 ] || exit 1; done"
 
 suite_end

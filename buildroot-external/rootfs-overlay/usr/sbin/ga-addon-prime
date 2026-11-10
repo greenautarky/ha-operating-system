@@ -219,12 +219,14 @@ detect_apps_cmd
 # `update` compares against the store. Not retried: a failure (e.g. a 429) is
 # logged loudly and the updates proceed on the cached metadata (Supervisor
 # refreshes it on its own every 3 h); retrying is what caused the storm.
+STORE_STALE=0
 run_ha store reload
 if [ "$RUN_RC" -eq 0 ]; then
     log "addon store cache refreshed (single /store/reload after readiness)"
 else
-    log "WARNING: single store reload failed (rc=$RUN_RC: $(last_line "$RUN_OUT
-$RUN_ERR")) — continuing on cached store metadata, NOT retrying"
+    STORE_STALE=1
+    STORE_ERR=$(last_line "$RUN_OUT $RUN_ERR")
+    log "WARNING: single store reload failed (rc=$RUN_RC: $STORE_ERR) — store metadata may be stale; updates are still attempted but 'no update available' is NOT trusted, no marker will be written, NOT retried in this run"
 fi
 
 # Registry-credential preflight (2026-07-29).
@@ -275,6 +277,10 @@ $RUN_ERR"
     if [ "$UPDATE_RC" -eq 0 ]; then
         log "  → $SLUG: primed OK"
         PRIMED_OK=1
+    elif [ "$STORE_STALE" -eq 1 ] && echo "$UPDATE_OUT" | grep -qiE 'no update available|already at version'; then
+        # Stale store metadata can hide a needed update: not a success in this run.
+        log "  → $SLUG: 'no update available' NOT trusted (store reload failed this run) — prime incomplete"
+        PRIMED_OK=0
     elif echo "$UPDATE_OUT" | grep -qiE 'no update available|already at version'; then
         # Discovered 2026-06-18 on K0: `ha addons update` returns rc!=0
         # with "No update available" when the addon is already at the
@@ -349,6 +355,11 @@ $RUN_ERR"
         fi
     fi
 done < "$PRIME_CONF"
+
+if [ "$STORE_STALE" -eq 1 ]; then
+    log "ERROR: store reload failed — prime incomplete, retry next start (no marker written)"
+    exit 1
+fi
 
 if [ "$FAIL" -gt 0 ]; then
     log "ERROR: $FAIL addon(s) failed to prime — marker NOT written, service will retry next boot"
