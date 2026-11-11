@@ -22,6 +22,8 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 BOSv1.5.3 + Core 2026.8.2.2 (same Core, rebuilt image with Brotli 1.2.1 and a refreshed Debian base; Odoo #1580), greenautarky_site 2.12.13, and the 1.5-line fixes merged since the BOSv1.5.3 final: stager keeps a newer component-sync'd component across reboot, with a cap (#1045, Odoo #1888); host firewall default-deny on every non-trusted interface (#1052, Odoo #1707, see the entry above); check-versions validates the 1.5 line's own release set (#1048, Odoo #1758); ga_manager 0.264.0 hold renewed to 2026-12-11 (#1050, Odoo #1758). ga_manager stays 0.264.0. Build only; no rollout implied.
 
+Add-on brotli rebuilds (CVE-2026-111497) so the release is not half-fixed (Core is fixed by 2026.8.2.2): ga_ihosthardwarecontrol 1.2.2, ga_zigbee2mqtt 2.12.1-11, sonoff_dongle_flasher 1.3.8. mosquitto, ga_influxdbv1, ga_default_addon and ga_hmvapp_addon stay on their BOSv1.5.3 pins; ga_manager stays held at 0.264.0.
+
 ## BOSv1.5.2-rc4 (marker)
 
 The first BOSv1.5.2 final bake (2026-10-28) was refused by the CVE gate: CVE-2026-115557 (Python 3.14.8, published after the rc3 bake) in three unchanged add-on images. They are rebuilt with Python 3.14.10 and no code change: ga_manager 0.255.1 (from the 0.255.0 source), ga_default_addon 2.1.6, ga_hmvapp_addon 2.6.2. Independently scanned (trivy, armv7): the CVE is absent, 0 fixable CRITICAL.
