@@ -92,6 +92,49 @@ cmp -s "$W/noest/$GATEF" "$W/dsgw210/$GATEF" && no "fixture noest changed nothin
 # the iHost must not pass with the DSGW's NIC names and vice versa (pinned per board, not derived)
 must_flag ihost "$W/dsgw210" FWB-11 "MUST-FLAG the DSGW-210 tree judged as an iHost (wrong NIC names)"
 
+# --- failure injection (rule 53; Odoo #1445): the path that only runs on the event it reports.
+# The LIVE gate of each board's tree is run with an nft that rejects `-f`. Paths are rewritten on a COPY
+# (the gate hardcodes /mnt/data, /mnt/boot, /usr/libexec); the rewrite itself is asserted.
+# inject <gate-file> <tag> -> sets FI_RC FI_STATUS FI_LOG after running it with a failing nft
+inject() {
+  local g="$1" t="$2" d="$W/fi-$2"
+  mkdir -p "$d/bin" "$d/share" "$d/boot"
+  sed -e "s#^SHARE_DIR=.*#SHARE_DIR=$d/share#" -e "s#^OFF_MARKER=.*#OFF_MARKER=$d/boot/ga-firewall-off#" \
+      -e "s#/usr/libexec/ga-share-publish#$d/bin/ga-share-publish#" "$g" > "$d/gate"
+  grep -q "^SHARE_DIR=$d/share" "$d/gate" && grep -q "$d/bin/ga-share-publish" "$d/gate" && grep -q "^OFF_MARKER=$d/boot" "$d/gate" \
+    || { FI_RC=rewrite; return 1; }
+  printf '#!/bin/sh\ncat > "$1"\n' > "$d/bin/ga-share-publish"   # same contract as the real helper: path, mode, stdin
+  printf '#!/bin/sh\necho "$@" >> "%s/logger.out"\n' "$d" > "$d/bin/logger"
+  printf '#!/bin/sh\ncase "$1" in -f) echo "Error: injected load failure" >&2; exit 1 ;; list) exit 1 ;; *) exit 0 ;; esac\n' > "$d/bin/nft"
+  chmod +x "$d/bin/"*
+  env PATH="$d/bin:$PATH" GA_BOARD_CONF="$d/none" sh "$d/gate" >"$d/out" 2>&1; FI_RC=$?
+  FI_STATUS=""; [ -r "$d/share/ga-firewall-status.json" ] && FI_STATUS="$(tr -d '\n' < "$d/share/ga-firewall-status.json")"
+  FI_LOG=""; [ -r "$d/logger.out" ] && FI_LOG="$(cat "$d/logger.out")"
+  return 0
+}
+fi_assert() {  # <gate-file> <tag> <label> -> ok/no for each of the three loud-failure properties
+  inject "$1" "$2" || { no "$3: failure-injection path rewrite did not apply (gate text changed?)"; return; }
+  [ "$FI_RC" = 0 ] && ok "$3: load failure -> gate exits 0 (fail-open by design, never wedges boot)" || no "$3: load failure -> exit $FI_RC"
+  grep -q '"ruleset_loaded": false' <<<"$FI_STATUS" && grep -q '"source": "load-failed"' <<<"$FI_STATUS" && grep -q '"enabled": false' <<<"$FI_STATUS" \
+    && ok "$3: load failure -> status JSON ruleset_loaded=false / source=load-failed / enabled=false" || no "$3: load failure -> status JSON wrong: $FI_STATUS"
+  grep -q 'daemon.err' <<<"$FI_LOG" && grep -q 'UNFILTERED' <<<"$FI_LOG" \
+    && ok "$3: load failure -> journal line at daemon.err naming UNFILTERED" || no "$3: load failure -> no err-level log line"
+}
+for b in $GA_BOARDS; do fi_assert "$W/$b/usr/libexec/ga-firewall-gate" "$b" "$b"; done
+# green twin: an nft that accepts the load must report ruleset_loaded=true (a check that can go green)
+d="$W/fi-ihost"; printf '#!/bin/sh\ncase "$1" in -f) exit 0 ;; list) exit 1 ;; *) exit 0 ;; esac\n' > "$d/bin/nft"; rm -f "$d/share/ga-firewall-status.json"
+env PATH="$d/bin:$PATH" GA_BOARD_CONF="$d/none" sh "$d/gate" >/dev/null 2>&1
+grep -q '"ruleset_loaded": true' "$d/share/ga-firewall-status.json" 2>/dev/null && grep -q '"source": "default"' "$d/share/ga-firewall-status.json" \
+  && ok "load success: status JSON ruleset_loaded=true / source=default" || no "load success: status JSON wrong"
+# must-flag: the SAME assertions, run against a gate whose loud-failure path is removed, must go red
+cp "$W/ihost/usr/libexec/ga-firewall-gate" "$W/quiet-gate"
+sed -i -e 's/^log_err() {.*$/log_err() { :; }/' -e 's/write_status false load-failed false/:/' "$W/quiet-gate"
+cmp -s "$W/quiet-gate" "$W/ihost/usr/libexec/ga-firewall-gate" && no "fixture quiet-gate changed nothing" || {
+  inject "$W/quiet-gate" quiet
+  if [ "$FI_RC" = 0 ] && ! grep -q 'load-failed' <<<"$FI_STATUS" && ! grep -q 'UNFILTERED' <<<"$FI_LOG"; then
+    ok "MUST-FLAG a gate with the loud-failure path removed (no load-failed status, no err line) -> assertions above would be red"
+  else no "quiet-gate not detected: rc=$FI_RC status=$FI_STATUS"; fi; }
+
 # static: defconfigs select nft and the GA layer overlay; one gate + one unit in the tree
 for b in $GA_BOARDS; do
   d="$ROOT/$(ga_board_var DEFCONFIG "$b")"
@@ -101,5 +144,5 @@ done
 n="$(git -C "$ROOT" ls-files | grep -cE '(^|/)ga-firewall(-gate|\.service)$')"
 [ "$n" = 3 ] && ok "exactly one gate + one unit + one wants link tracked (no per-board copy)" || no "firewall files tracked: $n (expected 3: gate, unit, wants link)"
 
-[ "$ran" -ge 18 ] || { echo "FAIL: only $ran cases ran (floor 18)"; exit 1; }
+[ "$ran" -ge 25 ] || { echo "FAIL: only $ran cases ran (floor 25)"; exit 1; }
 echo "$ran cases ran, $bad failed"; exit $((bad>0))
