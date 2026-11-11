@@ -65,7 +65,33 @@ else
   setenv fdtfile rv1109-sonoff-ihost.dtb
 fi
 
-echo "Loading standard device tree ${fdtfile}"
+# GA (Odoo #1900): vccio5 (Ethernet RMII/MDIO bank) is physically 3.3 V. Only a
+# device whose haos-config.txt (imported above, device-owned, kept across OTA)
+# says ga_vccio5=3v3 boots the 3.3 V variant; the flasher writes that key on a
+# fresh flash. Everything else keeps the legacy 1.8 V DTB (Thomas, 2026-11-11).
+# The loaded variant is handed to the kernel as ga.vccio5=<3v3|1v8>, so
+# hw_iodomain can tell a requested-but-missing 3v3 DTB (fallback) from a
+# legacy device: a fallback is loud, never silent. The argument is PREPENDED:
+# bootargs_ga must keep ending with the gadget serial
+# (tests/gates/ihost_gadget_serial), and the USB lock flag must stay after
+# ${cmdline} (tests/gates/ota_usb_lock).
+setenv ga_vccio5_loaded 1v8
+if test "x${ga_vccio5}" = "x3v3"; then
+  if test "x${cpucode#}" = "x1126"; then
+    setenv fdtfile_3v3 rv1126-sonoff-ihost-vccio5-3v3.dtb
+  else
+    setenv fdtfile_3v3 rv1109-sonoff-ihost-vccio5-3v3.dtb
+  fi
+  if test -e mmc ${devnum}:${boot_partnum} ${fdtfile_3v3}; then
+    setenv fdtfile ${fdtfile_3v3}
+    setenv ga_vccio5_loaded 3v3
+  else
+    echo "GA: ga_vccio5=3v3 requested but ${fdtfile_3v3} is missing - FALLING BACK to the 1.8 V DTB ${fdtfile}"
+  fi
+fi
+setenv bootargs_ga "ga.vccio5=${ga_vccio5_loaded} ${bootargs_ga}"
+
+echo "Loading device tree ${fdtfile} (vccio5 ${ga_vccio5_loaded})"
 fatload mmc ${devnum}:${boot_partnum} ${fdt_addr_r} ${fdtfile}
 fdt addr ${fdt_addr_r}
 

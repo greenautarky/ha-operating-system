@@ -144,6 +144,8 @@ touch -d '2026-01-01' "$OUT"/images/rootfs.erofs 2>/dev/null || : > "$OUT/images
 touch "$OUT"/images/*.raucb "$OUT"/images/*.img.xz
 # ... and then replaced by minimal SYNTHETIC ones the real checks can open (Odoo #1632)
 "$HERE/synth-release-artefacts.sh" "$OUT" || { echo "make-fixture: synthetic release artefacts failed" >&2; exit 2; }
+# iHost: the vccio5 = 3.3 V DTB variants from the LIVE generator on the fixture's own DTBs (Odoo #1900, BLD-VCC-01)
+"$HERE/synth-vccio5-dtbs.sh" "$OUT" "$BOARD" || { echo "make-fixture: vccio5 DTB variants failed" >&2; exit 2; }
 # the Buildroot .config of the build (the real ga_output/.config; images/configs/buildroot.config is its archived copy)
 [ -f "$OUT/images/configs/buildroot.config" ] && cp "$OUT/images/configs/buildroot.config" "$OUT/.config"
 # host Go: replays what the real `go version [-m] target/` printed in this bake; the verdict code is the real one

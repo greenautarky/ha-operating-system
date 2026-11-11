@@ -10,7 +10,11 @@
 #   --ethernet-force  After flashing, write /ga-ethernet-force onto hassos-boot so
 #                     provisioning runs over Ethernet. MUST be removed before the
 #                     device ships — see the block in the flash section.
-#   --flash      Flash image to SD card (DESTRUCTIVE)
+#   --flash      Flash image to SD card (DESTRUCTIVE). Always marks the card
+#                ga_vccio5=3v3 (Odoo #1900); an image without the vccio5 = 3.3 V
+#                DTB is a FAIL (no fresh flash may run the old 1.8 V setting).
+#   --allow-pre-1900-image  JUMP TESTS ONLY (norm N61): accept an image older than
+#                #1900; the card keeps the legacy 1.8 V setting (WARN, no key).
 #   --all        Run sha + diff + prompt for flash
 #   --device     SD card device (default: /dev/mmcblk0)
 #   --dry-run    Show what would be done without doing it
@@ -42,6 +46,7 @@ FAILURES=0
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 DO_SHA=false; DO_DIFF=false; DO_FLASH=false; DRY_RUN=false; ETH_FORCE=false
+ALLOW_PRE_1900=0
 IMAGE=""; DEVICE="/dev/mmcblk0"
 
 usage() {
@@ -57,6 +62,7 @@ while [[ $# -gt 0 ]]; do
     --diff)    DO_DIFF=true ;;
     --flash)   DO_FLASH=true ;;
     --ethernet-force) ETH_FORCE=true ;;
+    --allow-pre-1900-image) ALLOW_PRE_1900=1 ;;
     --all)     DO_SHA=true; DO_DIFF=true; DO_FLASH=true ;;
     --device)  DEVICE="$2"; shift ;;
     --dry-run) DRY_RUN=true ;;
@@ -232,6 +238,37 @@ if $DO_FLASH; then
       _flash_operator="$(whoami)@$(hostname)"
       echo "${_flash_date},$(basename "$IMAGE"),${_flash_sha},${DEVICE},${DEVICE_MODEL},${DEVICE_GB},${_flash_operator}" >> "$FLASH_LOG"
       _info "Flash recorded in $FLASH_LOG"
+
+      # ── vccio5 = 3.3 V on every fresh flash (Odoo #1900, always on) ──────────
+      # The iHost RMII/MDIO bank is physically 3.3 V (#1484). boot.scr loads the
+      # 3.3 V DTB only for ga_vccio5=3v3 in haos-config.txt (device-owned, kept
+      # across OTA). Thomas 2026-11-11: no fresh flash may come out on 1.8 V, so
+      # an image without the 3.3 V DTB FAILS here (DO NOT USE the card) unless
+      # --allow-pre-1900-image (jump tests). Same contract as the flasher's
+      # seed-vccio5.sh; logic in scripts/lib/vccio5-key.sh (gate vccio5_key).
+      . "$(dirname "$0")/lib/vccio5-key.sh"
+      sudo partprobe "$DEVICE" 2>/dev/null || true
+      _vcc_boot=""
+      for _p in "${DEVICE}"*; do
+        [[ -b "$_p" ]] || continue
+        [[ "$(lsblk -no LABEL "$_p" 2>/dev/null | xargs)" == "hassos-boot" ]] && { _vcc_boot="$_p"; break; }
+      done
+      _vcc_mnt="$(mktemp -d)"
+      if [[ -z "$_vcc_boot" ]]; then
+        _fail "vccio5: no hassos-boot partition on $DEVICE — card NOT marked ga_vccio5=3v3, DO NOT USE IT"
+      elif ! sudo mount "$_vcc_boot" "$_vcc_mnt" 2>/dev/null; then
+        _fail "vccio5: could not mount $_vcc_boot — card NOT marked ga_vccio5=3v3, DO NOT USE IT"
+      else
+        _vcc_rc=0; _vcc_out="$(vcc_seed_dir "$_vcc_mnt" "$ALLOW_PRE_1900")" || _vcc_rc=$?   # set -e safe
+        sudo sync
+        case $_vcc_rc in
+          0) _pass "vccio5: ga_vccio5=3v3 set in haos-config.txt — the device boots the 3.3 V DTB" ;;
+          3) _warn "vccio5: --allow-pre-1900-image: pre-#1900 image, card left on the LEGACY 1.8 V setting (jump tests only)" ;;
+          *) _fail "${_vcc_out:-vccio5: marking failed} — DO NOT USE this card (or pass --allow-pre-1900-image for a jump test)" ;;
+        esac
+        sudo umount "$_vcc_mnt" 2>/dev/null || true
+      fi
+      rmdir "$_vcc_mnt" 2>/dev/null || true
 
       # ── --ethernet-force: provisioning-time Ethernet override ───────────────
       # Provisioning runs over Ethernet, not WiFi: no customer credentials exist

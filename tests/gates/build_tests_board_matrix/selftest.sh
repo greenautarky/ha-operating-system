@@ -18,7 +18,8 @@
 #      keyring THIS image ships; the repo holds no signing key for that keyring, so it cannot pass on a
 #      fixture (swapping the keyring would turn RAUC-KEYRING-01 red). It is judged by its REAL code, extracted
 #      from the live runner, in tests/gates/rauc_sig_runner (throwaway CA, real `rauc`), and by the bake.
-#      BLD-ETH-01, IMG-01 and RFLOOR-01 are judged here on MINIMAL SYNTHETIC release artefacts
+#      BLD-ETH-01, IMG-01 and RFLOOR-01 are judged here on MINIMAL SYNTHETIC release artefacts, BLD-VCC-01
+#      on 3.3 V DTB variants made by the live generator from the fixture's real DTBs (synth-vccio5-dtbs.sh)
 #      (synth-release-artefacts.sh: a squashfs "bundle" with boot.vfat + manifest, a toy GPT image); their
 #      red proofs are at the bottom of this file (Odoo #1632).
 #   2. every test that PASSED in the real bake still PASSES (expected/<board>.pass = pinned from the real
@@ -158,6 +159,13 @@ synth_red SYNTH_NO_SD_MARKER=1  BLD-ETH-01 eth-detector-dead
 synth_red SYNTH_RELEASE=BOSv0.0.1 RFLOOR-01 floor-release-differs
 synth_red SYNTH_NO_META=1       RFLOOR-01 floor-no-meta
 synth_red SYNTH_IMG_BLANK1=1    IMG-01    img-slot1-blank
+# BLD-VCC-01 (Odoo #1900, iHost only): the green side is expected/ihost.pass (real generator on the real rc3 DTBs)
+vcc_red() { # <env assignment> <label>
+  local out; out="$(env "$1" "$HERE/run-board.sh" ihost "$W/wv-$2" 2>&1)"
+  echo "$out" | grep -qE "^ +FAIL +BLD-VCC-01[: ]" && ok "red proof $2: ihost goes red on BLD-VCC-01" || bad "red proof $2: ihost did NOT go red on BLD-VCC-01"
+}
+vcc_red SYNTH_VCC_NO_RV1109=1 vcc-variant-missing
+vcc_red SYNTH_VCC_1V8=1       vcc-variant-still-1v8
 
 # ---- Odoo #1649: the checks that read the vendored component / the baked Supervisor archive can go red ----
 # (they read sibling checkouts that no job provided and were SKIP in every run). Injected into the

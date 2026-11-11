@@ -62,7 +62,7 @@ printf 'rockchip,rk3568\0' > "$T/compat2"
 iod_is_ihost "$T/compat2"; RC=$?; show_verdict ISO-14 "board check: other board not recognised" "$([ $RC -ne 0 ] && echo 0 || echo 1)" ""
 
 # --- IOD-03..08 fixtures (live functions from iodomain.sh) ---------------------
-for f in grf-rmii-ok grf-rmii-bad ret-ok ret-bad regsum-ok regsum-vccio5-3v3 regsum-none pinconf-ok pinconf-83-4ma dmesg-ok dmesg-grf; do
+for f in grf-rmii-ok grf-rmii-bad ret-ok ret-bad regsum-ok regsum-vccio5-3v3 regsum-none pinconf-ok pinconf-83-4ma pinconf-real-1v8-ihostA dmesg-ok dmesg-grf; do
   [ -f "$FX/$f.txt" ] || { echo "FATAL: fixture $f.txt missing"; exit 1; }
 done
 for fn in iod_readreg iod_ret_verdict iod_rmii_verdict iod_regsum_verdict iod_pinconf_verdict iod_dmesg_verdict iod_eth_verdict; do
@@ -96,8 +96,8 @@ flag ISO-25 "zero io-domains consumers FAILS (coverage)" "$RC" "$OUT"
 OUT=$(iod_regsum_verdict "$FX/does-not-exist.txt"); RC=$?
 flag ISO-26 "unreadable regulator_summary FAILS" "$RC" "$OUT"
 # IOD-06 pinconf
-OUT=$(iod_pinconf_verdict "$FX/pinconf-ok.txt"); RC=$?
-show_verdict ISO-27 "pinconf known-good passes" "$RC" "$OUT"
+OUT=$(iod_pinconf_verdict "$FX/pinconf-real-1v8-ihostA.txt"); RC=$?
+show_verdict ISO-27 "REAL pinconf (iHost-A, 1v8) passes" "$RC" "$OUT"
 OUT=$(iod_pinconf_verdict "$FX/pinconf-83-4ma.txt"); RC=$?
 flag ISO-28 "4 mA on pin 83 flagged" "$RC" "$OUT"
 OUT=$(iod_pinconf_verdict "$FX/regs-a6.txt"); RC=$?
@@ -137,4 +137,53 @@ _l5=$(grep 'io-domains-vccio5' "$FX/regsum-real-k31-rc2.txt")
 awk -v l="$_l5" '/io-domains-vccio5/ {next} {print} /^ +vcc_3v3 / {print l}' "$FX/regsum-real-k31-rc2.txt" > "$T/rs-mut2"
 OUT=$(iod_regsum_verdict "$T/rs-mut2"); RC=$?
 flag ISO-46 "REAL summary with vccio5 moved under vcc_3v3 flagged" "$RC" "$OUT"
+# --- Two modes (Odoo #1900, 2026-11-11). REAL 3v3 captures from the iHost-A bench unit
+# (BOSv1.5.3 booted with the 3.3 V DTB): 0x140=0x86, vccio5 under
+# vcc_3v3, MDC pin 82 = 2 mA. Each mode must pass its own captures AND flag the other.
+for f in regs-real-pmugrf-3v3-ihostA regsum-real-3v3-ihostA pinconf-real-3v3-ihostA pinconf-real-1v8-ihostA; do
+  [ -f "$FX/$f.txt" ] || { echo "FATAL: fixture $f.txt missing"; exit 1; }
+done
+type iod_mode >/dev/null 2>&1 && type iod_set_mode >/dev/null 2>&1 \
+  || { echo "FATAL: iodomain.sh no longer defines iod_mode/iod_set_mode"; exit 1; }
+printf 'ga_vccio5=3v3\n' > "$T/c1";  M=$(iod_mode "$T/c1");  show_verdict ISO-47 "mode: 'ga_vccio5=3v3' -> 3v3" "$([ "$M" = 3v3 ] && echo 0 || echo 1)" "$M"
+: > "$T/c2";                          M=$(iod_mode "$T/c2");  show_verdict ISO-48 "mode: empty haos-config.txt -> 1v8 (legacy)" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
+M=$(iod_mode "$T/nope");              show_verdict ISO-49 "mode: missing file -> 1v8 (legacy)" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
+printf 'ga_vccio5=3v3\r\n' > "$T/c3"; M=$(iod_mode "$T/c3");  show_verdict ISO-50 "mode: CRLF value is not exactly 3v3 -> 1v8 (mirrors hush)" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
+printf 'ga_vccio5=1v8\n' > "$T/c4";  M=$(iod_mode "$T/c4");  show_verdict ISO-51 "mode: 'ga_vccio5=1v8' -> 1v8" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
+printf '#ga_vccio5=3v3\nxga_vccio5=3v3\n' > "$T/c5"; M=$(iod_mode "$T/c5"); show_verdict ISO-52 "mode: commented / prefixed key is NOT 3v3" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
+printf 'ga_vccio5=3v3 \n' > "$T/c6"; M=$(iod_mode "$T/c6"); show_verdict ISO-52a "mode: trailing space -> 1v8 (hush compares exactly)" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
+printf 'ga_vccio5=3v3\nga_vccio5=1v8\n' > "$T/c7"; M=$(iod_mode "$T/c7"); show_verdict ISO-52b "mode: last value wins (env import) -> 1v8" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
+printf 'ga_vccio5=1v8\nga_vccio5=3v3\n' > "$T/c8"; M=$(iod_mode "$T/c8"); show_verdict ISO-52c "mode: last value wins -> 3v3" "$([ "$M" = 3v3 ] && echo 0 || echo 1)" "$M"
+iod_set_mode 3v3
+x=$(iod_readreg "$FX/regs-real-pmugrf-3v3-ihostA.txt" 140); OUT=$(iod_verdict "$x"); RC=$?
+show_verdict ISO-53 "3v3: REAL 0x140=0x86 passes" "$RC" "$OUT"
+x=$(iod_readreg "$FX/regs-real-pmugrf-k31-rc2.txt" 140); OUT=$(iod_verdict "$x"); RC=$?
+flag ISO-54 "3v3: REAL 1v8 capture 0xA6 flagged" "$RC" "$OUT"
+show_verdict ISO-55 "3v3: 0xA6 names vccio5 1.8 V vs 3.3 V" "$([ "$OUT" = "vccio5: register implies 1.8 V, known-good is 3.3 V" ] && echo 0 || echo 1)" "$OUT"
+OUT=$(iod_regsum_verdict "$FX/regsum-real-3v3-ihostA.txt"); RC=$?
+show_verdict ISO-56 "3v3: REAL regulator_summary (vccio5 under vcc_3v3) passes" "$RC" "$OUT"
+OUT=$(iod_regsum_verdict "$FX/regsum-real-k31-rc2.txt"); RC=$?
+flag ISO-57 "3v3: REAL 1v8 regulator_summary flagged" "$RC" "$OUT"
+OUT=$(iod_pinconf_verdict "$FX/pinconf-real-3v3-ihostA.txt"); RC=$?
+show_verdict ISO-58 "3v3: REAL pinconf (pin 82 = 2 mA) passes" "$RC" "$OUT"
+OUT=$(iod_pinconf_verdict "$FX/pinconf-ok.txt"); RC=$?
+flag ISO-59 "MODELLED pinconf with pin 82 = 4 mA is flagged (the old expectation)" "$RC" "$OUT"
+iod_set_mode 1v8
+x=$(iod_readreg "$FX/regs-real-pmugrf-3v3-ihostA.txt" 140); OUT=$(iod_verdict "$x"); RC=$?
+flag ISO-60 "1v8: REAL 3v3 capture 0x86 flagged" "$RC" "$OUT"
+OUT=$(iod_regsum_verdict "$FX/regsum-real-3v3-ihostA.txt"); RC=$?
+flag ISO-61 "1v8: REAL 3v3 regulator_summary flagged" "$RC" "$OUT"
+OUT=$(iod_pinconf_verdict "$FX/pinconf-real-3v3-ihostA.txt"); RC=$?
+show_verdict ISO-62 "1v8: REAL 3v3 pinconf passes too (pin drive is mode-independent)" "$RC" "$OUT"
+# IOD-00 loaded-vs-mode (Odoo #1900)
+type iod_loaded >/dev/null 2>&1 && type iod_loaded_verdict >/dev/null 2>&1 || { echo "FATAL: iod_loaded* missing"; exit 1; }
+printf 'console=ttyS2 rauc.slot=A usbcore.authorized_default=0 ga.vccio5=3v3\n' > "$T/cl1"; L=$(iod_loaded "$T/cl1")
+show_verdict ISO-63 "cmdline ga.vccio5=3v3 read as 3v3" "$([ "$L" = 3v3 ] && echo 0 || echo 1)" "$L"
+printf 'console=ttyS2 rauc.slot=A\n' > "$T/cl2"; L=$(iod_loaded "$T/cl2")
+show_verdict ISO-64 "cmdline without the argument -> none" "$([ "$L" = none ] && echo 0 || echo 1)" "$L"
+OUT=$(iod_loaded_verdict 3v3 3v3); show_verdict ISO-65 "3v3 requested + 3v3 loaded passes" "$?" "$OUT"
+OUT=$(iod_loaded_verdict 1v8 1v8); show_verdict ISO-66 "legacy 1v8 + 1v8 loaded passes" "$?" "$OUT"
+OUT=$(iod_loaded_verdict 3v3 1v8); flag ISO-67 "3v3 requested but 1v8 loaded (silent fallback) flagged" "$?" "$OUT"
+OUT=$(iod_loaded_verdict 1v8 none); flag ISO-68 "pre-#1900 boot.scr (no argument) flagged, not passed" "$?" "$OUT"
+OUT=$(iod_loaded_verdict 1v8 3v3); flag ISO-69 "1v8 mode but 3v3 loaded flagged" "$?" "$OUT"
 suite_end

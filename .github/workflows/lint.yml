@@ -500,7 +500,7 @@ jobs:
         # Red-proven by restoring the first-row rule: OSV-01 and OSV-02 fail.
         run: sh tests/ga_tests/openstick/selftest.sh
 
-      - name: hw_iodomain parses PMUGRF 0x140 against the pinned 0xA6 (iHost I/O-domain voltages)
+      - name: hw_iodomain parses PMUGRF 0x140 against the pinned value of its vccio5 mode (0xA6 legacy / 0x86 3v3, Odoo #1900)
         # BOSv1.6.0-rc1 read 0x86 (vccio5 = 3.3 V, Ethernet dead) and every other
         # check was green. Drives the LIVE iodomain.sh that the device suite
         # sources: 0x86 must be flagged (naming vccio5 / 3.3 V), 0xA6 must pass,
@@ -680,6 +680,17 @@ jobs:
         # XVER-03/VER-05/GAMCAP-01/WIFI-09/pin file) into a copy of the runner.
         run: |
           git submodule update --init --depth 1 haos
+          # fdtget/fdtput/dtc for the live vccio5 DTB generator on the iHost fixture (BLD-VCC-01,
+          # Odoo #1900). Not via apt-install: that action proves a package by a command of the
+          # same name, and device-tree-compiler ships dtc/fdtget/fdtput. Same rules here: every
+          # apt call bounded, 3 attempts, then proven by the command the gate actually runs.
+          if ! command -v fdtput >/dev/null; then
+            for a in 1 2 3; do
+              timeout 180 sudo apt-get update -qq && timeout 180 sudo apt-get install -y -qq device-tree-compiler && break
+              echo "device-tree-compiler attempt $a failed (apt mirror)"; sleep 10
+            done
+          fi
+          command -v fdtput >/dev/null || { echo "::error::fdtput not on PATH — device-tree-compiler not installed (apt mirror, not the change under test)"; exit 1; }
           bash tests/gates/build_tests_board_matrix/selftest.sh
 
       - name: image archive reader (the baked Supervisor's dns.py for BLD-SUP-DNS / INT-05 / SVC-09*, Odoo #1649)
@@ -1018,6 +1029,20 @@ jobs:
       # the live hook, evaluates the kernel command line from the live script.
       - name: USB host lock reaches a device updated over the air (ADR-0029 D3)
         run: ./tests/gates/ota_usb_lock/selftest.sh
+
+      # Odoo #1900: the boot.scr block that loads the vccio5 = 3.3 V DTB is the riskiest code
+      # of the change: if it ever sets fdtfile to a variant that is not on the partition,
+      # fatload fails and the device does not boot. Evaluates the LIVE block; mutations
+      # (guard removed / wrong file / key loosened / no 1v8 reset / arg appended / set
+      # outside the guard) must go red; a script without the block fails the extraction.
+      - name: iHost boot.scr vccio5 DTB selection (Odoo #1900)
+        run: bash tests/gates/ihost_vccio5_bootscr/selftest.sh
+
+      # Odoo #1900: every fresh flash through verify-sd.sh marks the card
+      # ga_vccio5=3v3 (iHost vccio5 bank is physically 3.3 V, #1484) and refuses
+      # a pre-#1900 image unless --allow-pre-1900-image (jump tests).
+      - name: vccio5 3.3 V card key (verify-sd.sh, Odoo #1900)
+        run: sh tests/gates/vccio5_key/selftest.sh
 
       # Odoo #1723: the iHost boot script gives the g_serial gadget an
       # iSerialNumber (= serial#), guarded so an empty serial# emits nothing.

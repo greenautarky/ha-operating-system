@@ -13,6 +13,22 @@ function haos_pre_image() {
         "${BINARIES_DIR}/rv1126-sonoff-ihost.dtb" \
         "${BINARIES_DIR}/rv1109-sonoff-ihost.dtb"
 
+    # ── vccio5 = 3.3 V variant for freshly flashed devices (Odoo #1900) ──────
+    # The RMII/MDIO bank is physically 3.3 V (#1484, measured 2026-11-11); the
+    # DTBs above keep the legacy 1.8 V setting that every existing device runs.
+    # boot.scr loads the *-vccio5-3v3.dtb only when haos-config.txt carries
+    # ga_vccio5=3v3, which the flasher writes on a fresh flash. haos-config.txt
+    # is device-owned (the RAUC boot hook restores *.txt), so an OTA never
+    # changes a device's setting. The generator changes exactly one property
+    # and fails the build on anything else.
+    local soc
+    for soc in rv1126 rv1109; do
+        FDTGET="${HOST_DIR}/bin/fdtget" FDTPUT="${HOST_DIR}/bin/fdtput" DTC="${HOST_DIR}/bin/dtc" \
+            "${BOARD_DIR}/make-vccio5-3v3-dtb.sh" \
+            "${BINARIES_DIR}/${soc}-sonoff-ihost.dtb" \
+            "${BOOT_DATA}/${soc}-sonoff-ihost-vccio5-3v3.dtb" || exit 1
+    done
+
     mkdir -p "${BOOT_DATA}/overlays"
     #cp "${BINARIES_DIR}"/*.dtbo "${BOOT_DATA}/overlays/"
     cp "${BOARD_DIR}/boot-env.txt" "${BOOT_DATA}/haos-config.txt"

@@ -569,6 +569,43 @@ else
   fi
 fi
 
+# BLD-VCC-01 (Odoo #1900): the boot artifact carries the vccio5 = 3.3 V DTB
+# variants next to the legacy 1.8 V DTBs, and they differ in that one property.
+# The bank is physically 3.3 V (#1484, measured 2026-11-11); fresh flashes boot
+# the variant via ga_vccio5=3v3 in haos-config.txt. A missing variant would make
+# boot.scr fall back to 1.8 V on exactly the devices meant to leave it. Checked
+# on the real artifact with the host fdtget the hook used. The expected
+# regulators are pinned by NAME (vcc_1v8 / vcc_3v3), resolved via __symbols__.
+if [[ "$_RBT_BOARD" == ihost ]]; then
+  if [[ -d "${OUT}/images/boot" ]]; then
+    _vfg="${OUT}/host/bin/fdtget"
+    for _soc in rv1126 rv1109; do
+      _vb="${OUT}/images/boot/${_soc}-sonoff-ihost.dtb"
+      _vv="${OUT}/images/boot/${_soc}-sonoff-ihost-vccio5-3v3.dtb"
+      if [[ ! -f "$_vv" ]]; then
+        _fail "BLD-VCC-01: ${_soc}-sonoff-ihost-vccio5-3v3.dtb MISSING from the boot artifact — ga_vccio5=3v3 devices would fall back to 1.8 V"
+        continue
+      fi
+      if [[ ! -x "$_vfg" ]]; then
+        _fail "BLD-VCC-01: ${_vfg} not found — cannot verify the ${_soc} variant (host-dtc must be in the defconfig)"
+        continue
+      fi
+      _viod="$("$_vfg" "$_vb" /__symbols__ pmu_io_domains 2>/dev/null)"
+      _vp18="$("$_vfg" -t x "$_vb" "$("$_vfg" "$_vb" /__symbols__ vcc_1v8 2>/dev/null)" phandle 2>/dev/null)"
+      _vp33="$("$_vfg" -t x "$_vb" "$("$_vfg" "$_vb" /__symbols__ vcc_3v3 2>/dev/null)" phandle 2>/dev/null)"
+      _vbase="$("$_vfg" -t x "$_vb" "$_viod" vccio5-supply 2>/dev/null)"
+      _vvar="$("$_vfg" -t x "$_vv" "$_viod" vccio5-supply 2>/dev/null)"
+      if [[ -n "$_vp18" && -n "$_vp33" && "$_vbase" == "$_vp18" && "$_vvar" == "$_vp33" ]]; then
+        _pass "BLD-VCC-01: ${_soc}: base DTB vccio5 -> vcc_1v8, vccio5-3v3 DTB -> vcc_3v3"
+      else
+        _fail "BLD-VCC-01: ${_soc}: base vccio5-supply='${_vbase}' (want vcc_1v8 '${_vp18}'), variant='${_vvar}' (want vcc_3v3 '${_vp33}')"
+      fi
+    done
+  else
+    _skip "BLD-VCC-01: vccio5 3.3 V DTB variants in the boot artifact" "no ${OUT}/images/boot in this run"
+  fi
+fi
+
 # BLD-ETH-01: the OTA bundle must NOT carry the ethernet-force marker.
 #
 # The SD image carries it on purpose (CFG-49a); the bundle must not, because

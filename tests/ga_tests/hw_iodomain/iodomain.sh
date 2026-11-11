@@ -13,8 +13,60 @@
 # of BOSv1.5.3 / BOSv1.6.0-rc2 = vccio1 1.8, vccio2 1.8 (vccio_sd at runtime),
 # vccio3/4/6 3.3, vccio5 1.8, vccio7 1.8  ->  0xA6 (bits 1,2,5,7). Same set as
 # KNOWN_GOOD in scripts/check-ihost-iodomains.py (that one judges the DT sources).
-IOD_EXPECT=166   # 0xA6
 IOD_MASK=254     # 0xFE: bits 1..7 (vccio1..7); bit 0 is pmuio, not judged here
+#
+# TWO pinned sets since Odoo #1900 (2026-11-11). The vccio5 bank is PHYSICALLY
+# 3.3 V (RTL8201F IO = DVDD33; pin 21 measured 3.3 V on two units, #1484). Freshly
+# flashed devices run the 3.3 V DTB (haos-config.txt ga_vccio5=3v3, written by the
+# flasher); every other device keeps the legacy 1.8 V setting (Thomas, 2026-11-11).
+# The MODE (operator intent) picks which pinned set applies; the device is then
+# judged against it. Both sets are measurements, never read from the DT under test:
+#   1v8  0x140=0xA6, vccio5 -> vcc_1v8   K170/K31 2026-11-05, iHost-A 2026-11-11
+#   3v3  0x140=0x86, vccio5 -> vcc_3v3   iHost-A/-B 2026-11-11
+# Pin drive (IOD-06) is the SAME in both modes: 83/84/86 = 12 mA, MDC pin 82 = 2 mA,
+# measured on iHost-A in both modes and iHost-B at 3v3 (REAL captures). The earlier
+# "pin 82 = 4 mA" came from a MODELLED fixture and could not pass on iHost-A.
+IOD_BOOTCFG="${IOD_BOOTCFG:-/mnt/boot/haos-config.txt}"
+
+# iod_mode <haos-config.txt> — print 3v3 exactly when boot.scr would load the 3.3 V
+# DTB, else 1v8 (absent key, absent file = a legacy device). It MIRRORS U-Boot:
+# `env import -t` keeps the LAST value of a key, and hush compares
+# "x${ga_vccio5}" = "x3v3" exactly, so a trailing space or CR, or a later
+# ga_vccio5=1v8 line, means 1v8 to the bootloader and therefore here too
+# (tests/gates/ihost_vccio5_bootscr evaluates that boot.scr block).
+iod_mode() {
+  _v=""
+  [ -r "$1" ] && _v=$(sed -n 's/^ga_vccio5=//p' "$1" | tail -n1)
+  if [ "$_v" = 3v3 ]; then echo 3v3; else echo 1v8; fi
+}
+
+# iod_set_mode <1v8|3v3> — load the pinned expectations of that mode.
+iod_set_mode() {
+  case "$1" in
+    3v3) IOD_MODE=3v3; IOD_EXPECT=134; IOD_EXPECT_HEX=0x86; IOD_V5_SUPPLY=vcc_3v3 ;;
+    *)   IOD_MODE=1v8; IOD_EXPECT=166; IOD_EXPECT_HEX=0xA6; IOD_V5_SUPPLY=vcc_1v8 ;;
+  esac
+}
+iod_set_mode 1v8
+
+# iod_loaded <cmdline-file> — the DTB variant boot.scr actually loaded, from the
+# kernel argument ga.vccio5=<3v3|1v8> (uboot-boot.ush, Odoo #1900). Prints "none"
+# for a boot script that predates the argument.
+iod_loaded() {
+  _a=$(tr ' ' '\n' < "$1" 2>/dev/null | sed -n 's/^ga\.vccio5=//p' | tail -n1)
+  echo "${_a:-none}"
+}
+
+# iod_loaded_verdict <mode> <loaded> — rc 0 when the loaded DTB matches the mode.
+# A requested 3v3 that booted 1v8 is the silent-fallback case: FAIL, loudly.
+iod_loaded_verdict() {
+  case "$1:$2" in
+    3v3:3v3|1v8:1v8) echo "mode $1, boot.scr loaded the $2 DTB"; return 0 ;;
+    3v3:1v8) echo "ga_vccio5=3v3 requested but boot.scr loaded the 1v8 DTB (3v3 file missing? see the U-Boot console)"; return 1 ;;
+    *:none)  echo "no ga.vccio5= on the kernel command line — boot.scr predates #1900, cannot tell which DTB loaded"; return 1 ;;
+    *)       echo "mode $1 but boot.scr loaded '$2'"; return 1 ;;
+  esac
+}
 IOD_REGMAP="${IOD_REGMAP:-/sys/kernel/debug/regmap/dummy-syscon@0xfe020000/registers}"
 IOD_DTBASE="${IOD_DTBASE:-/sys/firmware/devicetree/base}"
 
@@ -41,7 +93,7 @@ iod_verdict() {
     fi
     _n=$((_n + 1))
   done
-  [ "$_bad" -eq 0 ] && printf 'bits 1-7 of 0x140 = 0x%02X = pinned 0xA6\n' "$_got"
+  [ "$_bad" -eq 0 ] && printf 'bits 1-7 of 0x140 = 0x%02X = pinned %s (%s)\n' "$_got" "$IOD_EXPECT_HEX" "$IOD_MODE"
   return "$_bad"
 }
 
@@ -111,8 +163,8 @@ iod_rmii_verdict() {
 # consumers listed = FAIL (coverage). Consumers are the more-indented lines.
 iod_regsum_verdict() {
   [ -r "$1" ] || { echo "cannot read $1"; return 1; }
-  awk '
-    function want(n) { return (n==5) ? "vcc_1v8" : ((n==3||n==4||n==6) ? "vcc_3v3" : "") }
+  awk -v v5="$IOD_V5_SUPPLY" '
+    function want(n) { return (n==5) ? v5 : ((n==3||n==4||n==6) ? "vcc_3v3" : "") }
     /^[ \t]*-+[ \t]*$/ || /^[ \t]*regulator[ \t]/ { next }
     {
       # A REGULATOR row carries three integer columns (use open bypass) after its
@@ -132,7 +184,7 @@ iod_regsum_verdict() {
       if (!seen) { print "no io-domains-* consumer listed — nothing inspected"; exit 1 }
       split("3 4 5 6", req, " ")
       for (i = 1; i <= 4; i++) if (!checked[req[i]]) { printf "io-domains-vccio%s not listed\n", req[i]; bad = 1 }
-      if (!bad) printf "%d io-domains consumers listed; vccio5 under vcc_1v8, vccio3/4/6 under vcc_3v3\n", seen
+      if (!bad) printf "%d io-domains consumers listed; vccio5 under %s, vccio3/4/6 under vcc_3v3\n", seen, v5
       exit bad
     }' "$1"
 }
@@ -148,10 +200,10 @@ iod_pinconf_ma() {
   echo "$_m"
 }
 
-# iod_pinconf_verdict <file> — pins 83,84,86 = 12 mA, pin 82 = 4 mA (PINNED).
+# iod_pinconf_verdict <file> — pins 83,84,86 = 12 mA, pin 82 = 2 mA (PINNED, both modes).
 iod_pinconf_verdict() {
   _bad=0
-  for _pe in 83:12 84:12 86:12 82:4; do
+  for _pe in 83:12 84:12 86:12 82:2; do
     _pn=${_pe%%:*}; _pw=${_pe##*:}
     if _pg=$(iod_pinconf_ma "$1" "$_pn"); then
       [ "$_pg" -eq "$_pw" ] || { printf 'pin %s drives %s mA, known-good is %s mA\n' "$_pn" "$_pg" "$_pw"; _bad=1; }
@@ -159,7 +211,7 @@ iod_pinconf_verdict() {
       printf 'pin %s: no mA figure in %s (fail closed)\n' "$_pn" "$1"; _bad=1
     fi
   done
-  [ "$_bad" -eq 0 ] && echo "pins 83/84/86 = 12 mA, pin 82 = 4 mA"
+  [ "$_bad" -eq 0 ] && echo "pins 83/84/86 = 12 mA, pin 82 = 2 mA"
   return "$_bad"
 }
 
