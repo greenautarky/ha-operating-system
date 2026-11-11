@@ -236,9 +236,59 @@ _is_prerelease() {
     printf '%s' "$_ipr_suffix" | grep -q '[A-Za-z]'
 }
 
+# --- WHICH LINE IS THIS TREE? (Odoo #1758, Thomas decision 2026-11-11) ---
+#
+# The store (vibe_addons) is ONE file for every release line and it moves with the NEWEST line. From
+# 2026-11-09 it carries the 1.6 add-on versions, so on a 1.5 tree "pin == store HEAD" can never hold
+# again and this gate went red on every 1.5 PR and blocked the BOSv1.5.4 cut, with nothing wrong in the pins.
+#
+# So the lockstep leg is a PER-LINE setting, read from the tree itself (version.yaml gaos_release, so a
+# merge between lines can never carry the wrong mode across - a config key would):
+#   store     the pin must EQUAL the store version (the 1.6 line, and any line not listed, and any tree whose
+#             line cannot be read - that fallback is announced, never silent)
+#   own-set   the line validates its OWN release set: the pins must be internally consistent (one image, one
+#             version; well-formed versions), every pinned image must EXIST in the store, and the store must
+#             not be BEHIND the pin. A store AHEAD of the pin is the other line's newer release, not drift.
+# The registry legs (image published), source-drift and the hold rules are unchanged on every line.
+# GA_LOCKSTEP_MODE=store|own-set overrides the detection (tests).
+OWN_SET_LINES="1.5"
+# A well-formed pin: dotted numeric version, optional numeric add-on revision (2.12.1-10), or a canary (1.3.0-ga.1).
+PIN_WELLFORMED_RE='^[0-9]+([.][0-9]+)+(-[0-9]+|-[A-Za-z][A-Za-z0-9.]*)?$'
+_lockstep_mode() {
+    local rel line
+    if [ -n "${GA_LOCKSTEP_MODE:-}" ]; then printf '%s' "$GA_LOCKSTEP_MODE"; return; fi
+    rel="$(sed -n 's/^gaos_release:[[:space:]]*BOSv\([0-9]*\.[0-9]*\)\..*/\1/p' "${REPO_ROOT}/version.yaml" 2>/dev/null | head -n 1 || true)"
+    for line in $OWN_SET_LINES; do
+        [ "$rel" = "$line" ] && { printf 'own-set'; return; }
+    done
+    if [ -z "$rel" ]; then
+        echo "NOTE: cannot read gaos_release from ${REPO_ROOT}/version.yaml - using the STRICT store lockstep" >&2
+    fi
+    printf 'store'
+}
+LOCKSTEP_MODE="$(_lockstep_mode)"
+line_ahead_count=0
+
 if [ -f "$ADDON_IMAGES_JSON" ] && command -v git >/dev/null 2>&1; then
     echo ""
-    echo "--- vibe_addons lockstep with addon-images.json ---"
+    echo "--- vibe_addons lockstep with addon-images.json (mode: ${LOCKSTEP_MODE}) ---"
+    if [ "$LOCKSTEP_MODE" = own-set ]; then
+        # Internal consistency of this line's own pins: one image must not carry two versions, and a
+        # version must be a release tag (X.Y.Z or X.Y.Z-N) or a canary (-ga.1).
+        while IFS= read -r _dup; do
+            printf "${RED}FAIL${NC}: addon-images.json pins image %s at more than one version (%s) — a line has ONE release set\n" \
+                "${_dup%%|*}" "${_dup#*|}"
+            lockstep_count=$((lockstep_count + 1))
+        done < <(jq -r '[.addons | to_entries[] | {i: .value.image, v: .value.version}] | group_by(.i)[]
+                        | select((map(.v) | unique | length) > 1) | "\(.[0].i)|\(map(.v) | unique | join(","))"' "$ADDON_IMAGES_JSON")
+        for _k in $(jq -r '.addons | keys[]' "$ADDON_IMAGES_JSON"); do
+            _v=$(jq -r ".addons.\"${_k}\".version // empty" "$ADDON_IMAGES_JSON")
+            if ! [[ "$_v" =~ $PIN_WELLFORMED_RE ]]; then
+                printf "${RED}FAIL${NC}: addon-images.json[%s] version '%s' is not a version tag — pin is malformed\n" "$_k" "$_v"
+                lockstep_count=$((lockstep_count + 1))
+            fi
+        done
+    fi
     VIBE_TMP=$(mktemp -d)
     trap 'rm -rf "$VIBE_TMP"' EXIT
     VIBE_REPO_URL="${VIBE_ADDONS_REPO_URL:-https://github.com/greenautarky/vibe_addons}"
@@ -277,6 +327,12 @@ if [ -f "$ADDON_IMAGES_JSON" ] && command -v git >/dev/null 2>&1; then
                 printf "${GREEN}OK${NC}: %s (slug=%s, dir=%s) version %s — vibe_addons in lockstep\n" \
                     "$key" "$found_slug" "$(basename "$found_dir")" "$found_version"
                 pass_count=$((pass_count + 1))
+            elif [ "$LOCKSTEP_MODE" = own-set ] && [ "$(printf '%s\n%s\n' "$expected_version" "$found_version" | sort -V | tail -1)" = "$found_version" ]; then
+                # This line's pin is BEHIND the store because the store serves a newer line. The pinned
+                # image existing in the store (above) and in the registry (check_image) is what this line needs.
+                printf "${YELLOW}LINE-OWN-SET${NC}: %s pinned %s, vibe_addons/%s is %s (newer line) — not required to be equal on this line\n" \
+                    "$key" "$expected_version" "$(basename "$found_dir")" "$found_version"
+                line_ahead_count=$((line_ahead_count + 1))
             elif _is_prerelease "$found_version" && ! _is_prerelease "$expected_version"; then
                 # The store is on a CANARY and the pin is on a release. Not drift
                 # the build may refuse, and not something to wave through either.
@@ -446,6 +502,7 @@ echo "Passed:       ${pass_count}"
 echo "Failed:       $((fail_count + lockstep_count))  (missing from registry: ${fail_count}, out of lockstep: ${lockstep_count})"
 echo "Unverified:   ${auth_count} (private, no registry credentials)"
 echo "Pre-release:  ${prerelease_count} (store on a canary, pin on a release — deliberate, not drift)"
+echo "Line-own-set: ${line_ahead_count} (store on a newer line than this one's pin — own-set mode, not drift)"
 echo "Held:         ${held_count:-0} (pin deliberately behind the newest published image — declared hold with reason and end date)"
 
 if [ "${drift_fatal:-0}" = "1" ]; then

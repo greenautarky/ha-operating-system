@@ -210,6 +210,54 @@ else
     grep -iE 'hmvapp' <<<"$out" | sed 's/^/          /'
 fi
 
+echo "== per-line lockstep (Odoo #1758): a line validates its OWN release set =="
+
+# The store moves with the NEWEST line (1.6 from 2026-11-09), so on a 1.5 tree "pin == store HEAD" can never
+# hold again. The mode is read from the tree's own version.yaml; every case below sets it explicitly.
+line_case() { # line_case <label> <gaos_release|-> <pin json body|version> <store version> <expect> <forbid> [image-in-store]
+    local label="$1" rel="$2" pins="$3" store="$4" expect="$5" forbid="$6" out
+    if [[ "$pins" == \{* ]]; then
+        mkdir -p "$WORK/repo/buildroot-external/package/hassio"
+        printf '%s\n' "$pins" > "$WORK/repo/buildroot-external/package/hassio/addon-images.json"
+    else make_pin "$pins"; fi
+    make_store "$store"
+    rm -f "$WORK/repo/version.yaml"
+    [[ "$rel" == "-" ]] || printf 'gaos_release: %s  # marker\n' "$rel" > "$WORK/repo/version.yaml"
+    ran=$((ran + 1))
+    out="$(REPO_ROOT="$WORK/repo" VIBE_ADDONS_REPO_URL="$WORK/store" \
+           VIBE_ADDONS_REPO_REF=main "$GATE" "$WORK/stable.json" 2>&1)"
+    if ! grep -qE "$expect" <<<"$out"; then
+        bad "$label — expected /$expect/"; grep -aiE "hmvapp|lockstep|Failed" <<<"$out" | sed 's/^/          /' | head -5; return
+    fi
+    if [[ -n "$forbid" ]] && grep -qE "$forbid" <<<"$out"; then
+        bad "$label — must NOT contain /$forbid/"; grep -aiE "hmvapp|lockstep|Failed" <<<"$out" | sed 's/^/          /' | head -5; return
+    fi
+    ok "$label"
+}
+
+# MUST-PASS: the 1.5 pins are consistent while the store is ahead (this is today's red on release/1.5).
+line_case "1.5 line, store AHEAD of a consistent pin -> LINE-OWN-SET, no FAIL" \
+    "BOSv1.5.3" "1.2.0" "1.3.0" 'LINE-OWN-SET.*ga_hmvapp_addon' 'FAIL.*ga_hmvapp_addon|out of lockstep with the vibe_addons store'
+line_case "1.5 line, pin == store -> still OK" \
+    "BOSv1.5.3" "1.2.0" "1.2.0" 'OK.*ga_hmvapp_addon.*lockstep' 'FAIL.*ga_hmvapp_addon'
+# MUST-PASS (unchanged behaviour): the 1.6 line keeps the strict store lockstep.
+line_case "1.6 line, store ahead -> still FAIL (strict lockstep unchanged)" \
+    "BOSv1.6.0-rc12" "1.2.0" "1.3.0" 'FAIL.*ga_hmvapp_addon version mismatch' 'LINE-OWN-SET'
+# MUST-FAIL: the 1.5 line is not exempt from the rest.
+line_case "1.5 line, pin NEWER than the store -> FAIL (not published in the store)" \
+    "BOSv1.5.3" "1.3.0" "1.2.0" 'FAIL.*ga_hmvapp_addon version mismatch' 'LINE-OWN-SET'
+line_case "1.5 line, pinned image has no store entry -> FAIL" \
+    "BOSv1.5.3" '{"addons":{"ga_ghost":{"image":"ghcr.io/greenautarky/ga_ghost-{arch}","version":"1.0.0"}}}' "1.3.0" \
+    'FAIL.*ga_ghost.*no matching addon in vibe_addons' ''
+line_case "1.5 line, one image pinned at two versions -> FAIL (internally inconsistent)" \
+    "BOSv1.5.3" '{"addons":{"a":{"image":"ghcr.io/greenautarky/ga_hmvapp_addon-{arch}","version":"1.2.0"},"b":{"image":"ghcr.io/greenautarky/ga_hmvapp_addon-{arch}","version":"1.1.0"}}}' "1.3.0" \
+    'pins image .*ga_hmvapp_addon.* more than one version' ''
+line_case "1.5 line, malformed pin version -> FAIL" \
+    "BOSv1.5.3" "latest" "1.3.0" "version 'latest' is not a version tag" ''
+# Fail-safe: a tree whose line cannot be read gets the STRICT mode, loudly - never the relaxed one.
+line_case "line unreadable (no version.yaml) -> strict, announced" \
+    "-" "1.2.0" "1.3.0" 'cannot read gaos_release.*STRICT|FAIL.*ga_hmvapp_addon version mismatch' 'LINE-OWN-SET'
+
 echo
 if (( ran == 0 )); then echo "${RED}FATAL${NC} nothing evaluated"; exit 1; fi
 if (( fails == 0 )); then
