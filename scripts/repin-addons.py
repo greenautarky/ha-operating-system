@@ -107,6 +107,58 @@ MARKER_LINE_RE = re.compile(r"^(?P<pre>gaos_release:[ \t]*)(?P<ver>\S+)(?P<post>
 MARKER_FMT_RE = re.compile(r"^BOSv\d+\.\d+\.\d+(-rc\d+)?$")
 
 
+# --- WHICH LINE IS THIS TREE? (Odoo #1758) ---------------------------------------------------------------
+# The store is ONE repo for every release line and moves with the newest line, so on a 1.5 tree "pin == store
+# HEAD" can never hold. scripts/check-images.sh already validates such a line against its OWN pinned set
+# (OWN_SET_LINES, mode own-set). This audit must reach the SAME verdict, and the list of lines is read from
+# THAT script - not copied here, so there is one definition and the two cannot drift apart. If the
+# definition cannot be found, --check FAILS (never silently falls back to a guess).
+GATE_SCRIPT = pathlib.Path(__file__).resolve().parent / "check-images.sh"
+OWN_SET_RE = re.compile(r'^OWN_SET_LINES="([^"]*)"', re.MULTILINE)
+GAOS_LINE_RE = re.compile(r"^gaos_release:[ \t]*BOSv(\d+\.\d+)\.", re.MULTILINE)
+
+
+def own_set_lines() -> list[str]:
+    try:
+        m = OWN_SET_RE.search(GATE_SCRIPT.read_text(encoding="utf-8"))
+    except OSError:
+        m = None
+    if not m:
+        raise SystemExit(f"error: cannot read OWN_SET_LINES from {GATE_SCRIPT} - refusing to guess "
+                         f"which release lines are checked against their own pinned set")
+    return m.group(1).split()
+
+
+def lockstep_mode() -> str:
+    """'own-set' for a line listed in check-images.sh OWN_SET_LINES, else 'store' (strict).
+
+    Same detection as check-images.sh::_lockstep_mode: version.yaml gaos_release of the tree being checked
+    (REPO_ROOT), GA_LOCKSTEP_MODE overrides. An unreadable version.yaml is announced and means strict."""
+    forced = os.environ.get("GA_LOCKSTEP_MODE")
+    if forced:
+        return forced
+    try:
+        m = GAOS_LINE_RE.search(VERSION_YAML.read_text(encoding="utf-8"))
+    except OSError:
+        m = None
+    if not m:
+        print(f"NOTE: cannot read gaos_release from {VERSION_YAML} - using the STRICT store lockstep",
+              file=sys.stderr)
+        return "store"
+    return "own-set" if m.group(1) in own_set_lines() else "store"
+
+
+def _vkey(v: str):
+    """Numeric version key (sort -V for the shapes we pin: 2.12.1, 2.12.1-10). None = not comparable."""
+    parts = re.split(r"[.-]", v)
+    return tuple(int(x) for x in parts) if all(x.isdigit() for x in parts) else None
+
+
+def store_is_newer(pinned: str, store_v: str) -> bool:
+    a, b = _vkey(pinned), _vkey(store_v)
+    return a is not None and b is not None and b > a
+
+
 def _is_prerelease(version: str) -> bool:
     """True for a canary tag, False for a normal release or a release revision.
 
@@ -391,8 +443,19 @@ def main(argv: list[str]) -> int:
             return 1
 
         if args.check:
-            if c.drift:
-                print(f"\nFAIL: {len(c.drift)} add-on(s) out of lockstep with the store. "
+            mode = lockstep_mode()
+            print(f"lockstep mode: {mode}")
+            drift = c.drift
+            if mode == "own-set":
+                # This line's pin is BEHIND the store because the store serves a newer line: not required
+                # to be equal (same rule as check-images.sh LINE-OWN-SET). A store BEHIND the pin, or a
+                # version that cannot be compared, is still drift.
+                ahead = [d for d in drift if store_is_newer(d[2], d[3])]
+                for key, _i, pinned, store_v in ahead:
+                    print(f"  LINE-OWN-SET {key}: pinned {pinned}, store {store_v} (newer line) - not required to be equal on this line")
+                drift = [d for d in drift if d not in ahead]
+            if drift:
+                print(f"\nFAIL: {len(drift)} add-on(s) out of lockstep with the store. "
                       f"Run scripts/repin-addons.py (no --check) to bring the pins to the "
                       f"store version, then commit.")
                 return 1
