@@ -184,7 +184,7 @@ else
     skip_test "FW-53" "ga_manager reads the failed state" "ga_manager container not running"
   fi
 
-  # Fail-open means management stays reachable: mesh interface present and sshd still listening.
+  # Management path check: mesh interface up and sshd listening on 22222.
   run_test "FW-54" "injected load failure: sshd still listens on :22222 (management path intact)" \
     "(ss -ltn 2>/dev/null || netstat -ltn) | grep -q ':22222 '"
   if ip link show wt0 >/dev/null 2>&1; then
