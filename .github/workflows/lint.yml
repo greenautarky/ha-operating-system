@@ -500,7 +500,7 @@ jobs:
         # Red-proven by restoring the first-row rule: OSV-01 and OSV-02 fail.
         run: sh tests/ga_tests/openstick/selftest.sh
 
-      - name: hw_iodomain parses PMUGRF 0x140 against the pinned 0xA6 (iHost I/O-domain voltages)
+      - name: hw_iodomain parses PMUGRF 0x140 against the pinned value of its vccio5 mode (0xA6 legacy / 0x86 3v3, Odoo #1900)
         # BOSv1.6.0-rc1 read 0x86 (vccio5 = 3.3 V, Ethernet dead) and every other
         # check was green. Drives the LIVE iodomain.sh that the device suite
         # sources: 0x86 must be flagged (naming vccio5 / 3.3 V), 0xA6 must pass,
@@ -1018,6 +1018,12 @@ jobs:
       # the live hook, evaluates the kernel command line from the live script.
       - name: USB host lock reaches a device updated over the air (ADR-0029 D3)
         run: ./tests/gates/ota_usb_lock/selftest.sh
+
+      # Odoo #1900: every fresh flash through verify-sd.sh marks the card
+      # ga_vccio5=3v3 (iHost vccio5 bank is physically 3.3 V, #1484) and refuses
+      # a pre-#1900 image unless --allow-pre-1900-image (jump tests).
+      - name: vccio5 3.3 V card key (verify-sd.sh, Odoo #1900)
+        run: sh tests/gates/vccio5_key/selftest.sh
 
       # Odoo #1723: the iHost boot script gives the g_serial gadget an
       # iSerialNumber (= serial#), guarded so an empty serial# emits nothing.
