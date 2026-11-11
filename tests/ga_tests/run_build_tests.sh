@@ -4877,6 +4877,21 @@ else
   fi
 fi
 
+# --- Host firewall present and correct on the built image (Odoo #1591, #1647) ---
+# The checker reads this target tree and renders the ruleset with the target's own gate (see
+# tests/gates/board_firewall/check.sh, red/green: its selftest.sh). The 1.5 line builds the iHost only.
+_fwb_chk="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tests/gates/board_firewall/check.sh"
+if [[ ! -x "$_fwb_chk" ]]; then
+  _fail "FWB-00: board firewall checker missing (${_fwb_chk})"
+else
+  _fwb_rc=0; _fwb_out="$("$_fwb_chk" ihost "$TARGET" 2>&1)" || _fwb_rc=$?   # a failing checker must not end the runner
+  if [[ "$_fwb_rc" == 0 ]] && ! grep -q '^FAIL' <<<"$_fwb_out"; then
+    _pass "FWB-00: ga-firewall enabled, LAN limited to 22222/80/8123, add-on ports closed, uplinks default-deny ($(grep -c '^PASS' <<<"$_fwb_out") checks)"
+  else
+    _fail "FWB-00: host firewall wrong on the image: $(grep '^FAIL' <<<"$_fwb_out" | head -n 4 | tr '\n' ';')"
+  fi
+fi
+
 echo ""
 total=$((pass + fail + skip))
 echo "=== Build tests: ${pass} passed, ${fail} failed, ${skip} skipped (${total} total) ==="

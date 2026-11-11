@@ -12,6 +12,12 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (release/1.5): the host firewall drops ingress on EVERY non-trusted interface, uplinks included (port of #1647 and #1610; Odoo #1707)
+
+`ga-firewall-gate` on the 1.5 line named only eth0 and wlan0, so an interface nobody listed (the modem uplink ppp0/wwan0, a USB NIC) was outside the filter, and the forward chain matched the post-DNAT port, so a published container port mapping to :80 was open from the LAN. The gate now takes the 1.6 form: lo, the mesh (wt0, tailscale0) and the container bridges (hassio, docker0, br-*, veth*, wpan0) are accepted first, eth0/wlan0 get the 22222/80/8123 allowlist, every other interface is dropped (own replies pass, ct established,related); the forward chain matches the ORIGINAL port and drops other DNAT'd traffic. The chain policy stays accept (nft loads atomically; fail-closed could cut the only management path); a load failure is logged at err level and published as `ruleset_loaded: false`. Tests: `tests/gates/board_firewall` and `tests/gates/fw_forward_dnat` (red on the old gate, green on the new), FW-29b and FW-28b/28c in the on-device suite, FWB-00 in the build tests.
+
+---
+
 ## BOSv1.5.2-rc4 (marker)
 
 The first BOSv1.5.2 final bake (2026-10-28) was refused by the CVE gate: CVE-2026-115557 (Python 3.14.8, published after the rc3 bake) in three unchanged add-on images. They are rebuilt with Python 3.14.10 and no code change: ga_manager 0.255.1 (from the 0.255.0 source), ga_default_addon 2.1.6, ga_hmvapp_addon 2.6.2. Independently scanned (trivy, armv7): the CVE is absent, 0 fixable CRITICAL.
