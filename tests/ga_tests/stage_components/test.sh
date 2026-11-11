@@ -131,7 +131,17 @@ vg_case GSV-55 "staged manifest missing -> restaged from baked" 2.12.9 MISSING b
 vg_case GSV-56 "staged manifest has no version -> restaged" 2.12.9 '{"domain":"x"}' baked
 vg_case GSV-57 "staged manifest garbage -> restaged" 2.12.9 'not json {{{' baked
 vg_case GSV-58 "staged version non-numeric -> restaged" 2.12.9 '{"version":"latest"}' baked
-vg_case GSV-59 "staged shorter version 2.13 KEPT over baked 2.12.9" 2.12.9 '{"version":"2.13"}' staged
+vg_case GSV-59 "CAP: staged 2.13 (higher minor) RESTAGED over baked 2.12.9" 2.12.9 '{"version":"2.13"}' baked
+vg_case GSV-62 "CAP: staged 2.13.0 RESTAGED over baked 2.12.9" 2.12.9 '{"version":"2.13.0"}' baked
+vg_case GSV-63 "CAP: staged 3.0.0 RESTAGED over baked 2.12.9" 2.12.9 '{"version":"3.0.0"}' baked
+vg_case GSV-64 "CAP: staged 99.0.0 RESTAGED over baked 2.12.9" 2.12.9 '{"version":"99.0.0"}' baked
+vg_case GSV-65 "OVERFLOW: 99999999999999999999.0.0 unparsable -> RESTAGED" 2.12.9 '{"version":"99999999999999999999.0.0"}' baked
+vg_case GSV-66 "OVERFLOW: 10-digit component unparsable -> RESTAGED" 2.12.9 '{"version":"2.12.1234567890"}' baked
+vg_case GSV-67 "SUFFIX: staged 2.12.12-rc1 RESTAGED (baked wins)" 2.12.9 '{"version":"2.12.12-rc1"}' baked
+vg_case GSV-68 "SUFFIX: staged 2.12.9+x at same core RESTAGED" 2.12.9 '{"version":"2.12.9+x"}' baked
+vg_case GSV-69 "non-numeric part 2.12.x unparsable -> RESTAGED" 2.12.9 '{"version":"2.12.x"}' baked
+vg_case GSV-70 "2.12 vs baked 2.12.0 is equal -> KEPT" 2.12.0 '{"version":"2.12"}' staged
+vg_case GSV-71 "patch-only newer 2.12.10 KEPT over baked 2.12.9" 2.12.9 '{"version":"2.12.10"}' staged
 run_test "GSV-60" "keep is logged at INFO (newer staged)" \
   "{ printf '{\"version\":\"2.12.12\"}\n' > '$vd/manifest.json'; GA_STAGE_SRC='$WORK/vg/src' GA_STAGE_SHARE_DST='$WORK/vg/share' GA_STAGE_PRIV_GLOB='$WORK/vg/addons/data/*_ga_manager' sh '$STAGE' 2>&1 | grep -q 'INFO trusted: keeping newer staged greenautarky_site 2.12.12 over baked 2.12.9'; }"
 # /share compat stays strict: forged HIGHER version is repaired, not kept.

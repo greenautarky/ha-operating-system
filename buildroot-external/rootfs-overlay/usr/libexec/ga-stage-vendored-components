@@ -75,36 +75,58 @@ fi
 log() { echo "ga-stage-vendored-components: $*"; }
 
 # manifest_version <manifest.json> — print the "version" string, nothing when
-# the file is missing/unreadable or has no parsable dotted-numeric version.
-# Pure POSIX (sed/awk-free of GNU flags): no jq and no `sort -V` dependency.
+# the file is missing/unreadable or the version is not parsable. Parsable =
+# 1-9 digit numeric components joined by dots, optionally followed by a
+# -suffix / +suffix (e.g. 2.12.9, 2.12.9-rc1). More than 9 digits in a
+# component or any other non-numeric part = unparsable (overflow guard for the
+# shell arithmetic below). Pure POSIX tools: no jq, no `sort -V`.
 manifest_version() {
 	[ -r "$1" ] || return 0
 	_v=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" 2>/dev/null | head -n 1)
-	case "$_v" in
-	[0-9]*) ;;
-	*) return 0 ;;
-	esac
-	# Reject anything whose leading dotted-numeric run is malformed (e.g. "1..2").
-	_core=$(printf '%s' "$_v" | sed -n 's/^\([0-9][0-9]*\(\.[0-9][0-9]*\)*\).*/\1/p')
-	[ -n "$_core" ] && printf '%s\n' "$_v"
+	printf '%s\n' "$_v" | grep -Eq '^[0-9]{1,9}(\.[0-9]{1,9})*([-+][A-Za-z0-9.+-]*)?$' || return 0
+	printf '%s\n' "$_v"
 }
 
-# baked_is_newer <baked_ver> <staged_ver> — exit 0 only when baked is strictly
-# newer. Numeric, component-wise on the leading dotted run (2.12.9 < 2.12.12;
-# a lexical compare gets that wrong). Any suffix ("-1", "rc2") is ignored, so
-# equal numeric cores count as equal (= keep staged).
-baked_is_newer() {
-	_b=$(printf '%s' "$1" | sed 's/^\([0-9][0-9]*\(\.[0-9][0-9]*\)*\).*/\1/')
-	_s=$(printf '%s' "$2" | sed 's/^\([0-9][0-9]*\(\.[0-9][0-9]*\)*\).*/\1/')
-	while [ -n "$_b" ] || [ -n "$_s" ]; do
-		_bh=${_b%%.*}; _sh=${_s%%.*}
+# ver_core <ver> — the leading dotted-numeric run (suffix stripped).
+ver_core() { printf '%s' "$1" | sed 's/^\([0-9][0-9]*\(\.[0-9][0-9]*\)*\).*/\1/'; }
+
+# ver_cmp <a> <b> — print -1/0/1, numeric per component on the numeric cores
+# (2.12.9 < 2.12.12; 2.12 == 2.12.0). Suffixes are ignored here.
+ver_cmp() {
+	_a=$(ver_core "$1"); _b=$(ver_core "$2")
+	while [ -n "$_a" ] || [ -n "$_b" ]; do
+		_ah=${_a%%.*}; _bh=${_b%%.*}
+		case "$_a" in *.*) _a=${_a#*.} ;; *) _a= ;; esac
 		case "$_b" in *.*) _b=${_b#*.} ;; *) _b= ;; esac
-		case "$_s" in *.*) _s=${_s#*.} ;; *) _s= ;; esac
-		_bh=${_bh:-0}; _sh=${_sh:-0}
-		[ "$_bh" -gt "$_sh" ] && return 0
-		[ "$_bh" -lt "$_sh" ] && return 1
+		_ah=${_ah:-0}; _bh=${_bh:-0}
+		[ "$_ah" -gt "$_bh" ] && { echo 1; return 0; }
+		[ "$_ah" -lt "$_bh" ] && { echo -1; return 0; }
 	done
-	return 1
+	echo 0
+}
+
+# ver_minor <ver> — "major.minor" of the core (missing parts = 0).
+ver_minor() {
+	_c=$(ver_core "$1")
+	_ma=${_c%%.*}
+	case "$_c" in *.*) _r=${_c#*.} ;; *) _r=0 ;; esac
+	printf '%s.%s' "$_ma" "${_r%%.*}"
+}
+
+# stage_verdict <baked_ver> <staged_ver> — print keep | restage | restage-range.
+# keep only when staged is >= baked on the numeric core, has the SAME
+# major.minor as baked (component-sync covers patch fixes of the release line;
+# a newer OS bake with a higher minor always wins), and carries no suffix
+# unless it is byte-identical to baked.
+stage_verdict() {
+	[ "$1" = "$2" ] && { echo keep; return 0; }
+	_c=$(ver_cmp "$1" "$2")
+	[ "$_c" = 1 ] && { echo restage; return 0; }
+	[ "$(ver_core "$2")" != "$2" ] && { echo restage; return 0; }
+	if [ "$(ver_cmp "$(ver_minor "$1")" "$(ver_minor "$2")")" != 0 ]; then
+		echo restage-range; return 0
+	fi
+	echo keep
 }
 
 # stage_tree <dst_root> <label> — mirror every component under $SRC into
@@ -156,15 +178,19 @@ stage_tree() {
 			baked_v=$(manifest_version "$comp/manifest.json")
 			staged_v=$(manifest_version "$dst/manifest.json")
 			if [ -n "$baked_v" ] && [ -n "$staged_v" ]; then
-				if baked_is_newer "$baked_v" "$staged_v"; then
-					log "$label: restaging $name $staged_v -> baked $baked_v"
-				else
-					if baked_is_newer "$staged_v" "$baked_v"; then
+				verdict=$(stage_verdict "$baked_v" "$staged_v")
+				case "$verdict" in
+				restage-range)
+					log "WARN $label: staged $name $staged_v outside the allowed range of baked $baked_v — restaging" ;;
+				restage)
+					log "$label: restaging $name $staged_v -> baked $baked_v" ;;
+				*)
+					if [ "$(ver_cmp "$staged_v" "$baked_v")" = 1 ]; then
 						log "INFO $label: keeping newer staged $name $staged_v over baked $baked_v"
 					fi
 					current=$((current + 1))
-					continue
-				fi
+					continue ;;
+				esac
 			elif [ -e "$dst" ]; then
 				log "WARN $label: staged $name has no readable version — restaging baked ${baked_v:-?}"
 			fi
