@@ -2,7 +2,11 @@
   "addons": {
     "mosquitto": {
       "image": "ghcr.io/greenautarky/ga_mosquitto-{arch}",
-      "version": "7.2.5"
+      "version": "7.2.5",
+      "hold": {
+        "reason": "BOSv1.5.4 is a security-only release (Core 2026.8.2.2 + brotli CVE rebuilds). Non-security add-on updates are deferred to keep the release-set delta minimal; 1.5 devices run the baked pins (measured on KIB-SON-168..171, 2026-11-11). Revisit with the next 1.5.x or retire with 1.6.",
+        "until": "2026-12-11"
+      }
     },
     "ga_ihosthardwarecontrol": {
       "image": "ghcr.io/greenautarky/ga_ihosthardwarecontrol-{arch}",
@@ -10,7 +14,11 @@
     },
     "ga_influxdbv1": {
       "image": "ghcr.io/greenautarky/ga_influxdbv1-{arch}",
-      "version": "0.0.21"
+      "version": "0.0.21",
+      "hold": {
+        "reason": "BOSv1.5.4 is a security-only release (Core 2026.8.2.2 + brotli CVE rebuilds). Non-security add-on updates are deferred to keep the release-set delta minimal; 1.5 devices run the baked pins (measured on KIB-SON-168..171, 2026-11-11). Revisit with the next 1.5.x or retire with 1.6.",
+        "until": "2026-12-11"
+      }
     },
     "ga_zigbee2mqtt": {
       "image": "ghcr.io/greenautarky/ga_zigbee2mqtt-{arch}",
@@ -30,11 +38,19 @@
     },
     "ga_default_addon": {
       "image": "ghcr.io/greenautarky/ga_default_addon-{arch}",
-      "version": "2.1.6"
+      "version": "2.1.6",
+      "hold": {
+        "reason": "BOSv1.5.4 is a security-only release (Core 2026.8.2.2 + brotli CVE rebuilds). Non-security add-on updates are deferred to keep the release-set delta minimal; 1.5 devices run the baked pins (measured on KIB-SON-168..171, 2026-11-11). Revisit with the next 1.5.x or retire with 1.6.",
+        "until": "2026-12-11"
+      }
     },
     "ga_hmvapp_addon": {
       "image": "ghcr.io/greenautarky/ga_hmvapp_addon-{arch}",
-      "version": "2.6.2"
+      "version": "2.6.2",
+      "hold": {
+        "reason": "BOSv1.5.4 is a security-only release (Core 2026.8.2.2 + brotli CVE rebuilds). Non-security add-on updates are deferred to keep the release-set delta minimal; 1.5 devices run the baked pins (measured on KIB-SON-168..171, 2026-11-11). Revisit with the next 1.5.x or retire with 1.6.",
+        "until": "2026-12-11"
+      }
     }
   }
 }
