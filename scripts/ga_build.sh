@@ -1515,10 +1515,22 @@ CONTAINEREOF
     fi
   fi
 
-  # ORDER: this runs LAST in archive_build_configs, after MANIFEST.txt and the container
-  # lockfile are written. It used to run before them, so a clean tree filed no MANIFEST
-  # (BOSv1.6.0-rc4 bake, 2026-11-07: "required evidence missing or empty: MANIFEST.txt")
-  # and an incremental tree filed the PREVIOUS build's MANIFEST as this build's evidence.
+  echo "=== Build configuration archive complete: ${cfg_dir} ==="
+  ls -la "$cfg_dir"
+}
+
+# collect_build_evidence — file this build's release evidence.
+#
+# ORDER (Odoo #1946): this is invoked from the main flow AFTER archive_build_configs
+# (MANIFEST.txt, source-pins.json, container lockfile), archive_legal_info
+# (LICENSE-SUMMARY.txt), generate_sbom + assert_prod_sbom (sbom-cyclonedx.json,
+# sbom-containers.json). It used to run INSIDE archive_build_configs, before
+# generate_sbom, so every bake logged "required evidence missing or empty" and was
+# marked "cannot be promoted" (BOSv1.6.0-rc4, BOSv1.6.0-rc12, BOSv1.5.4-rc1). On an
+# incremental tree it could instead file the PREVIOUS build's files as this build's
+# evidence. tests/gates/evidence_order/selftest.sh judges the live call order.
+#
+collect_build_evidence() {
   # Capture the evidence NOW, not at promotion time.
   #
   # images/configs/ is a FIXED path — cfg_dir="${OUT}/images/configs" — so every
@@ -1539,6 +1551,15 @@ CONTAINEREOF
   local _ev_ver
   _ev_ver="$(sed -n "s/^${GA_RELEASE_KEY}:[[:space:]]*\([^[:space:]#]*\).*/\1/p" "${SCRIPT_DIR}/../version.yaml" 2>/dev/null | head -1)"
   if [[ -x "$_ev_script" && -n "$_ev_ver" ]]; then
+    # Fail closed AT THE POINT OF USE: the collector requires these. If one is absent
+    # now it is a real defect (not ordering) — name it before the collector does.
+    local _ev_f _ev_missing=""
+    for _ev_f in "${OUT}/images/configs/MANIFEST.txt" "${OUT}/images/configs/source-pins.json" "${OUT}/images/sbom-containers.json"; do
+      [[ -s "$_ev_f" ]] || _ev_missing+="${_ev_f} "
+    done
+    if [[ -n "$_ev_missing" ]]; then
+      echo "ERROR: release evidence inputs absent AFTER all generators ran: ${_ev_missing}" >&2
+    fi
     mkdir -p "${_ev_root}"
     if "$_ev_script" "$OUT" "$_ev_ver" "${_ev_root}/${GA_BUILD_TIMESTAMP}"; then
       echo "Release evidence filed: ${_ev_root}/${GA_BUILD_TIMESTAMP}/${_ev_ver}"
@@ -1548,9 +1569,6 @@ CONTAINEREOF
   else
     echo "WARNING: release-evidence collector or gaos_release missing — nothing filed for this build" >&2
   fi
-
-  echo "=== Build configuration archive complete: ${cfg_dir} ==="
-  ls -la "$cfg_dir"
 }
 
 # -----------------------------------------------------------------------------
@@ -2656,6 +2674,11 @@ set -e
 # Fail-closed, asserted on the ARTIFACT (not the pipe's exit): every image
 # must carry a CycloneDX SBOM with real coverage (#772).
 assert_prod_sbom "$_sbom_rc"
+
+# 10b) File the release evidence — only now do MANIFEST.txt, source-pins.json,
+# sbom-containers.json, sbom-cyclonedx.json and LICENSE-SUMMARY.txt all exist.
+log_build_step "Collect release evidence"
+collect_build_evidence
 
 # 11) CVE scan of SBOM — coverage-verified, fail-closed
 #
