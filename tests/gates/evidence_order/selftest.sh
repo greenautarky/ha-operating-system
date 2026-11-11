@@ -63,5 +63,6 @@ for f in "$HERE"/must-fail/*.sh; do check "$f" bad "must-fail $(basename "$f")";
 for f in "$HERE"/must-pass/*.sh; do check "$f" ok "must-pass $(basename "$f")"; done
 check "$LIVE" ok "live $LIVE"
 [[ $ran -ge 5 ]] || { echo "ERROR (could not check): only $ran case(s) ran" >&2; exit 2; }
-echo "$ran cases ran, $fails failed"
+"$HERE/behavior.sh" || fails=$((fails+1))
+echo "$ran order cases ran, $fails failed"
 [[ $fails -eq 0 ]]

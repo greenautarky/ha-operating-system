@@ -1557,8 +1557,16 @@ collect_build_evidence() {
     for _ev_f in "${OUT}/images/configs/MANIFEST.txt" "${OUT}/images/configs/source-pins.json" "${OUT}/images/sbom-containers.json"; do
       [[ -s "$_ev_f" ]] || _ev_missing+="${_ev_f} "
     done
+    # Stale guard: the files must belong to THIS build. generate_sbom can `return` early
+    # and leave an earlier build's sbom-containers.json on an incremental tree.
+    grep -qE "^Build ID:[[:space:]]+${GA_BUILD_TIMESTAMP}[[:space:]]*$" "${OUT}/images/configs/MANIFEST.txt" 2>/dev/null \
+      || _ev_missing+="MANIFEST.txt(stale-build-id) "
+    grep -q "\"build_id\": \"${GA_BUILD_TIMESTAMP}\"" "${OUT}/images/sbom-containers.json" 2>/dev/null \
+      || _ev_missing+="sbom-containers.json(stale-build-id) "
     if [[ -n "$_ev_missing" ]]; then
-      echo "ERROR: release evidence inputs absent AFTER all generators ran: ${_ev_missing}" >&2
+      echo "ERROR: release evidence inputs missing, empty or from another build (want build ${GA_BUILD_TIMESTAMP}): ${_ev_missing}" >&2
+      echo "WARNING: release-evidence collection FAILED — this build cannot be promoted until it is re-run" >&2
+      return 0
     fi
     mkdir -p "${_ev_root}"
     if "$_ev_script" "$OUT" "$_ev_ver" "${_ev_root}/${GA_BUILD_TIMESTAMP}"; then
