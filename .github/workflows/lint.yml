@@ -894,3 +894,15 @@ jobs:
       # the bytes it never saw.
       - name: Slot-pair gate (red on an empty second slot, green on identical pairs)
         run: ./tests/gates/slot_pairs/selftest.sh
+
+      # Host firewall (Odoo #1591, #1647): the iHost overlay carries the enabled unit and a gate whose
+      # rendered ruleset opens only 22222/80/8123 to the LAN, accepts lo/mesh/container bridges first and
+      # drops every other interface (uplinks). Also drives the LIVE gate with an nft that rejects the load:
+      # exit 0, ruleset_loaded=false / source=load-failed, err-level log line. Red on the pre-#1647 gate.
+      - name: host firewall - default-deny on every non-trusted interface, loud load failure (Odoo #1647)
+        run: bash tests/gates/board_firewall/selftest.sh
+
+      # Odoo #1610: the forward chain accepts DNAT'd LAN traffic by its ORIGINAL port, and the live
+      # tests/ga_tests/firewall/test.sh parses recorded real `nft list` output (FW-25..29b).
+      - name: firewall forward rule + on-device suite parser (Odoo #1610)
+        run: bash tests/gates/fw_forward_dnat/selftest.sh
