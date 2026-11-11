@@ -24,8 +24,8 @@
       "image": "ghcr.io/greenautarky/ga_manager-{arch}",
       "version": "0.264.0",
       "hold": {
-        "reason": "BOSv1.5.3 final = proven BOSv1.5.3-rc2 content (Thomas 2026-10-30); 0.265.0-0.268.0 ship with BOSv1.6",
-        "until": "2026-11-13"
+        "reason": "1.5 line stays on ga_manager 0.264.0; newer ga_manager versions are BOSv1.6 content (Supervisor 2026.x compat, ship-ready, z2m channel fix) and ship with BOSv1.6 — Thomas decision 2026-11-11 (Odoo #1758)",
+        "until": "2026-12-11"
       }
     },
     "ga_default_addon": {
