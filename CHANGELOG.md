@@ -12,6 +12,14 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): BOSv1.6.0-rc13 pins (iHost) and BOSv1.6.0-dev9 (DSGW210)
+
+rc13 = rc12 plus:
+
+- greenautarky-site 2.12.9 -> 2.12.13: the K188 admin-bypass fix (2.12.12) and the login-flow hardening (2.12.13, session-bound PIN). Tag v2.12.13 exists and its Release workflow succeeded (2026-11-11).
+- Already on the line since rc12, no pin needed: #1046 (stager fix), #1047 (iHost vccio5 = 3.3 V DTB, `ga_vccio5=3v3`, fresh flash only), #1056 (firewall fail-open is loud, with failure-injection tests).
+- Add-on drift holds (until 2026-11-25), so the bake `images-per-arch` drift leg stays green: ga_zigbee2mqtt (2.12.1-12 published, store PR vibe_addons#342 pending) and ga_manager (0.277.2/0.277.3 published or building, store PR vibe_addons#341 pending). Pins stay at the store values 2.12.1-11 and 0.277.1; both move with the store sync in rc14.
+
 ## Unreleased (feat/1.6-haos18): iHost vccio5 = 3.3 V for freshly flashed devices, 1.8 V kept everywhere else (Odoo #1900, #1484)
 
 The iHost Ethernet RMII/MDIO bank VCCIO5 is physically 3.3 V: the RTL8201F PHY runs its IO from DVDD33, and the PHY reset pin measured 3.3 V on two units (2026-11-11). GA images declared it 1.8 V since `3c8c6f49d` (2026-03-11; its premise "VCCIO5 = SDIO" was wrong, SDIO is VCCIO3). A unit that ran the 1.8 V setting lost its PHY in the correct 3.3 V setting, under stock and under GA; a factory-fresh unit works at 3.3 V with this kernel. Decision 2026-11-11: only freshly flashed devices move to 3.3 V.
