@@ -49,7 +49,8 @@ if ! echo "$VERSION" | grep -qE '^BOSv[0-9]+\.[0-9]+\.[0-9]+(-(rc|dev)[0-9]+)?$'
 fi
 
 [[ -d "$IMAGES" ]] || { echo "ERROR: no images dir at ${IMAGES}" >&2; exit 1; }
-mkdir -p "$DEST"
+# $DEST is created only AFTER the required check below: a failed collection must not
+# leave a partial directory (some files, no EVIDENCE.md/SHA256SUMS) that looks filed.
 
 # --- required set: absence is a hard failure -------------------------------
 # These are the questions a regulator or a field engineer asks about a shipped
@@ -71,14 +72,15 @@ declare -A EXPECTED=(
 
 missing_required=""
 for name in "${!REQUIRED[@]}"; do
-  src="${REQUIRED[$name]}"
-  if [[ -s "$src" ]]; then cp "$src" "${DEST}/${name}"; else missing_required+="${name} "; fi
+  [[ -s "${REQUIRED[$name]}" ]] || missing_required+="${name} "
 done
 if [[ -n "$missing_required" ]]; then
   echo "ERROR: required evidence missing or empty: ${missing_required}" >&2
   echo "       A release cannot be promoted without it." >&2
   exit 1
 fi
+mkdir -p "$DEST"
+for name in "${!REQUIRED[@]}"; do cp "${REQUIRED[$name]}" "${DEST}/${name}"; done
 
 missing_expected=""
 for name in "${!EXPECTED[@]}"; do

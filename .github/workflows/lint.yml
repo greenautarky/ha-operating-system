@@ -492,6 +492,11 @@ jobs:
       - name: Frequent timers capped at notice (journal volume)
         run: ./tests/gates/frequent_timer_loglevel/selftest.sh
 
+      # Release evidence must be collected AFTER every file it files (MANIFEST.txt,
+      # sbom-containers.json ...) — Odoo #1946. Fixtures + live ga_build.sh.
+      - name: Release evidence is collected after the files it requires
+        run: ./tests/gates/evidence_order/selftest.sh
+
       # The journal is RAM-only (Odoo #1256, option C): the persistent journal
       # was 57 % of all SD writes. The failure trail that replaces
       # `journalctl -b -1` must stay wired to its three triggers (clean
