@@ -83,6 +83,18 @@ run_test "HW-08a2" "USB authorize helper + empty-by-default allowlist shipped" \
 run_test "HW-08b" "USB gadget (serial console) functional" \
   "dmesg | grep -q 'Gadget Serial\|g_serial\|dwc3.*peripheral' || [ -c /dev/ttyGS0 ]"
 
+# HW-08e (Odoo #1723): the iHost's built-in g_serial gadget carries an
+# iSerialNumber equal to the SoC serial, so a flasher station can identify the
+# device from the USB descriptor. U-Boot appends g_serial.iSerialNumber=${serial#}
+# (uboot-boot.ush); the kernel exposes the same value as DT /serial-number.
+# Applies where g_serial is built in (iHost); other boards use configfs gadgets.
+if [ -d /sys/module/g_serial ]; then
+  run_test "HW-08e" "USB gadget iSerialNumber (g_serial) == DT serial-number (16 lowercase hex)" \
+    "dt=\$(tr -d '\\0' < /sys/firmware/devicetree/base/serial-number); echo \"\$dt\" | grep -qE '^[0-9a-f]{16}\$' && [ \"\$(tr ' ' '\\n' < /proc/cmdline | sed -n 's/^g_serial\\.iSerialNumber=//p' | tail -1)\" = \"\$dt\" ]"
+else
+  skip_test "HW-08e" "USB gadget iSerialNumber (g_serial not built in on this board)"
+fi
+
 # HW-08d: USB RNDIS device detected (if plugged in)
 if lsusb 2>/dev/null | grep -qi 'RNDIS\|CDC.*Ethernet\|modem\|4G\|LTE'; then
   run_test "HW-08d" "USB RNDIS/modem device detected" "true"

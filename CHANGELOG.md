@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): the iHost USB serial gadget carries a serial number (Odoo #1723)
+
+The iHost's built-in `g_serial` gadget exposed no `iSerialNumber`, so a flasher station could not identify the device from the USB descriptor. `uboot-boot.ush` now appends `g_serial.iSerialNumber=${serial#}` to `bootargs_ga` (only when `serial#` is non-empty). New device test `HW-08e`, host gate `tests/gates/ihost_gadget_serial`.
+
 ## Unreleased (feat/1.6-haos18): OS files find Supervisor's add-on data under apps/ as well as addons/ (Odoo #1610)
 
 Supervisor 2026.10 renamed the host data root `/mnt/data/supervisor/addons/` to `apps/`, and 15 OS files still named the old one. On a BOSv1.6.0-rc6 device that meant device label `unknown`, Loki user `anonymous`, no RAUC slot picture published, and five `.path` units (OS install request, Ethernet override retire, telemetry profile, host release, SSH principal label) watching paths that never appear. `ga-telegraf-env` carried the same defect.

@@ -47,6 +47,16 @@ fileenv mmc ${devnum}:${boot_partnum} ${ramdisk_addr_r} cmdline.txt cmdline
 # imported, so a device-side file cannot override it.
 setenv bootargs_ga "usbcore.authorized_default=0"
 
+# GA: give the USB serial gadget (built-in g_serial, the legacy gadget) an
+# iSerialNumber string descriptor = the SoC serial that U-Boot derives from the
+# OTP cpuid (env serial#, 16 hex; the kernel DT /serial-number is the same
+# value). Without it the host side (flasher station) sees an empty `serial`
+# and cannot identify the device from the USB descriptor. Guarded: an empty
+# serial# must not emit "g_serial.iSerialNumber=" (empty descriptor string).
+if test -n "${serial#}"; then
+  setenv bootargs_ga "${bootargs_ga} g_serial.iSerialNumber=${serial#}"
+fi
+
 # Load device tree
 echo "Detected SoC RV${cpucode#}"
 if test "x${cpucode#}" = "x1126"; then
