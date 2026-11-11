@@ -152,8 +152,57 @@ else
     [ "$_had_off" = 1 ] || rm -f "$_off"
   }
 
-  # Reconcile back to the device's real desired state.
+  # --- failure injection (Odoo #1445, rule 53): the load failure path, driven on the device ---------
+  # The LIVE gate runs with ONLY nft shimmed: `-f` is rejected, every other call goes to the real nft
+  # (so flush_table really deletes the live table, as on a real failed load). The gate itself is
+  # run unmodified (no test mode in production code). Fail-open by design: the table is gone, the
+  # device is unfiltered until the real gate is re-run below. BENCH ONLY (that is the tier's rule).
+  _real_nft=$(command -v nft)
+  _fi=$(mktemp -d /tmp/fw-inject.XXXXXX)
+  # A bench device must never stay unfiltered: restore the real gate on ANY exit.
+  trap '"$GATE" >/dev/null 2>&1; rm -rf "$_fi"' EXIT INT TERM HUP
+  printf '#!/bin/sh\ncase "$1" in -f) echo "Error: injected load failure" >&2; exit 1 ;; *) exec %s "$@" ;; esac\n' "$_real_nft" > "$_fi/nft"
+  chmod +x "$_fi/nft"
+  if [ -e /mnt/boot/ga-firewall-off ]; then
+    for _id in FW-50 FW-51 FW-52 FW-53; do skip_test "$_id" "injected load failure" "off-marker /mnt/boot/ga-firewall-off exists: the gate would exit before the nft call (marker NOT moved)"; done
+  else
+    _t0=$(date +%s)
+    PATH="$_fi:$PATH" "$GATE" >"$_fi/out" 2>&1; _fi_rc=$?
+    run_test "FW-50" "injected load failure: gate exits 0 (fail-open, never wedges boot) and leaves no table" \
+      "[ $_fi_rc -eq 0 ] && ! nft list table $TABLE >/dev/null 2>&1"
+
+    run_test "FW-51" "injected load failure: status JSON ruleset_loaded=false / source=load-failed / enabled=false" \
+      "grep -q '\"ruleset_loaded\": false' $STATUS_FILE && grep -q '\"source\": \"load-failed\"' $STATUS_FILE && grep -q '\"enabled\": false' $STATUS_FILE"
+
+    # journald: priority <= 3 (err) from tag ga-firewall-gate since the injection started
+    run_test "FW-52" "injected load failure: journal line at err priority naming UNFILTERED" \
+      "journalctl -t ga-firewall-gate -p err --since @$_t0 --no-pager 2>/dev/null | grep -q UNFILTERED"
+
+    # What ga_manager's firewall healthcheck reads is this very file (its /share = $SHARE_DIR). Assert the
+    # fleet-visible side: the add-on container sees the failed state. NOTE: check_firewall is informational
+    # (until the parallel ga_manager package lands).
+    _gm=$(ga_ctr_of ga_manager 2>/dev/null)
+    if [ -n "$_gm" ]; then
+      run_test "FW-53" "injected load failure: ga_manager container reads ruleset_loaded=false from /share" \
+        "docker exec $_gm grep -q '\"ruleset_loaded\": false' /share/ga-firewall-status.json"
+    else
+      skip_test "FW-53" "ga_manager reads the failed state" "ga_manager container not running"
+    fi
+
+  fi
+  # Management path check: mesh interface up and sshd listening on 22222.
+  run_test "FW-54" "sanity (not injection-sensitive): sshd listens on :22222" \
+    "(ss -ltn 2>/dev/null || netstat -ltn) | grep -q ':22222 '"
+  if ip link show wt0 >/dev/null 2>&1; then
+    run_test "FW-55" "sanity (not injection-sensitive): mesh interface wt0 up" "ip link show wt0 | grep -q 'UP'"
+  else
+    skip_test "FW-55" "mesh wt0 up after failure" "no wt0 on this device"
+  fi
+
+  # Reconcile back to the device's real desired state (also restores the table + status JSON).
   "$GATE" >/dev/null 2>&1
+  run_test "FW-56" "after the injection the real gate restores the table and ruleset_loaded=true" \
+    "test -e /mnt/boot/ga-firewall-off || { nft list table $TABLE >/dev/null 2>&1 && grep -q '\"ruleset_loaded\": true' $STATUS_FILE; }"
 fi
 
 # =========================================================================

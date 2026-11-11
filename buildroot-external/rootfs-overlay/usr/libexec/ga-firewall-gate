@@ -42,6 +42,22 @@
 #     healthcheck).
 #   * If `nft -f` fails the table is deleted, leaving the device as it was.
 #
+# ACCEPTED RESIDUAL RISK (Odoo #1445, decision A, 2026-11-11): FAIL-OPEN BY DESIGN.
+# If the ruleset does not load (nft or a kernel module broken, a rule-generation
+# bug), the device runs UNFILTERED on its LAN until the next boot or gate run, and
+# the gate still exits 0. Accepted because the alternative (fail-closed) trades a
+# rare exposure for an outage: a device nobody can reach in a customer home, whose
+# only recovery is the serial console. Mitigations that make the accepted risk
+# bounded rather than silent:
+#   1. loud: journal at daemon.err naming UNFILTERED, status JSON
+#      ruleset_loaded=false / enabled=false / source=load-failed|no-nft|tmp-failed;
+#   2. rule generation is rendered and checked in CI (tests/gates/board_firewall);
+#   3. the failure path itself is injected, not assumed: board_firewall/selftest.sh
+#      (live gate, nft rejecting `-f`) and tests/ga_tests/firewall FW-50..53 (device).
+# "Loud" applies to ALL THREE fail-open paths: load-failed, no-nft, tmp-failed. Contract
+# for consumers (ga_manager check_firewall): enabled=false + ruleset_loaded=false, source in
+# {load-failed, no-nft, tmp-failed} (marker-off is the deliberate operator switch). Do not remove 1-3.
+#
 # INTERFACES (iHost defaults; a board names its own in /usr/share/ga-board.conf)
 #   eth0    customer LAN — the only interface facing the household network.
 #   wlan0   NOT household WiFi: the device joins the LTE dongle's own AP
@@ -138,14 +154,14 @@ fi
 
 if ! command -v nft >/dev/null 2>&1; then
 	# Report honestly rather than silently pretending to be protected.
-	log "nft not installed — firewall INERT, device is unfiltered"
+	log_err "nft not installed — firewall INERT, device is UNFILTERED (fail-open)"
 	write_status false no-nft false
 	exit 0
 fi
 
 # --- build ruleset ---------------------------------------------------------
 RULES="$(mktemp /tmp/ga-firewall.XXXXXX)" || {
-	log "mktemp failed"; write_status true default false; exit 0
+	log_err "mktemp failed — firewall NOT active, device is UNFILTERED (fail-open)"; write_status false tmp-failed false; exit 0
 }
 
 {
