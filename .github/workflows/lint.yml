@@ -680,8 +680,17 @@ jobs:
         # XVER-03/VER-05/GAMCAP-01/WIFI-09/pin file) into a copy of the runner.
         run: |
           git submodule update --init --depth 1 haos
-          # fdtget/fdtput/dtc: the live vccio5 DTB generator on the iHost fixture (BLD-VCC-01, Odoo #1900)
-          command -v fdtput >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq device-tree-compiler; }
+          # fdtget/fdtput/dtc for the live vccio5 DTB generator on the iHost fixture (BLD-VCC-01,
+          # Odoo #1900). Not via apt-install: that action proves a package by a command of the
+          # same name, and device-tree-compiler ships dtc/fdtget/fdtput. Same rules here: every
+          # apt call bounded, 3 attempts, then proven by the command the gate actually runs.
+          if ! command -v fdtput >/dev/null; then
+            for a in 1 2 3; do
+              timeout 180 sudo apt-get update -qq && timeout 180 sudo apt-get install -y -qq device-tree-compiler && break
+              echo "device-tree-compiler attempt $a failed (apt mirror)"; sleep 10
+            done
+          fi
+          command -v fdtput >/dev/null || { echo "::error::fdtput not on PATH — device-tree-compiler not installed (apt mirror, not the change under test)"; exit 1; }
           bash tests/gates/build_tests_board_matrix/selftest.sh
 
       - name: image archive reader (the baked Supervisor's dns.py for BLD-SUP-DNS / INT-05 / SVC-09*, Odoo #1649)
