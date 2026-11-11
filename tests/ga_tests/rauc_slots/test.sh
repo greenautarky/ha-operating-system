@@ -579,4 +579,65 @@ fi
 
 [ -n "${WORK:-}" ] && rm -rf "$WORK"
 
+# --- verified-write record of ga-rauc-mirror-slot (Odoo #1750) ---------------
+# rauc.db knows nothing of a `rauc write-slot`: a slot the mirror wrote with 1.6
+# would keep reporting the old bundle. The collector overlays the helper's record,
+# but only while RAUC has not installed into the slot since (record.at >= the
+# slot's installed.timestamp). booted-from-b: slot A installed 2026-07-27T09:14:02Z.
+if command -v jq >/dev/null 2>&1; then
+  WW="$(mktemp -d)"
+  written_run() { # <name> <record json or "-" for none> [fixture, default booted-from-b]
+    _wb="$WW/$1.boots.json"
+    if [ "$2" != "-" ]; then printf '%s' "$2" > "$WW/$1.written.json"; fi
+    GA_RAUC_SLOTS_TS=1790001000 \
+    GA_RAUC_SLOTS_INPUT="$FIX/${3:-booted-from-b}.shell" \
+    GA_RAUC_SLOTS_BOOTS="$_wb" \
+    GA_RAUC_SLOTS_WRITTEN="$WW/$1.written.json" \
+    GA_RAUC_SLOTS_OUT="$WW/$1.json" \
+    "$COL" >/dev/null 2>&1
+  }
+  # 1790000000 = 2026-09-21, after A's 2026-07-27 install
+  written_run wr_valid '{"A":{"release":"BOSv1.6.0","bundle_version":"16.3.1.10","at":1790000000}}'
+  run_test "SLOT-90" "written record newer than the RAUC install: slot A reports the written release and bundle version" \
+    "jq -e '(.slots[] | select(.bootname==\"A\")) | .installed_release == \"BOSv1.6.0\" and .installed_version == \"16.3.1.10\" and .written_verified == true' '$WW/wr_valid.json'"
+  written_run wr_stale '{"A":{"release":"BOSv1.6.0","bundle_version":"16.3.1.10","at":1700000000}}'
+  run_test "SLOT-91" "written record OLDER than the slot's RAUC install (RAUC wrote it again since): ignored, rauc.db version shown" \
+    "jq -e '(.slots[] | select(.bootname==\"A\")) | .installed_release == null and .installed_version == \"16.3.1.9\" and .written_verified == false' '$WW/wr_stale.json'"
+  written_run wr_none -
+  run_test "SLOT-92" "no record: installed_release null, written_verified false" \
+    "jq -e '(.slots[] | select(.bootname==\"A\")) | .installed_release == null and .written_verified == false' '$WW/wr_none.json'"
+  written_run wr_junk 'not json'
+  run_test "SLOT-93" "unparseable record: collector still publishes, nothing overlaid" \
+    "jq -e '.error == null and ((.slots[] | select(.bootname==\"A\")) | .installed_release == null)' '$WW/wr_junk.json'"
+  # Malformed records must be IGNORED, never break the collector (a 1-byte output
+  # file with rc=0 was the failure of the first version on {"A":"x"}).
+  bad_rec() { # <name> <record>
+    written_run "$1" "$2"
+    jq -e '.error == null and (.slots | length) >= 2 and ((.slots[] | select(.bootname=="A")) | .installed_release == null and .written_verified == false and .installed_version == "16.3.1.9")' "$WW/$1.json"
+  }
+  # fresh-sd-flash: the other slot (B) has no RAUC install record, so a record is
+  # NOT shadowed by the staleness rule; only the shape guards can reject it.
+  bad_rec_fs() { # <name> <record>
+    written_run "$1" "$2" fresh-sd-flash
+    jq -e '.error == null and ((.slots[] | select(.bootname=="B")) | .installed_release == null and .written_verified == false)' "$WW/$1.json"
+  }
+  run_test "SLOT-95b" "no RAUC record on the slot: a record with missing / string at is still ignored (shape guard, not shadowed by staleness)" \
+    "bad_rec_fs wr_fs1 '{\"B\":{\"release\":\"BOSv1.6.0\",\"bundle_version\":\"16.3.1.10\"}}' && bad_rec_fs wr_fs2 '{\"B\":{\"release\":\"BOSv1.6.0\",\"bundle_version\":\"16.3.1.10\",\"at\":\"1790000000\"}}'"
+  run_test "SLOT-95c" "no RAUC record on the slot: a well-formed record IS used (control: the shape test is not vacuous)" \
+    "written_run wr_fs3 '{\"B\":{\"release\":\"BOSv1.6.0\",\"bundle_version\":\"16.3.1.10\",\"at\":1790000000}}' fresh-sd-flash && jq -e '(.slots[] | select(.bootname==\"B\")) | .installed_release == \"BOSv1.6.0\" and .written_verified == true' '$WW/wr_fs3.json'"
+  run_test "SLOT-95" "record whose slot value is not an object ({\"A\":\"x\"}, 1, null, [..]): ignored, collector intact" \
+    "bad_rec wr_str '{\"A\":\"x\"}' && bad_rec wr_num '{\"A\":1}' && bad_rec wr_nul '{\"A\":null}' && bad_rec wr_arr '{\"A\":[1]}'"
+  run_test "SLOT-96" "record with a non-numeric at: ignored" \
+    "bad_rec wr_at '{\"A\":{\"release\":\"BOSv1.6.0\",\"bundle_version\":\"16.3.1.10\",\"at\":\"1790000000\"}}' && bad_rec wr_at2 '{\"A\":{\"release\":\"BOSv1.6.0\",\"bundle_version\":\"16.3.1.10\"}}'"
+  run_test "SLOT-97" "record with a non-string release or bundle_version: ignored" \
+    "bad_rec wr_rel '{\"A\":{\"release\":5,\"bundle_version\":\"16.3.1.10\",\"at\":1790000000}}' && bad_rec wr_ver '{\"A\":{\"release\":\"BOSv1.6.0\",\"bundle_version\":[1],\"at\":1790000000}}'"
+  run_test "SLOT-98" "record with at in the FUTURE (after the collector's clock): ignored" \
+    "bad_rec wr_fut '{\"A\":{\"release\":\"BOSv1.6.0\",\"bundle_version\":\"16.3.1.10\",\"at\":1790002000}}'"
+  run_test "SLOT-94" "fixture input without GA_RAUC_SLOTS_WRITTEN never reads the device record" \
+    "grep -q 'GA_RAUC_SLOTS_INPUT:-}\" ] && \[ -z \"\${GA_RAUC_SLOTS_WRITTEN' '$COL'"
+  rm -rf "$WW"
+else
+  skip_test "SLOT-90..SLOT-98" "verified-write record" "jq not available"
+fi
+
 suite_end

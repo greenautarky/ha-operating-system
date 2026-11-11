@@ -1,0 +1,21 @@
+# ga-rauc-mirror-slot.path — file-watcher for ga_manager's "mirror the running
+# release into the other RAUC slot" request (Odoo #1750). Same channel and the
+# same integrity argument as ga-rauc-install.path (ADR-0041): only ga_manager
+# mounts this directory, nothing is read from /share. The request is only a
+# "now"; every precondition (1.6+, soak, slot state) is decided by the helper.
+
+[Unit]
+Description=Watch ga_manager's data directory for a second-slot mirror request
+DefaultDependencies=no
+After=mnt-data.mount
+Requires=mnt-data.mount
+
+[Path]
+# Both spellings, like ga-rauc-install.path: Supervisor < 2026.10 keeps add-on data under
+# addons/, 2026.10+ (BOSv1.6) under apps/. A .path unit cannot call ga-data-root.sh.
+PathChanged=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-rauc-mirror-request
+PathChanged=/mnt/data/supervisor/apps/data/99f1cad4_ga_manager/ga-rauc-mirror-request
+Unit=ga-rauc-mirror-slot.service
+
+[Install]
+WantedBy=multi-user.target

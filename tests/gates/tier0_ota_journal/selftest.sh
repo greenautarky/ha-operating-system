@@ -26,6 +26,7 @@
 #       S1-S3,S6  _SYSTEMD_UNIT=ga-rauc-install.service at PRIORITY 6/3/7
 #       S4        PID 1 lifecycle line UNIT=ga-rauc-install.service (INFO)
 #       S5        PID 1 line UNIT=ga-rauc-install.path (INFO)
+#       S9,S10    ga-rauc-mirror-slot.service at PRIORITY 3 / its PID 1 line (Odoo #1750)
 #       S7        PID 1 lifecycle line UNIT=rauc.service (INFO)
 #       S8        rauc.service's own output incl. ga-release-floor (INFO)
 #     must-drop:
@@ -40,7 +41,7 @@
 #     master    the pre-change shape: the unit loads fluent-bit-tier0.conf alone
 #               -> S1-S7 missing (S8 still ships; D* still dropped)
 #     no-UNIT   the OS input without its UNIT= matches
-#               -> exactly S4, S5, S7 missing (the PID 1 lines)
+#               -> exactly S4, S5, S7, S10 missing (the PID 1 lines)
 #     no-mesh-prio  the mesh input without its PRIORITY grep FILTER
 #               -> exactly M3 shipped (the routine tick leaks)
 #
@@ -137,6 +138,8 @@ rec S5 _SYSTEMD_UNIT=init.scope UNIT=ga-rauc-install.path PRIORITY=6 SYSLOG_IDEN
 rec S6 _SYSTEMD_UNIT=ga-rauc-install.service PRIORITY=7 SYSLOG_IDENTIFIER=ga-rauc-install _PID=4100
 rec S7 _SYSTEMD_UNIT=init.scope UNIT=rauc.service PRIORITY=6 SYSLOG_IDENTIFIER=systemd _PID=1
 rec S8 _SYSTEMD_UNIT=rauc.service PRIORITY=6 SYSLOG_IDENTIFIER=rauc _PID=700
+rec S9 _SYSTEMD_UNIT=ga-rauc-mirror-slot.service PRIORITY=3 SYSLOG_IDENTIFIER=ga-rauc-mirror-slot _PID=4200
+rec S10 _SYSTEMD_UNIT=init.scope UNIT=ga-rauc-mirror-slot.service PRIORITY=6 SYSLOG_IDENTIFIER=systemd _PID=1
 rec D1 _SYSTEMD_UNIT=systemd-timesyncd.service PRIORITY=6 SYSLOG_IDENTIFIER=systemd-timesyncd _PID=300
 rec D2 _SYSTEMD_UNIT=ga-resolve-ota.service PRIORITY=6 SYSLOG_IDENTIFIER=ga-resolve-ota _PID=5000
 rec D3 _SYSTEMD_UNIT=init.scope UNIT=ga-resolve-ota.service PRIORITY=6 SYSLOG_IDENTIFIER=systemd _PID=1
@@ -146,7 +149,7 @@ rec D5 _SYSTEMD_UNIT=network.service PRIORITY=4 SYSLOG_IDENTIFIER=network _PID=2
 rec M1 _SYSTEMD_UNIT=ga-mesh-watchdog.service PRIORITY=4 SYSLOG_IDENTIFIER=ga-mesh-watchdog _PID=6000
 rec M2 _SYSTEMD_UNIT=ga-mesh-watchdog.service PRIORITY=3 SYSLOG_IDENTIFIER=ga-mesh-watchdog _PID=6000
 rec M3 _SYSTEMD_UNIT=ga-mesh-watchdog.service PRIORITY=6 SYSLOG_IDENTIFIER=ga-mesh-watchdog _PID=6000
-SHIP="S1 S2 S3 S4 S5 S6 S7 S8 M1 M2"
+SHIP="S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 M1 M2"
 DROP="D1 D2 D3 D4 D5 M3"
 
 mkdir -p "$W/journal"
@@ -271,10 +274,14 @@ mutant() {
 }
 
 if [ "$ENTRY_NAME" != "fluent-bit-tier0.conf" ]; then
-  mutant "S1 S2 S3 S4 S5 S6 S7 M1 M2" master fluent-bit-tier0.conf
+  mutant "S1 S2 S3 S4 S5 S6 S7 S9 S10 M1 M2" master fluent-bit-tier0.conf
   grep -v '^[[:space:]]*Systemd_Filter[[:space:]]\{1,\}UNIT=' "$W/etc/$ENTRY_NAME" > "$W/etc/no-unit.conf"
-  mutant "S4 S5 S7" no-unit no-unit.conf
+  mutant "S4 S5 S7 S10" no-unit no-unit.conf
   rm -f "$W/etc/no-unit.conf"
+  # the OS input without the mirror unit (Odoo #1750): exit 6 would be invisible
+  grep -v "ga-rauc-mirror-slot" "$W/etc/$ENTRY_NAME" > "$W/etc/no-mirror.conf"
+  mutant "S9 S10" no-mirror no-mirror.conf
+  rm -f "$W/etc/no-mirror.conf"
   # the mesh input without its PRIORITY grep: the every-2-min info tick leaks
   awk 'function out() { if (b != "" && b !~ /tier0\.mesh/) printf "%s", b; b = ""; f = 0 }
        /^\[/ { out(); if ($0 ~ /^\[FILTER\]/) { f = 1; b = $0 "\n"; next } }

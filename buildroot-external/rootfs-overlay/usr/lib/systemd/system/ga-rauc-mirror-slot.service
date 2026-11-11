@@ -1,0 +1,18 @@
+# ga-rauc-mirror-slot.service — write the running release into the other RAUC
+# slot, without switching or rebooting (Odoo #1750). Driven by
+# ga-rauc-mirror-slot.path; the design and every precondition are documented in
+# /usr/sbin/ga-rauc-mirror-slot and docs/RAUC-SLOTS.md. Never reboots.
+
+[Unit]
+Description=GA RAUC second-slot mirror (writes the other slot with the running release; no switch, no reboot)
+DefaultDependencies=no
+After=network-online.target mnt-data.mount
+Wants=network-online.target
+# No Conflicts= on purpose: starting this unit must never STOP an OS install in
+# progress. The helper looks at ga-rauc-install.service itself and steps aside.
+
+[Service]
+Type=oneshot
+# A 230 MB download over a slow uplink plus two slot writes.
+TimeoutStartSec=1500s
+ExecStart=/usr/sbin/ga-rauc-mirror-slot
