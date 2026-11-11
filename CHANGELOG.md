@@ -12,6 +12,14 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): iHost vccio5 = 3.3 V for freshly flashed devices, 1.8 V kept everywhere else (Odoo #1900, #1484)
+
+The iHost Ethernet RMII/MDIO bank VCCIO5 is physically 3.3 V: the RTL8201F PHY runs its IO from DVDD33, and the PHY reset pin measured 3.3 V on two units (2026-11-11). GA images declared it 1.8 V since `3c8c6f49d` (2026-03-11; its premise "VCCIO5 = SDIO" was wrong, SDIO is VCCIO3). A unit that ran the 1.8 V setting lost its PHY in the correct 3.3 V setting, under stock and under GA; a factory-fresh unit works at 3.3 V with this kernel. Decision 2026-11-11: only freshly flashed devices move to 3.3 V.
+
+- The image now carries `rv1126-`/`rv1109-sonoff-ihost-vccio5-3v3.dtb` next to the unchanged 1.8 V DTBs. `make-vccio5-3v3-dtb.sh` derives them at image build (host-dtc added to the defconfig) and fails the build unless exactly `vccio5-supply` changed from `vcc_1v8` to `vcc_3v3`.
+- `uboot-boot.ush` loads the variant only when `haos-config.txt` carries `ga_vccio5=3v3` (the flasher writes it on a fresh flash). `haos-config.txt` is device-owned and restored by the RAUC boot hook, so an OTA never changes a device's setting. A requested but missing variant falls back loudly on the console. The loaded variant goes to the kernel as `ga.vccio5=<3v3|1v8>`.
+- `hw_iodomain` judges each device against the pinned set of its mode (`1v8`: 0x140 = 0xA6, vccio5 → vcc_1v8; `3v3`: 0x86, vcc_3v3; real captures from the iHost-A bench unit in both modes). The new `IOD-00` fails a silent fallback. `IOD-06` now expects MDC pin 82 = 2 mA in both modes: the old 4 mA came from a modelled fixture and could not pass on a real unit. Selftest 69/69. Booted on iHost-A through U-Boot: 3v3 key → 3v3 DTB / 0x86, key without the variant → loud 1v8 fallback (IOD-00 red), no key → 1v8. New build check `BLD-VCC-01` asserts both variants on the real boot artifact.
+
 ## Unreleased (feat/1.6-haos18): the iHost USB serial gadget carries a serial number (Odoo #1723)
 
 The iHost's built-in `g_serial` gadget exposed no `iSerialNumber`, so a flasher station could not identify the device from the USB descriptor. `uboot-boot.ush` now appends `g_serial.iSerialNumber=${serial#}` to `bootargs_ga` (only when `serial#` is non-empty). New device test `HW-08e`, host gate `tests/gates/ihost_gadget_serial`.

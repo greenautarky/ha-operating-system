@@ -1,0 +1,20 @@
+pin 70 (gpio2-6): output drive strength (4 mA), input schmitt enabled, pin output (1 level)
+pin 71 (gpio2-7): output drive strength (4 mA), input schmitt enabled, pin output (0 level)
+pin 72 (gpio2-8): output drive strength (4 mA), input schmitt enabled, pin output (0 level)
+pin 73 (gpio2-9): output drive strength (4 mA), input schmitt enabled, pin output (0 level)
+pin 74 (gpio2-10): output drive strength (4 mA), input schmitt enabled, pin output (0 level)
+pin 75 (gpio2-11): output drive strength (4 mA), input schmitt enabled, pin output (0 level)
+pin 76 (gpio2-12): output drive strength (4 mA), input schmitt enabled
+pin 77 (gpio2-13): output drive strength (4 mA), input schmitt enabled
+pin 78 (gpio2-14): output drive strength (4 mA), input schmitt enabled
+pin 79 (gpio2-15): output drive strength (4 mA), input schmitt enabled
+pin 80 (gpio2-16): output drive strength (4 mA), input schmitt enabled
+pin 81 (gpio2-17): output drive strength (4 mA), input schmitt enabled
+pin 82 (gpio2-18): output drive strength (2 mA), input schmitt enabled
+pin 83 (gpio2-19): output drive strength (12 mA), input schmitt enabled
+pin 84 (gpio2-20): output drive strength (12 mA), input schmitt enabled
+pin 85 (gpio2-21): output drive strength (4 mA), input schmitt enabled, pin output (0 level)
+pin 86 (gpio2-22): output drive strength (12 mA), input schmitt enabled
+pin 87 (gpio2-23): output drive strength (4 mA), input schmitt enabled, pin output (0 level)
+pin 88 (gpio2-24): output drive strength (4 mA), input schmitt enabled, pin output (0 level)
+pin 89 (gpio2-25): output drive strength (4 mA), input schmitt enabled, pin output (0 level)
