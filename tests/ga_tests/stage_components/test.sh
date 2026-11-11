@@ -99,5 +99,44 @@ run_test "GSV-31" "missing addon data dir exits 0 (must never block boot)" \
 run_test "GSV-40" "absent vendored source exits 0" \
   "GA_STAGE_SRC='$WORK/nope' GA_STAGE_SHARE_DST='$SHARE' GA_STAGE_PRIV_GLOB='$ADDONS/*_ga_manager' sh '$STAGE' >/dev/null 2>&1"
 
+# --- newer-wins version gate (Odoo #1888) -----------------------------------
+# A component delivered by the fm component-sync job is NEWER than the baked
+# one. The old "manifest differs" gate rolled it back on every boot. Fixtures:
+# MUST-KEEP (staged newer / equal) and MUST-RESTAGE (baked newer / staged
+# missing / no version / garbage). 2.12.9 vs 2.12.12 pins numeric, not lexical.
+# Trusted root only: /share is writable by other add-ons, so it stays a strict
+# "differs" gate (GSV-12) and a forged higher version there must not stick.
+vg_case() { # <id> <desc> <baked_ver> <staged_manifest_content|MISSING> <expect_ver|any_baked>
+  id="$1"; desc="$2"; bv="$3"; sm="$4"; want="$5"
+  rm -rf "$WORK/vg"; mkdir -p "$WORK/vg/src/greenautarky_site" "$WORK/vg/addons/data/99f1cad4_ga_manager/ga-custom-components/greenautarky_site"
+  printf '{"domain":"greenautarky_site","version":"%s"}\n' "$bv" > "$WORK/vg/src/greenautarky_site/manifest.json"
+  printf 'baked\n' > "$WORK/vg/src/greenautarky_site/__init__.py"
+  vd="$WORK/vg/addons/data/99f1cad4_ga_manager/ga-custom-components/greenautarky_site"
+  printf 'staged\n' > "$vd/__init__.py"
+  if [ "$sm" = MISSING ]; then rm -f "$vd/manifest.json"; else printf '%s\n' "$sm" > "$vd/manifest.json"; fi
+  GA_STAGE_SRC="$WORK/vg/src" GA_STAGE_SHARE_DST="$WORK/vg/share" \
+    GA_STAGE_PRIV_GLOB="$WORK/vg/addons/data/*_ga_manager" sh "$STAGE" >"$WORK/vg/out" 2>&1
+  if [ "$want" = baked ]; then
+    run_test "$id" "$desc" "grep -q '^baked\$' '$vd/__init__.py'"
+  else
+    run_test "$id" "$desc" "grep -q '^staged\$' '$vd/__init__.py'"
+  fi
+}
+vg_case GSV-50 "staged newer is KEPT over baked (2.12.12 > 2.12.6)" 2.12.6 '{"version":"2.12.12"}' staged
+vg_case GSV-51 "numeric not lexical: staged 2.12.12 KEPT over baked 2.12.9" 2.12.9 '{"version":"2.12.12"}' staged
+vg_case GSV-52 "numeric not lexical: baked 2.12.12 RESTAGED over staged 2.12.9" 2.12.12 '{"version":"2.12.9"}' baked
+vg_case GSV-53 "baked newer is restaged" 2.12.9 '{"version":"2.12.6"}' baked
+vg_case GSV-54 "equal version is kept (no rewrite)" 2.12.9 '{"version":"2.12.9"}' staged
+vg_case GSV-55 "staged manifest missing -> restaged from baked" 2.12.9 MISSING baked
+vg_case GSV-56 "staged manifest has no version -> restaged" 2.12.9 '{"domain":"x"}' baked
+vg_case GSV-57 "staged manifest garbage -> restaged" 2.12.9 'not json {{{' baked
+vg_case GSV-58 "staged version non-numeric -> restaged" 2.12.9 '{"version":"latest"}' baked
+vg_case GSV-59 "staged shorter version 2.13 KEPT over baked 2.12.9" 2.12.9 '{"version":"2.13"}' staged
+run_test "GSV-60" "keep is logged at INFO (newer staged)" \
+  "{ printf '{\"version\":\"2.12.12\"}\n' > '$vd/manifest.json'; GA_STAGE_SRC='$WORK/vg/src' GA_STAGE_SHARE_DST='$WORK/vg/share' GA_STAGE_PRIV_GLOB='$WORK/vg/addons/data/*_ga_manager' sh '$STAGE' 2>&1 | grep -q 'INFO trusted: keeping newer staged greenautarky_site 2.12.12 over baked 2.12.9'; }"
+# /share compat stays strict: forged HIGHER version is repaired, not kept.
+run_test "GSV-61" "compat /share: forged higher version is still restaged" \
+  "printf '{\"version\":\"99.0.0\"}\n' > '$WORK/vg/share/greenautarky_site/manifest.json' && printf 'evil\n' > '$WORK/vg/share/greenautarky_site/__init__.py' && GA_STAGE_SRC='$WORK/vg/src' GA_STAGE_SHARE_DST='$WORK/vg/share' GA_STAGE_PRIV_GLOB='$WORK/vg/addons/data/*_ga_manager' sh '$STAGE' >/dev/null 2>&1; grep -q '^baked\$' '$WORK/vg/share/greenautarky_site/__init__.py'"
+
 rm -rf "$WORK"
 suite_end
