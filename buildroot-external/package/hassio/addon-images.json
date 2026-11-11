@@ -22,7 +22,11 @@
     },
     "ga_zigbee2mqtt": {
       "image": "ghcr.io/greenautarky/ga_zigbee2mqtt-{arch}",
-      "version": "2.12.1-11"
+      "version": "2.12.1-11",
+      "hold": {
+        "reason": "BOSv1.5.4 is a security-only release; 2.12.1-11 carries the brotli CVE rebuild. 2.12.1-12 adds the TS0014 countdown converter for the 1.6 underfloor-heating feature and is deferred from the 1.5 line. Revisit with the next 1.5.x or retire with 1.6.",
+        "until": "2026-12-11"
+      }
     },
     "sonoff_dongle_flasher": {
       "image": "ghcr.io/greenautarky/ga_dongle_flasher-{arch}",
