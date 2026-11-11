@@ -250,6 +250,55 @@ if [[ $rc -ne 0 ]] && grep -qiE 'no add-on entries found' <<<"$out"; then
     ok "an empty store is refused, not reported green"
 else bad "an empty store was not refused (rc=$rc)"; sed 's/^/      /' <<<"$out"; fi
 
+echo "== 10. per-line mode (Odoo #1758): the 1.5 line is checked against its OWN pinned set =="
+# Root cause fixed here: the bake pre-check ran this audit (and check-images.sh) on a tree it could not read
+# the release line from, so a 1.5 bake was judged against the store HEAD (which carries the 1.6 add-ons).
+# must-pass: a 1.5 tree whose pins are BEHIND the store (the store serves the newer line) - deliberately held.
+make_repo "1.2.0" "$IMAGE" "BOSv1.5.4"; make_store "1.3.0"
+ran=$((ran + 1)); repin_check
+if [[ $rc -eq 0 ]] && grep -qE 'lockstep mode: own-set' <<<"$out" && grep -qE 'LINE-OWN-SET ga_hmvapp_addon' <<<"$out"; then
+    ok "must-pass: 1.5 tree, pin behind the store -> own-set, exit 0"
+else bad "1.5 tree with a held-back pin must pass in own-set mode (rc=$rc)"; sed 's/^/      /' <<<"$out"; fi
+ran=$((ran + 1)); gate_run
+if grep -qE 'mode: own-set' <<<"$gout" && ! grep -qE 'FAIL.*ga_hmvapp_addon' <<<"$gout"; then
+    ok "check-images.sh agrees: mode own-set, no FAIL for the held pin"
+else bad "gate disagrees on the 1.5 own-set case"; grep -iE 'mode:|hmvapp' <<<"$gout" | sed 's/^/      /'; fi
+# must-flag: the store BEHIND the pin is a real inconsistency on any line
+make_repo "1.3.0" "$IMAGE" "BOSv1.5.4"; make_store "1.2.0"
+ran=$((ran + 1)); repin_check
+if [[ $rc -ne 0 ]] && grep -qE 'DRIFT ga_hmvapp_addon' <<<"$out"; then
+    ok "must-flag: 1.5 tree, store BEHIND the pin -> red"
+else bad "store behind the pin must stay red in own-set mode (rc=$rc)"; sed 's/^/      /' <<<"$out"; fi
+# must-flag: an uncomparable version is never waved through
+make_repo "1.2.0" "$IMAGE" "BOSv1.5.4"; make_store "1.3.0-ga.1"
+ran=$((ran + 1)); repin_check
+if grep -qE 'PRERELEASE' <<<"$out" && [[ $rc -eq 0 ]]; then
+    ok "canary store still reported as PRERELEASE in own-set mode"
+else bad "canary handling changed in own-set mode (rc=$rc)"; sed 's/^/      /' <<<"$out"; fi
+make_repo "1.2.0" "$IMAGE" "BOSv1.5.4"; make_store "1.3.x"
+ran=$((ran + 1)); repin_check
+if [[ $rc -ne 0 ]]; then ok "must-flag: store version not comparable -> red"; else bad "uncomparable store version passed"; fi
+# must-flag: the 1.6 line (and any unlisted line) stays strict
+make_repo "1.2.0" "$IMAGE" "BOSv1.6.0-rc13"; make_store "1.3.0"
+ran=$((ran + 1)); repin_check
+if [[ $rc -ne 0 ]] && grep -qE 'lockstep mode: store' <<<"$out"; then
+    ok "must-flag: 1.6 tree stays STRICT (pin behind the store -> red)"
+else bad "1.6 tree must stay strict (rc=$rc)"; sed 's/^/      /' <<<"$out"; fi
+# must-flag: a tree whose line cannot be read is strict AND says so (the bake pre-check bug, reproduced)
+make_repo "1.2.0" "$IMAGE"; rm -f "$WORK/repo/version.yaml"; make_store "1.3.0"
+ran=$((ran + 1)); repin_check
+if [[ $rc -ne 0 ]] && grep -qE 'cannot read gaos_release' <<<"$out"; then
+    ok "must-flag: no readable version.yaml -> strict, announced"
+else bad "unreadable line must be strict and loud (rc=$rc)"; sed 's/^/      /' <<<"$out"; fi
+# must-flag: the OWN_SET_LINES definition cannot be found -> FAIL, never a silent fallback (rule 51c)
+make_repo "1.2.0" "$IMAGE" "BOSv1.5.4"; make_store "1.3.0"
+mkdir -p "$WORK/lone"; cp "$REPIN" "$WORK/lone/repin-addons.py"
+ran=$((ran + 1))
+out="$(REPO_ROOT="$WORK/repo" python3 "$WORK/lone/repin-addons.py" --check --store "$WORK/store" 2>&1)"; rc=$?
+if [[ $rc -ne 0 ]] && grep -qE 'cannot read OWN_SET_LINES' <<<"$out"; then
+    ok "must-flag: OWN_SET_LINES definition missing -> FAIL (never skipped)"
+else bad "missing OWN_SET_LINES definition must fail (rc=$rc)"; sed 's/^/      /' <<<"$out"; fi
+
 echo
 if (( ran == 0 )); then echo "${RED}FATAL${NC} nothing evaluated"; exit 1; fi
 if (( fails == 0 )); then
