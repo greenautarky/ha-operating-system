@@ -148,9 +148,12 @@ type iod_mode >/dev/null 2>&1 && type iod_set_mode >/dev/null 2>&1 \
 printf 'ga_vccio5=3v3\n' > "$T/c1";  M=$(iod_mode "$T/c1");  show_verdict ISO-47 "mode: 'ga_vccio5=3v3' -> 3v3" "$([ "$M" = 3v3 ] && echo 0 || echo 1)" "$M"
 : > "$T/c2";                          M=$(iod_mode "$T/c2");  show_verdict ISO-48 "mode: empty haos-config.txt -> 1v8 (legacy)" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
 M=$(iod_mode "$T/nope");              show_verdict ISO-49 "mode: missing file -> 1v8 (legacy)" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
-printf 'ga_vccio5=3v3\r\n' > "$T/c3"; M=$(iod_mode "$T/c3");  show_verdict ISO-50 "mode: CRLF line still -> 3v3" "$([ "$M" = 3v3 ] && echo 0 || echo 1)" "$M"
+printf 'ga_vccio5=3v3\r\n' > "$T/c3"; M=$(iod_mode "$T/c3");  show_verdict ISO-50 "mode: CRLF value is not exactly 3v3 -> 1v8 (mirrors hush)" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
 printf 'ga_vccio5=1v8\n' > "$T/c4";  M=$(iod_mode "$T/c4");  show_verdict ISO-51 "mode: 'ga_vccio5=1v8' -> 1v8" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
 printf '#ga_vccio5=3v3\nxga_vccio5=3v3\n' > "$T/c5"; M=$(iod_mode "$T/c5"); show_verdict ISO-52 "mode: commented / prefixed key is NOT 3v3" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
+printf 'ga_vccio5=3v3 \n' > "$T/c6"; M=$(iod_mode "$T/c6"); show_verdict ISO-52a "mode: trailing space -> 1v8 (hush compares exactly)" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
+printf 'ga_vccio5=3v3\nga_vccio5=1v8\n' > "$T/c7"; M=$(iod_mode "$T/c7"); show_verdict ISO-52b "mode: last value wins (env import) -> 1v8" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
+printf 'ga_vccio5=1v8\nga_vccio5=3v3\n' > "$T/c8"; M=$(iod_mode "$T/c8"); show_verdict ISO-52c "mode: last value wins -> 3v3" "$([ "$M" = 3v3 ] && echo 0 || echo 1)" "$M"
 iod_set_mode 3v3
 x=$(iod_readreg "$FX/regs-real-pmugrf-3v3-ihostA.txt" 140); OUT=$(iod_verdict "$x"); RC=$?
 show_verdict ISO-53 "3v3: REAL 0x140=0x86 passes" "$RC" "$OUT"

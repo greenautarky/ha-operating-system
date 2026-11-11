@@ -28,14 +28,16 @@ IOD_MASK=254     # 0xFE: bits 1..7 (vccio1..7); bit 0 is pmuio, not judged here
 # "pin 82 = 4 mA" came from a MODELLED fixture and could not pass on iHost-A.
 IOD_BOOTCFG="${IOD_BOOTCFG:-/mnt/boot/haos-config.txt}"
 
-# iod_mode <haos-config.txt> — print 3v3 when the file carries the line
-# ga_vccio5=3v3, else 1v8 (absent key, absent file = a legacy device).
+# iod_mode <haos-config.txt> — print 3v3 exactly when boot.scr would load the 3.3 V
+# DTB, else 1v8 (absent key, absent file = a legacy device). It MIRRORS U-Boot:
+# `env import -t` keeps the LAST value of a key, and hush compares
+# "x${ga_vccio5}" = "x3v3" exactly, so a trailing space or CR, or a later
+# ga_vccio5=1v8 line, means 1v8 to the bootloader and therefore here too
+# (tests/gates/ihost_vccio5_bootscr evaluates that boot.scr block).
 iod_mode() {
-  if [ -r "$1" ] && tr -d '\r' < "$1" | grep -qx '[[:space:]]*ga_vccio5=3v3[[:space:]]*'; then
-    echo 3v3
-  else
-    echo 1v8
-  fi
+  _v=""
+  [ -r "$1" ] && _v=$(sed -n 's/^ga_vccio5=//p' "$1" | tail -n1)
+  if [ "$_v" = 3v3 ]; then echo 3v3; else echo 1v8; fi
 }
 
 # iod_set_mode <1v8|3v3> — load the pinned expectations of that mode.
