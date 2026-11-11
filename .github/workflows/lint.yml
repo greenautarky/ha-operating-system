@@ -1038,10 +1038,11 @@ jobs:
       - name: iHost boot.scr vccio5 DTB selection (Odoo #1900)
         run: bash tests/gates/ihost_vccio5_bootscr/selftest.sh
 
-      # Odoo #1900: every fresh flash through verify-sd.sh marks the card
-      # ga_vccio5=3v3 (iHost vccio5 bank is physically 3.3 V, #1484) and refuses
-      # a pre-#1900 image unless --allow-pre-1900-image (jump tests).
-      - name: vccio5 3.3 V card key (verify-sd.sh, Odoo #1900)
+      # Odoo #1900/#1944: verify-sd.sh --flash requires --vccio5 3v3|1v8 (no
+      # default, Thomas 2026-11-11), refuses before the first dd without it,
+      # writes exactly one ga_vccio5=<mode> line, and refuses 3v3 on a pre-#1900
+      # image (it would silently boot 1.8 V).
+      - name: vccio5 card key, mandatory per flash (verify-sd.sh, Odoo #1900/#1944)
         run: sh tests/gates/vccio5_key/selftest.sh
 
       # Odoo #1723: the iHost boot script gives the g_serial gadget an

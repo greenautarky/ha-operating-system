@@ -223,7 +223,7 @@ the founder/pilot circle, OR pre-CRA-deadline (mid-2027).
   - **Automatic**: RAUC marks slot as "bad" after 3 failed boots → falls back to previous slot
   - **Manual OTA rollback**: `rauc status mark-bad booted && reboot` → boots previous slot
   - **Restore after rollback**: `rauc status mark-good other && rauc status mark-active other && reboot`
-  - **Full re-flash**: `./scripts/verify-sd.sh --all bos_*.img.xz` (previous image)
+  - **Full re-flash**: `./scripts/verify-sd.sh --all --vccio5 3v3|1v8 bos_*.img.xz` (previous image; vccio5 chosen per flash)
   - **Data partition**: survives both OTA and rollback (only rootfs switches)
   - **Tested**: 16.3 → 16.3.1.1 → rollback to 16.3 → restore 16.3.1.1 (all PASS)
 
