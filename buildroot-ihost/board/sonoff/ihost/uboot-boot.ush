@@ -71,7 +71,10 @@ fi
 # fresh flash. Everything else keeps the legacy 1.8 V DTB (Thomas, 2026-11-11).
 # The loaded variant is handed to the kernel as ga.vccio5=<3v3|1v8>, so
 # hw_iodomain can tell a requested-but-missing 3v3 DTB (fallback) from a
-# legacy device: a fallback is loud, never silent.
+# legacy device: a fallback is loud, never silent. The argument is PREPENDED:
+# bootargs_ga must keep ending with the gadget serial
+# (tests/gates/ihost_gadget_serial), and the USB lock flag must stay after
+# ${cmdline} (tests/gates/ota_usb_lock).
 setenv ga_vccio5_loaded 1v8
 if test "x${ga_vccio5}" = "x3v3"; then
   if test "x${cpucode#}" = "x1126"; then
@@ -86,7 +89,7 @@ if test "x${ga_vccio5}" = "x3v3"; then
     echo "GA: ga_vccio5=3v3 requested but ${fdtfile_3v3} is missing - FALLING BACK to the 1.8 V DTB ${fdtfile}"
   fi
 fi
-setenv bootargs_ga "${bootargs_ga} ga.vccio5=${ga_vccio5_loaded}"
+setenv bootargs_ga "ga.vccio5=${ga_vccio5_loaded} ${bootargs_ga}"
 
 echo "Loading device tree ${fdtfile} (vccio5 ${ga_vccio5_loaded})"
 fatload mmc ${devnum}:${boot_partnum} ${fdt_addr_r} ${fdtfile}
