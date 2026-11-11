@@ -1,0 +1,549 @@
+#!/bin/sh
+# ga-rauc-mirror-slot — give the OTHER RAUC slot the release this device is
+# RUNNING, without switching to it and without rebooting (Odoo #1750).
+#
+# WHY
+#   BOSv1.6 migrates persistent state one way (Supervisor apps/ data root, app_
+#   container names, Core 2026.10). After an OTA from 1.5 the other slot still
+#   holds 1.5, so a bootloader fallback (3 failed boots) or an operator rollback
+#   lands on an OS that cannot read the migrated state: a broken system, not a
+#   rescue. Once the new slot has soaked, the fallback must be a 1.6.
+#
+# SCOPE (decision 2026-11-11): ONLY when the other slot carries a LOWER major.minor
+#   than the booted slot (the real case: 1.5 beside 1.6). An other slot that is
+#   already on the same line (1.6.x, good or not) is never overwritten: a healthy
+#   fallback is not replaced by another build of the same line.
+#
+# HOW — and why NOT `rauc install` (RAUC 1.13, pinned source)
+#   A full iHost bundle carries boot.vfat and spl.img besides kernel+rootfs, both
+#   with an `install` hook: `rauc install` would rewrite the SPL region of the
+#   boot disk (raw dd) and copy over the SHARED boot partition. On a healthy
+#   device a power loss there can brick BOTH slots. The mirror must touch only
+#   the other slot's own partitions. So:
+#     rauc extract <bundle> <dir>     signature + verity verified by RAUC
+#     sha256 of kernel.img/rootfs.img against the manifest digests
+#     rauc status mark-bad <other>    removes it from BOOT_ORDER: a half-written
+#                                     slot can never be booted
+#     rauc write-slot <kernel> <img>  raw write of that one partition, no hooks,
+#     rauc write-slot <rootfs> <img>  no status update, no other slot touched
+#     read the written bytes back and compare with the manifest digests
+#     rauc status mark-good <other>
+#     rauc status mark-active <other>   (adds it to BOOT_ORDER again, as primary)
+#     rauc status mark-active booted    (booted slot first again; retried, and the
+#                                        primary is READ BACK — exit 6 only if it
+#                                        still is not the booted slot)
+#   mark-bad drops the slot from BOOT_ORDER and mark-good does not re-add it
+#   (bootchooser.c), hence the mark-active pair. Every outcome of every step
+#   boots a 1.6: before the write the other slot is out of the order; between
+#   mark-active other and mark-active booted it already holds the same release.
+#   Not used: `activate-installed=false` (global; would stop every normal OTA
+#   from switching slots). rauc.db is NOT updated by write-slot; the other
+#   slot's release is read from its own /etc/ga-release (mounted read-only).
+#   Never reboots.
+#
+# WHEN IT ACTS — decided HERE from RAUC's own status; a request only says "now".
+#   release       /etc/ga-release is BOSvX.Y.Z[-rcN|-devN] with X.Y >= 1.6.
+#   booted good   booted kernel slot has boot status good.
+#   primary       RAUC_BOOT_PRIMARY is the booted slot (no armed switch).
+#   idle          no ga-rauc-install running, RAUC Operation is idle (covers
+#                 Supervisor's InstallBundle), no second mirror run, free space.
+#   other slot    its /etc/ga-release is readable and on a LOWER major.minor.
+#                 Unreadable -> skipped (never overwrite what cannot be read).
+#   soak          booted slot activated >= GA_MIRROR_SOAK_S (24 h) ago AND
+#                 uptime >= GA_MIRROR_MIN_UPTIME_S (1 h).
+#   same bundle   downloaded bundle: signature ok, [meta.ga] release == running
+#                 release, manifest hash == the booted rootfs's recorded bundle
+#                 hash where rauc.db has one.
+# A failed precondition is `skipped` (exit 0, reason in the result). Anything
+# after them is `failed` (non-zero, loud). App-level health is ga_manager's
+# check (the ota-mirror-slot job); fm decides when to ask.
+#
+# TRIGGER   ga-rauc-mirror-slot.path watches ga-rauc-mirror-request in ga_manager's
+#           private data dir (ADR-0041); content = request id ([A-Za-z0-9._-]{0,64}).
+# RESULT    ga-rauc-mirror-result.json in the same dir (tmp file in a root-only
+#           work dir, then rename over; a symlink there is replaced, never
+#           followed): {"ts","request_id","status":"done|skipped|failed",
+#           "reason","release","booted","other"}.
+#
+# EXIT  0 done/skipped · 2 bad request · 3 download/space · 4 bundle refused ·
+#       5 write/verify/mark failed · 6 boot primary NOT back on the booted slot
+#       (critical) · 7 facts unreadable
+#
+# Test hooks (nothing on a device sets them):
+#   GA_GM_DATA_DIR GA_RAUC_BIN GA_CURL_BIN GA_BUSCTL_BIN GA_SYSTEMCTL_BIN
+#   GA_MIRROR_ROOT (prefix for /etc /run /mnt)  GA_MIRROR_NOW  GA_MIRROR_UPTIME_S
+#   GA_MIRROR_SOAK_S GA_MIRROR_MIN_UPTIME_S GA_MIRROR_MIN_FREE_KB
+#   GA_MIRROR_DEVROOT   slot devices are <dir>/<partlabel> files
+#   GA_MOUNT_BIN GA_UMOUNT_BIN  mount/umount of the other slot
+#   GA_MIRROR_WRITTEN_RECORD  where the verified-write record goes
+#   GA_MIRROR_OTHER_ROOT  read the other slot's etc/ga-release from this dir
+#   GA_RESOLVE_OTA_BIN GA_OTA_ACTIVE_FILE (as in ga-rauc-install)
+
+set -u
+
+ROOT="${GA_MIRROR_ROOT:-}"
+# ga_manager's data dir: addons/data on Supervisor < 2026.10, apps/data from 2026.10
+# (BOSv1.6): ga-data-root.sh is the one place that knows (same as ga-rauc-install).
+# GA_GM_DATA_DIR relocates it for host tests only.
+if [ -n "${GA_GM_DATA_DIR:-}" ]; then
+    GM_DATA_DIR="$GA_GM_DATA_DIR"
+else
+    # shellcheck disable=SC1090
+    . "${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"
+    GM_DATA_DIR="$(ga_data_root_or_unresolved)/99f1cad4_ga_manager"
+fi
+RAUC="${GA_RAUC_BIN:-rauc}"
+CURL="${GA_CURL_BIN:-curl}"
+BUSCTL="${GA_BUSCTL_BIN:-busctl}"
+SYSTEMCTL="${GA_SYSTEMCTL_BIN:-systemctl}"
+MOUNT="${GA_MOUNT_BIN:-mount}"
+UMOUNT="${GA_UMOUNT_BIN:-umount}"
+RESOLVE_OTA_BIN="${GA_RESOLVE_OTA_BIN:-/usr/sbin/ga-resolve-ota}"
+OTA_ACTIVE_FILE="${GA_OTA_ACTIVE_FILE:-/run/ga-resolve-ota.active}"
+OTA_HOST="ota.greenautarky.com"
+REQUEST_FILE="$GM_DATA_DIR/ga-rauc-mirror-request"
+RESULT_FILE="$GM_DATA_DIR/ga-rauc-mirror-result.json"
+RELEASE_FILE="${ROOT}/etc/ga-release"
+STAGING_DIR="${ROOT}/mnt/data/tmp"
+SOAK_S="${GA_MIRROR_SOAK_S:-86400}"
+MIN_UPTIME_S="${GA_MIRROR_MIN_UPTIME_S:-3600}"
+# bundle (~250 MB) is deleted after extraction; extraction needs ~330 MB more
+MIN_FREE_KB="${GA_MIRROR_MIN_FREE_KB:-800000}"
+WRITTEN_RECORD="${GA_MIRROR_WRITTEN_RECORD:-${ROOT}/mnt/data/ga-slot-written.json}"
+LOCK_FILE="${ROOT}/run/ga-rauc-mirror-slot.lock"
+# one download may not eat the unit's budget (TimeoutStartSec=1500)
+CURL_LIMITS="--connect-timeout 30 --max-time 900 --speed-limit 10240 --speed-time 60"
+
+REQUEST_ID=""
+RELEASE="unknown"
+BOOTED=""
+OTHER=""
+WORK=""
+OTHER_MNT=""
+MARKED_OTHER=no     # we issued mark-active <other>: the primary may need restoring
+BK=""               # booted kernel slot name (set once the slot picture is read)
+
+log()  { echo "[ga-rauc-mirror-slot] $*"; }
+# <3> = journal priority err (systemd SyslogLevelPrefix): visible to the tier-0/1 filters
+loud() { echo "<3>[ga-rauc-mirror-slot] ERROR: $*" >&2; }
+
+json_str() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\000-\037'; }
+
+# write_result <status> <reason> — tmp in the root-only work dir, rename over.
+# rename replaces a symlink at the destination instead of following it.
+write_result() {
+    _wr_ts="${GA_MIRROR_NOW:-$(date +%s)}"
+    [ -d "$GM_DATA_DIR" ] || { loud "no result written, $GM_DATA_DIR missing"; return 0; }
+    _wr_dir="$WORK"
+    if [ -z "$_wr_dir" ]; then
+        mkdir -p "$STAGING_DIR" 2>/dev/null
+        _wr_dir="$(mktemp -d "$STAGING_DIR/ga-rauc-mirror-res.XXXXXX" 2>/dev/null)" || { loud "cannot create a work dir for the result"; return 0; }
+    fi
+    _wr_tmp="$_wr_dir/result.json"
+    if [ -d "$RESULT_FILE" ] && [ ! -L "$RESULT_FILE" ]; then loud "$RESULT_FILE is a directory"; return 0; fi
+    if printf '{"ts": %s, "request_id": "%s", "status": "%s", "reason": "%s", "release": "%s", "booted": "%s", "other": "%s"}\n' \
+        "$_wr_ts" "$(json_str "$REQUEST_ID")" "$1" "$(json_str "$2")" \
+        "$(json_str "$RELEASE")" "$(json_str "$BOOTED")" "$(json_str "$OTHER")" > "$_wr_tmp"; then
+        mv -f "$_wr_tmp" "$RESULT_FILE" || { rm -f "$_wr_tmp"; loud "could not write $RESULT_FILE"; }
+    else
+        rm -f "$_wr_tmp"; loud "could not write $RESULT_FILE"
+    fi
+    [ -n "$WORK" ] || rmdir "$_wr_dir" 2>/dev/null
+}
+
+cleanup() {
+    if [ -n "$OTHER_MNT" ] && [ -d "$OTHER_MNT" ]; then "$UMOUNT" "$OTHER_MNT" 2>/dev/null; fi
+    if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
+}
+trap cleanup EXIT
+
+skip() { log "SKIPPED: $1"; write_result skipped "$1"; exit 0; }
+fail() { _rc="$1"; shift; loud "FAILED: $*"; write_result failed "$*"; exit "$_rc"; }
+
+regular_file() { [ -f "$1" ] && [ ! -L "$1" ]; }
+
+# --- request ---------------------------------------------------------------
+if [ $# -ge 1 ]; then
+    REQUEST_ID="$(printf '%s' "$1" | head -c 64)"
+else
+    if [ ! -e "$REQUEST_FILE" ] && [ ! -L "$REQUEST_FILE" ]; then
+        loud "no request file $REQUEST_FILE"; exit 2
+    fi
+    if ! regular_file "$REQUEST_FILE"; then
+        rm -f "$REQUEST_FILE"
+        fail 2 "request file is not a regular file - refused and removed"
+    fi
+    REQUEST_ID="$(head -c 64 "$REQUEST_FILE" | tr -d '[:space:]')"
+    # Delete first: the delete is the dedupe gate.
+    rm -f "$REQUEST_FILE"
+fi
+case "$REQUEST_ID" in
+    *[!A-Za-z0-9._-]*) REQUEST_ID=""; fail 2 "malformed request id" ;;
+esac
+log "request '$REQUEST_ID'"
+
+# root-only work dir: result tmp, bundle, extraction
+mkdir -p "$STAGING_DIR" 2>/dev/null
+WORK="$(mktemp -d "$STAGING_DIR/ga-rauc-mirror.XXXXXX" 2>/dev/null)" || fail 3 "cannot create a work dir in $STAGING_DIR"
+chmod 700 "$WORK"
+
+# One at a time.
+mkdir -p "$(dirname "$LOCK_FILE")" 2>/dev/null || true
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"$LOCK_FILE"
+    flock -n 9 || skip "another ga-rauc-mirror-slot run is active"
+fi
+# ga-rauc-install.service is RemainAfterExit=yes: "active" only says it ran once,
+# "activating" is the oneshot executing.
+if command -v "$SYSTEMCTL" >/dev/null 2>&1 \
+   && [ "$("$SYSTEMCTL" show -p ActiveState --value ga-rauc-install.service 2>/dev/null)" = activating ]; then
+    skip "ga-rauc-install.service is running an install"
+fi
+# RAUC itself: any install (Supervisor's InstallBundle included) shows as a
+# non-idle Operation on the D-Bus. Unreadable is a failure, not a pass.
+OP="$("$BUSCTL" get-property de.pengutronix.rauc / de.pengutronix.rauc.Installer Operation 2>/dev/null)" \
+    || fail 7 "cannot read the RAUC Operation (busctl) - not writing a slot blind"
+case "$OP" in
+    's "idle"') ;;
+    's "'*) skip "RAUC is busy (Operation ${OP#s })" ;;
+    *) fail 7 "unexpected RAUC Operation reply '$OP'" ;;
+esac
+
+# --- facts -----------------------------------------------------------------
+read_status() { "$RAUC" status --detailed --output-format=shell 2>/dev/null; }
+STATUS="$(read_status)" || STATUS=""
+[ -n "$STATUS" ] || fail 7 "rauc status gave no output - cannot read the slots"
+
+# get KEY — value of KEY='value' (parsed, never eval'd)
+get_from() {
+    printf '%s\n' "$1" | awk -v k="$2" -v q="'" '
+        index($0, k "=") == 1 {
+            v = substr($0, length(k) + 2)
+            if (substr(v, 1, 1) == q) v = substr(v, 2)
+            if (length(v) > 0 && substr(v, length(v), 1) == q) v = substr(v, 1, length(v) - 1)
+            print v; exit
+        }'
+}
+get() { get_from "$STATUS" "$1"; }
+
+idx_of() {
+    _io_nums="$(get RAUC_SLOTS)"
+    _io_i=1
+    for _io_n in $(get RAUC_SYSTEM_SLOTS); do
+        if [ "$_io_n" = "$1" ]; then
+            printf '%s\n' "$_io_nums" | awk -v i="$_io_i" '{print $i}'; return 0
+        fi
+        _io_i=$((_io_i + 1))
+    done
+    return 1
+}
+kernel_slots() {
+    for _ks_n in $(get RAUC_SYSTEM_SLOTS); do
+        _ks_i="$(idx_of "$_ks_n")"
+        [ "$(get "RAUC_SLOT_CLASS_$_ks_i")" = kernel ] && printf '%s\n' "$_ks_n"
+    done
+}
+rootfs_of() {
+    for _ro_n in $(get RAUC_SYSTEM_SLOTS); do
+        _ro_i="$(idx_of "$_ro_n")"
+        [ "$(get "RAUC_SLOT_CLASS_$_ro_i")" = rootfs ] || continue
+        [ "$(get "RAUC_SLOT_PARENT_$_ro_i")" = "$1" ] && { printf '%s\n' "$_ro_n"; return 0; }
+    done
+    return 1
+}
+dev_of() { # <slot name> — the partition, or its test stand-in
+    _do_d="$(get "RAUC_SLOT_DEVICE_$(idx_of "$1")")"
+    if [ -n "${GA_MIRROR_DEVROOT:-}" ]; then printf '%s/%s\n' "$GA_MIRROR_DEVROOT" "${_do_d##*/}"; else printf '%s\n' "$_do_d"; fi
+}
+
+rfc3339_epoch() {
+    printf '%s\n' "$1" | awk '
+        /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/ {
+            y = substr($0,1,4)+0; m = substr($0,6,2)+0; d = substr($0,9,2)+0
+            H = substr($0,12,2)+0; M = substr($0,15,2)+0; S = substr($0,18,2)+0
+            if (m <= 2) { y -= 1; m += 12 }
+            era = int(y / 400); yoe = y - era * 400
+            doy = int((153 * (m - 3) + 2) / 5) + d - 1
+            doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+            days = era * 146097 + doe - 719468
+            printf "%d\n", days * 86400 + H * 3600 + M * 60 + S; exit }'
+}
+
+# line_of <BOSvX.Y.Z[-rcN]> -> "X Y", or nothing when it is not a GA label
+line_of() {
+    printf '%s\n' "$1" | sed -nE 's/^BOSv([0-9]+)\.([0-9]+)\.[0-9]+(-(rc|dev)[0-9]+)?$/\1 \2/p'
+}
+# line_lt "A B" "C D" — A.B < C.D
+line_lt() {
+    _a1=${1% *}; _a2=${1#* }; _b1=${2% *}; _b2=${2#* }
+    [ "$_a1" -lt "$_b1" ] || { [ "$_a1" -eq "$_b1" ] && [ "$_a2" -lt "$_b2" ]; }
+}
+
+NOW="${GA_MIRROR_NOW:-$(date +%s)}"
+UPTIME_S="${GA_MIRROR_UPTIME_S:-$(cut -d' ' -f1 /proc/uptime 2>/dev/null | cut -d. -f1)}"
+case "$NOW" in ''|*[!0-9]*) fail 7 "cannot read the clock" ;; esac
+case "$UPTIME_S" in ''|*[!0-9]*) fail 7 "cannot read the uptime" ;; esac
+
+# --- precondition: the running release (a 1.5 device is never touched) --------
+RELEASE="$(head -n 1 "$RELEASE_FILE" 2>/dev/null | tr -d '[:space:]')"
+if [ -z "$RELEASE" ]; then
+    RELEASE=unknown; fail 7 "$RELEASE_FILE unreadable - not acting on a release I cannot read"
+fi
+RUN_LINE="$(line_of "$RELEASE")"
+[ -n "$RUN_LINE" ] || fail 7 "$RELEASE_FILE holds '$RELEASE', not a GA release label"
+if line_lt "$RUN_LINE" "1 6"; then
+    skip "release $RELEASE is below BOSv1.6 - never mirrored on the 1.5 line"
+fi
+
+# --- precondition: slot picture ----------------------------------------------
+BOOTED="$(get RAUC_SYSTEM_BOOTED_BOOTNAME)"
+[ -n "$BOOTED" ] || fail 7 "rauc reports no booted slot"
+OK=""; _n_other=0
+for _n in $(kernel_slots); do
+    _i="$(idx_of "$_n")"
+    _bn="$(get "RAUC_SLOT_BOOTNAME_$_i")"
+    if [ "$_bn" = "$BOOTED" ]; then BK="$_n"; else OTHER="$_bn"; OK="$_n"; _n_other=$((_n_other + 1)); fi
+done
+[ -n "$BK" ] || fail 7 "no kernel slot with bootname $BOOTED"
+[ "$_n_other" -eq 1 ] || fail 7 "expected exactly one other kernel slot, found $_n_other"
+BR="$(rootfs_of "$BK")" || fail 7 "no rootfs slot under $BK"
+OR="$(rootfs_of "$OK")" || fail 7 "no rootfs slot under $OK"
+BKI="$(idx_of "$BK")"; BRI="$(idx_of "$BR")"; OKI="$(idx_of "$OK")"
+
+[ "$(get "RAUC_SLOT_BOOT_STATUS_$BKI")" = good ] || skip "booted slot $BOOTED is not marked good"
+[ "$(get RAUC_BOOT_PRIMARY)" = "$BK" ] \
+    || skip "boot primary is '$(get RAUC_BOOT_PRIMARY)', not the booted slot $BK - a switch is armed, not touching it"
+
+# --- precondition: the other slot is on a LOWER line --------------------------
+# other_release — sets OTHER_RELOUT (the other slot's release, may be empty) and
+# OTHER_ERR (mount failure). Runs in the main shell, never in $(...), so the
+# variables survive. The slot is mounted read-only for the read, then unmounted.
+OTHER_ERR=""
+OTHER_RELOUT=""
+other_release() {
+    OTHER_ERR=""; OTHER_RELOUT=""
+    if [ -n "${GA_MIRROR_OTHER_ROOT:-}" ]; then
+        OTHER_RELOUT="$(head -n 1 "$GA_MIRROR_OTHER_ROOT/etc/ga-release" 2>/dev/null | tr -d '[:space:]')"
+        return 0
+    fi
+    OTHER_MNT="$WORK/other"
+    mkdir -p "$OTHER_MNT"
+    if ! "$MOUNT" -o ro "$(dev_of "$OR")" "$OTHER_MNT" 2>/dev/null; then
+        OTHER_MNT=""; OTHER_ERR=mount
+        return 0
+    fi
+    OTHER_RELOUT="$(head -n 1 "$OTHER_MNT/etc/ga-release" 2>/dev/null | tr -d '[:space:]')"
+    "$UMOUNT" "$OTHER_MNT" 2>/dev/null
+    rmdir "$OTHER_MNT" 2>/dev/null
+    OTHER_MNT=""
+}
+# unreadable_skip — a slot that cannot be read is its own, loud verdict
+unreadable_skip() {
+    loud "other slot $OTHER unreadable: $1 - the mirror cannot tell what it would overwrite; fallback state unknown"
+    write_result skipped "other slot unreadable: $1"
+    log "SKIPPED: other slot unreadable: $1"
+    exit 0
+}
+other_release; OTHER_REL="$OTHER_RELOUT"
+[ -z "$OTHER_ERR" ] || unreadable_skip "its rootfs does not mount"
+OTHER_LINE="$(line_of "$OTHER_REL")"
+[ -n "$OTHER_LINE" ] || unreadable_skip "no usable /etc/ga-release ('${OTHER_REL:-none}')"
+if ! line_lt "$OTHER_LINE" "$RUN_LINE"; then
+    skip "other slot already same line ($OTHER_REL, running $RELEASE) - a fallback on the same line is not replaced"
+fi
+
+# --- precondition: soak ------------------------------------------------------
+ACT="$(get "RAUC_SLOT_STATUS_ACTIVATED_TIMESTAMP_$BKI")"
+[ -n "$ACT" ] || skip "booted slot has no activation record - soak start unknown"
+ACT_EPOCH="$(rfc3339_epoch "$ACT")"
+[ -n "$ACT_EPOCH" ] || fail 7 "unparseable activated.timestamp '$ACT'"
+[ "$NOW" -ge "$ACT_EPOCH" ] || skip "clock ($NOW) is before the activation ($ACT_EPOCH) - clock untrusted"
+AGE=$((NOW - ACT_EPOCH))
+[ "$AGE" -ge "$SOAK_S" ] || skip "soak not reached: booted slot activated ${AGE}s ago, need ${SOAK_S}s"
+[ "$UPTIME_S" -ge "$MIN_UPTIME_S" ] || skip "uptime ${UPTIME_S}s < ${MIN_UPTIME_S}s - not a stable run"
+
+# --- preconditions passed: from here on every error is a failure -------------
+VERSION="$(get "RAUC_SLOT_STATUS_BUNDLE_VERSION_$BRI")"
+case "$VERSION" in
+    ""|*[!0-9.]*|*..*|.*|*.) fail 7 "booted rootfs bundle version '$VERSION' is not N.N.N - cannot name the bundle" ;;
+esac
+
+FREE_KB="$(df -Pk "$WORK" 2>/dev/null | awk 'NR==2{print $4}')"
+case "$FREE_KB" in ''|*[!0-9]*) fail 7 "cannot read free space of $WORK" ;; esac
+[ "$FREE_KB" -ge "$MIN_FREE_KB" ] || fail 3 "only ${FREE_KB} KiB free in $STAGING_DIR, need ${MIN_FREE_KB}"
+
+# record_written — the verified-write record ga-rauc-slots reads (rauc.db knows
+# nothing of a write-slot, so its version for this slot would stay the old one).
+# Keyed on the bootname; ga-rauc-slots ignores it once RAUC installs into the slot again.
+record_written() {
+    _rw_tmp="$WORK/written.json"
+    _rw_prev='{}'
+    if [ -s "$WRITTEN_RECORD" ] && [ ! -L "$WRITTEN_RECORD" ]; then
+        _rw_prev="$(jq -c '. // {}' "$WRITTEN_RECORD" 2>/dev/null || printf '{}')"
+    fi
+    if command -v jq >/dev/null 2>&1 && printf '%s' "$_rw_prev" | jq -c \
+            --arg slot "$OTHER" --arg rel "$RELEASE" --arg ver "$VERSION" \
+            --arg kd "$K_DIG" --arg rd "$R_DIG" --argjson at "$NOW" \
+            '.[$slot] = {release: $rel, bundle_version: $ver, kernel_digest: $kd, rootfs_digest: $rd, at: $at}' > "$_rw_tmp" 2>/dev/null; then
+        mv -f "$_rw_tmp" "$WRITTEN_RECORD" || loud "could not record the verified write in $WRITTEN_RECORD"
+    else
+        loud "could not record the verified write in $WRITTEN_RECORD (jq missing or record unreadable) - ga-rauc-slots will keep showing the old version for slot $OTHER"
+    fi
+}
+
+# A signal from here on: clean up, and put the boot order right if we touched it.
+restore_primary() { # retried, READ BACK; 0 only when the primary is the booted slot
+    _rp_i=0
+    while [ "$_rp_i" -lt 3 ]; do
+        STATUS="$(read_status)" || STATUS=""
+        [ "$(get RAUC_BOOT_PRIMARY)" = "$BK" ] && return 0
+        "$RAUC" status mark-active booted >/dev/null 2>&1 || true
+        _rp_i=$((_rp_i + 1))
+    done
+    STATUS="$(read_status)" || STATUS=""
+    [ "$(get RAUC_BOOT_PRIMARY)" = "$BK" ]
+}
+on_signal() {
+    loud "interrupted by a signal"
+    if [ "$MARKED_OTHER" = yes ]; then restore_primary || loud "CRITICAL: boot primary not restored after the interrupt"; fi
+    write_result failed "interrupted by a signal (primary restore attempted: $MARKED_OTHER)"
+    exit 143
+}
+trap on_signal TERM INT HUP
+
+# Download: the SAME endpoint pinning and URL shape as ga-rauc-install
+# (tests/ga_tests/rauc_mirror_slot asserts the two stay in step).
+in_mesh() {
+    case "$1" in
+        "" | *[!0-9.]* | *..* | .* | *. | *.*.*.*.* ) return 1 ;;
+        *.*.*.* ) ;;
+        * ) return 1 ;;
+    esac
+    _o1=${1%%.*}; _r=${1#*.}; _o2=${_r%%.*}
+    [ "$_o1" = 100 ] && [ "$_o2" -ge 64 ] 2>/dev/null && [ "$_o2" -le 127 ]
+}
+read_pinned_ip() {
+    _ip=""
+    if regular_file "$OTA_ACTIVE_FILE"; then _ip="$(head -c 64 "$OTA_ACTIVE_FILE" | tr -d '[:space:]')"; fi
+    if [ -n "$_ip" ] && ! in_mesh "$_ip"; then _ip=""; fi
+    printf '%s' "$_ip"
+}
+OTA_IP="$(read_pinned_ip)"
+if [ -z "$OTA_IP" ]; then "$RESOLVE_OTA_BIN" >&2 || true; OTA_IP="$(read_pinned_ip)"; fi
+[ -n "$OTA_IP" ] || fail 3 "no pinned OTA endpoint in $OTA_ACTIVE_FILE - refusing to download via name resolution"
+
+# The bundle name carries the board (haos_<BOARD_ID>-<version>.raucb, 1.6 line;
+# VARIANT_ID in /etc/os-release). ga-rauc-install falls back to ihost with a
+# warning; a helper that WRITES A PARTITION does not guess: unreadable = failure.
+BOARD="$(sed -n 's/^VARIANT_ID=//p' "${ROOT}/etc/os-release" 2>/dev/null | head -n 1 | tr -d '"'"'"'[:space:]')"
+case "$BOARD" in
+    "" | *[!a-z0-9]* ) fail 7 "no usable VARIANT_ID ('$BOARD') in ${ROOT}/etc/os-release - cannot name the bundle for this board" ;;
+esac
+BASE_URL="https://${OTA_HOST}/releases/${VERSION}"
+PRIMARY_URL="${BASE_URL}/${RELEASE}/haos_${BOARD}-${VERSION}.raucb"
+FALLBACK_URL="${BASE_URL}/haos_${BOARD}-${VERSION}.raucb"
+BUNDLE="$WORK/bundle.raucb"
+log "downloading $PRIMARY_URL"
+# shellcheck disable=SC2086  # CURL_LIMITS is a fixed word list
+if ! "$CURL" --fail --silent --show-error --location $CURL_LIMITS --resolve "${OTA_HOST}:443:${OTA_IP}" --output "$BUNDLE" "$PRIMARY_URL"; then
+    log "per-release slot miss - falling back to $FALLBACK_URL"
+    # shellcheck disable=SC2086
+    "$CURL" --fail --silent --show-error --location $CURL_LIMITS --resolve "${OTA_HOST}:443:${OTA_IP}" --output "$BUNDLE" "$FALLBACK_URL" \
+        || fail 3 "download failed for $PRIMARY_URL and $FALLBACK_URL via ${OTA_IP}"
+fi
+
+# The bundle must be signed AND be the running release — never another one.
+INFO="$("$RAUC" info --output-format=shell "$BUNDLE" 2>/dev/null)" \
+    || fail 4 "rauc info refuses the bundle (truncated? wrong signature?)"
+B_REL="$(get_from "$INFO" RAUC_META_GA_RELEASE)"
+[ "$B_REL" = "$RELEASE" ] || fail 4 "bundle release '${B_REL:-none}' is not the running release $RELEASE - not installing"
+MF_HASH="$(get_from "$INFO" RAUC_MF_HASH)"
+BOOTED_HASH="$(get "RAUC_SLOT_STATUS_BUNDLE_HASH_$BRI")"
+if [ -n "$BOOTED_HASH" ] && [ "$MF_HASH" != "$BOOTED_HASH" ]; then
+    fail 4 "bundle manifest hash ${MF_HASH:-none} differs from the booted slot's recorded bundle $BOOTED_HASH - same release label, different build"
+fi
+# manifest digests of the two images we will write
+K_DIG=""; K_SIZE=""; R_DIG=""; R_SIZE=""
+_n="$(get_from "$INFO" RAUC_MF_IMAGES)"
+_c=0   # RAUC numbers the images from 0
+while [ "$_c" -lt "${_n:-0}" ]; do
+    case "$(get_from "$INFO" "RAUC_IMAGE_CLASS_$_c")" in
+        kernel) K_DIG="$(get_from "$INFO" "RAUC_IMAGE_DIGEST_$_c")"; K_SIZE="$(get_from "$INFO" "RAUC_IMAGE_SIZE_$_c")" ;;
+        rootfs) R_DIG="$(get_from "$INFO" "RAUC_IMAGE_DIGEST_$_c")"; R_SIZE="$(get_from "$INFO" "RAUC_IMAGE_SIZE_$_c")" ;;
+    esac
+    _c=$((_c + 1))
+done
+{ [ -n "$K_DIG" ] && [ -n "$R_DIG" ] && [ -n "$K_SIZE" ] && [ -n "$R_SIZE" ]; } \
+    || fail 4 "the bundle manifest does not list both a kernel and a rootfs image"
+
+# Verified extraction (signature + verity checked by RAUC), then the digests.
+EXTRACT="$WORK/x"
+"$RAUC" extract "$BUNDLE" "$EXTRACT" >/dev/null 2>&1 || fail 4 "rauc extract refused the bundle"
+rm -f "$BUNDLE"
+for _p in "kernel.img:$K_DIG" "rootfs.img:$R_DIG"; do
+    _f="$EXTRACT/${_p%%:*}"
+    [ -f "$_f" ] || fail 4 "${_p%%:*} missing from the extracted bundle"
+    _have="$(sha256sum "$_f" | cut -d' ' -f1)"
+    [ "$_have" = "${_p#*:}" ] || fail 4 "${_p%%:*} does not match the manifest digest"
+done
+
+# --- RE-CHECK everything that can change during the download (up to 15 min) ---
+# `rauc write-slot` does not set RAUC's busy flag. An OTA that finished meanwhile
+# leaves BOOT_ORDER "other booted" with the NEW release in the other slot: writing
+# now would undo it. So the live gate runs again. The slow parts (journal dump,
+# mounting and reading the other slot) come FIRST; the cheap, decisive checks
+# (rauc status, install unit, RAUC Operation) come last, so that only `mark-bad`
+# follows directly after them. ga-rauc-install is NOT touched and takes no lock
+# (a wait there could outlast its unit timeout); what that leaves is documented in
+# docs/RAUC-SLOTS.md ("residual window").
+if [ -x /usr/libexec/ga-journal-dump ]; then /usr/libexec/ga-journal-dump rauc-mirror-slot || true; fi
+other_release; OTHER_REL2="$OTHER_RELOUT"
+[ -z "$OTHER_ERR" ] || unreadable_skip "its rootfs does not mount at the re-check"
+OTHER_LINE2="$(line_of "$OTHER_REL2")"
+[ -n "$OTHER_LINE2" ] || unreadable_skip "no usable /etc/ga-release at the re-check ('${OTHER_REL2:-none}')"
+line_lt "$OTHER_LINE2" "$RUN_LINE" || skip "other slot is now $OTHER_REL2 (same line as $RELEASE) - it changed during the download; not overwriting it"
+STATUS="$(read_status)" || STATUS=""
+[ -n "$STATUS" ] || fail 7 "rauc status unreadable at the re-check - nothing written"
+[ "$(get RAUC_SYSTEM_BOOTED_BOOTNAME)" = "$BOOTED" ] || skip "booted slot changed during the download"
+[ "$(get "RAUC_SLOT_BOOT_STATUS_$BKI")" = good ] || skip "booted slot no longer good (changed during the download)"
+[ "$(get RAUC_BOOT_PRIMARY)" = "$BK" ] \
+    || skip "boot primary is now '$(get RAUC_BOOT_PRIMARY)', not the booted slot $BK - an OS install finished or a switch was armed during the download; not touching it"
+if command -v "$SYSTEMCTL" >/dev/null 2>&1 \
+   && [ "$("$SYSTEMCTL" show -p ActiveState --value ga-rauc-install.service 2>/dev/null)" = activating ]; then
+    skip "ga-rauc-install.service started an install during the download"
+fi
+OP="$("$BUSCTL" get-property de.pengutronix.rauc / de.pengutronix.rauc.Installer Operation 2>/dev/null)" \
+    || fail 7 "cannot read the RAUC Operation at the re-check - nothing written"
+[ "$OP" = 's "idle"' ] || skip "RAUC is busy at the re-check (Operation ${OP#s }) - changed during the download"
+
+# --- the write: ONLY this slot's kernel and rootfs partitions -----------------
+log "writing $RELEASE into slot $OTHER (booted: $BOOTED); other slot was $OTHER_REL"
+# out of BOOT_ORDER first: a half-written slot must never be bootable
+"$RAUC" status mark-bad "$OK" >/dev/null 2>&1 || fail 5 "could not mark slot $OTHER bad before writing - nothing written"
+"$RAUC" write-slot "$OK" "$EXTRACT/kernel.img" >/dev/null 2>&1 \
+    || fail 5 "write-slot $OK (kernel) failed - slot $OTHER left marked bad"
+"$RAUC" write-slot "$OR" "$EXTRACT/rootfs.img" >/dev/null 2>&1 \
+    || fail 5 "write-slot $OR (rootfs) failed - slot $OTHER left marked bad"
+# read the bytes back
+for _p in "$OK:$K_SIZE:$K_DIG" "$OR:$R_SIZE:$R_DIG"; do
+    _s="${_p%%:*}"; _r="${_p#*:}"; _sz="${_r%%:*}"; _dg="${_r#*:}"
+    _got="$(head -c "$_sz" "$(dev_of "$_s")" 2>/dev/null | sha256sum | cut -d' ' -f1)"
+    [ "$_got" = "$_dg" ] || fail 5 "read-back of $_s does not match the manifest digest - slot $OTHER left marked bad"
+done
+record_written
+"$RAUC" status mark-good "$OK" >/dev/null 2>&1 || fail 5 "could not mark slot $OTHER good after writing it"
+
+# Back into BOOT_ORDER (mark-bad removed it; mark-good does not re-add it), then
+# the booted slot first again. mark-active booted ONLY follows our own mark-active.
+MARKED_OTHER=yes
+"$RAUC" status mark-active "$OK" >/dev/null 2>&1 || true
+if ! restore_primary; then
+    fail 6 "CRITICAL: boot primary is '$(get RAUC_BOOT_PRIMARY)', not the booted slot $BK after the mirror - the next boot may switch slots (slot $OTHER holds $RELEASE); run: rauc status mark-active booted"
+fi
+STATUS="$(read_status)" || STATUS=""
+[ "$(get "RAUC_SLOT_BOOT_STATUS_$BKI")" = good ] || fail 6 "booted slot $BOOTED no longer reads good after the mirror"
+[ "$(get "RAUC_SLOT_BOOT_STATUS_$OKI")" = good ] || fail 5 "slot $OTHER does not read good after the mirror"
+
+log "DONE: slot $OTHER now holds $RELEASE; boot primary is still $BOOTED; switching is left to a later boot"
+write_result "done" "slot $OTHER written with $RELEASE (was $OTHER_REL); boot order restored to $BOOTED"
+exit 0

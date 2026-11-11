@@ -143,6 +143,129 @@ an older bundle on a device that runs the floor, by design. What still works:
 Consequence for release labels: they must only grow. A bake that reuses an
 older label produces a bundle that every device above that label refuses.
 
+## The second-slot mirror: no fallback into a 1.5 slot after the 1.6 migration (Odoo #1750)
+
+BOSv1.6 migrates persistent state one way (Supervisor `apps/` data root, `app_`
+container names, Core 2026.10). After the 1.5 -> 1.6 OTA the other slot still
+holds 1.5, so a bootloader fallback (3 failed boots) or an operator rollback
+lands on an OS that cannot read the migrated state: a broken system, not a
+rescue. After a soak the OTHER slot is given the release that runs.
+
+**Scope (decision 2026-11-11).** Only when the other slot's `/etc/ga-release`
+is on a LOWER major.minor than the booted one (1.5 beside 1.6). A 1.6.x slot is
+never overwritten by another 1.6.y: a healthy fallback stays. An unreadable
+other slot is skipped, not overwritten.
+
+**Decision: `rauc install` is NOT used.** Measured on a real bundle
+(`rauc info` of `bos_ihost-16.3.1.9_prod_20260727083535.raucb`; the manifest
+template `manifest.raucm.gtpl` (`buildroot-external/ota/` on the 1.5 line, `haos/buildroot-external/ota/` in the HAOS submodule on the 1.6 line) adds `[image.spl]` and
+`[image.boot]` whenever `BOOT_SPL=true`, which the iHost `meta` sets): the
+bundle has four images, `boot` (boot.vfat) and `spl` (spl.img) both with an
+`install` hook. `rauc install` would therefore rewrite the SPL region of the
+boot disk (raw `dd`) and `cp -rf` over the SHARED boot partition
+(`rauc-hook install_boot`). On a healthy device a power loss there can brick
+BOTH slots. (Checked against the July bundle and the template; the rc12/rc13
+bundles on the builder were not unpacked.)
+
+The helper `/usr/sbin/ga-rauc-mirror-slot` (`ga-rauc-mirror-slot.path` ->
+`.service`, request file in ga_manager's private data dir, ADR-0041) instead:
+
+1. `rauc extract` the bundle (RAUC verifies signature and verity), then sha256
+   of `kernel.img` and `rootfs.img` against the manifest digests;
+2. `rauc status mark-bad <other>`: the slot leaves `BOOT_ORDER`, a half-written
+   slot can never be booted;
+3. `rauc write-slot` for the other kernel slot and the other rootfs slot only
+   (raw write, no hooks, no bootloader change, no status update);
+4. read the written bytes back, compare with the manifest digests;
+5. `mark-good <other>`, `mark-active <other>`, then `mark-active booted`, retried
+   with a read-back of `RAUC_BOOT_PRIMARY`; exit 6 only if it still is not the
+   booted slot. (`mark-bad` removes a slot from `BOOT_ORDER` and `mark-good` does
+   not re-add it, `bootchooser.c`, hence the pair; between the two the other slot
+   already holds the same release.)
+
+It never reboots. `rauc.db` is not updated by `write-slot`; the other slot's
+release is read from its own `/etc/ga-release` (mounted read-only; a rootfs that
+does not mount, or has no usable release, is its own verdict `skipped: other slot
+unreadable: ...` with an err-priority log line, never a quiet skip).
+
+**Re-check after the download, and the residual window.** The download can take
+up to 15 minutes and `rauc write-slot` does not set RAUC's busy flag. An OTA that
+finished meanwhile leaves `BOOT_ORDER` "other booted" with the NEW release in the
+other slot; writing then would overwrite it and silently undo that OTA. So the
+live gate runs again before `mark-bad`: the slow parts first (journal dump, mount
+and read of the other slot), then the decisive ones (`rauc status`: booted slot
+unchanged and good, primary still the booted slot; `ga-rauc-install` not
+activating; RAUC `Operation` idle), so that only `mark-bad` follows directly after
+them.
+
+What this does NOT exclude: an OS install (`ga-rauc-install` OR Supervisor's
+InstallBundle) that starts during the 1 to 3 minutes of the `write-slot` window
+itself. `ga-rauc-install` is deliberately untouched (no lock: a wait there could
+outlast its unit timeout and kill an OTA after the download, and it would not
+cover InstallBundle anyway), so the normal OTA path of every device is
+byte-identical to the 1.6 branch. Consequence of a collision: two writers on the
+other slot's partitions; the read-back fails or the slot is left marked bad by
+our `mark-bad`/RAUC's own, and the installing OTA may fail or leave that slot
+unusable until the next install. Why it is acceptable: the mirror runs once per
+device after the 1.5 to 1.6 OTA, on request after a 24 h soak, so the window is
+rare; the bootloader falls back to the booted slot after `BOOT_x_LEFT` reaches 0;
+a failed read-back leaves the slot bad and out of `BOOT_ORDER` and is reported
+(`failed`, exit 5); and the booted slot is never touched.
+
+One more consequence of that collision: if the OTHER writer is `rauc install`, its
+own `mark-active` puts the freshly installed slot into `BOOT_ORDER` as primary
+after our read-back failed, so a slot that our write corrupted could be booted.
+Nothing in this feature protects against that; only the bootloader's 3-attempt
+fallback (`BOOT_x_LEFT` reaches 0, then the other slot) does.
+
+**What ga-rauc-slots reports for a mirrored slot.** rauc.db keeps the older
+bundle for it. The helper records the verified write (release, bundle version,
+digests, time) in `/mnt/data/ga-slot-written.json`; `ga-rauc-slots` overlays it
+as `installed_release` / `installed_version` / `written_verified` and counts it
+as a bootable ground, but only while RAUC has not installed into that slot since
+(`installed.timestamp` not newer than the record). ga_manager passes
+`installed_release` and `written_verified` through to `/info`.
+
+**Preconditions (host, from RAUC's own status; the request cannot lift one).**
+Release >= BOSv1.6 (1.5 is never touched); booted slot good; boot primary is
+the booted slot; other slot readable and on a lower line; RAUC `Operation` idle
+(covers Supervisor's InstallBundle; unreadable = failure, busy = skipped) and no
+`ga-rauc-install` activating and no second mirror run (flock); booted slot
+activated >= 24 h ago and uptime >= 1 h; free space. The bundle must be signed,
+carry the running `[meta.ga] release`, and its manifest hash must equal the
+booted rootfs's recorded bundle hash where rauc.db has one. Download: same
+pinned endpoint and URL shape as `ga-rauc-install`, with connect/max-time and
+speed limits so one download cannot eat the unit's budget; SIGTERM/INT cleans up
+and restores the primary if we had touched it. The result file is written via a
+root-only work dir and `rename`, so a symlink planted by the add-on is replaced,
+never followed. A failed precondition is `skipped` (exit 0); later errors are
+`failed` (exit 3..7, error level). Exit 6 reaches the fleet through the
+fluent-bit tier-0 and tier-1 filters for the unit (gate fixtures S9/S10).
+
+**Alternatives.**
+
+| alternative | verdict |
+|---|---|
+| `rauc install` + `mark-active booted` (first version of this change) | rejected after review: rewrites SPL and the shared boot partition; power loss there can brick both slots. |
+| `activate-installed=false` in `system.conf` | rejected: global; every normal OTA would stop switching slots (test MIR-53). |
+| `dd` of the booted slot pair | rejected: no signature check; copies whatever the running media holds. |
+| `rauc extract` + `write-slot` (chosen) | signature checked by RAUC, only the other slot's two partitions are written, bootloader state changes are explicit and read back. Cost: no rauc.db record for the write. |
+| fm-only job | rejected as the sole mechanism: soak start and boot order are not visible in the add-on. The fm role is "when", not "whether". |
+| autonomous timer | not shipped: it would write a slot with nobody asking. |
+| reuse of the OTA bundle (LTE) | not done; the helper downloads again (follow-up). |
+
+**Not done:** the fleet-manager trigger after the soak window; a device proof.
+
+**Needs a device proof on K31 (staging):** (1) OTA 1.5 -> 1.6, wait the soak (or
+run the helper by hand with `GA_MIRROR_SOAK_S=60 GA_MIRROR_MIN_UPTIME_S=60`, an
+operator-only override a request cannot set); `rauc write-slot` on a real
+partition, `rauc status mark-bad/good/active` and `BOOT_ORDER` as the stub
+assumes (the stub encodes the source reading, not the device); (2) the other
+slot then reads 1.6 and `mark-active other && reboot` boots it; (3) power loss
+during the write: the booted slot boots again and the half-written slot is not
+selected; (4) a second request is `skipped: same line`; (5) rootfs mount of the
+other slot for the release read works on the iHost (erofs, read-only).
+
 ## Where it is proven
 
 * `IMG-01` (build suite, `scripts/check-slot-pairs.sh`): the produced `.img.xz`
@@ -157,3 +280,7 @@ older label produces a bundle that every device above that label refuses.
   refused; SLOT-70..83 prove the mirror evidence red and green on fixtures;
   SLOT-46 (device) asserts the live rollback target is bootable; SLOT-61/62
   prove the suite wrote no device record.
+* `tests/ga_tests/rauc_mirror_slot/test.sh` (CI): the second-slot mirror: must-skip,
+  must-run, must-fail with the exit codes, no `rauc install`, and mutants of the
+  LIVE helper that each turn their named guard test red. `tier0_ota_journal`
+  carries the unit's log lines (S9/S10) and a no-mirror mutant.

@@ -841,6 +841,9 @@ jobs:
       - name: RAUC slot contract (parser + fail-closed)
         run: sh tests/ga_tests/rauc_slots/test.sh
 
+      - name: RAUC second-slot mirror (must-skip / must-run / must-fail + mutants)
+        run: sh tests/ga_tests/rauc_mirror_slot/test.sh
+
       - name: ga-stage-vendored-components (trusted staging root)
         run: sh tests/ga_tests/stage_components/test.sh
 

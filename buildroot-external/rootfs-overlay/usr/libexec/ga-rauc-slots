@@ -184,6 +184,15 @@ OUT_BASENAME="ga-rauc-slots.json"
 BOOTS_FILE="${GA_RAUC_SLOTS_BOOTS:-/mnt/data/ga-slot-boots.json}"
 BOOT_OK_UPTIME_S="${GA_RAUC_SLOTS_BOOT_OK_UPTIME_S:-600}"
 
+# Verified-write record of ga-rauc-mirror-slot (Odoo #1750). rauc.db knows nothing
+# of a `rauc write-slot`: after the 1.6 mirror it would still say the other slot
+# holds the 1.5 bundle. The helper records what it wrote, after reading it back.
+# The record is used for a slot only while RAUC has not installed into it since
+# (installed.timestamp not newer than the record), so it can never outlive the
+# write it describes. Same fixture rule as the other records: a run on canned
+# input reads no device record unless the test redirects it.
+WRITTEN_FILE="${GA_RAUC_SLOTS_WRITTEN:-/mnt/data/ga-slot-written.json}"
+
 # Mirror (content identity) record — same lifetime reasoning as BOOTS_FILE.
 MIRROR_FILE="${GA_RAUC_SLOTS_MIRROR:-/mnt/data/ga-slot-mirror.json}"
 # Upper bound for ONE partition comparison. 2 x 300M at idle IO priority on a
@@ -373,6 +382,15 @@ EOF
 	fi
 }
 
+written_slots() {
+	if [ -n "${GA_RAUC_SLOTS_INPUT:-}" ] && [ -z "${GA_RAUC_SLOTS_WRITTEN:-}" ]; then printf '{}'; return 0; fi
+	if [ -s "$WRITTEN_FILE" ] && [ ! -L "$WRITTEN_FILE" ]; then
+		jq -c 'if type == "object" then . else {} end' "$WRITTEN_FILE" 2>/dev/null || printf '{}'
+	else
+		printf '{}'
+	fi
+}
+
 # {"<bootname>": true|false} for every target measured against the slot booted
 # NOW. A bootname that is absent was never measured (or the record is stale) —
 # the verdict program treats absent as unknown, which refuses.
@@ -548,7 +566,8 @@ main() {
 	# --- phase 3: the verdict --------------------------------------------------
 	printf '%s' "$flat" | jq --argjson ts "$TS" \
 		--argjson booted_ok "$(healthy_boot_slots)" \
-		--argjson mirror "$(mirror_slots "$booted_now")" '
+		--argjson mirror "$(mirror_slots "$booted_now")" \
+		--argjson written "$(written_slots)" '
 		.slots as $all
 		| .compatible as $compatible
 		| .booted as $booted
@@ -577,6 +596,21 @@ main() {
 		    | (if $touched then null
 		       elif ($mirror | has($s.bootname)) then $mirror[$s.bootname]
 		       else null end) as $mirror_state
+		    # Verified-write record (ga-rauc-mirror-slot): valid only while RAUC
+		    # has not installed into this slot since the write.
+		    | (($group | map(.installed_timestamp) | map(select(. != null)) | .[0]) as $its
+		       | ($written[$s.bootname] // null) as $w0
+		       # A record is used only if it is well formed; anything else is ignored,
+		       # never an error (a broken record must not break the collector):
+		       # an object, a numeric `at` that is not in the future, string release
+		       # and bundle_version.
+		       | if (($w0 | type) == "object")
+		            and (($w0.at | type) == "number")
+		            and ($w0.at <= $ts)
+		            and (($w0.release | type) == "string")
+		            and (($w0.bundle_version | type) == "string")
+		            and ($its == null or ((try ($its | fromdateiso8601) catch 1e18) <= $w0.at))
+		         then $w0 else null end) as $w
 		    | {
 		        bootname: $s.bootname,
 		        slot: $s.name,
@@ -584,7 +618,11 @@ main() {
 		        state: $s.state,
 		        boot_status: $s.boot_status,
 		        booted: ($s.state == "booted"),
-		        installed_version: ($group | map(.bundle_version) | map(select(. != null)) | .[0]),
+		        installed_version: ($w.bundle_version // ($group | map(.bundle_version) | map(select(. != null)) | .[0])),
+		        # What the verified write put there (null = RAUC-installed or unknown).
+		        # rauc.db would still name the older bundle for such a slot.
+		        installed_release: ($w.release // null),
+		        written_verified: ($w != null),
 		        installed_timestamp: ($group | map(.installed_timestamp) | map(select(. != null)) | .[0]),
 		        installed_count: ($group | map(.installed_count) | max),
 		        install_status: ($group | map(.install_status) | map(select(. != null)) | .[0]),
@@ -614,7 +652,7 @@ main() {
 		        # a stray one closes it. Cost: one syntax error at write time.)
 		        bootable: (
 		          $s.state == "booted"
-		          or (($ever or ($booted_ok | index($s.bootname) != null) or ($mirror_state == true))
+		          or (($ever or ($w != null) or ($booted_ok | index($s.bootname) != null) or ($mirror_state == true))
 		              and $s.boot_status == "good")
 		        ),
 		        members: ($group | map(.name))

@@ -12,6 +12,11 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): second-slot mirror after the 1.6 soak (Odoo #1750)
+
+- **New host helper `/usr/sbin/ga-rauc-mirror-slot` (+ `ga-rauc-mirror-slot.path/.service`).** After the 1.5 -> 1.6 OTA the other RAUC slot still holds 1.5; a fallback there is a broken system (one-way migrations). On request from ga_manager the helper writes the running release into the other slot **only when that slot is on a lower major.minor**, using `rauc extract` + `rauc write-slot` for the other slot's kernel and rootfs only. It deliberately does not use `rauc install`: a full iHost bundle also carries `spl` and `boot` images with install hooks, which would rewrite the SPL region and the shared boot partition. The other slot is kept out of BOOT_ORDER while written, the bytes are read back, and the boot primary is restored with retry and read-back (exit 6 only if that fails). Preconditions (1.6+, good slot, no armed switch, RAUC idle, >= 24 h since activation, >= 1 h uptime, bundle release and manifest hash) are checked on the host; failures are exit codes 3..7 and `failed` in `ga-rauc-mirror-result.json`. Never reboots. The unit is in the tier-0 and tier-1 fluent-bit filters. The preconditions run AGAIN right before the write (the download can take 15 min and write-slot does not set RAUC busy: an OTA finishing meanwhile must not be overwritten). `ga-rauc-install` is untouched; the residual window (an OS install starting during the 1-3 min write) is documented. An unreadable other slot is its own loud `skipped` verdict. The verified write is recorded and `ga-rauc-slots` shows it (`installed_release`, `written_verified`) instead of the stale rauc.db version. Not shipped: the fleet-manager trigger. Design and the K31 proof list: `docs/RAUC-SLOTS.md`.
+- Tests: `tests/ga_tests/rauc_mirror_slot/test.sh` (MIR-01..82; mutants of the live helper), `tests/ga_tests/rauc_slots/test.sh` (SLOT-90..98), `tests/gates/tier0_ota_journal` (S9/S10, no-mirror mutant).
+
 ## Unreleased (feat/1.6-haos18): BOSv1.6.0-rc13 pins (iHost) and BOSv1.6.0-dev9 (DSGW210)
 
 rc13 = rc12 plus:
