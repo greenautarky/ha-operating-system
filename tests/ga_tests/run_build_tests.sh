@@ -58,15 +58,12 @@ esac
 _RBT_PINS_REL=""
 [[ "$_RBT_BOARD" == ihost ]] || _RBT_PINS_REL="$(ga_board_var ADDON_PINS "$_RBT_BOARD" 2>/dev/null || true)"
 # core_tag_ok TAG CHANNEL RELEASE -- BLD Core tag rule. A pinned calver; a `-dev` suffix
-# (GA aarch64 dev Core) only when the channel in version.json is dev AND the release
-# label is -devN (same rule as core_tag_valid in scripts/ga_build.sh, which
+# is refused on every channel (the Supervisor cannot parse it, Odoo #1985)
+# (same rule as core_tag_valid in scripts/ga_build.sh, which
 # tests/gates/core_tag_rule/selftest.sh holds to this copy). `latest` is not accepted here.
 core_tag_ok() {
   local tag="$1" channel="$2" release="$3"
-  if [[ "$tag" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?-dev$ ]]; then
-    [[ "$channel" == dev && "$release" =~ -dev[0-9]+$ ]]
-    return
-  fi
+  [[ "$tag" =~ -dev$ ]] && return 1
   [[ "$tag" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
 }
 _rbt_cond() {

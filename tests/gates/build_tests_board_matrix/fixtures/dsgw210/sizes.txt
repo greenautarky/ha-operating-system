@@ -15,5 +15,5 @@ ghcr.io_greenautarky_ga_influxdbv1-aarch64_0.0.22@sha256_3c286db03b3498586e23ab3
 ghcr.io_greenautarky_ga_manager-aarch64_0.277.3@sha256_f61dd9b9e3a00fab3b2a0997ec2fa3a9282025db3b19ece4af3bb059c8765b3e.tar
 ghcr.io_greenautarky_ga_mosquitto-aarch64_7.2.6@sha256_77d0d5d0c38df3c414f8f8ef47cfdc70a0333fc38de8134b6f44d7dc2123644a.tar
 ghcr.io_greenautarky_ga_zigbee2mqtt-aarch64_2.12.1-12@sha256_e222156eda59d446dee2a58baaa7b5d77402f0398012e92a4ac8ba1187f3b374.tar
-ghcr.io_greenautarky_home-assistant-aarch64_2026.10.4.3-dev@sha256_61606d9b2dce9a8052d4172d4dd094112fb5b8ba83562957d2b8e184fe5cc8f8.tar
+ghcr.io_greenautarky_home-assistant-aarch64_2026.10.4.4@sha256_bb9db4d4cc0f4916c54eabb313b56912bf47d225b19fe67cc97b532c1f9e04e1.tar
 lrwxrwxrwx 1 root root 16 Nov  6 14:54 host/bin/go -> ../lib/go/bin/go

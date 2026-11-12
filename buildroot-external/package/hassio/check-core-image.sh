@@ -5,8 +5,8 @@
 #   <arch>    armv7 (default) or aarch64: selects the GA Core image
 #             ghcr.io/greenautarky/home-assistant-<arch> and the platform the
 #             config is read for.
-#   <channel> stable (default) | beta | dev. A `-dev` tag suffix (the GA aarch64
-#             dev Core, e.g. 2026.10.4.3-dev) is accepted ONLY when <channel> is dev.
+#   <channel> stable (default) | beta | dev. A `-dev` tag suffix (e.g. 2026.10.4.3-dev)
+#             is refused on EVERY channel: the Supervisor cannot parse it as CalVer.
 #   Test hook: CORE_IMAGE_CONFIG_FILE=<file> reads the image config from a file
 #   instead of the registry (fixtures in tests/gates/core_image/).
 #
@@ -44,8 +44,14 @@ err() { echo "ERROR: core image: $*"; fail=1; }
 
 [ "$img" = "$WANT_IMAGE" ] || err "version.json images.core='$img' (must be $WANT_IMAGE — upstream no longer builds Core for this arch)"
 [ "$tag" = "$core" ] || err "homeassistant.$machine='$tag' differs from core='$core'"
-if [[ "$tag" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?-dev$ ]]; then
-  [ "$channel" = dev ] || err "tag '$tag' carries -dev but the channel is '$channel' (a -dev Core is for the dev channel only)"
+if [[ "$tag" =~ -dev$ ]]; then
+  # A `-dev` tag is not CalVer to the Supervisor: AwesomeVersion rates it UNKNOWN,
+  # get_latest_version() skips the baked image ("No Home Assistant Docker image
+  # found" -> landingpage -> runtime pull), and `ha core start` raises
+  # AwesomeVersionCompareException. Measured on DUT2, BOSv1.6.0-dev9, 2026-11-12
+  # (Odoo #1985). Refused on EVERY channel; build the dev Core under a plain
+  # CalVer tag instead (YYYY.M.P.N).
+  err "tag '$tag' is not CalVer for the Supervisor (AwesomeVersion UNKNOWN): the baked Core would be invisible to it and never start. Use a plain YYYY.M.P[.N] tag"
 elif [[ ! "$tag" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
   err "tag '$tag' is not a calver"
 elif (( ${tag%%.*} < MIN_YEAR )); then

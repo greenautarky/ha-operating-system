@@ -62,23 +62,27 @@ run_case() { # label want(pass|fail) wanttext dir arch machine channel boardmk
   else echo "  FAIL  $label (want $want, rc=$rc, text [$text])"; echo "$out" | sed 's/^/        /' | tail -12; bad=1; fi
 }
 BOARD_PINS='GA_HASSIO_SUPERVISOR_PIN = 2026.10.5.1
-GA_HASSIO_CORE_PIN = 2026.10.4.3-dev'
+GA_HASSIO_CORE_PIN = 2026.10.4.4'
 mkcase() { local d="$tmp/$1"; mkext "$d"; echo "$d"; }
 
-d=$(mkcase dsgw-ok); chan "$d" dev 2026.10.5.1 2026.10.4.3-dev $CORE_A64; sup_cfg "$d/sup.json" 2026.10.5.1 aarch64; core_cfg_a64 2026.10.4.3-dev "$d/core.json"
-run_case "DSGW dev with the board pins" pass "version.json validated: supervisor=2026.10.5.1 core=2026.10.4.3-dev" "$d" aarch64 qemuarm-64 dev "$BOARD_PINS"
+d=$(mkcase dsgw-ok); chan "$d" dev 2026.10.5.1 2026.10.4.4 $CORE_A64; sup_cfg "$d/sup.json" 2026.10.5.1 aarch64; core_cfg_a64 2026.10.4.4 "$d/core.json"
+run_case "DSGW dev with the board pins" pass "version.json validated: supervisor=2026.10.5.1 core=2026.10.4.4" "$d" aarch64 qemuarm-64 dev "$BOARD_PINS"
 run_case "DSGW dev WITHOUT board pins: the iHost version.yaml pins apply" fail "is '2025.11.5.10'" "$d" aarch64 qemuarm-64 dev ""
 run_case "only the Supervisor pin set" fail "must be set together" "$d" aarch64 qemuarm-64 dev "GA_HASSIO_SUPERVISOR_PIN = 2026.10.5.1"
-run_case "only the Core pin set" fail "must be set together" "$d" aarch64 qemuarm-64 dev "GA_HASSIO_CORE_PIN = 2026.10.4.3-dev"
+run_case "only the Core pin set" fail "must be set together" "$d" aarch64 qemuarm-64 dev "GA_HASSIO_CORE_PIN = 2026.10.4.4"
 
-d=$(mkcase sup-off); chan "$d" dev 2026.10.5.2 2026.10.4.3-dev $CORE_A64; sup_cfg "$d/sup.json" 2026.10.5.2 aarch64; core_cfg_a64 2026.10.4.3-dev "$d/core.json"
+d=$(mkcase sup-off); chan "$d" dev 2026.10.5.2 2026.10.4.4 $CORE_A64; sup_cfg "$d/sup.json" 2026.10.5.2 aarch64; core_cfg_a64 2026.10.4.4 "$d/core.json"
 run_case "channel Supervisor differs from the board pin" fail "supervisor='2026.10.5.2' but the pin" "$d" aarch64 qemuarm-64 dev "$BOARD_PINS"
 
-d=$(mkcase core-off); chan "$d" dev 2026.10.5.1 2026.10.4.4-dev $CORE_A64; sup_cfg "$d/sup.json" 2026.10.5.1 aarch64; core_cfg_a64 2026.10.4.4-dev "$d/core.json"
-run_case "channel Core differs from the board pin" fail "core='2026.10.4.4-dev' but the pin" "$d" aarch64 qemuarm-64 dev "$BOARD_PINS"
+d=$(mkcase core-off); chan "$d" dev 2026.10.5.1 2026.10.4.5 $CORE_A64; sup_cfg "$d/sup.json" 2026.10.5.1 aarch64; core_cfg_a64 2026.10.4.5 "$d/core.json"
+run_case "channel Core differs from the board pin" fail "core='2026.10.4.5' but the pin" "$d" aarch64 qemuarm-64 dev "$BOARD_PINS"
 
 d=$(mkcase dev-core-stable); chan "$d" stable 2026.10.5.1 2026.10.4.3-dev $CORE_A64; sup_cfg "$d/sup.json" 2026.10.5.1 aarch64; core_cfg_a64 2026.10.4.3-dev "$d/core.json"
-run_case "a -dev Core on the stable channel" fail "carries -dev but the channel is" "$d" aarch64 qemuarm-64 stable "$BOARD_PINS"
+run_case "a -dev Core on the stable channel" fail "is not CalVer for the Supervisor" "$d" aarch64 qemuarm-64 stable "$BOARD_PINS"
+
+d=$(mkcase dev-core-dev-pin); chan "$d" dev 2026.10.5.1 2026.10.4.3-dev $CORE_A64; sup_cfg "$d/sup.json" 2026.10.5.1 aarch64; core_cfg_a64 2026.10.4.3-dev "$d/core.json"
+run_case "a -dev Core on the DEV channel with a matching -dev board pin (#1985)" fail "is not CalVer for the Supervisor" "$d" aarch64 qemuarm-64 dev "GA_HASSIO_SUPERVISOR_PIN = 2026.10.5.1
+GA_HASSIO_CORE_PIN = 2026.10.4.3-dev"
 
 d=$(mkcase ihost-ok); mkdir -p "$d/c"
 printf '{"channel":"stable","supervisor":"2025.11.5.10","homeassistant":{"default":"2026.8.2","tinker":"2026.8.2"},"images":{"core":"ghcr.io/greenautarky/home-assistant-armv7","supervisor":"ghcr.io/greenautarky/{arch}-hassio-supervisor"},"core":"2026.8.2"}\n' > "$d/c/stable.json"
@@ -93,6 +97,7 @@ pair_verdict() { # <external.mk> <defconfig> -> "ok" | reason
   local sup core cy cm sy sm
   sup="$(pin_of GA_HASSIO_SUPERVISOR_PIN "$1")"; core="$(pin_of GA_HASSIO_CORE_PIN "$1")"
   [ -n "$sup" ] && [ -n "$core" ] || { echo "board pins missing"; return; }
+  [[ "$core" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "Core pin $core is not CalVer: the Supervisor rates it UNKNOWN and ignores the baked Core (#1985)"; return; }
   grep -q '^BR2_PACKAGE_HASSIO_FULL_CORE=y$' "$2" || { echo "defconfig lacks FULL_CORE=y"; return; }
   grep -q '^BR2_PACKAGE_HASSIO_CHANNEL_DEV=y$' "$2" || { echo "defconfig is not the dev channel"; return; }
   IFS=. read -r cy cm _ <<<"$core"; IFS=. read -r sy sm _ <<<"$sup"
@@ -110,14 +115,16 @@ DEFC="$(. "$ROOT/scripts/lib/tree-paths.sh"; ga_board_var DEFCONFIG dsgw210)"
 [ -r "$ROOT/$BOARD/external.mk" ] && [ -r "$ROOT/$DEFC" ] || { echo "FAIL: DSGW board files not found"; exit 1; }
 pair_case "REAL DSGW-210 board pins + defconfig" ok "$ROOT/$BOARD/external.mk" "$ROOT/$DEFC"
 mkdir -p "$tmp/pair"
-printf 'GA_HASSIO_SUPERVISOR_PIN = 2025.11.5.10\nGA_HASSIO_CORE_PIN = 2026.10.4.3-dev\n' > "$tmp/pair/old-sup.mk"
-printf 'GA_HASSIO_CORE_PIN = 2026.10.4.3-dev\n' > "$tmp/pair/no-sup.mk"
+printf 'GA_HASSIO_SUPERVISOR_PIN = 2025.11.5.10\nGA_HASSIO_CORE_PIN = 2026.10.4.4\n' > "$tmp/pair/old-sup.mk"
+printf 'GA_HASSIO_CORE_PIN = 2026.10.4.4\n' > "$tmp/pair/no-sup.mk"
 printf 'BR2_PACKAGE_HASSIO_CHANNEL_STABLE=y\nBR2_PACKAGE_HASSIO_FULL_CORE=y\n' > "$tmp/pair/stable.defconfig"
 printf 'BR2_PACKAGE_HASSIO_CHANNEL_DEV=y\n' > "$tmp/pair/nocore.defconfig"
 pair_case "Core 2026.10 with the 2025.11 Supervisor"  bad "$tmp/pair/old-sup.mk" "$ROOT/$DEFC"
+printf 'GA_HASSIO_SUPERVISOR_PIN = 2026.10.5.3\nGA_HASSIO_CORE_PIN = 2026.10.4.3-dev\n' > "$tmp/pair/dev-core.mk"
+pair_case "Core pin 2026.10.4.3-dev (not CalVer, the dev9 pin)" bad "$tmp/pair/dev-core.mk" "$ROOT/$DEFC"
 pair_case "Supervisor pin missing"                    bad "$tmp/pair/no-sup.mk"  "$ROOT/$DEFC"
 pair_case "defconfig on the stable channel"           bad "$ROOT/$BOARD/external.mk" "$tmp/pair/stable.defconfig"
 pair_case "defconfig without FULL_CORE"               bad "$ROOT/$BOARD/external.mk" "$tmp/pair/nocore.defconfig"
 
-[ "$n" -ge 13 ] || { echo "FAIL: only $n cases ran (want >= 13)"; exit 1; }
+[ "$n" -ge 15 ] || { echo "FAIL: only $n cases ran (want >= 15)"; exit 1; }
 echo "$n cases ran"; exit "$bad"
