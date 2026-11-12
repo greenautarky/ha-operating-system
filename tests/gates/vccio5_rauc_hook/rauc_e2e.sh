@@ -130,5 +130,10 @@ scenario "ga_vccio5=1v8\n" "root=x ga.vccio5=3v3" "140: 00000086"
   && ok "key present (1v8): installed, key left as it is" \
   || bad "key present: rc=$RC slot=$SLOT cfg=$(tr '\n' '|' <<<"$CFG")"
 
+scenario "ga_vccio5=3v3\n" "root=x rootwait" "140: 000000a6"
+[[ $RC != 0 && $SLOT == untouched && "$CFG" == "$BEFORE" && "$LOG" == *"Bundle rejected: Hook returned: "*"would move it to 3.3 V"* ]] \
+  && ok "key 3v3 on a unit running 1.8 V: RAUC rejects WITH the reason, slot untouched" \
+  || bad "3v3 key on 1.8 V unit: rc=$RC slot=$SLOT :: $(grep -iE 'hook|GA vccio5' <<<"$LOG" | tail -3 | tr '\n' ' ')"
+
 echo "vccio5 rauc e2e: $((ran - fails))/$ran ok"
-[[ $fails -eq 0 && $ran -eq 5 ]]
+[[ $fails -eq 0 && $ran -eq 6 ]]

@@ -8,14 +8,14 @@ writes the RUNNING mode as an explicit key where there is none yet, cross-
 checked against PMUGRF 0x140 bit 5; a mismatch or an unreadable value aborts
 the install. Only for compatible haos-ihost. Gate: tests/gates/vccio5_rauc_hook.
 ---
-  buildroot-external/ota/rauc-hook | 69 ++++++++++++++++++++++++++++++++++++++++
-  1 file changed, 69 insertions(+)
+  buildroot-external/ota/rauc-hook | 84 ++++++++++++++++++++++++++++++++++++++++
+  1 file changed, 84 insertions(+)
 
 diff --git a/buildroot-external/ota/rauc-hook b/buildroot-external/ota/rauc-hook
-index 212d6bd..de1c4ee 100755
+index 212d6bd..cc42cf5 100755
 --- a/buildroot-external/ota/rauc-hook
 +++ b/buildroot-external/ota/rauc-hook
-@@ -98,6 +98,71 @@ post_install_kernel() {
+@@ -98,6 +98,86 @@ post_install_kernel() {
      fi
  }
  
@@ -46,12 +46,16 @@ index 212d6bd..de1c4ee 100755
 +    fi
 +    [ -d "${_gv_boot}" ] || { echo "GA vccio5: ${_gv_boot} missing - install refused" >&2; return 1; }
 +
-+    # a key is a NON-EMPTY value (boot.scr treats "ga_vccio5=" like no key: 3v3)
-+    if [ -f "${_gv_cfg}" ] && tr -d '\r' < "${_gv_cfg}" | grep -q '^ga_vccio5=[^[:space:]]'; then
-+        echo "GA vccio5: key present ($(tr -d '\r' < "${_gv_cfg}" | grep '^ga_vccio5=[^[:space:]]' | tail -n 1)) - left as it is"
-+        return 0
-+    fi
++    # the key as boot.scr sees it: U-Boot env import keeps the LAST ga_vccio5= line;
++    # a commented or prefixed line is no key (line-anchored); an empty value = no key
++    _gv_key=""
++    [ -f "${_gv_cfg}" ] && _gv_key="$(tr -d '\r' < "${_gv_cfg}" | sed -n 's/^ga_vccio5=//p' | tail -n 1)"
++    case "${_gv_key}" in
++        ""|3v3) ;;   # no key: pin below; 3v3: must match the hardware (below)
++        *) echo "GA vccio5: key present (ga_vccio5=${_gv_key}) - left as it is"; return 0 ;;
++    esac
 +
++    # the RUNNING mode: kernel argument, cross-checked against the hardware
 +    [ -r "${_gv_cmdline}" ] || { echo "GA vccio5: cannot read ${_gv_cmdline} - install refused" >&2; return 1; }
 +    _gv_run="$(tr ' ' '\n' < "${_gv_cmdline}" | sed -n 's/^ga\.vccio5=//p' | tail -n 1)"
 +    case "${_gv_run}" in
@@ -59,7 +63,6 @@ index 212d6bd..de1c4ee 100755
 +        1v8|"") _gv_run=1v8 ;;
 +        *) echo "GA vccio5: unexpected ga.vccio5=${_gv_run} on the kernel command line - install refused" >&2; return 1 ;;
 +    esac
-+
 +    [ -r "${_gv_regmap}" ] || { echo "GA vccio5: cannot read PMUGRF (${_gv_regmap}) - install refused, nothing written" >&2; return 1; }
 +    _gv_v="$(sed -n 's/^0*140:[[:space:]]*\([0-9a-fA-F][0-9a-fA-F]*\).*/\1/p' "${_gv_regmap}" | head -n 1)"
 +    [ -n "${_gv_v}" ] || { echo "GA vccio5: no PMUGRF 0x140 line in ${_gv_regmap} - install refused, nothing written" >&2; return 1; }
@@ -69,10 +72,22 @@ index 212d6bd..de1c4ee 100755
 +        return 1
 +    fi
 +
++    if [ "${_gv_key}" = 3v3 ]; then
++        # an explicit 3v3 key on a unit that RUNS 1.8 V (hand-written key, or a card from before
++        # #1900 whose boot.scr ignored it): this boot.scr would move it to 3.3 V - refuse
++        if [ "${_gv_run}" = 1v8 ]; then
++            echo "GA vccio5: ga_vccio5=3v3 on the card but the unit runs 1.8 V (PMUGRF 0x140 = 0x${_gv_v}) - this OTA would move it to 3.3 V; install refused, nothing written" >&2
++            return 1
++        fi
++        echo "GA vccio5: key present (ga_vccio5=3v3) and the unit runs 3.3 V - left as it is"
++        return 0
++    fi
++
 +    _gv_tmp="${_gv_cfg}.ga-new"
-+    # keep every other line, drop empty "ga_vccio5=" lines; grep ends every line it
-+    # prints with a newline, so a last line without one cannot swallow the key
-+    { if [ -f "${_gv_cfg}" ]; then tr -d '\r' < "${_gv_cfg}" | grep -v '^ga_vccio5=[[:space:]]*$' || true; fi
++    # keep every other line; drop every ga_vccio5= line (the last one was empty, so all of
++    # them were inert) and write exactly one; grep ends every line it prints with a
++    # newline, so a last line without one cannot swallow the key
++    { if [ -f "${_gv_cfg}" ]; then tr -d '\r' < "${_gv_cfg}" | grep -v '^ga_vccio5=' || true; fi
 +      echo "ga_vccio5=${_gv_run}"; } > "${_gv_tmp}" \
 +        || { rm -f "${_gv_tmp}"; echo "GA vccio5: cannot write ${_gv_tmp} - install refused" >&2; return 1; }
 +    mv -f "${_gv_tmp}" "${_gv_cfg}" || { rm -f "${_gv_tmp}"; echo "GA vccio5: cannot replace ${_gv_cfg} - install refused" >&2; return 1; }
@@ -87,7 +102,7 @@ index 212d6bd..de1c4ee 100755
  ##
  # Hooks
  
-@@ -107,6 +172,10 @@ case "$1" in
+@@ -107,6 +187,10 @@ case "$1" in
               # Check if GRUB env has been corrupted. This is only problematic
               # with OS 8+, where compatible matches.
               check_grubenv

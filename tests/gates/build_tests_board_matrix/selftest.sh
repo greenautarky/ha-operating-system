@@ -166,6 +166,14 @@ vcc_red() { # <env assignment> <label>
 }
 vcc_red SYNTH_VCC_NO_RV1109=1 vcc-variant-missing
 vcc_red SYNTH_VCC_1V8=1       vcc-variant-still-1v8
+# BLD-VCC-02 (Odoo #1981, iHost only): the bundle must carry the vccio5 install-check hook
+hook_red() { # <env assignment> <label>
+  local out; out="$(env "$1" "$HERE/run-board.sh" ihost "$W/wh-$2" 2>&1)"
+  echo "$out" | grep -qE "^ +FAIL +BLD-VCC-02[: ]" && ok "red proof $2: ihost goes red on BLD-VCC-02" || bad "red proof $2: ihost did NOT go red on BLD-VCC-02"
+  rm -rf "$W/wh-$2"   # a full fixture workspace each: free it now, not at the end (a 16 GB tmpfs /tmp filled up)
+}
+hook_red SYNTH_NO_HOOK_DECL=1  vcc-hook-not-declared
+hook_red SYNTH_HOOK_UPSTREAM=1 vcc-hook-unpatched
 
 # ---- Odoo #1649: the checks that read the vendored component / the baked Supervisor archive can go red ----
 # (they read sibling checkouts that no job provided and were SKIP in every run). Injected into the

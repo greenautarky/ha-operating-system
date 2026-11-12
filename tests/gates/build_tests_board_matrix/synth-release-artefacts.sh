@@ -16,6 +16,10 @@
 #   SYNTH_RELEASE=X        manifest release differs from /etc/ga-release     -> RFLOOR-01 must FAIL
 #   SYNTH_NO_META=1        manifest has no [meta.ga] release                 -> RFLOOR-01 must FAIL
 #   SYNTH_IMG_BLANK1=1     slot pair 1 left empty (the pre-#349 layout)      -> IMG-01 must FAIL
+#   SYNTH_NO_HOOK_DECL=1   manifest without [hooks] install-check            -> BLD-VCC-02 must FAIL (iHost)
+#   SYNTH_HOOK_UPSTREAM=1  the bundle hook is upstream's (no ga_vccio5_pin)  -> BLD-VCC-02 must FAIL (iHost)
+# The bundle carries the hook as a real HAOS bundle does: the LIVE upstream ota/rauc-hook with the GA patch
+# set applied (scripts/apply-haos-patches.sh --cat; needs the haos/ submodule — fails, never skips).
 set -eu
 OUT="${1:?OUT}"
 for t in mksquashfs sfdisk xz truncate dd; do command -v "$t" >/dev/null || { echo "synth: $t missing" >&2; exit 2; }; done
@@ -25,7 +29,15 @@ MARK='GA-ETH~1  ga-ethernet-force'
 { echo "FAT-BOOT-SD"; [ -n "${SYNTH_NO_SD_MARKER:-}" ] || echo "$MARK"; head -c 4096 /dev/zero; } > "$IMG/boot.vfat"
 mkdir -p "$T/b"
 { echo "FAT-BOOT-OTA"; [ -z "${SYNTH_ETH_IN_BUNDLE:-}" ] || echo "$MARK"; head -c 4096 /dev/zero; } > "$T/b/boot.vfat"
-{ printf '[update]\ncompatible=ga-fixture\nversion=1\n\n[image.rootfs]\nfilename=rootfs.img\n\n'
+GAROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+if [ -n "${SYNTH_HOOK_UPSTREAM:-}" ]; then
+  git -C "$GAROOT/haos" show HEAD:buildroot-external/ota/rauc-hook > "$T/b/hook" 2>/dev/null || { echo "synth: no upstream rauc-hook (haos/ submodule?)" >&2; exit 2; }
+else
+  bash "$GAROOT/scripts/apply-haos-patches.sh" --cat buildroot-external/ota/rauc-hook > "$T/b/hook" 2>/dev/null || { echo "synth: cannot extract the patched rauc-hook (haos/ submodule?)" >&2; exit 2; }
+fi
+{ printf '[update]\ncompatible=ga-fixture\nversion=1\n\n'
+  [ -n "${SYNTH_NO_HOOK_DECL:-}" ] || printf '[hooks]\nfilename=hook\nhooks=install-check;\n\n'
+  printf '[image.rootfs]\nfilename=rootfs.img\n\n'
   [ -n "${SYNTH_NO_META:-}" ] || printf '[meta.ga]\nrelease=%s\n' "${SYNTH_RELEASE:-$rel}"; } > "$T/b/manifest.raucm"
 mksquashfs "$T/b" "$T/bundle" -quiet -noappend -no-progress >/dev/null 2>&1
 head -c 4096 /dev/zero >> "$T/bundle"

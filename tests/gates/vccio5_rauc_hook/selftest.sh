@@ -50,14 +50,19 @@ REG_18="140: 000000a6"; REG_33="140: 00000086"
 # run_hook <hook> <compat> <cfg-content|-ABSENT-> <cmdline> <regmap-content|-ABSENT-> [ro]
 # -> sets RC, OUT, CFG (content after, "-ABSENT-" if none), BEFORE
 run_hook() {
-  local h="$1" compat="$2" cfg="$3" cmd="$4" reg="$5" ro="${6:-}" d
+  local h="$1" compat="$2" cfg="$3" cmd="$4" reg="$5" ro="${6:-}" mvf="${7:-}" d pathx="$T/bin"
   d="$(mktemp -d -p "$T")"; mkdir "$d/boot"
   [[ "$cfg" == -ABSENT- ]] || printf '%b' "$cfg" > "$d/boot/haos-config.txt"
   printf '%s\n' "$cmd" > "$d/cmdline"
   [[ "$reg" == -ABSENT- ]] || printf '%s\n' "$reg" > "$d/regmap"
   BEFORE="$(cat "$d/boot/haos-config.txt" 2>/dev/null || echo -ABSENT-)"
   [[ -n "$ro" ]] && { chmod 444 "$d/boot/haos-config.txt" 2>/dev/null; chmod 555 "$d/boot"; }
-  OUT="$(PATH="$T/bin:$PATH" RAUC_MF_COMPATIBLE="$compat" RAUC_SYSTEM_COMPATIBLE="$compat" \
+  if [[ -n "$mvf" ]]; then   # a fake mv: "noop" claims success and moves nothing, "fail" fails
+    mkdir -p "$d/mvbin"; pathx="$d/mvbin:$T/bin"
+    if [[ "$mvf" == noop ]]; then printf '#!/bin/sh\nexit 0\n' > "$d/mvbin/mv"; else printf '#!/bin/sh\nexit 1\n' > "$d/mvbin/mv"; fi
+    chmod +x "$d/mvbin/mv"
+  fi
+  OUT="$(PATH="$pathx:$PATH" RAUC_MF_COMPATIBLE="$compat" RAUC_SYSTEM_COMPATIBLE="$compat" \
          GA_VCC_BOOT="$d/boot" GA_VCC_CMDLINE="$d/cmdline" GA_VCC_REGMAP="$d/regmap" sh "$h" install-check 2>&1)"; RC=$?
   chmod -R u+w "$d" 2>/dev/null
   CFG="$(cat "$d/boot/haos-config.txt" 2>/dev/null || echo -ABSENT-)"
@@ -81,7 +86,14 @@ cases() {  # <hook> — every expectation on one hook; returns 0 when all hold (
   run_hook "$h" haos-ihost ""                "root=x ga.vccio5=1v8 rootwait" "$REG_18"; want_key "no key + running 1v8 -> ga_vccio5=1v8 pinned" "ga_vccio5=1v8"
   run_hook "$h" haos-ihost "overlays=x\n"    "root=x rootwait"               "$REG_18"; want_key "no key + no ga.vccio5 (pre-#1900 boot.scr) -> 1v8" "ga_vccio5=1v8"
   run_hook "$h" haos-ihost "ga_vccio5=1v8\n" "root=x ga.vccio5=3v3"          "$REG_33"; want_untouched "key 1v8 present -> untouched"
-  run_hook "$h" haos-ihost "ga_vccio5=3v3\n" "root=x ga.vccio5=1v8"          "$REG_18"; want_untouched "key 3v3 present -> untouched"
+  run_hook "$h" haos-ihost "ga_vccio5=3v3\n" "root=x ga.vccio5=3v3"          "$REG_33"; want_untouched "key 3v3 on a unit running 3.3 V -> untouched"
+  run_hook "$h" haos-ihost "ga_vccio5=3v3\n" "root=x rootwait"               "$REG_18"; want_refused "key 3v3 on a unit running 1.8 V -> refused (the OTA would move it to 3.3 V)" "would move it to 3.3 V"
+  run_hook "$h" haos-ihost "ga_vccio5=1v8\nga_vccio5=\n" "root=x rootwait"   "$REG_18"; want_key "last value empty (boot.scr: no key) -> pinned, one key line left" "ga_vccio5=1v8"
+  [[ "$CFG" == "ga_vccio5=1v8" ]] && ok "last value empty -> exactly one key line in the file" || bad "last value empty -> file: $(tr '\n' '|' <<<"$CFG")"
+  run_hook "$h" haos-ihost "ga_vccio5=\nga_vccio5=1v8\n" "root=x ga.vccio5=3v3" "$REG_33"; want_untouched "last value 1v8 (earlier empty line) -> key present, untouched"
+  run_hook "$h" haos-ihost "#ga_vccio5=3v3\nxga_vccio5=3v3\n" "root=x rootwait" "$REG_18"; want_key "commented / prefixed key is no key -> running 1v8 pinned" "ga_vccio5=1v8"
+  run_hook "$h" haos-ihost "overlays=x\n"    "root=x rootwait"               "$REG_18" "" noop; want_refused "mv claims success but moves nothing -> read-back refuses" "did not read back"
+  run_hook "$h" haos-ihost "overlays=x\n"    "root=x rootwait"               "$REG_18" "" fail; want_refused "mv fails -> refused with its own reason" "cannot replace"
   run_hook "$h" haos-ihost "ga_vccio5=\n"    "root=x rootwait"               "$REG_18"; want_key "empty ga_vccio5= is no key (boot.scr: 3v3) -> running 1v8 pinned" "ga_vccio5=1v8"
   run_hook "$h" haos-ihost ""                "root=x ga.vccio5=3v3"          "$REG_18"; want_refused "mismatch: cmdline 3v3 vs PMUGRF 1.8 V -> refused" "says 1v8"
   run_hook "$h" haos-ihost ""                "root=x rootwait"               "$REG_33"; want_refused "mismatch: no argument (1v8) vs PMUGRF 3.3 V -> refused" "says 3v3"
@@ -125,8 +137,13 @@ mut call-removed        'ga_vccio5_pin || exit 11' 'true || exit 11'
 mut silent-exit-code    'ga_vccio5_pin || exit 11' 'ga_vccio5_pin || exit 1'
 mut crosscheck-off      'if [ "${_gv_reg}" != "${_gv_run}" ]; then' 'if false; then'
 mut always-1v8          '        3v3) ;;' '        3v3) _gv_run=1v8 ;;'
-mut key-check-removed   "grep -q '^ga_vccio5=[^[:space:]]'; then" "grep -q '^NEVER='; then"
-mut empty-counts-as-key "grep -q '^ga_vccio5=[^[:space:]]'; then" "grep -q '^ga_vccio5='; then"
+mut key-check-removed   '        ""|3v3) ;;' '        *) ;;'
+mut empty-counts-as-key '        ""|3v3) ;;' '        3v3) ;;'
+mut last-line-not-used  "sed -n 's/^ga_vccio5=//p' | tail -n 1)" "sed -n 's/^ga_vccio5=//p' | head -n 1)"
+mut anchor-removed      "sed -n 's/^ga_vccio5=//p' | tail -n 1)" "sed -n 's/.*ga_vccio5=//p' | tail -n 1)"
+mut readback-off        '| grep -cx "ga_vccio5=${_gv_run}")" != 1 ]; then' '| grep -cx "ga_vccio5=${_gv_run}")" = 99 ]; then'
+mut mv-guard-off        'mv -f "${_gv_tmp}" "${_gv_cfg}" || {' 'mv -f "${_gv_tmp}" "${_gv_cfg}" || true || {'
+mut 3v3-key-on-1v8-off  '        if [ "${_gv_run}" = 1v8 ]; then' '        if false; then'
 mut compat-guard-off    '[ "${RAUC_SYSTEM_COMPATIBLE}" = "haos-ihost" ] || return 0' ':'
 
 echo "vccio5_rauc_hook: $pass passed, $fail failed"
