@@ -174,6 +174,7 @@ hook_red() { # <env assignment> <label>
 }
 hook_red SYNTH_NO_HOOK_DECL=1  vcc-hook-not-declared
 hook_red SYNTH_HOOK_UPSTREAM=1 vcc-hook-unpatched
+hook_red SYNTH_HOOK_COMMENTED=1 vcc-hook-call-commented
 
 # ---- Odoo #1649: the checks that read the vendored component / the baked Supervisor archive can go red ----
 # (they read sibling checkouts that no job provided and were SKIP in every run). Injected into the

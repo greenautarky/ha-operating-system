@@ -92,6 +92,7 @@ cases() {  # <hook> — every expectation on one hook; returns 0 when all hold (
   [[ "$CFG" == "ga_vccio5=1v8" ]] && ok "last value empty -> exactly one key line in the file" || bad "last value empty -> file: $(tr '\n' '|' <<<"$CFG")"
   run_hook "$h" haos-ihost "ga_vccio5=\nga_vccio5=1v8\n" "root=x ga.vccio5=3v3" "$REG_33"; want_untouched "last value 1v8 (earlier empty line) -> key present, untouched"
   run_hook "$h" haos-ihost "#ga_vccio5=3v3\nxga_vccio5=3v3\n" "root=x rootwait" "$REG_18"; want_key "commented / prefixed key is no key -> running 1v8 pinned" "ga_vccio5=1v8"
+  run_hook "$h" haos-ihost ""                "root=x foo.ga.vccio5=3v3 rootwait" "$REG_18"; want_key "cmdline token foo.ga.vccio5=3v3 is not ga.vccio5 -> running 1v8 pinned" "ga_vccio5=1v8"
   run_hook "$h" haos-ihost "overlays=x\n"    "root=x rootwait"               "$REG_18" "" noop; want_refused "mv claims success but moves nothing -> read-back refuses" "did not read back"
   run_hook "$h" haos-ihost "overlays=x\n"    "root=x rootwait"               "$REG_18" "" fail; want_refused "mv fails -> refused with its own reason" "cannot replace"
   run_hook "$h" haos-ihost "ga_vccio5=\n"    "root=x rootwait"               "$REG_18"; want_key "empty ga_vccio5= is no key (boot.scr: 3v3) -> running 1v8 pinned" "ga_vccio5=1v8"
@@ -144,6 +145,7 @@ mut anchor-removed      "sed -n 's/^ga_vccio5=//p' | tail -n 1)" "sed -n 's/.*ga
 mut readback-off        '| grep -cx "ga_vccio5=${_gv_run}")" != 1 ]; then' '| grep -cx "ga_vccio5=${_gv_run}")" = 99 ]; then'
 mut mv-guard-off        'mv -f "${_gv_tmp}" "${_gv_cfg}" || {' 'mv -f "${_gv_tmp}" "${_gv_cfg}" || true || {'
 mut 3v3-key-on-1v8-off  '        if [ "${_gv_run}" = 1v8 ]; then' '        if false; then'
+mut cmdline-anchor-off  "sed -n 's/^ga\\.vccio5=//p'" "sed -n 's/.*ga\\.vccio5=//p'"
 mut compat-guard-off    '[ "${RAUC_SYSTEM_COMPATIBLE}" = "haos-ihost" ] || return 0' ':'
 
 echo "vccio5_rauc_hook: $pass passed, $fail failed"

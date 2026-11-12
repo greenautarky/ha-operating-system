@@ -1043,7 +1043,7 @@ jobs:
       # written (cmdline ga.vccio5 cross-checked against PMUGRF 0x140 bit 5; mismatch or
       # unreadable -> exit 11, RAUC shows the reason). Drives the LIVE patched hook
       # (apply-haos-patches.sh --cat): every case, CRLF/no-newline/read-only/foreign
-      # board, and 7 mutations of the hook.
+      # board, and 13 mutations of the hook.
       - name: RAUC install-check pins the running vccio5 mode (Odoo #1981)
         run: bash tests/gates/vccio5_rauc_hook/selftest.sh
 

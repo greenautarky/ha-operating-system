@@ -18,6 +18,7 @@
 #   SYNTH_IMG_BLANK1=1     slot pair 1 left empty (the pre-#349 layout)      -> IMG-01 must FAIL
 #   SYNTH_NO_HOOK_DECL=1   manifest without [hooks] install-check            -> BLD-VCC-02 must FAIL (iHost)
 #   SYNTH_HOOK_UPSTREAM=1  the bundle hook is upstream's (no ga_vccio5_pin)  -> BLD-VCC-02 must FAIL (iHost)
+#   SYNTH_HOOK_COMMENTED=1 the call in install-check is commented out       -> BLD-VCC-02 must FAIL (iHost)
 # The bundle carries the hook as a real HAOS bundle does: the LIVE upstream ota/rauc-hook with the GA patch
 # set applied (scripts/apply-haos-patches.sh --cat; needs the haos/ submodule — fails, never skips).
 set -eu
@@ -34,6 +35,10 @@ if [ -n "${SYNTH_HOOK_UPSTREAM:-}" ]; then
   git -C "$GAROOT/haos" show HEAD:buildroot-external/ota/rauc-hook > "$T/b/hook" 2>/dev/null || { echo "synth: no upstream rauc-hook (haos/ submodule?)" >&2; exit 2; }
 else
   bash "$GAROOT/scripts/apply-haos-patches.sh" --cat buildroot-external/ota/rauc-hook > "$T/b/hook" 2>/dev/null || { echo "synth: cannot extract the patched rauc-hook (haos/ submodule?)" >&2; exit 2; }
+  if [ -n "${SYNTH_HOOK_COMMENTED:-}" ]; then
+    sed -i 's/^\([[:space:]]*\)ga_vccio5_pin || exit 11/\1# ga_vccio5_pin || exit 11/' "$T/b/hook"
+    grep -q '# ga_vccio5_pin || exit 11' "$T/b/hook" || { echo "synth: SYNTH_HOOK_COMMENTED did not apply (mutation dead)" >&2; exit 2; }
+  fi
 fi
 { printf '[update]\ncompatible=ga-fixture\nversion=1\n\n'
   [ -n "${SYNTH_NO_HOOK_DECL:-}" ] || printf '[hooks]\nfilename=hook\nhooks=install-check;\n\n'

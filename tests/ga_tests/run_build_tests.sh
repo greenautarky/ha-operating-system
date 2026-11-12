@@ -1427,7 +1427,8 @@ if [[ "$_RBT_BOARD" == ihost ]]; then
         _fail "BLD-VCC-02: bundle manifest [hooks] does not declare install-check ('${_vh_hooks:-<none>}') — keyless field units would boot 3.3 V after the OTA"
       elif [[ -z "$_vh_file" || ! -f "${_vh_tmp}/x/${_vh_file}" ]]; then
         _fail "BLD-VCC-02: the hook file the manifest names ('${_vh_file:-<none>}') is not in the bundle"
-      elif ! grep -q 'ga_vccio5_pin || exit 11' "${_vh_tmp}/x/${_vh_file}"; then
+      # the CALL, uncommented, inside the install-check branch — not just the text somewhere
+      elif ! awk '/^[[:space:]]*install-check\)/{f=1} f&&/;;/{exit} f&&/^[[:space:]]*ga_vccio5_pin \|\| exit 11/{print "y"; exit}' "${_vh_tmp}/x/${_vh_file}" | grep -q y; then
         _fail "BLD-VCC-02: the bundle hook does not call ga_vccio5_pin in install-check (patches-haos/0113 missing?) — keyless field units would boot 3.3 V"
       else
         _pass "BLD-VCC-02: bundle declares install-check and its hook pins the running vccio5 mode (ga_vccio5_pin)"
