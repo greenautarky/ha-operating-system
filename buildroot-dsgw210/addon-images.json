@@ -18,7 +18,8 @@
     },
     "ga_manager": {
       "image": "ghcr.io/greenautarky/ga_manager-{arch}",
-      "version": "0.277.3"
+      "version": "0.277.3",
+      "hold": {"reason": "BOSv1.6.0 Final = BOSv1.6.0-rc14 tree (Thomas 2026-11-12); 0.277.4 (#2006 fix) published after the rc14 gate, follows in 1.6.1; store vibe_addons pins 0.277.3", "until": "2026-12-12"}
     },
     "ga_default_addon": {
       "image": "ghcr.io/greenautarky/ga_default_addon-{arch}",
