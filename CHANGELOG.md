@@ -12,6 +12,12 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18): hw_iodomain IOD-07 reads the whole boot, not a flooded ring buffer (Odoo #1961)
+
+- IOD-07 ("no io-domain error strings") read `dmesg` AFTER IOD-06, and IOD-06's read of debugfs `pinconf-pins` writes one `unsupported pinctrl` kernel line per pin (4,349 on an iHost on BOSv1.6.0-rc13, 2026-11-12). The ring buffer then started at the moment the suite ran; boot-time io-domain errors could no longer be seen and IOD-07 stayed green — blind to the very error it exists for. (The PASS on that unit was still correct: the full kernel journal had 0 io-domain errors.)
+- Now: the kernel log is captured BEFORE IOD-06, from `journalctl -k -b 0` (the whole boot; `dmesg` only without a journal), and IOD-07 FAILS when the capture does not reach back to the boot (no `Booting Linux` line) instead of passing a rotated buffer as clean.
+- Selftest 78 checks (ISO-70..75 new, ISO-31 now asserts the reason). Red: the old library fails ISO-70/73/74; coverage check removed → ISO-70/74; journal preference removed → ISO-73; capture removed from before IOD-06 → ISO-75. Live on the device (rotated dmesg): journal → IOD-07 PASS; journal unavailable → IOD-07 FAIL with the coverage message (the old suite passed there).
+
 ## Unreleased (feat/1.6-haos18): BOSv1.6.0-rc13 pins (iHost) and BOSv1.6.0-dev9 (DSGW210)
 
 rc13 = rc12 plus:
