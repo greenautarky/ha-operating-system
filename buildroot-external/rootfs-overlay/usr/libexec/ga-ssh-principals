@@ -8,7 +8,7 @@
 #           fresh device is never certificate-less — otherwise break-glass
 #           becomes the routine provisioning path, and a rescue key needed
 #           daily stops being a rescue key.
-#   label   KIB-SON-…, written by the fleet-manager when it assigns identity.
+#   label   KIB-SON-… (iHost) or KIB-DUS-… (DSGW-210), written by the fleet-manager when it assigns identity.
 #           This is what operators type.
 #
 # sshd reads ONE file per user, so two writers would race on it. Each writer
@@ -48,8 +48,8 @@ case "$role" in
         case "$identity" in
             ''|*[!A-Za-z0-9-]*) die "refusing label $(refused) — empty or outside [A-Za-z0-9-]" ;;
         esac
-        printf '%s' "$identity" | grep -qE '^KIB-SON-[0-9]{8}$' \
-            || die "refusing label $(refused) — must match ^KIB-SON-[0-9]{8}$" ;;
+        printf '%s' "$identity" | grep -qE '^KIB-(SON|DUS)-[0-9]{8}$' \
+            || die "refusing label $(refused) — must match ^KIB-(SON|DUS)-[0-9]{8}$" ;;
     *)  die "usage: ga-ssh-principals <anchor|label> <identity>" ;;
 esac
 [ "$role" = "label" ] && target="$LABEL_FILE"
