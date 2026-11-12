@@ -85,10 +85,16 @@ verdict() {
   [[ $r == *'"bootargs_ga": "ga.vccio5=3v3 usbcore.authorized_default=0 g_serial.iSerialNumber=0123"'* ]] || good=0
   r=$(ev "$f" 3v3 1126 "$B26") || return 2
   [[ $r == *"\"fdtfile\": \"$B26\""* && $r == *'"loaded": "1v8"'* && $r == *'"bootargs_ga": "ga.vccio5=1v8 '* ]] || good=0
-  r=$(ev "$f" "" 1126 "$B26,$V26") || return 2
+  r=$(ev "$f" "" 1126 "$B26,$V26") || return 2                # option B: no key -> 3v3
+  [[ $r == *"\"fdtfile\": \"$V26\""* && $r == *'"loaded": "3v3"'* ]] || good=0
+  r=$(ev "$f" "" 1126 "$B26") || return 2                     # no key, variant missing -> 1v8 fallback
   [[ $r == *"\"fdtfile\": \"$B26\""* && $r == *'"loaded": "1v8"'* ]] || good=0
-  r=$(ev "$f" "3v3 " 1126 "$B26,$V26") || return 2           # not exactly 3v3 -> legacy
-  [[ $r == *"\"fdtfile\": \"$B26\""* ]] || good=0
+  r=$(ev "$f" 1v8 1126 "$B26,$V26") || return 2               # explicit 1v8 wins over an available variant
+  [[ $r == *"\"fdtfile\": \"$B26\""* && $r == *'"loaded": "1v8"'* ]] || good=0
+  r=$(ev "$f" "3v3 " 1126 "$B26,$V26") || return 2           # not exactly 3v3/1v8/empty -> 1.8 V
+  [[ $r == *"\"fdtfile\": \"$B26\""* && $r == *'"loaded": "1v8"'* ]] || good=0
+  r=$(ev "$f" foo 1126 "$B26,$V26") || return 2
+  [[ $r == *"\"fdtfile\": \"$B26\""* && $r == *'"loaded": "1v8"'* ]] || good=0
   r=$(ev "$f" 3v3 1109 "$B09,$V09") || return 2
   [[ $r == *"\"fdtfile\": \"$V09\""* && $r == *'"loaded": "3v3"'* ]] || good=0
   r=$(ev "$f" 3v3 1109 "$B09,$V26") || return 2               # only the OTHER SoC's variant present
@@ -98,7 +104,7 @@ verdict() {
 
 verdict "$USH"; rc=$?
 case $rc in
-  0) ok "live block: 3v3+variant -> variant; 3v3 without variant -> fallback 1v8; no key -> 1v8; rv1109; bootargs_ga prefix" ;;
+  0) ok "live block: no key -> 3v3 (variant) / 1v8 (no variant); 3v3 -> variant; explicit 1v8 and any other value -> 1v8; rv1109; bootargs_ga prefix" ;;
   2) bad "live block: extraction/evaluation failed (gate would be blind): $(ev "$USH" 3v3 1126 x 2>&1 | tail -1)" ;;
   *) bad "live block: an expectation does not hold" ;;
 esac
@@ -111,7 +117,11 @@ mut() {  # <label> <sed-expr>
 }
 mut guard-removed      's/^\(\s*\)if test -e mmc ${devnum}:${boot_partnum} ${fdtfile_3v3}; then$/\1if true; then/'
 mut guard-wrong-file   's/^\(\s*\)if test -e mmc ${devnum}:${boot_partnum} ${fdtfile_3v3}; then$/\1if test -e mmc ${devnum}:${boot_partnum} ${fdtfile}; then/'
-mut key-compare-loose  's/^if test "x${ga_vccio5}" = "x3v3"; then$/if true; then/'
+# Odoo #1981 (option B): each rule of the key selection, attacked on its own
+mut no-key-not-3v3     's/^    if test "x${ga_vccio5}" = "x"; then$/    if false; then/'
+mut 3v3-key-ignored    's/^  if test "x${ga_vccio5}" = "x3v3"; then$/  if false; then/'
+mut garbage-to-3v3     's/^setenv ga_vccio5_want 1v8$/setenv ga_vccio5_want 3v3/'
+mut want-compare-loose 's/^if test "x${ga_vccio5_want}" = "x3v3"; then$/if true; then/'
 mut no-fallback-reset  's/^setenv ga_vccio5_loaded 1v8$/setenv ga_vccio5_loaded 3v3/'
 mut arg-appended       's/^setenv bootargs_ga "ga.vccio5=${ga_vccio5_loaded} ${bootargs_ga}"$/setenv bootargs_ga "${bootargs_ga} ga.vccio5=${ga_vccio5_loaded}"/'
 # the variant set OUTSIDE the guard (moved up, before the test -e)

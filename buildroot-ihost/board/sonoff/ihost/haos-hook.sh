@@ -16,8 +16,10 @@ function haos_pre_image() {
     # ── vccio5 = 3.3 V variant for freshly flashed devices (Odoo #1900) ──────
     # The RMII/MDIO bank is physically 3.3 V (#1484, measured 2026-11-11); the
     # DTBs above keep the legacy 1.8 V setting that every existing device runs.
-    # boot.scr loads the *-vccio5-3v3.dtb only when haos-config.txt carries
-    # ga_vccio5=3v3, which the flasher writes on a fresh flash. haos-config.txt
+    # boot.scr loads the *-vccio5-3v3.dtb when haos-config.txt carries
+    # ga_vccio5=3v3 OR no key at all (option B, Odoo #1981); ga_vccio5=1v8 keeps
+    # these DTBs, and the RAUC install-check hook pins the running mode as that
+    # key before an OTA (patches-haos/0113). haos-config.txt
     # is device-owned (the RAUC boot hook restores *.txt), so an OTA never
     # changes a device's setting. The generator changes exactly one property
     # and fails the build on anything else.

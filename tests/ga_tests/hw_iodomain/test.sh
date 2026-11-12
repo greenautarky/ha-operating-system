@@ -10,8 +10,8 @@
 #   IOD-00  kernel arg ga.vccio5= (DTB boot.scr loaded) matches the mode — no silent fallback
 #   IOD-01  PMUGRF 0x140 bits 1-7 == the PINNED value of the mode (0xA6 for 1v8, 0x86 for 3v3)
 #   IOD-02  the running DT's vccio5-supply resolves to vcc_1v8 (1v8) / vcc_3v3 (3v3)
-#   Mode = ga_vccio5 in /mnt/boot/haos-config.txt (flasher writes 3v3 on fresh flashes,
-#   Odoo #1900); absent = 1v8 (every legacy device). See iodomain.sh for both sets.
+#   Mode = ga_vccio5 in /mnt/boot/haos-config.txt, as boot.scr reads it (option B,
+#   #1981): no key / 3v3 = 3v3, 1v8 / anything else = 1v8. See iodomain.sh.
 #   IOD-03  PMUGRF 0x144 (retention) == pinned 0xFFFF
 #   IOD-04  GRF 0x70 bit6 set, bit4 clear (RMII interface select)
 #   IOD-05  regulator_summary: io-domains-vccio5 under vcc_1v8, vccio3/4/6 under vcc_3v3

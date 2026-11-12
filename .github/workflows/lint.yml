@@ -1038,6 +1038,15 @@ jobs:
       - name: iHost boot.scr vccio5 DTB selection (Odoo #1900)
         run: bash tests/gates/ihost_vccio5_bootscr/selftest.sh
 
+      # Odoo #1981 (option B): the image boots 3.3 V without a key, so the bundle's
+      # install-check hook pins the RUNNING mode as an explicit key before any slot is
+      # written (cmdline ga.vccio5 cross-checked against PMUGRF 0x140 bit 5; mismatch or
+      # unreadable -> exit 11, RAUC shows the reason). Drives the LIVE patched hook
+      # (apply-haos-patches.sh --cat): every case, CRLF/no-newline/read-only/foreign
+      # board, and 7 mutations of the hook.
+      - name: RAUC install-check pins the running vccio5 mode (Odoo #1981)
+        run: bash tests/gates/vccio5_rauc_hook/selftest.sh
+
       # Odoo #1900/#1944: verify-sd.sh --flash requires --vccio5 3v3|1v8 (no
       # default, Thomas 2026-11-11), refuses before the first dd without it,
       # writes exactly one ga_vccio5=<mode> line, and refuses 3v3 on a pre-#1900
@@ -1094,6 +1103,11 @@ jobs:
       # bundle that carries the release — the transition.
       - name: OS update release floor through a real RAUC
         run: ./tests/gates/rauc_release_floor/rauc_e2e.sh
+      # The vccio5 install-check hook behind a REAL `rauc service`: RAUC runs the
+      # hook from the bundle, a refusal aborts with the reason and leaves the slot
+      # untouched, an accepted install writes the slot AND the pinned key (Odoo #1981).
+      - name: vccio5 install-check hook through a real RAUC (Odoo #1981)
+        run: ./tests/gates/vccio5_rauc_hook/rauc_e2e.sh
 
       # RAUC-SIG-01's REAL code (extracted from the live runner) against bundles signed by a
       # throwaway CA with the real rauc installed above (Odoo #1632): right CA passes, another CA,
