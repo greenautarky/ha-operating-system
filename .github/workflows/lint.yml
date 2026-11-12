@@ -300,6 +300,16 @@ jobs:
         # guessing 80 when nothing is readable fails the 3 refusal cases.
         run: sh tests/ga_tests/lib/ha_port_selftest.sh
 
+      - name: suite preflight waits for the apps, not just the containers (lib/app_ready.sh)
+        # A container reads Up long before InfluxDB answers /ping or Core's API
+        # answers (BOSv1.5.1-rc4 on K31). Drives the live helper through scripted
+        # answers: late-starting apps pass after a wait, a dead app fails within
+        # the bound, a 5xx is not an answer, absent containers are not waited
+        # for, and run_all.sh runs the preflight before the suites and aborts on
+        # failure. Red-proven: without the wait loop the late-start cases fail;
+        # without the wiring the four wiring checks fail.
+        run: sh tests/ga_tests/lib/app_ready_selftest.sh
+
       - name: idle_perf sample window (IDLE-05 / IDLE-10b judged on a p90, not one sample)
         # A periodic burst (the ga_manager health tick, ~one per 65 s) must not
         # fail an idle device; a Supervisor that stays busy still must. Replays

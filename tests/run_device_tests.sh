@@ -537,6 +537,7 @@ run_serial() {
                 done
                 "$SERIAL_TMUX" send "$port" "wget -q http://${host_ip}:${http_port}/lib/test_helpers.sh -O $REMOTE_DIR/lib/test_helpers.sh"
                 "$SERIAL_TMUX" send "$port" "wget -q http://${host_ip}:${http_port}/lib/ha_port.sh -O $REMOTE_DIR/lib/ha_port.sh"
+                "$SERIAL_TMUX" send "$port" "wget -q http://${host_ip}:${http_port}/lib/app_ready.sh -O $REMOTE_DIR/lib/app_ready.sh"
                 sleep 2
 
                 local suite_args=""
