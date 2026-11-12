@@ -40,12 +40,12 @@
    "io.hass.arch": "aarch64",
    "io.hass.machine": "qemuarm-64",
    "io.hass.type": "core",
-   "io.hass.version": "2026.10.4.3-dev",
+   "io.hass.version": "2026.10.4.4",
    "org.opencontainers.image.description": "aarch64 glibc baseimage for self-built upstream Home Assistant Core after upstream froze armv7",
    "org.opencontainers.image.licenses": "Apache-2.0",
    "org.opencontainers.image.source": "https://github.com/greenautarky/ga-core-armv7",
    "org.opencontainers.image.title": "Home Assistant Core (GreenAutarky aarch64)",
-   "org.opencontainers.image.version": "2026.10.4.3-dev"
+   "org.opencontainers.image.version": "2026.10.4.4"
   },
   "Shell": [
    "/bin/bash",
