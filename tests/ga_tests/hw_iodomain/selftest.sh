@@ -69,6 +69,8 @@ for fn in iod_readreg iod_ret_verdict iod_rmii_verdict iod_regsum_verdict iod_pi
   type "$fn" >/dev/null 2>&1 || { echo "FATAL: iodomain.sh no longer defines $fn"; exit 1; }
 done
 flag() { show_verdict "$1" "$2" "$([ "$3" -ne 0 ] && echo 0 || echo 1)" "$4"; }   # must-flag: rc != 0 is the pass
+# must-flag FOR A REASON: rc != 0 AND the message names it (a red for the wrong reason is not a pass)
+flagr() { show_verdict "$1" "$2" "$([ "$3" -ne 0 ] && printf '%s' "$4" | grep -qF -- "$5" && echo 0 || echo 1)" "$4"; }
 # IOD-03 retention
 x=$(iod_readreg "$FX/ret-ok.txt" 144); OUT=$(iod_ret_verdict "$x"); RC=$?
 show_verdict ISO-15 "0x144 = 0xFFFF passes" "$RC" "$OUT"
@@ -106,7 +108,7 @@ flag ISO-29 "a file without the pins FAILS (fail closed)" "$RC" "$OUT"
 OUT=$(iod_dmesg_verdict "$FX/dmesg-ok.txt"); RC=$?
 show_verdict ISO-30 "clean dmesg passes" "$RC" "$OUT"
 OUT=$(iod_dmesg_verdict "$FX/dmesg-grf.txt"); RC=$?
-flag ISO-31 "dmesg with \"Couldn't write to GRF\" flagged" "$RC" "$OUT"
+flagr ISO-31 "dmesg with \"Couldn't write to GRF\" flagged for that line" "$RC" "$OUT" "Couldn't write to GRF"
 : > "$T/empty"; iod_dmesg_verdict "$T/empty" >/dev/null; flag ISO-32 "empty dmesg FAILS" $? ""
 printf 'x Can'"'"'t determine voltage for vccio5\n' > "$T/d2"; iod_dmesg_verdict "$T/d2" >/dev/null; flag ISO-33 "\"Can't determine voltage\" flagged" $? ""
 printf 'x May damage SoC\n' > "$T/d3"; iod_dmesg_verdict "$T/d3" >/dev/null; flag ISO-34 "\"May damage SoC\" flagged" $? ""
@@ -186,4 +188,29 @@ OUT=$(iod_loaded_verdict 1v8 1v8); show_verdict ISO-66 "legacy 1v8 + 1v8 loaded 
 OUT=$(iod_loaded_verdict 3v3 1v8); flag ISO-67 "3v3 requested but 1v8 loaded (silent fallback) flagged" "$?" "$OUT"
 OUT=$(iod_loaded_verdict 1v8 none); flag ISO-68 "pre-#1900 boot.scr (no argument) flagged, not passed" "$?" "$OUT"
 OUT=$(iod_loaded_verdict 1v8 3v3); flag ISO-69 "1v8 mode but 3v3 loaded flagged" "$?" "$OUT"
+# --- IOD-07 whole-boot coverage (Odoo #1961) -----------------------------------
+# IOD-06 reads pinconf-pins, which floods the kernel ring buffer; on iHost-B rc13
+# (2026-11-12) dmesg afterwards started at 420 s. A capture that does not reach
+# the boot must FAIL, never pass "clean" (red proof against the old verdict: it
+# passed exactly this capture).
+fl() { _i=0; while [ $_i -lt "$1" ]; do echo "[  420.$_i] rockchip-pinctrl pinctrl: unsupported pinctrl type"; _i=$((_i+1)); done; }
+fl 3000 > "$T/k-rotated"                                                   # dmesg after IOD-06: no boot, no error
+OUT=$(iod_dmesg_verdict "$T/k-rotated"); flagr ISO-70 "rotated kernel log (no boot) FAILS instead of passing clean" "$?" "$OUT" "does not reach back to the boot"
+{ echo "[    0.000000] Booting Linux on physical CPU 0xf00"; echo "[    1.2] rockchip-iodomain: Couldn't write to GRF"; fl 3000; } > "$T/k-boot-err"
+OUT=$(iod_dmesg_verdict "$T/k-boot-err"); flagr ISO-71 "boot-time error before a 3000-line flood is still found" "$?" "$OUT" "Couldn't write to GRF"
+{ echo "[    0.000000] Booting Linux on physical CPU 0xf00"; fl 3000; } > "$T/k-boot-ok"
+OUT=$(iod_dmesg_verdict "$T/k-boot-ok"); show_verdict ISO-72 "whole-boot log with a flood but no error passes" "$?" "$OUT"
+# capture source: the journal when there is one, dmesg only without it (fake binaries = the dependencies, not the subject)
+mkdir -p "$T/kb1" "$T/kb2"
+printf '#!/bin/sh\necho "[ 0.0] Booting Linux on physical CPU 0xf00"\n' > "$T/kb1/journalctl"
+printf '#!/bin/sh\necho "[ 420.0] rockchip-pinctrl pinctrl: unsupported pinctrl type"\n' > "$T/kb1/dmesg"; cp "$T/kb1/dmesg" "$T/kb2/dmesg"
+chmod +x "$T/kb1/journalctl" "$T/kb1/dmesg" "$T/kb2/dmesg"
+SRC=$(PATH="$T/kb1:/usr/bin:/bin" iod_klog_capture "$T/cap1"); RC=$?
+show_verdict ISO-73 "capture prefers the journal (whole boot)" "$([ $RC -eq 0 ] && [ "$SRC" = journal ] && grep -q 'Booting Linux' "$T/cap1" && echo 0 || echo 1)" "src=$SRC"
+SRC=$(PATH="$T/kb2" iod_klog_capture "$T/cap2"); RC=$?
+show_verdict ISO-74 "without a journal: dmesg fallback, and its rotated content then FAILS IOD-07" "$([ $RC -eq 0 ] && [ "$SRC" = dmesg ] && ! iod_dmesg_verdict "$T/cap2" >/dev/null && echo 0 || echo 1)" "src=$SRC"
+# test.sh takes the capture BEFORE IOD-06 reads pinconf-pins (the read is what floods the buffer)
+_c=$(grep -n 'iod_klog_capture "\$_dm"' "$HERE/test.sh" | head -n1 | cut -d: -f1)
+_p=$(grep -n 'iod_pinconf_verdict "\${_pc' "$HERE/test.sh" | head -n1 | cut -d: -f1)
+show_verdict ISO-75 "test.sh captures the kernel log before the IOD-06 pinconf read" "$([ -n "$_c" ] && [ -n "$_p" ] && [ "$_c" -lt "$_p" ] && echo 0 || echo 1)" "capture line ${_c:-none}, pinconf line ${_p:-none}"
 suite_end

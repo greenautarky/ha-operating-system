@@ -1,2 +1,3 @@
+[    0.000000] Booting Linux on physical CPU 0xf00
 [    1.0] rockchip-iodomain: ok
 [    2.0] eth0: Link is Up

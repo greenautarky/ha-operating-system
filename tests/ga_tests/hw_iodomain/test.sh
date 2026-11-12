@@ -16,7 +16,10 @@
 #   IOD-04  GRF 0x70 bit6 set, bit4 clear (RMII interface select)
 #   IOD-05  regulator_summary: io-domains-vccio5 under vcc_1v8, vccio3/4/6 under vcc_3v3
 #   IOD-06  pinconf: gpio2 pins 83/84/86 = 12 mA, pin 82 = 2 mA (both modes, REAL captures)
-#   IOD-07  dmesg free of io-domain error strings
+#   IOD-07  kernel log of the WHOLE boot (journal; captured before IOD-06) free of io-domain errors
+#           Known limit (Odoo #1961): run it after a FRESH boot. On a long uptime with a
+#           volatile journal, vacuuming can drop the boot lines; IOD-07 then FAILS loudly
+#           ("does not reach back to the boot") — fail-closed, never a false green.
 #   IOD-08  Ethernet outcome (only with carrier; no carrier = SKIP, never PASS)
 # Known-good values: hardware investigation, measured on two units, 2026-11-05.
 # Fail closed: an unreadable regmap / missing 140 line is a FAIL, not a skip.
@@ -63,14 +66,17 @@ else
   _msg=$(iod_regsum_verdict "$IOD_REGSUM"); _rc=$?
   show_verdict "IOD-05" "regulator_summary: io-domains consumers under the pinned supplies" "$_rc" "$_msg"
 
+  # IOD-07's capture is taken HERE, before IOD-06 reads pinconf-pins (that read
+  # floods the kernel ring buffer, Odoo #1961); it is the whole boot from the journal.
+  _dm=$(mktemp); _dmsrc=$(iod_klog_capture "$_dm") || _dmsrc=none
+
   _pc="$IOD_PINCONF"
   [ -n "$_pc" ] || _pc=$(ls /sys/kernel/debug/pinctrl/*/pinconf-pins 2>/dev/null | head -n1)
   _msg=$(iod_pinconf_verdict "${_pc:-/nonexistent}"); _rc=$?
   show_verdict "IOD-06" "pinconf: pins 83/84/86 = 12 mA, pin 82 = 2 mA" "$_rc" "$_msg"
 
-  _dm=$(mktemp); dmesg > "$_dm" 2>/dev/null
   _msg=$(iod_dmesg_verdict "$_dm"); _rc=$?; rm -f "$_dm"
-  show_verdict "IOD-07" "dmesg has no io-domain error strings" "$_rc" "$_msg"
+  show_verdict "IOD-07" "kernel log ($_dmsrc) reaches back to the boot and has no io-domain error strings" "$_rc" "$_msg"
 
   _e=${IOD_NETDIR:-/sys/class/net/eth0}
   if [ "$(cat "$_e/carrier" 2>/dev/null)" = 1 ]; then

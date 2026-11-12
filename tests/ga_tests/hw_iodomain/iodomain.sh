@@ -215,13 +215,30 @@ iod_pinconf_verdict() {
   return "$_bad"
 }
 
-# iod_dmesg_verdict <dmesg-text-file> — none of IOD_DMESG_BAD; an empty/unreadable
-# capture FAILS (an empty log proves nothing).
+# iod_klog_capture <out-file> — the kernel log of the WHOLE current boot (Odoo #1961).
+# The io-domain driver reports at boot; dmesg is a ring buffer, and reading
+# debugfs pinconf-pins (IOD-06) writes one "unsupported pinctrl" line per pin —
+# 4,349 on iHost-B rc13 (2026-11-12) — so after IOD-06 the buffer started at 420 s
+# and the boot was gone. The journal keeps the whole boot: prefer it; fall back to
+# dmesg only where there is no journal. Prints the source used; rc 1 = no capture.
+iod_klog_capture() {
+  if command -v journalctl >/dev/null 2>&1 && journalctl -k -b 0 --no-pager > "$1" 2>/dev/null && [ -s "$1" ]; then
+    echo journal; return 0
+  fi
+  dmesg > "$1" 2>/dev/null && [ -s "$1" ] && { echo dmesg; return 0; }
+  return 1
+}
+
+# iod_dmesg_verdict <kernel-log-file> — none of IOD_DMESG_BAD, AND the capture
+# reaches back to the boot ("Booting Linux" line). An empty/unreadable capture
+# FAILS, and so does one that does not start at the boot: a rotated ring buffer
+# with no error in it proves nothing about the boot (Odoo #1961).
 iod_dmesg_verdict() {
-  [ -s "$1" ] || { echo "dmesg capture empty or unreadable — nothing inspected"; return 1; }
+  [ -s "$1" ] || { echo "kernel log capture empty or unreadable — nothing inspected"; return 1; }
   _h=$(grep -E "$IOD_DMESG_BAD" "$1" | head -n3)
-  [ -z "$_h" ] && { echo "no io-domain error strings in dmesg"; return 0; }
-  printf '%s\n' "$_h"; return 1
+  [ -z "$_h" ] || { printf '%s\n' "$_h"; return 1; }
+  grep -q "Booting Linux" "$1" || { echo "kernel log does not reach back to the boot (no \"Booting Linux\" line — ring buffer rotated?): boot-time io-domain errors would be invisible"; return 1; }
+  echo "no io-domain error strings in the kernel log of the whole boot"; return 0
 }
 
 # iod_eth_verdict <speed> <duplex> <phy_id> <carrier_changes_before> <after> <rx_before> <rx_after>

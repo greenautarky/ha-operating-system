@@ -1,1 +1,2 @@
+[    0.000000] Booting Linux on physical CPU 0xf00
 [    1.0] rockchip-iodomain: Couldn't write to GRF
