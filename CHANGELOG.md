@@ -19,6 +19,15 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 - Known limit: the suite is meant for after a fresh boot. With a long uptime and a volatile journal, vacuuming can drop the `Booting Linux` line; IOD-07 then FAILS loudly (fail-closed, not a false green) — reboot, then run it.
 - Selftest 78 checks (ISO-70..75 new, ISO-31 now asserts the reason). Red: the old library fails ISO-70/73/74; coverage check removed → ISO-70/74; journal preference removed → ISO-73; capture removed from before IOD-06 → ISO-75. Live on the device (rotated dmesg): journal → IOD-07 PASS; journal unavailable → IOD-07 FAIL with the coverage message (the old suite passed there).
 
+## Unreleased (feat/1.6-haos18): BOSv1.6.0-rc14 pins (iHost) and BOSv1.6.0-dev10 (DSGW210)
+
+rc14 = rc13 plus:
+
+- Add-ons, store-lockstep (pins equal vibe_addons main; the rc13 drift holds for z2m and gm are removed): ga_zigbee2mqtt 2.12.1-11 -> 2.12.1-12 (store #342, TS0014 countdown converter), ga_manager 0.277.1 -> 0.277.3 (store #343), ga_default_addon 2.1.7 -> 2.3.1 (store #345). All other add-on pins re-checked against the store: unchanged and equal.
+- ga-frontend-bundle 1.23.9 -> 1.23.10 and ga-heating 0.14.2 -> 0.14.4 (OCI digest sha256:93cd2fc9d0c482cccd3661daaf36580ad0bffbd8eb1ebe85f75384ba94f2ee51). greenautarky-site stays 2.12.13 (no post-#87 tag approved).
+- Already on the line since rc13, no pin needed: #1065 (release evidence filed after generate_sbom), #1063 (verify-sd.sh --flash requires --vccio5), #1068 (hw_iodomain IOD-07 reads the whole boot).
+- Not included: #1058 (second RAUC slot), pending, decision at the freeze (depends on a device proof).
+
 ## Unreleased (feat/1.6-haos18): BOSv1.6.0-rc13 pins (iHost) and BOSv1.6.0-dev9 (DSGW210)
 
 rc13 = rc12 plus:
