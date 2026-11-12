@@ -19,6 +19,7 @@
 #   ENV-FE-14..21  board seed requirement (Odoo #1700): the DSGW board file (read LIVE)
 #              makes an absent/empty GA_FLEET_ENV a loud refusal, never prod; staging and
 #              explicit prod still enrol; the iHost (no board file) is unchanged
+#   ENV-RT-01..06  incomplete enrolment (no mesh IP / no creds) exits 1 so the unit retries (Odoo #2005)
 #   ENV-FE-11  with the key in NEITHER file the skip is LOUD and names the cause
 #
 # Needs sh, jq, coreutils. No device.
@@ -56,14 +57,28 @@ printf '%s\n' "$url" >> "${CURL_LOG}.url"
 if [ -n "${MOCK_REJECT_FLEET_ENV:-}" ] && printf '%s' "$payload" | grep -q '"fleet_env"'; then
   exit 22   # curl -f exit code on HTTP >=400 — an fm predating ADR-0027 D4 answers 422
 fi
-printf '{"status":"pending","provisional_id":"kibu-test","enroll_count":1,"registries":{"ghcr.io":{"username":"u","password":"p"}}}'
+if [ -n "${MOCK_NO_REGISTRIES:-}" ]; then
+  printf '{"status":"pending","provisional_id":"kibu-test","enroll_count":1}'
+else
+  printf '{"status":"pending","provisional_id":"kibu-test","enroll_count":1,"registries":{"ghcr.io":{"username":"u","password":"p"}}}'
+fi
 STUB
 chmod +x "$W/bin/curl"
+
+# stub ip: the CI runner has no wt0. Default = the device has a mesh address;
+# MOCK_WT0=none = wt0 has no address yet (Odoo #2005).
+cat > "$W/bin/ip" <<'STUB'
+#!/bin/sh
+[ "${MOCK_WT0:-100.126.1.2}" = none ] && exit 0
+echo "5: wt0    inet ${MOCK_WT0:-100.126.1.2}/32 scope global wt0\       valid_lft forever preferred_lft forever"
+STUB
+chmod +x "$W/bin/ip"
 
 # a baked conf: the real one, so the default really is "absent"
 run_enroll() {   # run_enroll <override-file-or-empty> <logname>
   _ovr="$1"; _log="$W/$2.log"; : > "$_log"; : > "$_log.url"
   CURL_LOG="$_log" PATH="$W/bin:$PATH" MOCK_REJECT_FLEET_ENV="${MOCK_REJECT_FLEET_ENV:-}" \
+  MOCK_NO_REGISTRIES="${MOCK_NO_REGISTRIES:-}" MOCK_WT0="${MOCK_WT0:-}" \
   GA_ENROLL_CONF_DEFAULT="$BAKED_CONF" GA_ENROLL_CONF_OVERRIDE="${_ovr:-$W/no-such-override}" \
   GA_ENROLL_CREDS_FILE="$W/ghcr-creds.json" GA_ENROLL_STATE_FILE="$W/share/ga-enroll-state.json" \
   GA_ENROLL_NB_ENV="$W/no-nb-env" GA_ENROLL_HA_UUID_STORE="$W/no-uuid" \
@@ -182,6 +197,32 @@ run_test "ENV-FE-20" "DSGW + EXPLICIT prod seed -> enrols as prod (the pilot pat
 run_enroll "" ihost-noseed
 run_test "ENV-FE-21" "iHost (no board file) + no seed -> prod exactly as before (must-pass, field behaviour)" \
   "[ \"\$(cat '$W/ihost-noseed.rc')\" = 0 ] && [ \"\$(jq -r .fleet_env '$W/ihost-noseed.log')\" = prod ] && [ ! -e '$W/share/ga-enroll-refused.json' ]"
+
+# --- ENV-RT-01..07: an INCOMPLETE enrolment must exit non-zero (Odoo #2005) ----
+# The unit is Type=oneshot + Restart=on-failure: only a non-zero exit retries.
+# Before the fix, "no wt0 address" and "no registries" were warnings + exit 0, so
+# a fresh device stalled until reboot. Bridge state must still be written.
+rm -f "$W/ghcr-creds.json" "$W/share/ga-enroll-state.json"
+MOCK_WT0=none run_enroll "" rt-noip
+run_test "ENV-RT-01" "wt0 has no address -> exit 1 (unit retries), not 0" \
+  "[ \"\$(cat '$W/rt-noip.rc')\" = 1 ] && grep -q 'incomplete (no-netbird-ip' '$W/rt-noip.out'"
+run_test "ENV-RT-02" "...but the enrol request and the bridge state were still made/written" \
+  "[ -s '$W/rt-noip.log' ] && [ \"\$(jq -r .netbird_ip '$W/rt-noip.log')\" = '' ] && [ -s '$W/share/ga-enroll-state.json' ]"
+rm -f "$W/ghcr-creds.json"
+MOCK_NO_REGISTRIES=1 run_enroll "" rt-noreg
+run_test "ENV-RT-03" "no registries in the response AND no creds file -> exit 1" \
+  "[ \"\$(cat '$W/rt-noreg.rc')\" = 1 ] && grep -q 'no-registries' '$W/rt-noreg.out'"
+printf '{"ghcr.io":{"username":"u","password":"old"}}\n' > "$W/ghcr-creds.json"
+MOCK_NO_REGISTRIES=1 run_enroll "" rt-noreg-have
+run_test "ENV-RT-04" "no registries but a creds file already exists -> exit 0 (must-pass, creds untouched)" \
+  "[ \"\$(cat '$W/rt-noreg-have.rc')\" = 0 ] && grep -q old '$W/ghcr-creds.json'"
+rm -f "$W/ghcr-creds.json"
+run_enroll "" rt-ok
+run_test "ENV-RT-05" "mesh IP present + registries delivered -> exit 0 and creds written (must-pass)" \
+  "[ \"\$(cat '$W/rt-ok.rc')\" = 0 ] && [ -s '$W/ghcr-creds.json' ] && [ \"\$(jq -r .netbird_ip '$W/rt-ok.log')\" = 100.126.1.2 ]"
+UNIT="$SCRIPT_DIR/../../../buildroot-external/rootfs-overlay/usr/lib/systemd/system/ga-enroll.service"
+run_test "ENV-RT-06" "unit (read LIVE): Restart=on-failure, RestartSec 1..300 s, no start-limit knobs that stop it for good" \
+  "grep -qx 'Restart=on-failure' '$UNIT' && s=\$(sed -n 's/^RestartSec=\\([0-9]*\\)s\$/\\1/p' '$UNIT') && [ -n \"\$s\" ] && [ \"\$s\" -ge 1 ] && [ \"\$s\" -le 300 ] && ! grep -qE '^StartLimit|^Restart=(no|always)' '$UNIT'"
 
 rm -rf "$W" 2>/dev/null
 suite_end

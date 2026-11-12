@@ -2,7 +2,7 @@
 Description=GA — Device self-enrollment with the fleet-manager (ADR-0010)
 # Enroll after the mesh is (potentially) up and /etc/hosts carries the
 # GA service entries — but neither is a hard Requires: the script copes
-# with a missing wt0 address (enrolls without it, refreshed next boot)
+# with a missing wt0 address (enrolls without it, then exits 1 so it retries)
 # and retries until the fleet-manager answers.
 After=network-online.target ga-netbird-register.service ga-update-hosts.service
 Wants=network-online.target
