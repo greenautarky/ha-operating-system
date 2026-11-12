@@ -12,6 +12,12 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## BOSv1.6.0 (iHost FINAL, feat/1.6-haos18)
+
+BOSv1.6.0 is exactly the tree of BOSv1.6.0-rc14 (commit abb36e1); only the release marker differs (`gaos_release`, `EXPECTED_GA_RELEASE`). Content = rc14 (see the next section): Supervisor 2026.10.5.3, Core 2026.10.4.4, HAOS 18.4, store sync (ga_zigbee2mqtt 2.12.1-12, ga_manager 0.277.3, ga_default_addon 2.3.1), ga-frontend-bundle 1.23.10, ga-heating 0.14.4. K31 fresh-flash gate on rc14: green with caveat (Odoo #1935).
+
+Known issues: #1962 first converge on fresh flash fails, self-heals via pairing / identity-backfill; fix in 1.6.1.
+
 ## Unreleased (feat/1.6-haos18): hw_iodomain IOD-07 reads the whole boot, not a flooded ring buffer (Odoo #1961)
 
 - IOD-07 ("no io-domain error strings") read `dmesg` AFTER IOD-06, and IOD-06's read of debugfs `pinconf-pins` writes one `unsupported pinctrl` kernel line per pin (4,349 on an iHost on BOSv1.6.0-rc13, 2026-11-12). The ring buffer then started at the moment the suite ran; boot-time io-domain errors could no longer be seen and IOD-07 stayed green — blind to the very error it exists for. (The PASS on that unit was still correct: the full kernel journal had 0 io-domain errors.)
