@@ -10,11 +10,11 @@
 #   --ethernet-force  After flashing, write /ga-ethernet-force onto hassos-boot so
 #                     provisioning runs over Ethernet. MUST be removed before the
 #                     device ships — see the block in the flash section.
-#   --flash      Flash image to SD card (DESTRUCTIVE). Always marks the card
-#                ga_vccio5=3v3 (Odoo #1900); an image without the vccio5 = 3.3 V
-#                DTB is a FAIL (no fresh flash may run the old 1.8 V setting).
-#   --allow-pre-1900-image  JUMP TESTS ONLY (norm N61): accept an image older than
-#                #1900; the card keeps the legacy 1.8 V setting (WARN, no key).
+#   --flash      Flash image to SD card (DESTRUCTIVE). Needs --vccio5.
+#   --vccio5 3v3|1v8  REQUIRED with --flash, no default (Odoo #1900/#1944): the
+#                Ethernet IO setting, written as ga_vccio5=<value> onto the card.
+#                3v3 = fresh unit (needs a #1900 image, older ones FAIL); 1v8 =
+#                explicit legacy (unit that only works at 1.8 V, jump test N61).
 #   --all        Run sha + diff + prompt for flash
 #   --device     SD card device (default: /dev/mmcblk0)
 #   --dry-run    Show what would be done without doing it
@@ -22,15 +22,12 @@
 # Examples:
 #   verify-sd.sh --sha image.img.xz
 #   verify-sd.sh --diff image.img.xz /dev/mmcblk0
-#   verify-sd.sh --flash image.img.xz /dev/mmcblk0
-#   verify-sd.sh --all image.img.xz
+#   verify-sd.sh --flash --vccio5 3v3 image.img.xz /dev/mmcblk0
+#   verify-sd.sh --all --vccio5 3v3 image.img.xz
 
 set -euo pipefail
 
-# ── Ensure root (needed for mount, dd, device access) ────────────────────────
-if [[ $EUID -ne 0 ]]; then
-  exec sudo "$0" "$@"
-fi
+ORIG_ARGS=("$@")   # the parser below shifts them away; the root re-exec needs them (Odoo #1944)
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -46,7 +43,7 @@ FAILURES=0
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 DO_SHA=false; DO_DIFF=false; DO_FLASH=false; DRY_RUN=false; ETH_FORCE=false
-ALLOW_PRE_1900=0
+VCCIO5=""   # REQUIRED with --flash, no default (Odoo #1944)
 IMAGE=""; DEVICE="/dev/mmcblk0"
 
 usage() {
@@ -62,7 +59,10 @@ while [[ $# -gt 0 ]]; do
     --diff)    DO_DIFF=true ;;
     --flash)   DO_FLASH=true ;;
     --ethernet-force) ETH_FORCE=true ;;
-    --allow-pre-1900-image) ALLOW_PRE_1900=1 ;;
+    --vccio5)
+      [[ $# -ge 2 && -n "${2:-}" && "${2:0:2}" != "--" ]] || { echo "Error: --vccio5 needs a value: 3v3|1v8"; exit 1; }
+      [[ -z "$VCCIO5" || "$VCCIO5" == "$2" ]] || { echo "Error: --vccio5 given twice with different values ($VCCIO5, $2)"; exit 1; }
+      VCCIO5="$2"; shift ;;
     --all)     DO_SHA=true; DO_DIFF=true; DO_FLASH=true ;;
     --device)  DEVICE="$2"; shift ;;
     --dry-run) DRY_RUN=true ;;
@@ -78,8 +78,28 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -z "$IMAGE" ]] && { echo "Error: no image file specified"; usage; }
+# vccio5: decided per flash, checked before anything is written (Odoo #1944).
+. "$(dirname "$0")/lib/vccio5-key.sh"
+_vcc_refusal="$(vcc_mode_verdict "$DO_FLASH" "$VCCIO5")"
+[[ -z "$_vcc_refusal" ]] || { echo "Error: $_vcc_refusal"; exit 1; }
 [[ ! -f "$IMAGE" ]] && { echo "Error: image not found: $IMAGE"; exit 1; }
 IMAGE="$(realpath "$IMAGE")"
+
+# ── argument-check-only hook for the gate (tests/gates/vccio5_key) ───────────
+# Everything above runs WITHOUT root, so the gate can drive the live parser and
+# the vccio5 verdict and stop here. It only ends the run earlier; it can never
+# make it do more.
+if [[ "${GA_VERIFY_SD_ARGCHECK_ONLY:-}" == 1 ]]; then
+  echo "ARGCHECK OK flash=$DO_FLASH vccio5=${VCCIO5:-none}"; exit 0
+fi
+
+# ── Ensure root (needed for mount, dd, device access) ────────────────────────
+# After the argument check (Odoo #1944): a call without the vccio5 choice is
+# refused before any password prompt and before anything is touched.
+if [[ $EUID -ne 0 ]]; then
+  exec sudo "$0" "${ORIG_ARGS[@]}"
+fi
+
 IMGBASE="${IMAGE%.xz}"; IMGBASE="${IMGBASE%.img}"
 
 echo -e "${BOLD}GA OS SD Card Verification${NC}"
@@ -239,14 +259,13 @@ if $DO_FLASH; then
       echo "${_flash_date},$(basename "$IMAGE"),${_flash_sha},${DEVICE},${DEVICE_MODEL},${DEVICE_GB},${_flash_operator}" >> "$FLASH_LOG"
       _info "Flash recorded in $FLASH_LOG"
 
-      # ── vccio5 = 3.3 V on every fresh flash (Odoo #1900, always on) ──────────
+      # ── vccio5: write the per-flash choice onto the card (Odoo #1900/#1944) ──
       # The iHost RMII/MDIO bank is physically 3.3 V (#1484). boot.scr loads the
       # 3.3 V DTB only for ga_vccio5=3v3 in haos-config.txt (device-owned, kept
-      # across OTA). Thomas 2026-11-11: no fresh flash may come out on 1.8 V, so
-      # an image without the 3.3 V DTB FAILS here (DO NOT USE the card) unless
-      # --allow-pre-1900-image (jump tests). Same contract as the flasher's
-      # seed-vccio5.sh; logic in scripts/lib/vccio5-key.sh (gate vccio5_key).
-      . "$(dirname "$0")/lib/vccio5-key.sh"
+      # across OTA). --vccio5 was required above; 1v8 is written explicitly too.
+      # 3v3 on an image without the 3.3 V DTB FAILS here (DO NOT USE the card).
+      # Same contract as the flasher's seed-vccio5.sh; logic in
+      # scripts/lib/vccio5-key.sh (gate vccio5_key).
       sudo partprobe "$DEVICE" 2>/dev/null || true
       _vcc_boot=""
       for _p in "${DEVICE}"*; do
@@ -255,16 +274,15 @@ if $DO_FLASH; then
       done
       _vcc_mnt="$(mktemp -d)"
       if [[ -z "$_vcc_boot" ]]; then
-        _fail "vccio5: no hassos-boot partition on $DEVICE — card NOT marked ga_vccio5=3v3, DO NOT USE IT"
+        _fail "vccio5: no hassos-boot partition on $DEVICE — card NOT marked ga_vccio5=$VCCIO5, DO NOT USE IT"
       elif ! sudo mount "$_vcc_boot" "$_vcc_mnt" 2>/dev/null; then
-        _fail "vccio5: could not mount $_vcc_boot — card NOT marked ga_vccio5=3v3, DO NOT USE IT"
+        _fail "vccio5: could not mount $_vcc_boot — card NOT marked ga_vccio5=$VCCIO5, DO NOT USE IT"
       else
-        _vcc_rc=0; _vcc_out="$(vcc_seed_dir "$_vcc_mnt" "$ALLOW_PRE_1900")" || _vcc_rc=$?   # set -e safe
+        _vcc_rc=0; _vcc_out="$(vcc_seed_dir "$_vcc_mnt" "$VCCIO5")" || _vcc_rc=$?   # set -e safe
         sudo sync
         case $_vcc_rc in
-          0) _pass "vccio5: ga_vccio5=3v3 set in haos-config.txt — the device boots the 3.3 V DTB" ;;
-          3) _warn "vccio5: --allow-pre-1900-image: pre-#1900 image, card left on the LEGACY 1.8 V setting (jump tests only)" ;;
-          *) _fail "${_vcc_out:-vccio5: marking failed} — DO NOT USE this card (or pass --allow-pre-1900-image for a jump test)" ;;
+          0) _pass "vccio5: ga_vccio5=$VCCIO5 set in haos-config.txt (chosen on the command line)" ;;
+          *) _fail "${_vcc_out:-vccio5: marking failed} — DO NOT USE this card" ;;
         esac
         sudo umount "$_vcc_mnt" 2>/dev/null || true
       fi

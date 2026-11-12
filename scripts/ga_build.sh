@@ -2966,7 +2966,7 @@ echo ""
 img_xz="$(ls "${OUT}/images/"*"${GA_BUILD_TIMESTAMP}"*.img.xz 2>/dev/null | head -n 1 || true)"
 if [[ -n "$img_xz" ]]; then
   echo "  To flash this image:"
-  echo "    ./scripts/verify-sd.sh --all $(basename "$img_xz")"
+  echo "    ./scripts/verify-sd.sh --all --vccio5 3v3|1v8 $(basename "$img_xz")   # vccio5: choose per flash, no default (Odoo #1944)"
 fi
 
 # Generate HTML build report
