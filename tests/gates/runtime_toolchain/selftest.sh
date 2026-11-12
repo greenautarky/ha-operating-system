@@ -16,7 +16,10 @@
 #              ::warning:: that says it would fail); look-alike paths (a doc file
 #              called cc1, a python module called 'as', libgcc_s / libstdc++)
 #   broken     (rc 2, in BOTH modes): zero tars; a corrupt tar; a missing layer
-#              blob; bad config (unknown mode, missing file, entry without ticket)
+#              blob; wrong-shaped manifest/index JSON (never a crash = rc 1);
+#              a multi-arch index without --arch; bad config (unknown mode,
+#              missing file, entry without ticket)
+#   arch       a multi-arch index is read for the board arch, not "first arm"
 #   wiring     ga_build.sh calls this script with the live policy and turns rc 1
 #              into a failed bake; the live policy parses.
 set -uo pipefail
@@ -54,7 +57,7 @@ run() {
     local name="$1" want="$2" c="$3" d="$4"; shift 4
     ran=$((ran + 1))
     local out rc
-    out="$(python3 "$GATE" --image-tars "$d" --config "$c" --today "$TODAY" 2>&1)"; rc=$?
+    out="$(python3 "$GATE" --image-tars "$d" --config "$c" --today "$TODAY" ${GATE_ARGS:-} 2>&1)"; rc=$?
     if [[ "$rc" != "$want" ]]; then bad "$name: rc=$rc, want $want"; printf '%s\n' "$out" | sed 's/^/        /' | tail -4; return; fi
     local g; for g in "$@"; do
         grep -qF -- "$g" <<<"$out" || { bad "$name: rc ok but output lacks '$g'"; printf '%s\n' "$out" | sed 's/^/        /' | tail -4; return; }
@@ -130,6 +133,32 @@ PY
 run "layer blob missing (report)" 2 "$REP" "$d" "BROKEN" "not in the tar"
 run "unknown mode" 2 "$(cfg warn)" "$WORK/p1" "BROKEN" "mode must be"
 run "missing config" 2 "$WORK/nope.cfg" "$WORK/p1" "BROKEN" "not found"
+# Wrong-shaped but valid JSON must be BROKEN (2), never a crash that exits 1 and
+# reads as "ships a build toolchain" (Manager review 2026-11-12, repro: [1]).
+for _shape in 'docker-manifest=[1]' 'docker-manifest=[{"Layers": 5}]' 'docker-manifest={}' 'oci-index={"manifests": [1]}' 'oci-index=[]'; do
+  d="$WORK/shape.$RANDOM"; img "$d" a.tar ghcr.io/x/img-armv7:1 "$_shape"
+  run "wrong-shaped manifest is BROKEN, not 1 (${_shape})" 2 "$REP" "$d" "BROKEN"
+done
+# An unexpected exception inside one tar (index.json that is not JSON) is
+# caught PER TAR and names the tar — the first of two backstops.
+d="$WORK/notjson"; img "$d" a.tar ghcr.io/x/img-armv7:1 'oci-index={not json'
+run "unexpected exception in a tar is BROKEN and names the tar" 2 "$REP" "$d" "BROKEN" "a.tar: JSONDecodeError"
+# The second backstop: guarded_main turns ANY escaped exception into rc 2.
+ran=$((ran + 1))
+_gm="$(python3 - "$GATE" <<'PY' 2>&1
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1]); g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+def boom(): raise KeyError("escaped")
+g.main = boom
+rc = g.guarded_main(); print("RC", rc)
+PY
+)"
+if grep -q "^RC 2$" <<<"$_gm" && grep -q "BROKEN: unexpected KeyError" <<<"$_gm"; then ok "guarded_main: an escaped exception is rc 2 + loud ::error::"
+else bad "guarded_main does not turn an escaped exception into rc 2: $(tail -2 <<<"$_gm")"; fi
+d="$WORK/ma"; img "$d" a.tar ghcr.io/x/img:1 oci-multiarch "$CLEAN_BASE" "usr/libexec/gcc/x/14/cc1"
+GATE_ARGS="--arch armv7" run "multi-arch index: --arch armv7 reads the arm/v7 image" 1 "$ENF" "$d" "(gcc;"
+GATE_ARGS="--arch aarch64" run "multi-arch index: --arch aarch64 reads the arm64 image, not 'first arm'" 0 "$ENF" "$d" "0 with a build toolchain"
+run "multi-arch index without --arch is BROKEN" 2 "$REP" "$d" "BROKEN" "multi-arch"
 run "allow entry without ticket" 2 "$(cfg enforce 'allow home-assistant-armv7 2026-12-31 fixture-no-ticket')" "$WORK/p1" "BROKEN" "ticket"
 
 echo "=== runtime toolchain gate: live policy + ga_build.sh wiring ==="
@@ -149,19 +178,25 @@ if [[ -n "$_block" ]] && grep -qE 'check-runtime-toolchain\.py"? +--image-tars' 
 else
   bad "ga_build.sh has no 11c block calling check-runtime-toolchain.py --image-tars with .runtime-toolchain-gate (the gate would be unreachable)"
 fi
-wire() { # wire NAME STUB_RC WANT_RC
+wire() { # wire NAME STUB_RC WANT_RC MUST_SAY [MUST_NOT_SAY]
   ran=$((ran + 1))
   local w="$WORK/wire.$2"; mkdir -p "$w/repo/scripts" "$w/out/build/hassio-1.0.0/images" "$w/out/images/reports"
-  printf '#!/usr/bin/env python3\nimport sys; print("stub gate rc %s"); sys.exit(%s)\n' "$2" "$2" > "$w/repo/scripts/check-runtime-toolchain.py"
+  printf 'BR2_PACKAGE_HASSIO_ARCH="aarch64"\n' > "$w/out/.config"
+  printf '#!/usr/bin/env python3\nimport sys; print("stub gate argv", " ".join(sys.argv[1:])); sys.exit(%s)\n' "$2" > "$w/repo/scripts/check-runtime-toolchain.py"
   local rc
   ( set -e; OUT="$w/out"; SCRIPT_DIR="$w/repo/scripts"; MODE=full; BOARD=fixture; eval "$_block" ) >"$w/log" 2>&1; rc=$?
-  if [[ "$rc" == "$3" ]]; then ok "$1"; else bad "$1: bake rc=$rc, want $3"; sed 's/^/        /' "$w/log" | tail -3; fi
+  if [[ "$rc" != "$3" ]]; then bad "$1: bake rc=$rc, want $3"; sed 's/^/        /' "$w/log" | tail -3; return; fi
+  if ! grep -qF -- "$4" "$w/log"; then bad "$1: bake log lacks '$4'"; sed 's/^/        /' "$w/log" | tail -3; return; fi
+  if [[ -n "${5:-}" ]] && grep -qF -- "$5" "$w/log"; then bad "$1: bake log says '$5' (wrong branch)"; return; fi
+  ok "$1"
 }
-wire "bake continues when the gate passes (rc 0)" 0 0
-wire "bake aborts when the gate blocks (rc 1)" 1 1
-wire "bake aborts when the gate is broken (rc 2)" 2 1
+# rc 1 and rc 2 must take DIFFERENT branches: a crash must never read as
+# "ships a build toolchain" (mutation "-eq 1 branch neutered" survived before).
+wire "bake continues when the gate passes (rc 0), board arch passed on" 0 0 "--arch aarch64"
+wire "bake aborts with the TOOLCHAIN message on rc 1" 1 1 "ships a build toolchain that no allowlist entry covers" "is BROKEN"
+wire "bake aborts with the BROKEN message on rc 2" 2 1 "runtime toolchain gate is BROKEN" "ships a build toolchain that no allowlist entry covers"
 
 echo
 echo "runtime toolchain gate selftest: ${ran} checks, ${fails} failed"
-[[ "$ran" -ge 31 ]] || { echo "FATAL: only ${ran} checks ran — the selftest lost coverage"; exit 2; }
+[[ "$ran" -ge 41 ]] || { echo "FATAL: only ${ran} checks ran — the selftest lost coverage"; exit 2; }
 [[ "$fails" -eq 0 ]]

@@ -40,9 +40,12 @@
 # ----------
 #   0  nothing blocking (or mode=report)
 #   1  mode=enforce and a toolchain is not allowlisted, or its entry expired
-#   2  BROKEN — unreadable tar, no manifest, zero images, bad config. Always
-#      fatal, in BOTH modes: an image that was not inspected must not ship as
-#      inspected.
+#   2  BROKEN — unreadable tar, no or wrong-shaped manifest, zero images, bad
+#      config, or ANY unexpected exception. Always fatal, in BOTH modes: an
+#      image that was not inspected must not ship as inspected. Exit 1 means
+#      exactly one thing — a toolchain finding in enforce mode — so a crash can
+#      never be read as "ships a build toolchain" (Manager review, 2026-11-12:
+#      a manifest.json of `[1]` raised AttributeError and exited 1).
 import argparse
 import datetime
 import io
@@ -54,7 +57,6 @@ import posixpath
 import re
 import sys
 import tarfile
-import zlib
 
 # (category, regex on the path inside the image, no leading slash)
 TOOLCHAIN_RULES = [
@@ -162,21 +164,56 @@ def _blob(tf, digest):
         raise Broken(f"blob {digest} named by the manifest is not in the tar")
 
 
-def _pick_manifest(tf, desc, depth=0):
+# Board arch (BR2_PACKAGE_HASSIO_ARCH) -> OCI platform (architecture, variant)
+ARCH_PLATFORM = {"armv7": ("arm", "v7"), "armhf": ("arm", "v6"), "aarch64": ("arm64", None),
+                 "amd64": ("amd64", None), "i386": ("386", None)}
+
+
+def _desc(d, what):
+    if not isinstance(d, dict) or not isinstance(d.get("digest"), str) or ":" not in d["digest"]:
+        raise Broken(f"{what}: descriptor is not an object with a digest")
+    return d
+
+
+def _platform_ok(desc, arch):
+    plat = desc.get("platform")
+    if not arch or not isinstance(plat, dict):
+        return True
+    want_a, want_v = ARCH_PLATFORM[arch]
+    if plat.get("architecture") != want_a:
+        return False
+    return want_v is None or plat.get("variant", want_v) == want_v
+
+
+def _pick_manifest(tf, desc, arch, depth=0):
     if depth > 3:
         raise Broken("image index nested deeper than 3")
-    data = json.loads(_blob(tf, desc["digest"]))
+    data = json.loads(_blob(tf, _desc(desc, "index entry")["digest"]))
+    if not isinstance(data, dict):
+        raise Broken("manifest blob is not a JSON object")
     if desc.get("mediaType") in OCI_INDEX or data.get("mediaType") in OCI_INDEX or "manifests" in data:
-        ms = data.get("manifests") or []
-        arm = [m for m in ms if (m.get("platform") or {}).get("architecture") == "arm"]
-        if not (arm or ms):
+        ms = data.get("manifests")
+        if not isinstance(ms, list) or not ms:
             raise Broken("image index lists no manifest")
-        return _pick_manifest(tf, (arm or ms)[0], depth + 1)
+        ms = [_desc(m, "image index") for m in ms]
+        if len(ms) == 1:
+            pick = ms
+        elif not arch:
+            raise Broken(f"multi-arch image index ({len(ms)} manifests) and no --arch to choose one")
+        else:
+            pick = [m for m in ms if isinstance(m.get("platform"), dict) and _platform_ok(m, arch)]
+            if len(pick) != 1:
+                raise Broken(f"multi-arch image index: {len(pick)} manifests match --arch {arch} (need exactly 1)")
+        if not _platform_ok(pick[0], arch):
+            raise Broken(f"the only manifest is for {pick[0].get('platform')}, not --arch {arch}")
+        return _pick_manifest(tf, pick[0], arch, depth + 1)
     return data
 
 
-def read_image(path):
-    """Return (name, [layer-bytes-reader factories]) for an OCI or docker-archive tar."""
+def read_image(path, arch=None):
+    """Return (tarfile, ref name, [layer member names]) for an OCI or docker-archive tar.
+
+    Every JSON shape is checked; a wrong shape is Broken, never an exception."""
     try:
         tf = tarfile.open(path, "r:")
     except (tarfile.TarError, OSError) as e:
@@ -184,18 +221,26 @@ def read_image(path):
     names = set(tf.getnames())
     if "index.json" in names:
         idx = json.loads(tf.extractfile("index.json").read())
-        ms = idx.get("manifests") or []
-        if not ms:
+        ms = idx.get("manifests") if isinstance(idx, dict) else None
+        if not isinstance(ms, list) or not ms:
             raise Broken("index.json lists no manifest")
-        name = (ms[0].get("annotations") or {}).get("org.opencontainers.image.ref.name", "")
-        man = _pick_manifest(tf, ms[0])
-        layers = [("blobs/" + l["digest"].replace(":", "/", 1)) for l in man.get("layers", [])]
+        top = _desc(ms[0], "index.json")
+        ann = top.get("annotations") if isinstance(top.get("annotations"), dict) else {}
+        name = ann.get("org.opencontainers.image.ref.name", "")
+        man = _pick_manifest(tf, top, arch)
+        lay = man.get("layers")
+        if not isinstance(lay, list):
+            raise Broken("manifest has no layers list")
+        layers = ["blobs/" + _desc(l, "manifest layer")["digest"].replace(":", "/", 1) for l in lay]
     elif "manifest.json" in names:
         man = json.loads(tf.extractfile("manifest.json").read())
-        if not man:
-            raise Broken("manifest.json is empty")
-        name = (man[0].get("RepoTags") or [""])[0]
-        layers = list(man[0].get("Layers") or [])
+        if not isinstance(man, list) or not man or not isinstance(man[0], dict):
+            raise Broken("manifest.json is not a non-empty list of objects")
+        tags = man[0].get("RepoTags")
+        name = tags[0] if isinstance(tags, list) and tags and isinstance(tags[0], str) else ""
+        layers = man[0].get("Layers")
+        if not isinstance(layers, list) or not all(isinstance(x, str) for x in layers):
+            raise Broken("manifest.json Layers is not a list of paths")
     else:
         raise Broken("neither index.json (OCI) nor manifest.json (docker-archive) in the tar")
     if not layers:
@@ -212,8 +257,8 @@ def image_key(ref_name, path):
     return os.path.basename(path), "filename"
 
 
-def scan_image(path):
-    tf, ref, layers = read_image(path)
+def scan_image(path, arch=None):
+    tf, ref, layers = read_image(path, arch)
     present = {}  # path -> size (regular files and links)
     for lname in layers:
         try:
@@ -309,6 +354,8 @@ def main():
     ap.add_argument("--image-tars", required=True, help="directory with the baked image tars")
     ap.add_argument("--config", required=True, help=".runtime-toolchain-gate")
     ap.add_argument("--summary-json", help="write a machine-readable summary here")
+    ap.add_argument("--arch", choices=sorted(ARCH_PLATFORM),
+                    help="board arch (BR2_PACKAGE_HASSIO_ARCH); picks the manifest of a multi-arch index")
     ap.add_argument("--today", help="YYYY-MM-DD; tests only")
     a = ap.parse_args()
     try:
@@ -322,10 +369,10 @@ def main():
         results = []
         for t in tars:
             try:
-                ref, found, tbytes, nfiles = scan_image(os.path.join(a.image_tars, t))
+                ref, found, tbytes, nfiles = scan_image(os.path.join(a.image_tars, t), a.arch)
             except Broken as e:
                 raise Broken(f"{t}: {e}")
-            except (OSError, EOFError, ValueError, zlib.error, tarfile.TarError, json.JSONDecodeError) as e:
+            except Exception as e:  # noqa: BLE001 — ANY failure to inspect is BROKEN (exit 2), never exit 1
                 raise Broken(f"{t}: {type(e).__name__}: {e}")
             if nfiles == 0:
                 raise Broken(f"{t}: zero files after applying the layers")
@@ -388,5 +435,17 @@ def main():
     return 1 if blocking else 0
 
 
+def guarded_main():
+    """Exit 1 is reserved for an enforce-mode finding; anything else that goes wrong is 2."""
+    try:
+        return main()
+    except SystemExit as e:  # argparse usage errors exit 2 already; keep any explicit code
+        return e.code if isinstance(e.code, int) else 2
+    except Exception as e:  # noqa: BLE001
+        print(f"::error::runtime toolchain gate BROKEN: unexpected {type(e).__name__}: {e}")
+        print("Runtime toolchain gate: BROKEN — the baked images were NOT inspected")
+        return 2
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(guarded_main())

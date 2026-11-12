@@ -2861,9 +2861,11 @@ _tc_report="${OUT}/images/reports/runtime-toolchain.txt"
 if [[ -n "$_tc_dir" && -d "$_tc_dir" ]]; then
   echo ""
   echo "Checking the baked container images for a build toolchain..."
+  # The board arch picks the manifest if a tar ever holds a multi-arch index.
+  _tc_arch="$(sed -n 's/^BR2_PACKAGE_HASSIO_ARCH="\(.*\)"$/\1/p' "${OUT}/.config" 2>/dev/null | head -n 1)"
   set +e
   python3 "${SCRIPT_DIR:-/build/scripts}/check-runtime-toolchain.py" --image-tars "$_tc_dir" \
-    --config "${SCRIPT_DIR%/scripts}/.runtime-toolchain-gate" \
+    --config "${SCRIPT_DIR%/scripts}/.runtime-toolchain-gate" ${_tc_arch:+--arch "$_tc_arch"} \
     --summary-json "${OUT}/images/reports/runtime-toolchain.json" 2>&1 | tee "$_tc_report"
   _tc_rc=${PIPESTATUS[0]}
   set -e
