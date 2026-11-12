@@ -12,6 +12,39 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## BOSv1.6.0 (iHost FINAL, feat/1.6-haos18)
+
+BOSv1.6.0 is exactly the tree of BOSv1.6.0-rc14 (commit abb36e1); only the release marker differs (`gaos_release`, `EXPECTED_GA_RELEASE`). Content = rc14 (see the next section): Supervisor 2026.10.5.3, Core 2026.10.4.4, HAOS 18.4, store sync (ga_zigbee2mqtt 2.12.1-12, ga_manager 0.277.3, ga_default_addon 2.3.1), ga-frontend-bundle 1.23.10, ga-heating 0.14.4. K31 fresh-flash gate on rc14: green with caveat (Odoo #1935).
+
+Known issues: #1962 first converge on fresh flash fails, self-heals via pairing / identity-backfill; fix in 1.6.1.
+
+### Release set (N62)
+
+Versions read from the tree (`version.yaml`, `buildroot-external/package/hassio/addon-images.json`, `buildroot-ihost/configs/ga_ihost_full_defconfig`, `tests/ga_tests/os_integrity/expected.env`) at BOSv1.6.0 = rc14 tree. "no changelog" = none exists / none linked.
+
+| Artifact | Version | Changelog / release |
+|---|---|---|
+| HAOS base (image `bos_ihost-18.4.1.6_prod_*`) | 18.4 (HAOS fork; `haos` submodule @ 4a7dab4) | no changelog (upstream: https://github.com/home-assistant/operating-system/releases) |
+| Linux kernel (`ga_ihost_full_defconfig`) | 6.12.115 | no changelog |
+| OpenSSL (pinned buildroot, `expected.env`) | 3.5.9 | no changelog |
+| Supervisor (GA fork) | 2026.10.5.3 | no changelog |
+| Home Assistant Core (GA build) | 2026.10.4.4 | no changelog |
+| Plugins dns / cli / audio / observer / multicast (`expected.env`) | 2026.09.1 / 2025.10.2 / 2025.08.1 / 2025.02.1 / 2025.08.1 | no changelog |
+| Add-on ga_manager | 0.277.3 | https://github.com/greenautarky/vibe_addons/blob/main/ga_manager/CHANGELOG.md |
+| Add-on ga_zigbee2mqtt | 2.12.1-12 | no changelog |
+| Add-on ga_default_addon | 2.3.1 | https://github.com/greenautarky/vibe_addons/blob/main/ga_default_addon/CHANGELOG.md |
+| Add-on ga_hmvapp_addon | 2.6.3 | https://github.com/greenautarky/vibe_addons/blob/main/ga_hmvapp_addon/CHANGELOG.md |
+| Add-on mosquitto (ga_mosquitto) | 7.2.6 | https://github.com/greenautarky/vibe_addons/blob/main/mosquitto/CHANGELOG.md |
+| Add-on ga_influxdbv1 | 0.0.22 | no changelog |
+| Add-on ga_ihosthardwarecontrol | 1.2.2 | no changelog |
+| Add-on sonoff_dongle_flasher (ga_dongle_flasher) | 1.3.8 | https://github.com/greenautarky/vibe_addons/blob/main/hassio-ihost-sonoff-dongle-flasher/CHANGELOG.md |
+| ga-frontend-bundle | 1.23.10 | https://github.com/greenautarky/ga-frontend-bundle/blob/main/CHANGELOG.md |
+| ga-heating | 0.14.4 | https://github.com/greenautarky/ga-heating/blob/main/CHANGELOG.md |
+| greenautarky-site (HA integration) | 2.12.13 | no changelog |
+| greenautarky-telemetry | 0.2.4 | https://github.com/greenautarky/greenautarky-telemetry/blob/main/CHANGELOG.md |
+| ga-bootstrap (rootfs overlay) | 1.2.15 | https://github.com/greenautarky/ga-bootstrap/blob/main/CHANGELOG.md |
+| ga-telemetry-config (rootfs overlay) | 1.1.1 | https://github.com/greenautarky/ga-telemetry-config/blob/main/CHANGELOG.md |
+
 ## Unreleased (feat/1.6-haos18): hw_iodomain IOD-07 reads the whole boot, not a flooded ring buffer (Odoo #1961)
 
 - IOD-07 ("no io-domain error strings") read `dmesg` AFTER IOD-06, and IOD-06's read of debugfs `pinconf-pins` writes one `unsupported pinctrl` kernel line per pin (4,349 on an iHost on BOSv1.6.0-rc13, 2026-11-12). The ring buffer then started at the moment the suite ran; boot-time io-domain errors could no longer be seen and IOD-07 stayed green — blind to the very error it exists for. (The PASS on that unit was still correct: the full kernel journal had 0 io-domain errors.)
