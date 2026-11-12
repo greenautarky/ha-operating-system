@@ -5,7 +5,8 @@
 #              other lines kept; a stale line replaced; a missing file created;
 #              1v8 writes an explicit line on ANY image (old or new)
 #   must-flag  3v3 on a pre-#1900 image; no mode / a wrong mode (NO default);
-#              --flash without --vccio5 (vcc_mode_verdict)
+#              --flash without --vccio5 (vcc_mode_verdict), and LIVE through
+#              verify-sd.sh's parser (no root: argcheck hook + a fake sudo)
 # and checks that verify-sd.sh refuses BEFORE its first dd and calls the seed
 # set -e safe. FAILS if the library or its functions cannot be found (never skips).
 set -u
@@ -76,6 +77,28 @@ if [ -n "$vline" ] && [ -n "$eline" ] && [ -n "$dline" ] && [ "$vline" -lt "$eli
 else bad "verify-sd.sh: --vccio5 check missing or not before the first dd (verdict=$vline exit=$eline dd=$dline)"; fi
 grep -q 'vcc_seed_dir "$_vcc_mnt" "$VCCIO5"' "$VSD" && ok "verify-sd.sh seeds the CHOSEN mode" || bad "verify-sd.sh does not pass \$VCCIO5 to vcc_seed_dir"
 grep -q 'allow-pre-1900' "$VSD" && bad "verify-sd.sh still knows the retired --allow-pre-1900-image" || ok "--allow-pre-1900-image is retired"
+
+# ── verify-sd.sh LIVE, without root (review #1063): the real parser + verdict run
+# before the root re-exec; GA_VERIFY_SD_ARGCHECK_ONLY=1 stops right after them. A
+# fake sudo on PATH records a call and fails: if a mutation lets a call through to
+# the root part, the case goes red instead of flashing anything.
+mkdir "$T/fb"; printf '#!/bin/sh\necho FAKE-SUDO-REACHED >> "%s/sudo.log"; exit 97\n' "$T" > "$T/fb/sudo"; chmod +x "$T/fb/sudo"
+: > "$T/x.img"
+vsd() {  # $1 = expected rc, $2 = expected text, rest = args
+  _rc=$1; _txt=$2; shift 2; : > "$T/sudo.log"
+  _out=$(PATH="$T/fb:$PATH" GA_VERIFY_SD_ARGCHECK_ONLY=1 bash "$VSD" "$@" 2>&1); _got=$?
+  if [ "$_got" = "$_rc" ] && printf '%s' "$_out" | grep -qF -- "$_txt" && [ ! -s "$T/sudo.log" ]; then ok "verify-sd.sh $* -> rc $_rc, '$_txt'"
+  else bad "verify-sd.sh $* -> rc $_got (want $_rc), sudo reached: $(cat "$T/sudo.log" | head -1), out: $(printf '%s' "$_out" | tail -1)"; fi
+}
+vsd 1 "--vccio5 3v3|1v8 is required"            --flash "$T/x.img"
+vsd 1 "--vccio5 3v3|1v8 is required"            --all "$T/x.img"
+vsd 1 "is not 3v3|1v8"                          --flash --vccio5 3.3 "$T/x.img"
+vsd 1 "--vccio5 needs a value"                  --flash --vccio5
+vsd 1 "given twice with different values"       --flash --vccio5 3v3 --vccio5 1v8 "$T/x.img"
+vsd 1 "Unknown argument"                        --flash --vccio5 3v3 --allow-pre-1900-image "$T/x.img"
+vsd 0 "ARGCHECK OK flash=true vccio5=3v3"       --flash --vccio5 3v3 "$T/x.img"
+vsd 0 "ARGCHECK OK flash=true vccio5=1v8"       --flash --vccio5 1v8 --vccio5 1v8 "$T/x.img"
+vsd 0 "ARGCHECK OK flash=false vccio5=none"     --sha "$T/x.img"
 
 # verify-sd.sh runs under set -euo pipefail: a plain `x="$(vcc_seed_dir ..)"; rc=$?`
 # would abort the script SILENTLY on a refused image (measured 2026-11-11). The

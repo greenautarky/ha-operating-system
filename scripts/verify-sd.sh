@@ -27,10 +27,7 @@
 
 set -euo pipefail
 
-# ── Ensure root (needed for mount, dd, device access) ────────────────────────
-if [[ $EUID -ne 0 ]]; then
-  exec sudo "$0" "$@"
-fi
+ORIG_ARGS=("$@")   # the parser below shifts them away; the root re-exec needs them (Odoo #1944)
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -64,6 +61,7 @@ while [[ $# -gt 0 ]]; do
     --ethernet-force) ETH_FORCE=true ;;
     --vccio5)
       [[ $# -ge 2 && -n "${2:-}" && "${2:0:2}" != "--" ]] || { echo "Error: --vccio5 needs a value: 3v3|1v8"; exit 1; }
+      [[ -z "$VCCIO5" || "$VCCIO5" == "$2" ]] || { echo "Error: --vccio5 given twice with different values ($VCCIO5, $2)"; exit 1; }
       VCCIO5="$2"; shift ;;
     --all)     DO_SHA=true; DO_DIFF=true; DO_FLASH=true ;;
     --device)  DEVICE="$2"; shift ;;
@@ -86,6 +84,22 @@ _vcc_refusal="$(vcc_mode_verdict "$DO_FLASH" "$VCCIO5")"
 [[ -z "$_vcc_refusal" ]] || { echo "Error: $_vcc_refusal"; exit 1; }
 [[ ! -f "$IMAGE" ]] && { echo "Error: image not found: $IMAGE"; exit 1; }
 IMAGE="$(realpath "$IMAGE")"
+
+# ── argument-check-only hook for the gate (tests/gates/vccio5_key) ───────────
+# Everything above runs WITHOUT root, so the gate can drive the live parser and
+# the vccio5 verdict and stop here. It only ends the run earlier; it can never
+# make it do more.
+if [[ "${GA_VERIFY_SD_ARGCHECK_ONLY:-}" == 1 ]]; then
+  echo "ARGCHECK OK flash=$DO_FLASH vccio5=${VCCIO5:-none}"; exit 0
+fi
+
+# ── Ensure root (needed for mount, dd, device access) ────────────────────────
+# After the argument check (Odoo #1944): a call without the vccio5 choice is
+# refused before any password prompt and before anything is touched.
+if [[ $EUID -ne 0 ]]; then
+  exec sudo "$0" "${ORIG_ARGS[@]}"
+fi
+
 IMGBASE="${IMAGE%.xz}"; IMGBASE="${IMGBASE%.img}"
 
 echo -e "${BOLD}GA OS SD Card Verification${NC}"
