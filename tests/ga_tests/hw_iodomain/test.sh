@@ -17,6 +17,9 @@
 #   IOD-05  regulator_summary: io-domains-vccio5 under vcc_1v8, vccio3/4/6 under vcc_3v3
 #   IOD-06  pinconf: gpio2 pins 83/84/86 = 12 mA, pin 82 = 2 mA (both modes, REAL captures)
 #   IOD-07  kernel log of the WHOLE boot (journal; captured before IOD-06) free of io-domain errors
+#           Known limit (Odoo #1961): run it after a FRESH boot. On a long uptime with a
+#           volatile journal, vacuuming can drop the boot lines; IOD-07 then FAILS loudly
+#           ("does not reach back to the boot") — fail-closed, never a false green.
 #   IOD-08  Ethernet outcome (only with carrier; no carrier = SKIP, never PASS)
 # Known-good values: hardware investigation, measured on two units, 2026-11-05.
 # Fail closed: an unreadable regmap / missing 140 line is a FAIL, not a skip.
