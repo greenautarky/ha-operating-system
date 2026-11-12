@@ -1168,6 +1168,13 @@ jobs:
       - name: Baked add-on images (a pin that is not in the image must go red)
         run: ./tests/gates/baked_addon_images/selftest.sh
 
+      # Odoo #1975 (ADR-0044 §2.2, Amendment 2026-11-12): no baked container
+      # ships a build toolchain. Synthetic image tars in the bake's layouts
+      # (OCI incl. the rc13 Core's zstd empty layer, docker-archive), the live
+      # policy file, and the REAL 11c block of ga_build.sh run with a stub gate.
+      - name: Runtime toolchain gate (a compiler in a baked container must go red)
+        run: ./tests/gates/runtime_toolchain/selftest.sh
+
       # BOSv1.6.0-rc4 baked the Core image config without variant v7 (an old skopeo in the
       # download-cache path dropped it); the Supervisor re-pulled the Core on first boot
       # (Odoo #1637). Every baked image must declare the board's os/arch/variant; the real rc4

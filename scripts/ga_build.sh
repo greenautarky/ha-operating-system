@@ -2849,6 +2849,37 @@ else
   exit 1
 fi
 
+# 11c) No baked container ships a build toolchain (Odoo #1975; ADR-0044 §2.2 and
+# its Amendment 2026-11-12). Same image tars as 11b. The policy file holds the
+# mode (report on the 1.6 line: loud ::warning:: + summary row, the bake stays
+# green; enforce from BOSv1.7) and the time-boxed allowlist (Core #1965, hmvapp
+# #1969). rc 2 = the gate could not inspect the images, fatal in both modes: an
+# image that was not inspected must not ship as inspected.
+# Self-test: tests/gates/runtime_toolchain/selftest.sh (lint.yml).
+_tc_dir="$(ls -d "${OUT}/build/hassio-"*/images 2>/dev/null | head -n 1 || true)"
+_tc_report="${OUT}/images/reports/runtime-toolchain.txt"
+if [[ -n "$_tc_dir" && -d "$_tc_dir" ]]; then
+  echo ""
+  echo "Checking the baked container images for a build toolchain..."
+  set +e
+  python3 "${SCRIPT_DIR:-/build/scripts}/check-runtime-toolchain.py" --image-tars "$_tc_dir" \
+    --config "${SCRIPT_DIR%/scripts}/.runtime-toolchain-gate" \
+    --summary-json "${OUT}/images/reports/runtime-toolchain.json" 2>&1 | tee "$_tc_report"
+  _tc_rc=${PIPESTATUS[0]}
+  set -e
+  if [[ "$_tc_rc" -eq 1 ]]; then
+    echo "ERROR: a baked container ships a build toolchain that no allowlist entry covers (or its entry expired) — refusing to build the image"
+    echo "       Build it in a builder stage, or add a time-boxed entry with a ticket to .runtime-toolchain-gate. See ${_tc_report}"
+    exit 1
+  elif [[ "$_tc_rc" -ne 0 ]]; then
+    echo "ERROR: the runtime toolchain gate is BROKEN (exit ${_tc_rc}) — uninspected images must not ship as inspected"
+    exit 1
+  fi
+else
+  echo "NOTICE: no baked container images under ${OUT}/build/hassio-*/images — the runtime toolchain gate did NOT run (MODE=${MODE:-full}, board ${BOARD:-?})" \
+    | tee "$_tc_report"
+fi
+
 # Post-build integrity checks
 log_build_step "Build integrity checks"
 verify_build_integrity

@@ -1,0 +1,18 @@
+# Runtime toolchain gate — policy for scripts/check-runtime-toolchain.py
+# (Odoo #1975; ADR-0044 §2.2 + Amendment 2026-11-12).
+#
+# mode report   findings are ::warning:: lines and a summary row; the bake stays
+#               green. The 1.6 line runs in this mode (Manager, 2026-11-12).
+# mode enforce  an unallowlisted toolchain, or an expired entry that still
+#               matches, aborts the bake. Switch here as the first BOSv1.7 item,
+#               after one real rc bake reported exactly the two entries below.
+#
+# allow <image> <until YYYY-MM-DD> <#odoo-ticket> <reason>
+#   <image> = the repository's last path segment (e.g. home-assistant-armv7),
+#   exact match. Every entry is time-boxed and names the ticket that removes it.
+#   An expired entry that still matches FAILS in enforce mode, as a lapsed
+#   add-on pin hold does.
+mode report
+
+allow home-assistant-armv7  2026-12-31 #1965 Core still builds its residual no-wheel deps in the runtime image (ga-core-armv7 base, INTERIM); multi-stage + armv7 wheels is BOSv1.7 work
+allow ga_hmvapp_addon-armv7 2026-12-31 #1969 cmake/make/gcc/g++/musl-dev/linux-headers left over from a commented-out xgboost install
