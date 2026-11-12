@@ -46,8 +46,12 @@
 #
 # RETRY BEHAVIOR
 # --------------
-# Exit 1 on any transient failure (fleet unreachable, 5xx, no mesh IP
-# yet); the unit retries every 60 s until enrollment succeeds.
+# Exit 1 on any transient failure (fleet unreachable, 5xx) and on an
+# INCOMPLETE enrolment (no mesh IP yet, or no registry credential delivered and
+# none on disk — Odoo #2005); the unit retries every 60 s (Restart=on-failure,
+# RestartSec=60s; the systemd start limit is 5 starts per 10 s, never reached at
+# a 60 s period) until enrollment is complete. The bridge state is written
+# before that exit, so ga_manager still sees the device while it retries.
 #
 # Test hooks (tests/ga_tests/enroll_env/test.sh drives the real script on a
 # CI runner): every path below can be moved with GA_ENROLL_*; the defaults are
@@ -153,7 +157,16 @@ if [ -r "$NB_ENV" ]; then
 fi
 
 netbird_ip=$(ip -4 -o addr show dev wt0 2>/dev/null | awk '{split($4,a,"/"); print a[1]; exit}')
-[ -n "$netbird_ip" ] || warn "no wt0 address yet — enrolling without netbird_ip (refreshed next boot)"
+incomplete=""
+if [ -z "$netbird_ip" ]; then
+    # Still enrol (the row and the bridge state are useful), but the run is
+    # NOT complete: the fleet-manager only hands out the registry credential to
+    # a caller whose source address equals the claimed mesh IP (Odoo #1988), so
+    # an enrolment without one can never finish. Exit non-zero at the end so
+    # the unit retries (Odoo #2005).
+    warn "no wt0 address yet — enrolling without netbird_ip; will exit 1 so the unit retries"
+    incomplete="no-netbird-ip"
+fi
 
 ga_release=""
 [ -r /etc/ga-release ] && ga_release=$(head -1 /etc/ga-release | tr -d '\r\n')
@@ -205,7 +218,15 @@ if [ -n "$registries" ] && [ "$registries" != "null" ]; then
         log "GHCR creds unchanged"
     fi
 else
-    warn "enroll response carried no registries — ga-bootstrap stays blocked unless creds exist already"
+    if [ -s "$CREDS_FILE" ]; then
+        warn "enroll response carried no registries — keeping the credentials already in ${CREDS_FILE}"
+    else
+        # Nothing delivered and nothing on disk: ga-bootstrap stays blocked.
+        # A warning plus exit 0 left a fresh device stalled until the next
+        # reboot (Odoo #2005) — fail so the unit retries.
+        warn "enroll response carried no registries and ${CREDS_FILE} is missing — ga-bootstrap stays blocked; will exit 1 so the unit retries"
+        incomplete="${incomplete:+$incomplete,}no-registries"
+    fi
 fi
 
 # 5. Non-secret bridge state for ga_manager's enroll worker (token bind):
@@ -259,3 +280,4 @@ jq -cn --arg hw "$hw_serial" --arg url "$FLEET_URL" --arg ipurl "$FLEET_URL_IP" 
        '{hw_serial:$hw, fleet_url:$url, fleet_url_ip:$ipurl, provisional_id:$pid, enrolled_at:$at, ga_release:$rel, ga_env:$env, fleet_env:$fenv, ssh_auth:$ssh, ssh_host_key:$hk}' \
     | "$SHARE_PUBLISH" "$STATE_FILE" 0644
 log "state written to ${STATE_FILE}"
+[ -z "$incomplete" ] || die "enrolment incomplete (${incomplete}) — bridge state written, retrying"
