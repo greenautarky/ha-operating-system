@@ -148,11 +148,13 @@ done
 type iod_mode >/dev/null 2>&1 && type iod_set_mode >/dev/null 2>&1 \
   || { echo "FATAL: iodomain.sh no longer defines iod_mode/iod_set_mode"; exit 1; }
 printf 'ga_vccio5=3v3\n' > "$T/c1";  M=$(iod_mode "$T/c1");  show_verdict ISO-47 "mode: 'ga_vccio5=3v3' -> 3v3" "$([ "$M" = 3v3 ] && echo 0 || echo 1)" "$M"
-: > "$T/c2";                          M=$(iod_mode "$T/c2");  show_verdict ISO-48 "mode: empty haos-config.txt -> 1v8 (legacy)" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
-M=$(iod_mode "$T/nope");              show_verdict ISO-49 "mode: missing file -> 1v8 (legacy)" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
+: > "$T/c2";                          M=$(iod_mode "$T/c2");  show_verdict ISO-48 "mode: empty haos-config.txt -> 3v3 (option B image default)" "$([ "$M" = 3v3 ] && echo 0 || echo 1)" "$M"
+M=$(iod_mode "$T/nope");              show_verdict ISO-49 "mode: missing file -> 3v3 (option B image default)" "$([ "$M" = 3v3 ] && echo 0 || echo 1)" "$M"
 printf 'ga_vccio5=3v3\r\n' > "$T/c3"; M=$(iod_mode "$T/c3");  show_verdict ISO-50 "mode: CRLF value is not exactly 3v3 -> 1v8 (mirrors hush)" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
 printf 'ga_vccio5=1v8\n' > "$T/c4";  M=$(iod_mode "$T/c4");  show_verdict ISO-51 "mode: 'ga_vccio5=1v8' -> 1v8" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
-printf '#ga_vccio5=3v3\nxga_vccio5=3v3\n' > "$T/c5"; M=$(iod_mode "$T/c5"); show_verdict ISO-52 "mode: commented / prefixed key is NOT 3v3" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
+printf '#ga_vccio5=3v3\nxga_vccio5=3v3\n' > "$T/c5"; M=$(iod_mode "$T/c5"); show_verdict ISO-52 "mode: commented / prefixed key is no key -> 3v3 default" "$([ "$M" = 3v3 ] && echo 0 || echo 1)" "$M"
+printf 'ga_vccio5=\n' > "$T/c9"; M=$(iod_mode "$T/c9"); show_verdict ISO-52d "mode: empty value = no key -> 3v3 (mirrors hush x = x)" "$([ "$M" = 3v3 ] && echo 0 || echo 1)" "$M"
+printf 'ga_vccio5=foo\n' > "$T/c10"; M=$(iod_mode "$T/c10"); show_verdict ISO-52e "mode: unknown value -> 1v8 (boot.scr is conservative)" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
 printf 'ga_vccio5=3v3 \n' > "$T/c6"; M=$(iod_mode "$T/c6"); show_verdict ISO-52a "mode: trailing space -> 1v8 (hush compares exactly)" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
 printf 'ga_vccio5=3v3\nga_vccio5=1v8\n' > "$T/c7"; M=$(iod_mode "$T/c7"); show_verdict ISO-52b "mode: last value wins (env import) -> 1v8" "$([ "$M" = 1v8 ] && echo 0 || echo 1)" "$M"
 printf 'ga_vccio5=1v8\nga_vccio5=3v3\n' > "$T/c8"; M=$(iod_mode "$T/c8"); show_verdict ISO-52c "mode: last value wins -> 3v3" "$([ "$M" = 3v3 ] && echo 0 || echo 1)" "$M"

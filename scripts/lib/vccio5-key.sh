@@ -5,7 +5,8 @@
 #
 # Odoo #1484 / #1900 / #1944: the iHost RMII/MDIO bank VCCIO5 is physically 3.3 V.
 # Images with #1900 carry rv1126/rv1109-sonoff-ihost-vccio5-3v3.dtb; boot.scr loads
-# it only for ga_vccio5=3v3 in haos-config.txt, which belongs to the device and
+# it for ga_vccio5=3v3 and, since option B (#1981), also when there is no key;
+# ga_vccio5=1v8 keeps the 1.8 V DTB. haos-config.txt belongs to the device and
 # survives OTA. Units that ran the 1.8 V setting behave unpredictably at 3.3 V
 # (2026-11-11: 2 of 4 lost the PHY), a factory-fresh unit needs 3.3 V. Thomas
 # 2026-11-11: "Pflichtangabe je Flash" — the setting is chosen on every flash,

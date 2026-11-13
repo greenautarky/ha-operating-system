@@ -1,0 +1,115 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] ota/rauc-hook: pin the running vccio5 mode before an OTA (iHost)
+
+GA delta of the bundle hook (Odoo #1981, option B, Thomas 2026-11-12): the iHost
+image boots the vccio5 = 3.3 V DTB when haos-config.txt carries no ga_vccio5
+key. install-check (runs before any slot is written, on every install path)
+writes the RUNNING mode as an explicit key where there is none yet, cross-
+checked against PMUGRF 0x140 bit 5; a mismatch or an unreadable value aborts
+the install. Only for compatible haos-ihost. Gate: tests/gates/vccio5_rauc_hook.
+---
+  buildroot-external/ota/rauc-hook | 84 ++++++++++++++++++++++++++++++++++++++++
+  1 file changed, 84 insertions(+)
+
+diff --git a/buildroot-external/ota/rauc-hook b/buildroot-external/ota/rauc-hook
+index 212d6bd..cc42cf5 100755
+--- a/buildroot-external/ota/rauc-hook
++++ b/buildroot-external/ota/rauc-hook
+@@ -98,6 +98,86 @@ post_install_kernel() {
+     fi
+ }
+ 
++# GA (Odoo #1981, option B — Thomas 2026-11-12): the iHost image boots the
++# vccio5 = 3.3 V DTB when /mnt/boot/haos-config.txt carries NO ga_vccio5 key.
++# A field unit that runs 1.8 V must never meet that fallback, so BEFORE any slot
++# is written (install-check runs before every slot install, on every install
++# path: rauc v1.13 install_run -> do_install_bundle) the RUNNING mode is pinned
++# as an explicit key, only where there is no key yet:
++#   ga.vccio5=3v3 on /proc/cmdline                 -> ga_vccio5=3v3 (new device)
++#   ga.vccio5=1v8, or no ga.vccio5= (pre-#1900)    -> ga_vccio5=1v8 (field unit)
++# The kernel argument is cross-checked against the hardware: PMUGRF 0x140 bit 5
++# (1 = vccio5 1.8 V). A mismatch, an unreadable register, or a key that does not
++# read back FAILS the hook: the install is aborted and nothing is written to a
++# slot (exit 11; the reason is the LAST line on stderr, which RAUC reports).
++# /mnt/boot is shared by both slots (#1520): a later fallback to an older slot
++# boots THIS boot.scr too, and stays on 1.8 V only because of the pinned key.
++# Paths are overridable for the gate tests/gates/vccio5_rauc_hook only.
++ga_vccio5_pin() {
++    [ "${RAUC_SYSTEM_COMPATIBLE}" = "haos-ihost" ] || return 0
++    _gv_boot="${GA_VCC_BOOT:-/mnt/boot}"
++    _gv_cfg="${_gv_boot}/haos-config.txt"
++    _gv_cmdline="${GA_VCC_CMDLINE:-/proc/cmdline}"
++    _gv_regmap="${GA_VCC_REGMAP:-/sys/kernel/debug/regmap/dummy-syscon@0xfe020000/registers}"
++
++    if ! systemctl -q is-active mnt-boot.mount; then
++        systemctl start mnt-boot.mount || { echo "GA vccio5: cannot mount /mnt/boot - install refused" >&2; return 1; }
++    fi
++    [ -d "${_gv_boot}" ] || { echo "GA vccio5: ${_gv_boot} missing - install refused" >&2; return 1; }
++
++    # the key as boot.scr sees it: U-Boot env import keeps the LAST ga_vccio5= line;
++    # a commented or prefixed line is no key (line-anchored); an empty value = no key
++    _gv_key=""
++    [ -f "${_gv_cfg}" ] && _gv_key="$(tr -d '\r' < "${_gv_cfg}" | sed -n 's/^ga_vccio5=//p' | tail -n 1)"
++    case "${_gv_key}" in
++        ""|3v3) ;;   # no key: pin below; 3v3: must match the hardware (below)
++        *) echo "GA vccio5: key present (ga_vccio5=${_gv_key}) - left as it is"; return 0 ;;
++    esac
++
++    # the RUNNING mode: kernel argument, cross-checked against the hardware
++    [ -r "${_gv_cmdline}" ] || { echo "GA vccio5: cannot read ${_gv_cmdline} - install refused" >&2; return 1; }
++    _gv_run="$(tr ' ' '\n' < "${_gv_cmdline}" | sed -n 's/^ga\.vccio5=//p' | tail -n 1)"
++    case "${_gv_run}" in
++        3v3) ;;
++        1v8|"") _gv_run=1v8 ;;
++        *) echo "GA vccio5: unexpected ga.vccio5=${_gv_run} on the kernel command line - install refused" >&2; return 1 ;;
++    esac
++    [ -r "${_gv_regmap}" ] || { echo "GA vccio5: cannot read PMUGRF (${_gv_regmap}) - install refused, nothing written" >&2; return 1; }
++    _gv_v="$(sed -n 's/^0*140:[[:space:]]*\([0-9a-fA-F][0-9a-fA-F]*\).*/\1/p' "${_gv_regmap}" | head -n 1)"
++    [ -n "${_gv_v}" ] || { echo "GA vccio5: no PMUGRF 0x140 line in ${_gv_regmap} - install refused, nothing written" >&2; return 1; }
++    if [ $(( (0x${_gv_v} >> 5) & 1 )) -eq 1 ]; then _gv_reg=1v8; else _gv_reg=3v3; fi
++    if [ "${_gv_reg}" != "${_gv_run}" ]; then
++        echo "GA vccio5: kernel command line says ${_gv_run} but PMUGRF 0x140 = 0x${_gv_v} says ${_gv_reg} - install refused, nothing written" >&2
++        return 1
++    fi
++
++    if [ "${_gv_key}" = 3v3 ]; then
++        # an explicit 3v3 key on a unit that RUNS 1.8 V (hand-written key, or a card from before
++        # #1900 whose boot.scr ignored it): this boot.scr would move it to 3.3 V - refuse
++        if [ "${_gv_run}" = 1v8 ]; then
++            echo "GA vccio5: ga_vccio5=3v3 on the card but the unit runs 1.8 V (PMUGRF 0x140 = 0x${_gv_v}) - this OTA would move it to 3.3 V; install refused, nothing written" >&2
++            return 1
++        fi
++        echo "GA vccio5: key present (ga_vccio5=3v3) and the unit runs 3.3 V - left as it is"
++        return 0
++    fi
++
++    _gv_tmp="${_gv_cfg}.ga-new"
++    # keep every other line; drop every ga_vccio5= line (the last one was empty, so all of
++    # them were inert) and write exactly one; grep ends every line it prints with a
++    # newline, so a last line without one cannot swallow the key
++    { if [ -f "${_gv_cfg}" ]; then tr -d '\r' < "${_gv_cfg}" | grep -v '^ga_vccio5=' || true; fi
++      echo "ga_vccio5=${_gv_run}"; } > "${_gv_tmp}" \
++        || { rm -f "${_gv_tmp}"; echo "GA vccio5: cannot write ${_gv_tmp} - install refused" >&2; return 1; }
++    mv -f "${_gv_tmp}" "${_gv_cfg}" || { rm -f "${_gv_tmp}"; echo "GA vccio5: cannot replace ${_gv_cfg} - install refused" >&2; return 1; }
++    sync
++    if [ "$(tr -d '\r' < "${_gv_cfg}" | grep -cx "ga_vccio5=${_gv_run}")" != 1 ]; then
++        echo "GA vccio5: ga_vccio5=${_gv_run} did not read back from ${_gv_cfg} - install refused" >&2
++        return 1
++    fi
++    echo "GA vccio5: no key - pinned the running mode: ga_vccio5=${_gv_run} (cmdline + PMUGRF 0x140 = 0x${_gv_v})"
++}
++
+ ##
+ # Hooks
+ 
+@@ -107,6 +187,10 @@ case "$1" in
+              # Check if GRUB env has been corrupted. This is only problematic
+              # with OS 8+, where compatible matches.
+              check_grubenv
++             # exit >= 10: RAUC reports the hook's LAST stderr line ("Bundle rejected:
++             # Hook returned: '...'"); below 10 it swallows the reason (rauc v1.13
++             # run_bundle_hook). 11, not upstream's 10 (compatible mismatch).
++             ga_vccio5_pin || exit 11
+              exit 0
+          fi
+          echo "Compatible does not match!" 1>&2

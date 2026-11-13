@@ -16,9 +16,10 @@
 IOD_MASK=254     # 0xFE: bits 1..7 (vccio1..7); bit 0 is pmuio, not judged here
 #
 # TWO pinned sets since Odoo #1900 (2026-11-11). The vccio5 bank is PHYSICALLY
-# 3.3 V (RTL8201F IO = DVDD33; pin 21 measured 3.3 V on two units, #1484). Freshly
-# flashed devices run the 3.3 V DTB (haos-config.txt ga_vccio5=3v3, written by the
-# flasher); every other device keeps the legacy 1.8 V setting (Thomas, 2026-11-11).
+# 3.3 V (RTL8201F IO = DVDD33; pin 21 measured 3.3 V on two units, #1484). Since
+# option B (#1981, Thomas 2026-11-12) a card with NO ga_vccio5 key and one with
+# ga_vccio5=3v3 run the 3.3 V DTB; ga_vccio5=1v8 (pinned on field units by the
+# RAUC install-check hook before an OTA) and any other value run 1.8 V.
 # The MODE (operator intent) picks which pinned set applies; the device is then
 # judged against it. Both sets are measurements, never read from the DT under test:
 #   1v8  0x140=0xA6, vccio5 -> vcc_1v8   K170/K31 2026-11-05, iHost-A 2026-11-11
@@ -34,10 +35,14 @@ IOD_BOOTCFG="${IOD_BOOTCFG:-/mnt/boot/haos-config.txt}"
 # "x${ga_vccio5}" = "x3v3" exactly, so a trailing space or CR, or a later
 # ga_vccio5=1v8 line, means 1v8 to the bootloader and therefore here too
 # (tests/gates/ihost_vccio5_bootscr evaluates that boot.scr block).
-iod_mode() {
+iod_mode() {   # mirrors uboot-boot.ush (Odoo #1981, option B): the LAST value wins
   _v=""
   [ -r "$1" ] && _v=$(sed -n 's/^ga_vccio5=//p' "$1" | tail -n1)
-  if [ "$_v" = 3v3 ]; then echo 3v3; else echo 1v8; fi
+  case "$_v" in
+    1v8) echo 1v8 ;;
+    3v3|"") echo 3v3 ;;     # no key (or an empty value) = the image default, 3.3 V
+    *) echo 1v8 ;;          # any other value (CRLF, spaces, garbage): boot.scr loads 1.8 V
+  esac
 }
 
 # iod_set_mode <1v8|3v3> — load the pinned expectations of that mode.

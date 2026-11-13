@@ -261,8 +261,9 @@ if $DO_FLASH; then
 
       # ── vccio5: write the per-flash choice onto the card (Odoo #1900/#1944) ──
       # The iHost RMII/MDIO bank is physically 3.3 V (#1484). boot.scr loads the
-      # 3.3 V DTB only for ga_vccio5=3v3 in haos-config.txt (device-owned, kept
-      # across OTA). --vccio5 was required above; 1v8 is written explicitly too.
+      # 3.3 V DTB for ga_vccio5=3v3 and, since option B (#1981), for no key; 1v8
+      # keeps 1.8 V. haos-config.txt is device-owned, kept across OTA. --vccio5 was
+      # required above; the choice is written explicitly either way.
       # 3v3 on an image without the 3.3 V DTB FAILS here (DO NOT USE the card).
       # Same contract as the flasher's seed-vccio5.sh; logic in
       # scripts/lib/vccio5-key.sh (gate vccio5_key).

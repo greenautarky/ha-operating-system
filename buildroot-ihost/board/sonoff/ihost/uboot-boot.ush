@@ -65,10 +65,17 @@ else
   setenv fdtfile rv1109-sonoff-ihost.dtb
 fi
 
-# GA (Odoo #1900): vccio5 (Ethernet RMII/MDIO bank) is physically 3.3 V. Only a
-# device whose haos-config.txt (imported above, device-owned, kept across OTA)
-# says ga_vccio5=3v3 boots the 3.3 V variant; the flasher writes that key on a
-# fresh flash. Everything else keeps the legacy 1.8 V DTB (Thomas, 2026-11-11).
+# GA (Odoo #1900, #1981): vccio5 (Ethernet RMII/MDIO bank) is physically 3.3 V.
+# haos-config.txt (imported above, device-owned, kept across OTA) decides:
+#   no ga_vccio5 key   -> 3.3 V variant (option B, Thomas 2026-11-12: a NEW
+#                         device boots 3.3 V from the image alone)
+#   ga_vccio5=3v3      -> 3.3 V variant
+#   ga_vccio5=1v8      -> legacy 1.8 V DTB (field devices: the RAUC install-check
+#                         hook pins the running mode BEFORE an OTA writes this
+#                         boot.scr, so a field unit never meets the new fallback
+#                         without a key)
+#   any other value    -> legacy 1.8 V DTB, said out loud (an unexpected value must
+#                         never put a used unit on 3.3 V)
 # The loaded variant is handed to the kernel as ga.vccio5=<3v3|1v8>, so
 # hw_iodomain can tell a requested-but-missing 3v3 DTB (fallback) from a
 # legacy device: a fallback is loud, never silent. The argument is PREPENDED:
@@ -76,7 +83,21 @@ fi
 # (tests/gates/ihost_gadget_serial), and the USB lock flag must stay after
 # ${cmdline} (tests/gates/ota_usb_lock).
 setenv ga_vccio5_loaded 1v8
-if test "x${ga_vccio5}" = "x3v3"; then
+setenv ga_vccio5_want 1v8
+if test "x${ga_vccio5}" = "x1v8"; then
+  setenv ga_vccio5_want 1v8
+else
+  if test "x${ga_vccio5}" = "x3v3"; then
+    setenv ga_vccio5_want 3v3
+  else
+    if test "x${ga_vccio5}" = "x"; then
+      setenv ga_vccio5_want 3v3
+    else
+      echo "GA: ga_vccio5=${ga_vccio5} is not 3v3|1v8 - using the 1.8 V DTB ${fdtfile}"
+    fi
+  fi
+fi
+if test "x${ga_vccio5_want}" = "x3v3"; then
   if test "x${cpucode#}" = "x1126"; then
     setenv fdtfile_3v3 rv1126-sonoff-ihost-vccio5-3v3.dtb
   else
@@ -86,7 +107,7 @@ if test "x${ga_vccio5}" = "x3v3"; then
     setenv fdtfile ${fdtfile_3v3}
     setenv ga_vccio5_loaded 3v3
   else
-    echo "GA: ga_vccio5=3v3 requested but ${fdtfile_3v3} is missing - FALLING BACK to the 1.8 V DTB ${fdtfile}"
+    echo "GA: vccio5 3v3 wanted but ${fdtfile_3v3} is missing - FALLING BACK to the 1.8 V DTB ${fdtfile}"
   fi
 fi
 setenv bootargs_ga "ga.vccio5=${ga_vccio5_loaded} ${bootargs_ga}"
