@@ -196,7 +196,35 @@ wire "bake continues when the gate passes (rc 0), board arch passed on" 0 0 "--a
 wire "bake aborts with the TOOLCHAIN message on rc 1" 1 1 "ships a build toolchain that no allowlist entry covers" "is BROKEN"
 wire "bake aborts with the BROKEN message on rc 2" 2 1 "runtime toolchain gate is BROKEN" "ships a build toolchain that no allowlist entry covers"
 
+# End to end on the bake's own call path: the REAL 11c block running the REAL
+# gate (not a stub) over image tars, with a policy file in the repo-root slot
+# 11c reads. Proves that report mode CANNOT block a bake even on a finding no
+# allowlist covers (red fixture), that a clean image passes (green fixture),
+# and — so neither green is the gate being inert — that the same finding
+# aborts the bake in enforce mode (Manager, 2026-11-13; rules 6/45).
+real_bake() { # real_bake NAME MODE IMAGE_LAYER WANT_RC MUST_SAY
+  ran=$((ran + 1))
+  local w="$WORK/real.$RANDOM"; mkdir -p "$w/repo/scripts" "$w/out/build/hassio-1.0.0/images" "$w/out/images/reports"
+  cp "$GATE" "$w/repo/scripts/check-runtime-toolchain.py"
+  printf 'mode %s\n' "$2" > "$w/repo/.runtime-toolchain-gate"
+  printf 'BR2_PACKAGE_HASSIO_ARCH="armv7"\n' > "$w/out/.config"
+  python3 "$MK" "$w/out/build/hassio-1.0.0/images/x.tar" ghcr.io/x/fixture-armv7:1 oci "$CLEAN_BASE" "$3" \
+    || { bad "$1: fixture build failed"; return; }
+  local rc
+  ( set -e; OUT="$w/out"; SCRIPT_DIR="$w/repo/scripts"; MODE=full; BOARD=fixture; eval "$_block" ) >"$w/log" 2>&1; rc=$?
+  if [[ "$rc" != "$4" ]]; then bad "$1: bake rc=$rc, want $4"; sed 's/^/        /' "$w/log" | tail -3; return; fi
+  if ! grep -qF -- "$5" "$w/log"; then bad "$1: bake log lacks '$5'"; sed 's/^/        /' "$w/log" | tail -3; return; fi
+  if [[ ! -s "$w/out/images/reports/runtime-toolchain.json" ]]; then bad "$1: no summary json in the bake's reports dir"; return; fi
+  ok "$1"
+}
+real_bake "real 11c + real gate, REPORT, unallowlisted toolchain: bake continues (red fixture)" report \
+  "usr/libexec/gcc/arm-linux-gnueabihf/14/cc1" 0 "::warning::REPORT MODE (would FAIL in enforce)"
+real_bake "real 11c + real gate, REPORT, clean image: bake continues (green fixture)" report \
+  "usr/bin/env" 0 "0 with a build toolchain"
+real_bake "real 11c + real gate, ENFORCE, same toolchain: bake ABORTS (the gate is not inert)" enforce \
+  "usr/libexec/gcc/arm-linux-gnueabihf/14/cc1" 1 "ships a build toolchain that no allowlist entry covers"
+
 echo
 echo "runtime toolchain gate selftest: ${ran} checks, ${fails} failed"
-[[ "$ran" -ge 41 ]] || { echo "FATAL: only ${ran} checks ran — the selftest lost coverage"; exit 2; }
+[[ "$ran" -ge 44 ]] || { echo "FATAL: only ${ran} checks ran — the selftest lost coverage"; exit 2; }
 [[ "$fails" -eq 0 ]]
