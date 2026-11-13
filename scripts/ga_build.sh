@@ -160,14 +160,12 @@ board_skipped_images() {
     | head -n 1 | sed 's/[[:space:]]*#.*$//'
 }
 # core_tag_valid TAG CHANNEL RELEASE — the post-build Core tag rule. A pinned calver
-# (YYYY.M.P[.N]) or the legacy `latest`; a `-dev` suffix (GA aarch64 dev Core) only
-# when the channel in version.json is dev AND the release label is -devN.
+# (YYYY.M.P[.N]) or the legacy `latest`. A `-dev` suffix is refused on every channel:
+# the Supervisor rates it AwesomeVersion UNKNOWN and never starts the baked Core
+# (Odoo #1985). channel/release stay in the signature for the callers.
 core_tag_valid() {
   local tag="$1" channel="$2" release="$3"
-  if [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?-dev$ ]]; then
-    [[ "$channel" == dev && "$release" =~ -dev[0-9]+$ ]]
-    return
-  fi
+  [[ "$tag" =~ -dev$ ]] && return 1
   [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || [[ "$tag" == "latest" ]]
 }
 # board_skips KEY — true when the board declares it does not bake KEY.
@@ -872,7 +870,7 @@ verify_build_integrity() {
     elif core_tag_valid "$core_ver" "$(jq -r '.channel // ""' "$version_json" 2>/dev/null)" "$GA_RELEASE"; then
       _check_pass "Core image tag: $core_ver"
     else
-      _check_fail "Core image tag invalid: '$core_ver' (expected pinned version or 'latest'; a -dev suffix only on the dev channel with a -devN release)"
+      _check_fail "Core image tag invalid: '$core_ver' (expected a pinned CalVer YYYY.M.P[.N] or 'latest'; a -dev suffix is not CalVer for the Supervisor, Odoo #1985)"
     fi
   else
     _check_warn "version.json not found (normal for non-full builds)"

@@ -58,15 +58,12 @@ esac
 _RBT_PINS_REL=""
 [[ "$_RBT_BOARD" == ihost ]] || _RBT_PINS_REL="$(ga_board_var ADDON_PINS "$_RBT_BOARD" 2>/dev/null || true)"
 # core_tag_ok TAG CHANNEL RELEASE -- BLD Core tag rule. A pinned calver; a `-dev` suffix
-# (GA aarch64 dev Core) only when the channel in version.json is dev AND the release
-# label is -devN (same rule as core_tag_valid in scripts/ga_build.sh, which
+# is refused on every channel (the Supervisor cannot parse it, Odoo #1985)
+# (same rule as core_tag_valid in scripts/ga_build.sh, which
 # tests/gates/core_tag_rule/selftest.sh holds to this copy). `latest` is not accepted here.
 core_tag_ok() {
   local tag="$1" channel="$2" release="$3"
-  if [[ "$tag" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?-dev$ ]]; then
-    [[ "$channel" == dev && "$release" =~ -dev[0-9]+$ ]]
-    return
-  fi
+  [[ "$tag" =~ -dev$ ]] && return 1
   [[ "$tag" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
 }
 _rbt_cond() {
@@ -1403,6 +1400,41 @@ else
     _fail "RFLOOR-01: could not extract manifest.raucm from $(basename "$_rf_bundle")"
   fi
   rm -rf "$_rf_tmp"
+fi
+
+# BLD-VCC-02 (Odoo #1981, option B): the produced bundle carries the vccio5 install-check hook.
+# The iHost image boots 3.3 V when a device has no ga_vccio5 key; field devices are kept on 1.8 V
+# ONLY by the bundle hook that pins the running mode before any slot is written. A bundle without
+# it would move every keyless field unit to 3.3 V at its next OTA. Read from the bundle itself
+# (manifest [hooks] + the hook file it names), never assumed from the source (rule 61).
+if [[ "$_RBT_BOARD" == ihost ]]; then
+  if [[ ! -f "$_rf_rootfs" ]]; then
+    _skip "BLD-VCC-02: bundle carries the vccio5 install-check hook" "no rootfs in this run (source tree only)"
+  elif [[ -z "$_rf_bundle" || -z "$_rf_unsq" ]]; then
+    _fail "BLD-VCC-02: no bundle or no unsquashfs although a rootfs was built — the hook cannot be verified"
+  else
+    _vh_tmp="$(mktemp -d)"
+    if "$_rf_unsq" -q -n -d "${_vh_tmp}/x" "$_rf_bundle" >/dev/null 2>&1 && [[ -f "${_vh_tmp}/x/manifest.raucm" ]]; then
+      _vh_mf="${_vh_tmp}/x/manifest.raucm"
+      _vh_hooks="$(awk '/^[[:space:]]*\[/{g=$0; gsub(/[[:space:]]/,"",g); next}
+                       g=="[hooks]" && /^[[:space:]]*hooks[[:space:]]*=/{sub(/^[^=]*=[[:space:]]*/,""); print}' "$_vh_mf")"
+      _vh_file="$(awk '/^[[:space:]]*\[/{g=$0; gsub(/[[:space:]]/,"",g); next}
+                      g=="[hooks]" && /^[[:space:]]*filename[[:space:]]*=/{sub(/^[^=]*=[[:space:]]*/,""); sub(/[[:space:]]+$/,""); print}' "$_vh_mf")"
+      if [[ ";${_vh_hooks// /};" != *";install-check;"* ]]; then
+        _fail "BLD-VCC-02: bundle manifest [hooks] does not declare install-check ('${_vh_hooks:-<none>}') — keyless field units would boot 3.3 V after the OTA"
+      elif [[ -z "$_vh_file" || ! -f "${_vh_tmp}/x/${_vh_file}" ]]; then
+        _fail "BLD-VCC-02: the hook file the manifest names ('${_vh_file:-<none>}') is not in the bundle"
+      # the CALL, uncommented, inside the install-check branch — not just the text somewhere
+      elif ! awk '/^[[:space:]]*install-check\)/{f=1} f&&/;;/{exit} f&&/^[[:space:]]*ga_vccio5_pin \|\| exit 11/{print "y"; exit}' "${_vh_tmp}/x/${_vh_file}" | grep -q y; then
+        _fail "BLD-VCC-02: the bundle hook does not call ga_vccio5_pin in install-check (patches-haos/0113 missing?) — keyless field units would boot 3.3 V"
+      else
+        _pass "BLD-VCC-02: bundle declares install-check and its hook pins the running vccio5 mode (ga_vccio5_pin)"
+      fi
+    else
+      _fail "BLD-VCC-02: could not extract the bundle"
+    fi
+    rm -rf "$_vh_tmp"
+  fi
 fi
 
 _rf_conf="${TARGET}/etc/rauc/system.conf"

@@ -12,12 +12,69 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (BOSv1.6.1, feat/1.6-haos18): iHost vccio5 option B — the image boots 3.3 V without a key; an OTA pins the running mode first (Odoo #1981)
+
+Decision Thomas 2026-11-12 (option B): a NEW device boots vccio5 = 3.3 V from the image alone, the field keeps 1.8 V. Implementation detail by the Manager the same day: the OTA hook pins the RUNNING mode, not "always 1v8" — a keyless new device would otherwise drop to 1.8 V at its first update.
+- `boot.scr` (`uboot-boot.ush`): no `ga_vccio5` key (or an empty value) and `ga_vccio5=3v3` load the 3.3 V variant; `ga_vccio5=1v8` and any other value load the 1.8 V DTB (an unexpected value never puts a used unit on 3.3 V, and says so). A missing variant still falls back to 1.8 V, loudly. `ga.vccio5=<loaded>` stays on the kernel command line.
+- RAUC bundle hook (`patches-haos/0113`, upstream `ota/rauc-hook`): in `install-check` — which RAUC runs from the NEW bundle before any slot is written, on every install path (rauc v1.13 source: CLI and Supervisor `InstallBundle` both end in `install_run` → `do_install_bundle`: pre-install handler → install-check → slot installs) — a device WITHOUT a key gets its running mode written as one: `ga.vccio5=3v3` on `/proc/cmdline` → `ga_vccio5=3v3`; `1v8` or no argument (pre-#1900 boot.scr, i.e. 1.5.x and 1.6 up to rc14) → `ga_vccio5=1v8`. Cross-checked against PMUGRF 0x140 bit 5; a mismatch, an unreadable register or a key that does not read back aborts the install with exit 11 — RAUC reports a hook's reason only for exit >= 10, and only its LAST stderr line (measured with a real RAUC 1.13). "Key" is read as boot.scr reads it: the LAST `ga_vccio5=` line counts (line-anchored — a commented line is no key), an empty last value is no key; when pinning, every `ga_vccio5=` line is replaced by exactly one. A key `1v8` (or any other value) is left alone; a key `3v3` on a unit that RUNS 1.8 V (hand-written key, pre-#1900 card) is refused with exit 11 — this boot.scr would otherwise move it to 3.3 V. Only for compatible `haos-ihost`.
+- Not affected: the second-slot mirror (#1058, open) writes kernel + rootfs with `rauc write-slot` only — no hook, no `/mnt/boot`, so neither `boot.scr` nor `haos-config.txt` changes.
+- Rollback: `/mnt/boot` is shared by both slots (#1520). A fallback to an older slot boots THIS boot.scr too, and stays on 1.8 V only because the key was pinned before the install — not because an older boot.scr would ignore it.
+- `hw_iodomain` `iod_mode` mirrors the new rule (no key / empty / 3v3 = 3v3; 1v8 / anything else = 1v8).
+- Measured on bench units 2026-11-12: two on BOSv1.5.3 and one on BOSv1.6.0-rc2 — debugfs regmap readable, 0x140 = 0xa6, no `ga.vccio5` on cmdline, no key (the hook pins 1v8 there); a fresh unit on rc13 with 3v3 — `ga.vccio5=3v3`, 0x140 = 0x86. `rauc.service` has no sandboxing (MountFlags=slave), so the hook sees the host's debugfs and /mnt/boot.
+- Proof: `tests/gates/vccio5_rauc_hook/selftest.sh` 39/39 on the LIVE patched hook (the six spec cases, 3v3 key on a 1.8 V unit, last-line / empty-last-value, commented key, empty key, CRLF, no trailing newline, missing file, read-only /mnt/boot, mv that fails / that moves nothing (read-back), foreign board, upstream compatible check) incl. 13 mutations, each caught by its specific case (incl. the kernel-argument anchor: a `foo.ga.vccio5=` token is not `ga.vccio5`); `rauc_e2e.sh` through a real `rauc service` 6/6 (refusal: slot untouched, reason shown; accepted: slot + key written); red before the exit-11 fix (reason swallowed). `ihost_vccio5_bootscr` 11/11 (4 new mutations), `hw_iodomain` selftest 80/80.
+- Build gate BLD-VCC-02 (iHost): the produced bundle's manifest declares `install-check` and the hook file it names calls `ga_vccio5_pin` — read from the bundle (unsquashfs), not assumed from the source. Board-matrix fixtures ship the LIVE patched hook in the synthetic bundle; red proofs: manifest without `[hooks]`, upstream (unpatched) hook, the call commented out (the check requires the uncommented call inside the `install-check` branch).
+- Known behaviour (by design, tracked): a used unit whose `haos-config.txt` loses the `ga_vccio5` line boots 3.3 V at the next boot — every write path that touches the file must keep the key; a `ga_vccio5=3v3` key on a unit that nevertheless runs 1.8 V is refused at every OTA until the key is corrected to `1v8`; card writes (flasher, SD) do not pass through the OTA pin — a used unit is re-flashed with an explicit `1v8`.
+- MUST land together: the boot.scr fallback without the hook would put keyless field units on 3.3 V at their next OTA. Follow-up #1984: station `verify()` and `ga-provision.sh` (#1978) accept a keyless card that loaded 3v3.
+
+## BOSv1.6.0 (iHost FINAL, feat/1.6-haos18)
+
+BOSv1.6.0 is exactly the tree of BOSv1.6.0-rc14 (commit abb36e1); only the release marker differs (`gaos_release`, `EXPECTED_GA_RELEASE`). Content = rc14 (see the next section): Supervisor 2026.10.5.3, Core 2026.10.4.4, HAOS 18.4, store sync (ga_zigbee2mqtt 2.12.1-12, ga_manager 0.277.3, ga_default_addon 2.3.1), ga-frontend-bundle 1.23.10, ga-heating 0.14.4. K31 fresh-flash gate on rc14: green with caveat (Odoo #1935).
+
+Known issues: #1962 first converge on fresh flash fails, self-heals via pairing / identity-backfill; fix in 1.6.1.
+
+### Release set (N62)
+
+Versions read from the tree (`version.yaml`, `buildroot-external/package/hassio/addon-images.json`, `buildroot-ihost/configs/ga_ihost_full_defconfig`, `tests/ga_tests/os_integrity/expected.env`) at BOSv1.6.0 = rc14 tree. "no changelog" = none exists / none linked.
+
+| Artifact | Version | Changelog / release |
+|---|---|---|
+| HAOS base (image `bos_ihost-18.4.1.6_prod_*`) | 18.4 (HAOS fork; `haos` submodule @ 4a7dab4) | no changelog (upstream: https://github.com/home-assistant/operating-system/releases) |
+| Linux kernel (`ga_ihost_full_defconfig`) | 6.12.115 | no changelog |
+| OpenSSL (pinned buildroot, `expected.env`) | 3.5.9 | no changelog |
+| Supervisor (GA fork) | 2026.10.5.3 | no changelog |
+| Home Assistant Core (GA build) | 2026.10.4.4 | no changelog |
+| Plugins dns / cli / audio / observer / multicast (`expected.env`) | 2026.09.1 / 2025.10.2 / 2025.08.1 / 2025.02.1 / 2025.08.1 | no changelog |
+| Add-on ga_manager | 0.277.3 | https://github.com/greenautarky/vibe_addons/blob/main/ga_manager/CHANGELOG.md |
+| Add-on ga_zigbee2mqtt | 2.12.1-12 | no changelog |
+| Add-on ga_default_addon | 2.3.1 | https://github.com/greenautarky/vibe_addons/blob/main/ga_default_addon/CHANGELOG.md |
+| Add-on ga_hmvapp_addon | 2.6.3 | https://github.com/greenautarky/vibe_addons/blob/main/ga_hmvapp_addon/CHANGELOG.md |
+| Add-on mosquitto (ga_mosquitto) | 7.2.6 | https://github.com/greenautarky/vibe_addons/blob/main/mosquitto/CHANGELOG.md |
+| Add-on ga_influxdbv1 | 0.0.22 | no changelog |
+| Add-on ga_ihosthardwarecontrol | 1.2.2 | no changelog |
+| Add-on sonoff_dongle_flasher (ga_dongle_flasher) | 1.3.8 | https://github.com/greenautarky/vibe_addons/blob/main/hassio-ihost-sonoff-dongle-flasher/CHANGELOG.md |
+| ga-frontend-bundle | 1.23.10 | https://github.com/greenautarky/ga-frontend-bundle/blob/main/CHANGELOG.md |
+| ga-heating | 0.14.4 | https://github.com/greenautarky/ga-heating/blob/main/CHANGELOG.md |
+| greenautarky-site (HA integration) | 2.12.13 | no changelog |
+| greenautarky-telemetry | 0.2.4 | https://github.com/greenautarky/greenautarky-telemetry/blob/main/CHANGELOG.md |
+| ga-bootstrap (rootfs overlay) | 1.2.15 | https://github.com/greenautarky/ga-bootstrap/blob/main/CHANGELOG.md |
+| ga-telemetry-config (rootfs overlay) | 1.1.1 | https://github.com/greenautarky/ga-telemetry-config/blob/main/CHANGELOG.md |
+
+
 ## Unreleased (feat/1.6-haos18): hw_iodomain IOD-07 reads the whole boot, not a flooded ring buffer (Odoo #1961)
 
 - IOD-07 ("no io-domain error strings") read `dmesg` AFTER IOD-06, and IOD-06's read of debugfs `pinconf-pins` writes one `unsupported pinctrl` kernel line per pin (4,349 on an iHost on BOSv1.6.0-rc13, 2026-11-12). The ring buffer then started at the moment the suite ran; boot-time io-domain errors could no longer be seen and IOD-07 stayed green — blind to the very error it exists for. (The PASS on that unit was still correct: the full kernel journal had 0 io-domain errors.)
 - Now: the kernel log is captured BEFORE IOD-06, from `journalctl -k -b 0` (the whole boot; `dmesg` only without a journal), and IOD-07 FAILS when the capture does not reach back to the boot (no `Booting Linux` line) instead of passing a rotated buffer as clean.
 - Known limit: the suite is meant for after a fresh boot. With a long uptime and a volatile journal, vacuuming can drop the `Booting Linux` line; IOD-07 then FAILS loudly (fail-closed, not a false green) — reboot, then run it.
 - Selftest 78 checks (ISO-70..75 new, ISO-31 now asserts the reason). Red: the old library fails ISO-70/73/74; coverage check removed → ISO-70/74; journal preference removed → ISO-73; capture removed from before IOD-06 → ISO-75. Live on the device (rotated dmesg): journal → IOD-07 PASS; journal unavailable → IOD-07 FAIL with the coverage message (the old suite passed there).
+
+## Unreleased (feat/1.6-haos18): BOSv1.6.0-rc14 pins (iHost) and BOSv1.6.0-dev10 (DSGW210)
+
+rc14 = rc13 plus:
+
+- Add-ons, store-lockstep (pins equal vibe_addons main; the rc13 drift holds for z2m and gm are removed): ga_zigbee2mqtt 2.12.1-11 -> 2.12.1-12 (store #342, TS0014 countdown converter), ga_manager 0.277.1 -> 0.277.3 (store #343), ga_default_addon 2.1.7 -> 2.3.1 (store #345). All other add-on pins re-checked against the store: unchanged and equal.
+- ga-frontend-bundle 1.23.9 -> 1.23.10 and ga-heating 0.14.2 -> 0.14.4 (OCI digest sha256:93cd2fc9d0c482cccd3661daaf36580ad0bffbd8eb1ebe85f75384ba94f2ee51). greenautarky-site stays 2.12.13 (no post-#87 tag approved).
+- Already on the line since rc13, no pin needed: #1065 (release evidence filed after generate_sbom), #1063 (verify-sd.sh --flash requires --vccio5), #1068 (hw_iodomain IOD-07 reads the whole boot).
+- Not included: #1058 (second RAUC slot), pending, decision at the freeze (depends on a device proof).
 
 ## Unreleased (feat/1.6-haos18): BOSv1.6.0-rc13 pins (iHost) and BOSv1.6.0-dev9 (DSGW210)
 

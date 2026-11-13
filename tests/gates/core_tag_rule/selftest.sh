@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ga_build.sh core_tag_valid (the post-build Core tag rule): the LIVE function,
-# extracted from ga_build.sh, never re-declared here. A -dev Core tag is valid only on
-# the dev channel with a -devN release label. If the function cannot be extracted
-# the check FAILS (it never skips).
+# extracted from ga_build.sh, never re-declared here. A -dev Core tag is valid nowhere
+# since Odoo #1985 (the Supervisor rates it AwesomeVersion UNKNOWN). If the function
+# cannot be extracted the check FAILS (it never skips).
 set -u
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 fn="$(awk '/^core_tag_valid\(\)/,/^}/' "$REPO/scripts/ga_build.sh")"
@@ -16,8 +16,9 @@ core_tag_valid "$1" "$2" "$3"' _ "$3" "$4" "$5"; rc=$?
 check 0 "must-pass: plain pinned calver, stable"            2026.8.2.2        stable BOSv1.6.0-rc1
 check 0 "must-pass: 3-part calver, stable"                  2026.8.2          stable BOSv1.6.0-rc1
 check 0 "must-pass: legacy latest"                          latest            stable BOSv1.5.3
-check 0 "must-pass: DSGW dev Core on dev + -devN"           2026.10.4.3-dev   dev    BOSv1.6.0-dev1
+check 1 "must-fail: DSGW dev Core -dev on dev + -devN (Supervisor: UNKNOWN version, #1985)" 2026.10.4.3-dev   dev    BOSv1.6.0-dev1
 check 0 "must-pass: plain calver on dev channel"            2026.10.4.3       dev    BOSv1.6.0-dev1
+check 0 "must-pass: DSGW aarch64 release Core 2026.10.4.4"   2026.10.4.4       dev    BOSv1.6.0-dev1
 check 1 "must-fail: -dev Core on stable channel"            2026.10.4.3-dev   stable BOSv1.6.0-dev1
 check 1 "must-fail: -dev Core on dev channel, rc label"     2026.10.4.3-dev   dev    BOSv1.6.0-rc1
 check 1 "must-fail: -dev Core on dev channel, final label"  2026.10.4.3-dev   dev    BOSv1.6.0
@@ -35,7 +36,8 @@ core_tag_ok "$1" "$2" "$3"' _ "$3" "$4" "$5"; rc=$?
   if [ "$rc" -eq "$1" ]; then echo "  ok    [suite] $2"; else echo "  FAIL  [suite] $2 (rc=$rc, want $1)"; bad=1; fi
 }
 check2 0 "must-pass: plain calver, stable"                 2026.8.2.2        stable BOSv1.6.0-rc1
-check2 0 "must-pass: DSGW dev Core on dev + -devN"         2026.10.4.3-dev   dev    BOSv1.6.0-dev5
+check2 1 "must-fail: DSGW dev Core -dev on dev + -devN (Supervisor: UNKNOWN version, #1985)" 2026.10.4.3-dev   dev    BOSv1.6.0-dev5
+check2 0 "must-pass: DSGW aarch64 release Core on dev + -devN"  2026.10.4.4       dev    BOSv1.6.0-dev5
 check2 1 "must-fail: -dev Core on stable channel"          2026.10.4.3-dev   stable BOSv1.6.0-dev5
 check2 1 "must-fail: -dev Core on dev channel, rc label"   2026.10.4.3-dev   dev    BOSv1.6.0-rc1
 check2 1 "must-fail: -dev Core, release label unset"       2026.10.4.3-dev   dev    ""

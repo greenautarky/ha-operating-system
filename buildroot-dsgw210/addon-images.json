@@ -10,8 +10,7 @@
     },
     "ga_zigbee2mqtt": {
       "image": "ghcr.io/greenautarky/ga_zigbee2mqtt-{arch}",
-      "version": "2.12.1-11",
-      "hold": {"reason": "2.12.1-12 (TS0014 countdown converter) is reviewed and built but its store PR vibe_addons#342 awaits Thomas' merge; pin together with the store sync in rc14 (pin freeze 2026-11-13 12:00). Manager 2026-11-11.", "until": "2026-11-25"}
+      "version": "2.12.1-12"
     },
     "sonoff_dongle_flasher": {
       "image": "ghcr.io/greenautarky/ga_dongle_flasher-{arch}",
@@ -19,12 +18,12 @@
     },
     "ga_manager": {
       "image": "ghcr.io/greenautarky/ga_manager-{arch}",
-      "version": "0.277.1",
-      "hold": {"reason": "0.277.2/0.277.3 not yet store-synced (vibe_addons#341 open); pin together with the store sync in rc14. Manager 2026-11-11.", "until": "2026-11-25"}
+      "version": "0.277.3",
+      "hold": {"reason": "BOSv1.6.0 Final = BOSv1.6.0-rc14 tree (Thomas 2026-11-12); 0.277.4 (#2006 fix) published after the rc14 gate, follows in 1.6.1; store vibe_addons pins 0.277.3", "until": "2026-12-12"}
     },
     "ga_default_addon": {
       "image": "ghcr.io/greenautarky/ga_default_addon-{arch}",
-      "version": "2.1.7"
+      "version": "2.3.1"
     },
     "ga_hmvapp_addon": {
       "image": "ghcr.io/greenautarky/ga_hmvapp_addon-{arch}",
