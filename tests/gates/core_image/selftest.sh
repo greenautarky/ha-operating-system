@@ -26,6 +26,6 @@ for d in "$here"/must-fail/*/ "$here"/must-pass/*/; do
     echo "  FAIL  $kind/$name (rc=$rc)"; bad=1
   fi
 done
-[ "$n" -ge 12 ] || { echo "FAIL: only $n fixtures inspected (expected >= 12)"; exit 1; }
+[ "$n" -ge 14 ] || { echo "FAIL: only $n fixtures inspected (expected >= 12)"; exit 1; }
 echo "$n fixtures inspected"
 exit "$bad"

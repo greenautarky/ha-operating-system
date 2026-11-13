@@ -2,7 +2,7 @@
 # build_tests_board_arch -- the build suite (tests/ga_tests/run_build_tests.sh) judges BLD
 # (Core tag), VER-09 (Supervisor digest) and VER-10 (baked add-ons) per BOARD: the iHost
 # against armv7 and the shared pin file (unchanged), the DSGW-210 against aarch64, its own
-# pin file, and a -dev Core only on the dev channel with a -devN label.
+# pin file, and no -dev Core tag anywhere (the Supervisor cannot parse it, Odoo #1985).
 #
 # The LIVE runner is driven on fixture bakes (version.json + images/ with the tar names
 # fetch-addon-images.sh writes). Only `skopeo` (the registry) is replaced by a stand-in
@@ -42,7 +42,7 @@ cat > "$W/bin/curl" <<'CU'
 case "$*" in
   *stable.json*) echo '{"core":"2026.8.2.2","supervisor":"2025.11.5.10","homeassistant":{"tinker":"2026.8.2.2"},"images":{"core":"ghcr.io/greenautarky/home-assistant-armv7","supervisor":"x"}}' ;;
   *rc.json*)     echo '{"core":"2026.8.2.2","supervisor":"2026.10.5.1","homeassistant":{"tinker":"2026.8.2.2"},"images":{"core":"ghcr.io/greenautarky/home-assistant-armv7","supervisor":"x"}}' ;;
-  *dev.json*)    echo '{"core":"2026.10.4.3-dev","supervisor":"2026.10.5.1","homeassistant":{"tinker":"2026.10.4.3-dev"},"images":{"core":"'"${STUB_DEV_CORE_IMG:-ghcr.io/greenautarky/home-assistant-aarch64}"'","supervisor":"x"}}' ;;
+  *dev.json*)    echo '{"core":"2026.10.4.4","supervisor":"2026.10.5.1","homeassistant":{"tinker":"2026.10.4.4"},"images":{"core":"'"${STUB_DEV_CORE_IMG:-ghcr.io/greenautarky/home-assistant-aarch64}"'","supervisor":"x"}}' ;;
   *) exit 22 ;;
 esac
 CU
@@ -73,21 +73,23 @@ npins() { jq -r '.addons|length' "$ROOT/$(ga_board_var ADDON_PINS "$1")"; }
 has() { printf '%s\n' "$1" | grep -qE "$2"; }
 
 # --- DSGW-210, correct bake: green ---
-mkfix dsgw210 aarch64 2026.10.4.3-dev dev
+mkfix dsgw210 aarch64 2026.10.4.4 dev
 o="$(run dsgw210 BOSv1.6.0-dev5)"
-has "$o" '^  PASS  BLD: Core image tag is' && ok "dsgw210: -dev Core on dev + -devN passes BLD" || bad "dsgw210: BLD not green"
+has "$o" '^  PASS  BLD: Core image tag is' && ok "dsgw210: CalVer Core 2026.10.4.4 on dev + -devN passes BLD" || bad "dsgw210: BLD not green"
 has "$o" '^  PASS  VER-09: Supervisor image digest matches GHCR' && ok "dsgw210: VER-09 compares the aarch64 digest and passes" || bad "dsgw210: VER-09 not green"
 has "$o" "^  PASS  VER-10: baked add-on images: $(npins dsgw210)/$(npins dsgw210) pins" && ok "dsgw210: VER-10 reads its own pin file, aarch64 tars, passes" || bad "dsgw210: VER-10 not green"
 # --- DSGW-210, wrong inputs: red ---
+mkfix dsgw210 aarch64 2026.10.4.3-dev dev
+has "$(run dsgw210 BOSv1.6.0-dev5)" '^  FAIL  BLD: Core tag is' && ok "dsgw210: -dev Core on dev + -devN FAILS BLD (Supervisor: UNKNOWN version)" || bad "dsgw210: -dev Core on dev accepted"
 mkfix dsgw210 aarch64 2026.10.4.3-dev stable
 has "$(run dsgw210 BOSv1.6.0-dev5)" '^  FAIL  BLD: Core tag is' && ok "dsgw210: -dev Core on the stable channel FAILS" || bad "dsgw210: -dev on stable not refused"
 mkfix dsgw210 aarch64 2026.10.4.3-dev dev
 has "$(run dsgw210 BOSv1.6.0-rc1)" '^  FAIL  BLD: Core tag is' && ok "dsgw210: -dev Core with an rc label FAILS" || bad "dsgw210: -dev with rc label not refused"
-mkfix dsgw210 aarch64 2026.10.4.3-dev dev "$D2"
+mkfix dsgw210 aarch64 2026.10.4.4 dev "$D2"
 has "$(run dsgw210 BOSv1.6.0-dev5)" '^  FAIL  VER-09: Supervisor STALE' && ok "dsgw210: a Supervisor tar that differs from the aarch64 digest FAILS" || bad "dsgw210: stale Supervisor not caught"
-mkfix dsgw210 aarch64 2026.10.4.3-dev dev "$D1" 1
+mkfix dsgw210 aarch64 2026.10.4.4 dev "$D1" 1
 has "$(run dsgw210 BOSv1.6.0-dev5)" '^  FAIL  VER-10:' && ok "dsgw210: a pinned add-on with no tar FAILS VER-10" || bad "dsgw210: missing add-on tar not caught"
-mkfix dsgw210 armv7 2026.10.4.3-dev dev
+mkfix dsgw210 armv7 2026.10.4.4 dev
 has "$(run dsgw210 BOSv1.6.0-dev5)" '^  FAIL  VER-10:' && ok "dsgw210: armv7 tarballs where aarch64 is expected FAIL VER-10" || bad "dsgw210: armv7 tars accepted"
 # --- iHost: unchanged ---
 mkfix ihost armv7 2026.10.4.3 stable "$D2"
@@ -101,14 +103,14 @@ mkfix ihost armv7 2026.10.4.3 stable "$D1"
 has "$(run ihost BOSv1.6.0-rc2)" '^  FAIL  VER-09: Supervisor STALE' && ok "ihost: a Supervisor tar that differs from the armv7 digest FAILS" || bad "ihost: stale Supervisor not caught"
 
 # --- XVER-06/07: the build is compared against ITS OWN channel file ---
-mkfix dsgw210 aarch64 2026.10.4.3-dev dev
+mkfix dsgw210 aarch64 2026.10.4.4 dev
 o="$(run dsgw210 BOSv1.6.0-dev5)"
 has "$o" '^  PASS  XVER-06: .*matches dev.json' && ok "dsgw210: XVER-06 compares against dev.json and passes" || bad "dsgw210: XVER-06 not green"
 has "$o" '^  PASS  XVER-07: .*matches dev.json' && ok "dsgw210: XVER-07 compares against dev.json and passes" || bad "dsgw210: XVER-07 not green"
 has "$o" '^  PASS  XVER-03: dev.json core image is the GA aarch64 build' && ok "dsgw210: XVER-03 expects the aarch64 Core image and passes" || bad "dsgw210: XVER-03 not green"
 o="$(STUB_DEV_CORE_IMG=ghcr.io/greenautarky/home-assistant-armv7 run dsgw210 BOSv1.6.0-dev5)"
 has "$o" '^  FAIL  XVER-03: dev.json core image is NOT the GA aarch64 build' && ok "dsgw210: an armv7 Core image in dev.json FAILS XVER-03" || bad "dsgw210: armv7 Core image in dev.json accepted"
-SUPV=2026.10.4.0 mkfix dsgw210 aarch64 2026.10.4.3-dev dev
+SUPV=2026.10.4.0 mkfix dsgw210 aarch64 2026.10.4.4 dev
 o="$(SUPV=2026.10.4.0 run dsgw210 BOSv1.6.0-dev5)"
 has "$o" '^  FAIL  XVER-07: .*dev.json' && ok "dsgw210: a Supervisor that differs from dev.json FAILS XVER-07" || bad "dsgw210: XVER-07 drift not caught"
 mkfix ihost armv7 2026.8.2.2 stable "$D2"
