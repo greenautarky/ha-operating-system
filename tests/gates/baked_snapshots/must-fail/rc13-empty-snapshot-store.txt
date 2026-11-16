@@ -1,0 +1,5 @@
+# the REAL BOSv1.6.0-rc13 data.ext4 layout: content store filled, snapshot dir empty (Odoo #2067)
+mkdir /docker/containerd/daemon/io.containerd.content.v1.content/blobs/sha256
+mkdir /docker/containerd/daemon/io.containerd.snapshotter.v1.native/snapshots
+mkdir /docker/containerd/daemon/io.containerd.snapshotter.v1.overlayfs/snapshots
+file /docker/containerd/daemon/io.containerd.content.v1.content/blobs/sha256/27685217857b8a8bb59e020327880a566c19351b65104f6682352a6338404486

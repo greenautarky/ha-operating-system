@@ -1738,6 +1738,38 @@ if [[ -f "$VER_JSON" ]]; then
     fi
   fi
 
+  # VER-13: the baked images are UNPACKED in data.ext4 (containerd snapshot store not empty, one
+  # committed snapshot per distinct layer chain of the baked archives). BOSv1.6.0-rc13 baked them
+  # compressed-only; every device unpacked on first boot (Core ~9 min, Odoo #2067). scripts/
+  # check-baked-snapshots.sh reads the finished data.ext4 with debugfs (no mount); its mode is
+  # GA_SNAPSHOT_GATE_MODE (default report until patch 0135 is baked, then enforce). Selftest:
+  # tests/gates/baked_snapshots/selftest.sh. Status read from the command, not from a pipe.
+  VER13_CHECKER="${VER10_SRC:+${VER10_SRC}/scripts/check-baked-snapshots.sh}"
+  VER13_DATA="${OUT}/images/data.ext4"
+  # A real bake (images/build.log exists: the Buildroot build writes it, seen in the rc1 bake log; the matrix fixtures do not) MUST have produced data.ext4: a
+  # missing one there is a failure, never a skip. Only a source-only / fixture run may skip.
+  if [[ -d "$IMAGES_DIR" ]] && [[ ! -f "$VER13_DATA" ]] \
+     && [[ -f "${OUT}/images/build.log" ]]; then
+    _fail "VER-13: this is a real bake output (${OUT}/images/build.log exists) but ${VER13_DATA} is missing — the unpack check cannot run"
+  elif [[ ! -d "$IMAGES_DIR" ]] || [[ ! -f "$VER13_DATA" ]]; then
+    _skip "VER-13" "no images dir or no data.ext4, and no real-bake marker — source-only/fixture run"
+  elif [[ -z "$VER13_CHECKER" ]] || [[ ! -x "$VER13_CHECKER" ]]; then
+    _fail "VER-13: data.ext4 was built but scripts/check-baked-snapshots.sh was not found or is not executable (looked under '${VER10_SRC:-<unresolved>}')"
+  else
+    VER13_OUT="$("$VER13_CHECKER" --data-img "$VER13_DATA" --images-dir "$IMAGES_DIR" 2>&1)"
+    VER13_RC=$?
+    VER13_SUMMARY="$(printf '%s\n' "$VER13_OUT" | grep -E '^baked snapshots:' || true)"
+    if [[ "$VER13_RC" -eq 0 ]] && ! printf '%s\n' "$VER13_OUT" | grep -q 'REPORT-ONLY'; then
+      _pass "VER-13: ${VER13_SUMMARY}"
+    elif [[ "$VER13_RC" -eq 0 ]]; then
+      printf '%s\n' "$VER13_OUT" | sed 's/^/        /'
+      echo -e "${YELLOW}  WARN${RESET}  VER-13: REPORT-ONLY, the baked images are NOT unpacked (${VER13_SUMMARY})"
+    else
+      printf '%s\n' "$VER13_OUT" | sed 's/^/        /'
+      _fail "VER-13: the baked images are not unpacked in data.ext4 (${VER13_SUMMARY:-rc=${VER13_RC}})"
+    fi
+  fi
+
   # GAMCAP-01: the BAKED ga_manager carries what this OS relies on it for.
   # BOSv1.4.0-rc2 shipped a ga_manager that configured nothing for Home
   # Assistant Core's InfluxDB integration, so Core wrote nothing into the

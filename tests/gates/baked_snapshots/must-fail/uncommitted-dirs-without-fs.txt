@@ -1,0 +1,2 @@
+# 60 numeric dirs but none committed (no fs/): extraction died halfway
+snapnofs 60
