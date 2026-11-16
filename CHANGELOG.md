@@ -77,7 +77,7 @@ Versions read from the tree (`version.yaml`, `buildroot-external/package/hassio/
 | ga-heating | 0.14.4 | https://github.com/greenautarky/ga-heating/blob/main/CHANGELOG.md |
 | greenautarky-site (HA integration) | 2.12.13 | no changelog |
 | greenautarky-telemetry | 0.2.4 | https://github.com/greenautarky/greenautarky-telemetry/blob/main/CHANGELOG.md |
-| ga-bootstrap (rootfs overlay) | 1.2.15 | https://github.com/greenautarky/ga-bootstrap/blob/main/CHANGELOG.md |
+| ga-bootstrap (rootfs overlay) | 1.2.17 | https://github.com/greenautarky/ga-bootstrap/blob/main/CHANGELOG.md |
 | ga-telemetry-config (rootfs overlay) | 1.1.1 | https://github.com/greenautarky/ga-telemetry-config/blob/main/CHANGELOG.md |
 
 
