@@ -22,8 +22,7 @@
     },
     "ga_manager": {
       "image": "ghcr.io/greenautarky/ga_manager-{arch}",
-      "version": "0.277.5",
-      "store_ahead": {"reason": "BOSv1.6.1-rc1 carries ga_manager 0.277.5 (#2059 met duplicate fix, #2006); the vibe_addons store sync (PR #346) is a separate release-set step and still pins 0.277.3", "until": "2026-12-16"}
+      "version": "0.277.5"
     },
     "ga_default_addon": {
       "image": "ghcr.io/greenautarky/ga_default_addon-{arch}",
