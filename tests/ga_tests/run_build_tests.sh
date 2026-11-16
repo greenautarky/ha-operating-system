@@ -2317,16 +2317,16 @@ if [[ -n "$SRC" ]]; then
     _skip "SRC-05" "source files not found"
   fi
 
-  # SRC-07: create-data-partition.sh refreshes the build dir's copy of dind-import-containers.sh before
+  # SRC-DIND-01: create-data-partition.sh refreshes the build dir's copy of dind-import-containers.sh before
   # running it (Odoo #2067: the ga-builder keeps ga_output between bakes; the rsynced copy of 2026-11-12
   # ran in the DSGW dev11 bake without --platform although patch 0135 was applied).
   CDP7="${HAOS_EXT_SRC}/package/hassio/create-data-partition.sh"
   if [[ -f "$CDP7" ]]; then
-    grep -qE 'install .*dind-import-containers\.sh .*\$\{build_dir\}/dind-import-containers\.sh' "$CDP7" \
-      && _pass "SRC-07: create-data-partition.sh installs the current dind-import-containers.sh into the build dir" \
-      || _fail "SRC-07: create-data-partition.sh does NOT refresh the build dir's dind-import-containers.sh (stale incremental-workspace copy runs)"
+    grep -qE 'install .*dind-import-containers\.sh.*\$\{build_dir\}/dind-import-containers\.sh' "$CDP7" \
+      && _pass "SRC-DIND-01: create-data-partition.sh installs the current dind-import-containers.sh into the build dir" \
+      || _fail "SRC-DIND-01: create-data-partition.sh does NOT refresh the build dir's dind-import-containers.sh (stale incremental-workspace copy runs)"
   else
-    _skip "SRC-07" "create-data-partition.sh not found"
+    _skip "SRC-DIND-01" "create-data-partition.sh not found"
   fi
 
   # SRC-06: updater.json core version is read dynamically from version.json (not hardcoded)
