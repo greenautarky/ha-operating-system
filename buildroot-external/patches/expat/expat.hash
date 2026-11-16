@@ -1,0 +1,7 @@
+# GA carry of expat 2.10.0 (see GA_CONTAINER_FLOORS in ../../container-floor.mk).
+# From https://github.com/libexpat/libexpat/releases/tag/R_2_10_0. The tarball was verified
+# against the release's detached signature (expat-2.10.0.tar.xz.asc, signed by Sebastian
+# Pipping, primary key 3176EF7DB2367F1FCA4F306B1F9B0E909AF37285) before this hash was taken.
+sha256  c624ba2998fc65df1163a49641ff3f9ab73138b11641d92c86bee0fb01b1bc7f  expat-2.10.0.tar.xz
+# Locally calculated (COPYING is unchanged from 2.9.0)
+sha256  31b15de82aa19a845156169a17a5488bf597e561b2c318d159ed583139b25e87  COPYING

@@ -16,6 +16,15 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 dev10 plus ga-bootstrap 1.2.17 (Odoo #2132, #2066), the F5 updater.json seed (Odoo #2065), ga_manager 0.277.6 (the DSGW pin moves from 0.277.3, the 1.6.0 final freeze hold removed; the store serves 0.277.6) and the storage watchdog (reboot step off). Marker only: `gaos_release_dsgw210`.
 
+## BOSv1.6.1-rc3 (unreleased, iHost, feat/1.6-haos18)
+
+### Security: Go module floors (x/net 0.62.0, compress, otel, go-jose) and expat 2.10.0 (Odoo #2162)
+
+- **Go module floors raised** in `buildroot-external/go-modfloor.mk` (applies to netbird, telegraf, os-agent, runc, containerd, docker-engine, docker-cli): golang.org/x/net v0.60.0 -> v0.62.0 (CVE-2026-78661), x/crypto v0.57.0 -> v0.58.0 and x/text v0.42.0 -> v0.43.0 (x/net 0.62.0 requires them), and new floors github.com/klauspost/compress v1.18.7 (CVE-2026-63209), go.opentelemetry.io/otel v1.41.0 (CVE-2026-29181), github.com/go-jose/go-jose/v4 v4.1.6 (CVE-2026-116587). `go-modfloor.sum` pins the 26 new go.sum lines (discovered against sum.golang.org, then proven complete by running the hook in its real GOSUMDB=off mode on all seven source trees).
+- **expat 2.9.0 -> 2.10.0** (target and host) through `container-floor.mk` (CVE-2026-113351, -115506, -117610, -118370); hash file `buildroot-external/patches/expat/expat.hash`, tarball checked against the maintainer's detached signature. SONAME stays libexpat.so.1.
+- Gates: `GOTC-IN-07` minimums raised/extended, `check-container-floor.sh` inspects 4 packages, new modfloor must-flag fixtures and a seam fixture at the live floors, board-matrix `go-version-m.txt` fixtures lifted to the hook-derived versions (a real bake must re-capture them).
+- **NetBird is rebuilt** with the bumped x/net/x/crypto/x/text/x/sys: mesh connectivity is proven on the rc3 K31 fresh-flash gate (mesh up + SSH login), not by this change. gRPC is not bumped.
+
 ## BOSv1.6.1-rc2 (iHost, feat/1.6-haos18)
 
 rc1 plus everything merged on the line since (`git log 67cd2551e..HEAD`) and the component bumps:

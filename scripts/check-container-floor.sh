@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check-container-floor.sh — docker-engine, docker-cli and containerd in the
+# check-container-floor.sh — docker-engine, docker-cli, containerd and expat in the
 # image are at or above the pinned minimum, and the GA carry that lifts them
 # is complete.
 #
@@ -28,6 +28,7 @@ set -uo pipefail
 MIN_DOCKER_ENGINE=29.8.2
 MIN_DOCKER_CLI=29.8.2
 MIN_CONTAINERD=2.3.7
+MIN_EXPAT=2.10.0
 
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/.." && pwd)"
@@ -61,8 +62,9 @@ for lm in "${localmks[@]}"; do
   fi
 done
 n=0
-for spec in DOCKER_ENGINE:docker-engine:$MIN_DOCKER_ENGINE DOCKER_CLI:docker-cli:$MIN_DOCKER_CLI CONTAINERD:containerd:$MIN_CONTAINERD; do
-  IFS=: read -r pfx pkg min <<<"$spec"
+# PREFIX:package:minimum:tarball-suffix (the Go packages are buildroot go2 download tarballs)
+for spec in DOCKER_ENGINE:docker-engine:$MIN_DOCKER_ENGINE:-go2.tar.gz DOCKER_CLI:docker-cli:$MIN_DOCKER_CLI:-go2.tar.gz CONTAINERD:containerd:$MIN_CONTAINERD:-go2.tar.gz EXPAT:expat:$MIN_EXPAT:.tar.xz; do
+  IFS=: read -r pfx pkg min tsuf <<<"$spec"
   pmk="$br/package/$pkg/$pkg.mk"
   [ -f "$pmk" ] || die "$pmk not found"
   # The package's own plain version assignment, evaluated AFTER the floor file.
@@ -84,7 +86,7 @@ MAKE
   fi
   # The hash for the effective version must be reachable: either a GA hash
   # file naming it, or (submodule already at/above the floor) buildroot's own.
-  tarball="$pkg-$eff-go2.tar.gz"
+  tarball="$pkg-$eff$tsuf"
   gahash="$ext/patches/$pkg/$pkg.hash"
   if grep -qE "^sha256[[:space:]]+[0-9a-f]{64}[[:space:]]+${tarball//./\\.}\$" "$gahash" 2>/dev/null; then
     echo "container-floor: ok   $pkg $eff (>= $min), GA hash entry for $tarball"
@@ -94,6 +96,6 @@ MAKE
     bad "$pkg $eff: no sha256 entry for $tarball in $gahash or the submodule's $pkg.hash"
   fi
 done
-[ "$n" -eq 3 ] || die "inspected $n packages, expected 3"
+[ "$n" -eq 4 ] || die "inspected $n packages, expected 4"
 [ "$fail" -eq 0 ] && echo "container-floor: OK ($n packages inspected)"
 exit "$fail"

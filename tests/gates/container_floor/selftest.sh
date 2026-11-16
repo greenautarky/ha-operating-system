@@ -26,8 +26,10 @@ case_() { # label want-rc expect-substring ext br localmk
   if [ "$rc" = "$2" ] && grep -qF -- "$3" <<<"$out"; then echo "  ok    $1 (rc=$rc)"
   else echo "  FAIL  $1 rc=$rc want $2 '$3' :: $out"; bad=1; fi
 }
-mkbr() { # dir de dc cd [hash-in-submodule]
-  mkdir -p "$1/package"/{docker-engine,docker-cli,containerd}
+mkbr() { # dir de dc cd [hash-in-submodule]   (env EXV = the submodule's expat, default 2.9.0 as HAOS 18.4 ships it)
+  local ex="${EXV:-2.9.0}"
+  mkdir -p "$1/package"/{docker-engine,docker-cli,containerd,expat}
+  printf 'EXPAT_VERSION = %s\n' "$ex" >"$1/package/expat/expat.mk"
   printf 'DOCKER_ENGINE_VERSION = %s\n' "$2" >"$1/package/docker-engine/docker-engine.mk"
   printf 'DOCKER_CLI_VERSION = %s\n' "$3" >"$1/package/docker-cli/docker-cli.mk"
   printf 'CONTAINERD_VERSION = %s\n' "$4" >"$1/package/containerd/containerd.mk"
@@ -36,23 +38,24 @@ mkbr() { # dir de dc cd [hash-in-submodule]
     printf 'sha256  %s  docker-engine-%s-go2.tar.gz\n' "$h" "$2" >"$1/package/docker-engine/docker-engine.hash"
     printf 'sha256  %s  docker-cli-%s-go2.tar.gz\n' "$h" "$3" >"$1/package/docker-cli/docker-cli.hash"
     printf 'sha256  %s  containerd-%s-go2.tar.gz\n' "$h" "$4" >"$1/package/containerd/containerd.hash"
+    printf 'sha256  %s  expat-%s.tar.xz\n' "$h" "$ex" >"$1/package/expat/expat.hash"
   fi
 }
 mkext() { # dir : copy of the live GA files the gate reads
   mkdir -p "$1/patches"
   cp "$repo/$GA_LAYER_DIR/container-floor.mk" "$1/"
   cp -r "$repo/$GA_LAYER_DIR/patches/docker-engine" "$repo/$GA_LAYER_DIR/patches/docker-cli" \
-        "$repo/$GA_LAYER_DIR/patches/containerd" "$1/patches/"
+        "$repo/$GA_LAYER_DIR/patches/containerd" "$repo/$GA_LAYER_DIR/patches/expat" "$1/patches/"
 }
 good_local="$tmp/local-good.mk"
 printf 'include $(call qstrip,$(BR2_EXTERNAL_GA_HAOS_PATH))/container-floor.mk\n' >"$good_local"
 
 # --- must-pass
 mkbr "$tmp/br183" 29.7.2 29.7.2 2.3.3; mkext "$tmp/ext1"
-case_ "must-pass/haos-18.3-versions-floor-active" 0 "container-floor: OK (3 packages inspected)" "$tmp/ext1" "$tmp/br183" "$good_local"
-mkbr "$tmp/brnew" 29.9.0 29.9.0 2.4.0 hash
+case_ "must-pass/haos-18.3-versions-floor-active" 0 "container-floor: OK (4 packages inspected)" "$tmp/ext1" "$tmp/br183" "$good_local"
+EXV=2.10.1 mkbr "$tmp/brnew" 29.9.0 29.9.0 2.4.0 hash
 case_ "must-pass/submodule-newer-floor-off" 0 "the GA carry is obsolete" "$tmp/ext1" "$tmp/brnew" "$good_local"
-mkbr "$tmp/breq" 29.8.2 29.8.2 2.3.7
+EXV=2.10.0 mkbr "$tmp/breq" 29.8.2 29.8.2 2.3.7
 case_ "must-pass/submodule-at-floor" 0 "container-floor: OK" "$tmp/ext1" "$tmp/breq" "$good_local"
 
 # --- must-fail
@@ -63,6 +66,10 @@ case_ "must-fail/hash-file-missing" 1 "docker-cli 29.8.2: no sha256 entry" "$tmp
 mkext "$tmp/ext4"; sed -i 's/containerd-2.3.7-go2/containerd-2.3.3-go2/' "$tmp/ext4/patches/containerd/containerd.hash"
 case_ "must-fail/hash-names-other-version" 1 "containerd 2.3.7: no sha256 entry" "$tmp/ext4" "$tmp/br183" "$good_local"
 mkext "$tmp/ext5"; sed -i -E 's/^(sha256  )[0-9a-f]{64}(  docker-engine-)/\1deadbeef\2/' "$tmp/ext5/patches/docker-engine/docker-engine.hash"
+mkext "$tmp/ext6"; sed -i 's/EXPAT:expat:2.10.0/EXPAT:expat:2.9.0/' "$tmp/ext6/container-floor.mk"
+case_ "must-fail/expat-floor-lowered" 1 "expat effective version 2.9.0 is below the pinned minimum" "$tmp/ext6" "$tmp/br183" "$good_local"
+mkext "$tmp/ext7"; rm "$tmp/ext7/patches/expat/expat.hash"
+case_ "must-fail/expat-hash-file-missing" 1 "expat 2.10.0: no sha256 entry" "$tmp/ext7" "$tmp/br183" "$good_local"
 case_ "must-fail/hash-value-not-sha256" 1 "docker-engine 29.8.2: no sha256 entry" "$tmp/ext5" "$tmp/br183" "$good_local"
 : >"$tmp/local-none.mk"
 case_ "must-fail/local-mk-without-include" 1 "does not include container-floor.mk" "$tmp/ext1" "$tmp/br183" "$tmp/local-none.mk"
@@ -76,7 +83,7 @@ case_ "must-fail/package-dir-incomplete" 2 "cannot read CONTAINERD_VERSION" "$tm
 # --- the real thing: live GA files against the pinned submodule
 if [ -d "$repo/$GA_HAOS_DIR/buildroot/package/docker-engine" ]; then
   n=$((n+1)); out="$("$gate" 2>&1)"; rc=$?
-  if [ "$rc" = 0 ] && grep -qF "container-floor: OK (3 packages inspected)" <<<"$out"; then echo "  ok    must-pass/live-tree-pinned-submodule"
+  if [ "$rc" = 0 ] && grep -qF "container-floor: OK (4 packages inspected)" <<<"$out"; then echo "  ok    must-pass/live-tree-pinned-submodule"
   else echo "  FAIL  live tree rc=$rc :: $out"; bad=1; fi
 elif [ "${CONTAINER_FLOOR_REQUIRE_LIVE:-0}" = 1 ]; then
   echo "  FAIL  live tree: haos/buildroot not checked out (CONTAINER_FLOOR_REQUIRE_LIVE=1)"; bad=1

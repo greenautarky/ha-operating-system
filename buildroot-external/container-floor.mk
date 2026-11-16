@@ -4,6 +4,12 @@
 # containerd 2.3.3. Security releases are out for all three:
 #   docker-engine / docker-cli 29.8.2   https://github.com/moby/moby/releases/tag/docker-v29.8.2
 #   containerd 2.3.7                    https://github.com/containerd/containerd/releases/tag/v2.3.7
+# expat (not a Go package, same mechanism): the buildroot submodule pins 2.9.0, inside
+# four published advisories fixed in 2.10.0 (CVE-2026-113351, -115506, -117610, -118370;
+# https://blog.hartwork.org/posts/expat-2-10-0-released/). 2.10.0 keeps SONAME libexpat.so.1
+# (libtool 14:1:13, i.e. only the revision moves: 1.13.0 -> 1.13.1). Consumers on the device
+# are dbus-daemon / dbus-broker-launch; host-expat follows EXPAT_VERSION. Its hash file is
+# patches/expat/expat.hash (tarball sha256 checked against the maintainer's detached signature).
 # Master (HAOS 16.3 line) already ships them through its buildroot pin; this
 # file gives the 18.x line the same versions without a buildroot fork.
 #
@@ -27,7 +33,8 @@
 GA_CONTAINER_FLOORS = \
 	DOCKER_ENGINE:docker-engine:29.8.2 \
 	DOCKER_CLI:docker-cli:29.8.2 \
-	CONTAINERD:containerd:2.3.7
+	CONTAINERD:containerd:2.3.7 \
+	EXPAT:expat:2.10.0
 
 define GA_CONTAINER_FLOOR
 GA_$(1)_SUBMODULE_VERSION := $$(shell sed -n -E 's/^$(1)_VERSION[[:space:]]*=[[:space:]]*([0-9]+(\.[0-9]+)*)[[:space:]]*$$$$/\1/p' $$(TOPDIR)/package/$(2)/$(2).mk | head -n 1)
