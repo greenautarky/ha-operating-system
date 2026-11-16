@@ -23,8 +23,9 @@
 # --images-dir is a failure, never a pass.
 #
 #   check-baked-snapshots.sh --data-img data.ext4 [--images-dir DIR] [--mode enforce|report]
-# MODE (env GA_SNAPSHOT_GATE_MODE, default below): enforce = exit 1 on a finding; report = print
-# the finding loudly and exit 0 (used until the bake unpacks, i.e. until patch 0135 is in).
+# MODE (env GA_SNAPSHOT_GATE_MODE, default below = enforce since 2026-11-16): enforce = exit 1 on a
+# finding; report = print the finding loudly and exit 0 (escape hatch, not the default: in report mode
+# the DSGW dev11 bake went green with 0 snapshots).
 # The selftest is tests/gates/baked_snapshots/selftest.sh and always passes --mode explicitly.
 set -uo pipefail
 
@@ -33,7 +34,7 @@ SNAP_DIR=/docker/containerd/daemon/io.containerd.snapshotter.v1.overlayfs/snapsh
 # add more; an unpacked bake has well over 100. 40 separates "unpacked" from "empty / one image"
 # with a wide margin and survives Core shrinking (epic #1964).
 MIN_SNAPSHOTS=40
-DEFAULT_MODE=report
+DEFAULT_MODE=enforce
 
 IMG=""; IMAGES_DIR=""; MODE="${GA_SNAPSHOT_GATE_MODE:-$DEFAULT_MODE}"
 while [ $# -gt 0 ]; do
@@ -51,7 +52,7 @@ finding() { echo "  BAD   $*"; problems=$((problems + 1)); }
 finish() {
 	echo "baked snapshots: ${n_snap:-0} committed, floor ${MIN_SNAPSHOTS}${expected:+, ${expected} distinct layer chain(s) in the archives}, ${problems} problem(s) [mode ${MODE}]"
 	if [ "$problems" -gt 0 ] && [ "$MODE" = report ]; then
-		echo "check-baked-snapshots: REPORT-ONLY: the images are NOT unpacked in this data partition -- first boot unpacks them on the device (Odoo #2067); enforcing once patch 0135 is baked" >&2
+		echo "check-baked-snapshots: REPORT-ONLY: the images are NOT unpacked in this data partition -- first boot unpacks them on the device (Odoo #2067); report mode is an explicit opt-out" >&2
 		exit 0
 	fi
 	[ "$problems" -eq 0 ]; exit $?

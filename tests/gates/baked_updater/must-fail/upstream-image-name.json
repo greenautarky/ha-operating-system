@@ -1,0 +1,19 @@
+{
+  "channel": "stable",
+  "homeassistant": "2026.10.4.4",
+  "supervisor": "2026.10.5.1",
+  "cli": "2025.10.2",
+  "dns": "2026.09.1",
+  "audio": "2025.08.1",
+  "multicast": "2025.08.1",
+  "observer": "2025.02.1",
+  "image": {
+    "homeassistant": "ghcr.io/greenautarky/home-assistant-armv7",
+    "supervisor": "ghcr.io/greenautarky/{arch}-hassio-supervisor",
+    "cli": "homeassistant/{arch}-hassio-cli",
+    "dns": "ghcr.io/greenautarky/{arch}-hassio-dns",
+    "audio": "ghcr.io/greenautarky/{arch}-hassio-audio",
+    "multicast": "ghcr.io/greenautarky/{arch}-hassio-multicast",
+    "observer": "ghcr.io/greenautarky/{arch}-hassio-observer"
+  }
+}

@@ -1742,7 +1742,7 @@ if [[ -f "$VER_JSON" ]]; then
   # committed snapshot per distinct layer chain of the baked archives). BOSv1.6.0-rc13 baked them
   # compressed-only; every device unpacked on first boot (Core ~9 min, Odoo #2067). scripts/
   # check-baked-snapshots.sh reads the finished data.ext4 with debugfs (no mount); its mode is
-  # GA_SNAPSHOT_GATE_MODE (default report until patch 0135 is baked, then enforce). Selftest:
+  # GA_SNAPSHOT_GATE_MODE (default enforce). Selftest:
   # tests/gates/baked_snapshots/selftest.sh. Status read from the command, not from a pipe.
   VER13_CHECKER="${VER10_SRC:+${VER10_SRC}/scripts/check-baked-snapshots.sh}"
   VER13_DATA="${OUT}/images/data.ext4"
@@ -1767,6 +1767,31 @@ if [[ -f "$VER_JSON" ]]; then
     else
       printf '%s\n' "$VER13_OUT" | sed 's/^/        /'
       _fail "VER-13: the baked images are not unpacked in data.ext4 (${VER13_SUMMARY:-rc=${VER13_RC}})"
+    fi
+  fi
+
+  # VER-14: the BUILT updater.json in data.ext4 carries every version + image of version.json (the five
+  # plugins always; Supervisor and Core when baked). SRC-06 only greps the generator's source and passed
+  # on rc1 while the real seed was Core-only. scripts/check-baked-updater.sh reads /supervisor/updater.json
+  # from the finished data.ext4; selftest tests/gates/baked_updater/selftest.sh. Real bake (build.log
+  # present) without data.ext4 or version.json = FAIL, not skip.
+  VER14_CHECKER="${VER10_SRC:+${VER10_SRC}/scripts/check-baked-updater.sh}"
+  VER14_VJ="$(dirname "${IMAGES_DIR:-/nonexistent/x}")/version.json"
+  if [[ -d "$IMAGES_DIR" ]] && { [[ ! -f "$VER13_DATA" ]] || [[ ! -f "$VER14_VJ" ]]; } && [[ -f "${OUT}/images/build.log" ]]; then
+    _fail "VER-14: this is a real bake output (${OUT}/images/build.log exists) but ${VER13_DATA} or ${VER14_VJ} is missing — the updater.json check cannot run"
+  elif [[ ! -d "$IMAGES_DIR" ]] || [[ ! -f "$VER13_DATA" ]] || [[ ! -f "$VER14_VJ" ]]; then
+    _skip "VER-14" "no images dir, data.ext4 or version.json, and no real-bake marker — source-only/fixture run"
+  elif [[ -z "$VER14_CHECKER" ]] || [[ ! -x "$VER14_CHECKER" ]]; then
+    _fail "VER-14: data.ext4 was built but scripts/check-baked-updater.sh was not found or is not executable (looked under '${VER10_SRC:-<unresolved>}')"
+  else
+    VER14_OUT="$("$VER14_CHECKER" --data-img "$VER13_DATA" --version-json "$VER14_VJ" --images-dir "$IMAGES_DIR" 2>&1)"
+    VER14_RC=$?
+    VER14_SUMMARY="$(printf '%s\n' "$VER14_OUT" | grep -E '^baked updater.json:' || true)"
+    if [[ "$VER14_RC" -eq 0 ]]; then
+      _pass "VER-14: ${VER14_SUMMARY}"
+    else
+      printf '%s\n' "$VER14_OUT" | sed 's/^/        /'
+      _fail "VER-14: the built updater.json does not carry version.json (${VER14_SUMMARY:-rc=${VER14_RC}})"
     fi
   fi
 

@@ -57,6 +57,7 @@ NOT_DEVICE = {
     "buildroot-external/patches-haos/0133-": "Makefile recipe, runs on the builder",
     "buildroot-external/patches-haos/0134-": "Makefile recipe, runs on the builder",
     "buildroot-external/patches-haos/0135-": "bake recipe (dind import, Makefile), runs on the builder",
+    "buildroot-external/patches-haos/0137-": "bake recipe (create-data-partition.sh), runs on the builder",
     "patches/haos/": "patches to hassio build scripts, run on the builder",
     "scripts/": "build host / CI tooling (check-images.sh, scan-cves.sh, ...)",
     "Dockerfile": "build-container definition, installs jq for the builder",

@@ -103,8 +103,12 @@ run --data-img "$W/at.ext4" --mode bogus; [ "$RC" = 2 ] && ok "unknown mode -> u
 build "$HERE/must-fail/rc13-empty-snapshot-store.txt" "$W/rep.ext4"
 run --data-img "$W/rep.ext4" --mode report
 [ "$RC" = 0 ] && grep -q 'REPORT-ONLY' <<<"$OUT" && grep -q ' BAD ' <<<"$OUT" && ok "report mode: finding printed, exit 0, REPORT-ONLY announced" || bad "report mode rc=$RC :: $OUT"
-GA_SNAPSHOT_GATE_MODE=enforce run --data-img "$W/rep.ext4"
-[ "$RC" = 1 ] && ok "GA_SNAPSHOT_GATE_MODE=enforce overrides the default" || bad "env enforce rc=$RC :: $OUT"
+run --data-img "$W/rep.ext4"
+[ "$RC" = 1 ] && ok "no --mode, no env: the DEFAULT is enforce (0 snapshots -> rc 1)" || bad "default mode rc=$RC :: $OUT"
+GA_SNAPSHOT_GATE_MODE=report run --data-img "$W/rep.ext4"
+[ "$RC" = 0 ] && grep -q 'REPORT-ONLY' <<<"$OUT" && ok "GA_SNAPSHOT_GATE_MODE=report is an explicit opt-out (rc 0, REPORT-ONLY)" || bad "env report rc=$RC :: $OUT"
+build "$(spec_n "$FLOOR")" "$W/at2.ext4"; run --data-img "$W/at2.ext4"
+[ "$RC" = 0 ] && ok "default mode, unpacked fixture -> green" || bad "default mode green rc=$RC :: $OUT"
 
 [ "$ran" -gt 0 ] || { echo "FAIL: zero cases"; exit 1; }
 echo "$ran cases, $fails failed (floor read from the gate: $FLOOR)"; exit $((fails > 0))
