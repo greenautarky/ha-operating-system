@@ -188,7 +188,7 @@ done
 # telegraf. The go-toolchain floor (GOTC-04) says nothing about vendored modules.
 # MFLOORS is a PINNED constant here: the verdict is held to it, not to the live
 # go-modfloor.mk (inputs_check.sh holds that file to a minimum).
-MFLOORS=$'golang.org/x/net v0.60.0\ngolang.org/x/crypto v0.57.0\ngolang.org/x/text v0.42.0\ngolang.org/x/mod v0.41.0'
+MFLOORS=$'golang.org/x/net v0.60.0\ngolang.org/x/crypto v0.57.0\ngolang.org/x/text v0.42.0\ngolang.org/x/mod v0.41.0\ngithub.com/klauspost/compress v1.18.7\ngo.opentelemetry.io/otel v1.41.0\ngithub.com/go-jose/go-jose/v4 v4.1.6'
 declare -A MFLAG=(
   [rc2-shaped]="1 10"
   [runc-bake-rc3]="1 1"
@@ -196,6 +196,9 @@ declare -A MFLAG=(
   [crypto-only-below]="1 1"
   [text-below]="1 1"
   [mod-below]="1 1"
+  [compress-below]="1 1"
+  [otel-below]="1 1"
+  [jose-below]="1 1"
   [pseudo-version]="1 1"
   [single-digit-minor]="1 1"
   [replace-downgrades]="1 1"
@@ -434,10 +437,10 @@ GOSTUB
   } > "$BW/block.sh"
   _blk() { GOSTUB_SCAN="$1" bash "$BW/block.sh" 2>&1; }
   _g5() { grep -E 'GOTC-05' <<<"$1" | head -n 1; }
-  o="$(_blk "$FX/modfloor/must-pass/all-at-floor.mods")"
+  o="$(_blk "$FX/modfloor/seam/at-live-floor.mods")"
   [[ "$(_g5 "$o")" == *"PASS"*"GOTC-05"* ]] && _pass "GOTC-FX-SEAM-1: block over a good image: GOTC-05 passes" || _fail "GOTC-FX-SEAM-1: good image -> '$(_g5 "$o")'"
   o="$(_blk "$FX/modfloor/must-flag/rc2-shaped.mods")"
-  { [[ "$(_g5 "$o")" == *"FAIL"*"GOTC-05"* ]] && grep -q 'golang.org/x/net v0.59.0 (below floor v0.60.0)' <<<"$o"; } \
+  { [[ "$(_g5 "$o")" == *"FAIL"*"GOTC-05"* ]] && grep -q 'golang.org/x/net v0.59.0 (below floor v0.62.0)' <<<"$o"; } \
     && _pass "GOTC-FX-SEAM-2: block over the rc2-shaped image: GOTC-05 fails and names the offenders" || _fail "GOTC-FX-SEAM-2: rc2-shaped image -> '$(_g5 "$o")'"
   o="$(_blk "$FX/modfloor/must-pass/binary-without-floored-modules.mods")"
   [[ "$(_g5 "$o")" == *"FAIL"*"reader is broken"* ]] && _pass "GOTC-FX-SEAM-3: an image with zero floored entries fails closed (reader broken)" || _fail "GOTC-FX-SEAM-3: zero floored entries -> '$(_g5 "$o")'"
@@ -453,7 +456,7 @@ GOSTUB
     && _pass "GOTC-FX-SEAM-5: block: the same runc after the expiry date fails and names the expired exemption" || _fail "GOTC-FX-SEAM-5: expired -> '$(_g5 "$o")'"
   rm -f "$XF"
   o="$(_blk "$XFL")"
-  { [[ "$(_g5 "$o")" == *"FAIL"*"GOTC-05"* ]] && grep -q 'usr/bin/runc: golang.org/x/net v0.43.0 (below floor v0.60.0)' <<<"$o"; } \
+  { [[ "$(_g5 "$o")" == *"FAIL"*"GOTC-05"* ]] && grep -q 'usr/bin/runc: golang.org/x/net v0.43.0 (below floor v0.62.0)' <<<"$o"; } \
     && _pass "GOTC-FX-SEAM-6: block: without an exemption file the same runc fails (strict by default)" || _fail "GOTC-FX-SEAM-6: no exemption file -> '$(_g5 "$o")'"
   rm -rf "$BW"
 fi
