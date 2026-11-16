@@ -1,0 +1,75 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] hassio: unpack the baked images at build time (docker load --platform) (Odoo #2067)
+
+Applies after 0131/0134. The bake's plain `docker load` of an armv7/aarch64 archive on the amd64
+builder imported the compressed content only and committed NO containerd snapshot (BOSv1.6.0-rc13:
+snapshot store empty, 15 images). Every device then unpacked each image at its first container
+create / add-on install: Core 9 min 04 s of a ~15 min first boot, add-ons 35-72 s each.
+
+- dind-import-containers.sh: `docker load --platform <board platform>` (armv7 -> linux/arm/v7,
+  aarch64 -> linux/arm64, from /build/images.arch, an unknown arch fails the bake); fails the bake
+  in the first minute when fewer snapshots than images are committed;
+- hassio.mk: writes images.arch (BR2_PACKAGE_HASSIO_ARCH) next to images.expected.
+The finished data.ext4 is judged by scripts/check-baked-snapshots.sh (VER-13, enforcing).
+---
+  buildroot-external/package/hassio/dind-import-containers.sh | 20 ++++++++++++++++++--
+  buildroot-external/package/hassio/hassio.mk                 |  2 ++
+ 2 files changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/buildroot-external/package/hassio/dind-import-containers.sh b/buildroot-external/package/hassio/dind-import-containers.sh
+--- a/buildroot-external/package/hassio/dind-import-containers.sh
++++ b/buildroot-external/package/hassio/dind-import-containers.sh
+@@ -16,12 +16,27 @@
+ n_tar=0
+ n_loaded=0
+ 
++# GA (Odoo #2067): UNPACK at build time. A plain `docker load` of a foreign-platform image
++# (armv7/aarch64 archive on an amd64 builder) only imports the compressed content and commits NO
++# containerd snapshot; the device then unpacks every image at its first container create / add-on
++# install (Core: ~9 min on the iHost, BOSv1.6.0-rc13). `docker load --platform` makes the daemon
++# unpack the layers for the board's platform now. The platform comes from the board arch
++# (hassio.mk: images.arch), never from the archive. Measured on docker 29.7.2, 29.8.2 and 29.9.3:
++# plain load = 0 snapshots, --platform load = committed snapshots. An unknown arch fails the bake.
++arch=$(cat /build/images.arch 2>/dev/null || echo "")
++case "${arch}" in
++	armv7)   platform=linux/arm/v7 ;;
++	aarch64) platform=linux/arm64 ;;
++	*) echo "GA dind-import: ERROR: /build/images.arch missing or unknown ('${arch}')" >&2; exit 1 ;;
++esac
++echo "GA dind-import: loading for ${platform} (unpacked at build time)"
++
+ # Make sure to order images by size (largest first)
+ # It seems docker load requires space during operation
+ # shellcheck disable=SC2045
+ for image in $(ls -S /build/images/*.tar 2>/dev/null); do
+ 	n_tar=$((n_tar + 1))
+-	out=$(docker load --input "${image}")
++	out=$(docker load --platform "${platform}" --input "${image}")
+ 	echo "${out}"
+ 	if echo "${out}" | grep -q '^Loaded image'; then
+ 		n_loaded=$((n_loaded + 1))
+@@ -35,6 +50,12 @@
+ [ "${n_tar}" -eq "${expected}" ] || { echo "GA dind-import: ERROR: ${n_tar} archives, expected ${expected}" >&2; exit 1; }
+ [ "${n_loaded}" -eq "${n_tar}" ] || { echo "GA dind-import: ERROR: ${n_loaded} of ${n_tar} archives loaded" >&2; exit 1; }
+ 
++# GA (Odoo #2067): the unpack must have happened -- fail here, in the first minute, rather than
++# after the whole build (scripts/check-baked-snapshots.sh judges the finished data partition).
++n_snap=$(ctr --address /var/run/docker/containerd/containerd.sock -n moby snapshots ls | tail -n +2 | wc -l)
++echo "GA dind-import: ${n_snap} committed snapshot(s) for ${n_loaded} image(s)"
++[ "${n_snap}" -ge "${n_loaded}" ] || { echo "GA dind-import: ERROR: ${n_snap} snapshots for ${n_loaded} images -- images were not unpacked" >&2; exit 1; }
++
+ # Tag the Supervisor how the OS expects it to be tagged.
+ # GA: the GA launcher (haos-supervisor, patch 0130) runs
+ # ghcr.io/greenautarky/<arch>-hassio-supervisor:latest -- never the upstream
+diff --git a/buildroot-external/package/hassio/hassio.mk b/buildroot-external/package/hassio/hassio.mk
+--- a/buildroot-external/package/hassio/hassio.mk
++++ b/buildroot-external/package/hassio/hassio.mk
+@@ -177,6 +177,8 @@
+ 	# dind-import-containers.sh fails unless exactly this many load.
+ 	$(Q)echo $$(( $(words $(HASSIO_GA_IMAGES)) + $(if $(HASSIO_ADDON_IMAGES_JSON),$$(jq -r '.addons | length' $(HASSIO_ADDON_IMAGES_JSON)),0) )) > $(@D)/images.expected
+ 	@echo "GA hassio: data partition must carry $$(cat $(@D)/images.expected) image(s)"
++	# GA (Odoo #2067): the board arch the images are unpacked for (dind-import-containers.sh maps it to the platform)
++	$(Q)echo $(call qstrip,$(BR2_PACKAGE_HASSIO_ARCH)) > $(@D)/images.arch
+ endef
+ 
+ # /etc/ga-version-url: the haos-version base URL the device POLLS, written from
