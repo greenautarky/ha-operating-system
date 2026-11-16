@@ -199,6 +199,88 @@ case "$BOARD" in
         BOARD=ihost ;;
 esac
 
+# ── Device identity (OTA hardening, stage 1 — Odoo #2160) ───────────────────
+# Every download below carries the device's own fleet-manager identity: the
+# per-device `role=device` token ga_manager already holds (the `fleet:` block of
+# its unified credentials bundle, ADR-0003 Amendment 2026-07-09b), sent as
+# `Authorization: Bearer <token>` plus the non-secret `X-GA-Device-Id`. Stage 1
+# only SENDS it; the OTA store stays open, so a device with no identity (fresh,
+# not yet enrolled, token not delivered) still downloads exactly as before.
+# Stage 2 — the store REQUIRING it — is a separate, later change, gated on the
+# access log showing no active device without it.
+#
+# The token never appears on a command line: it goes into a 0600 curl --config
+# file under /run that is removed on exit. Absence of an identity is announced
+# at WARNING level (never a quiet substitution) and never blocks the download.
+CREDS_FILE="$GM_DATA_DIR/ga-fleet-credentials.yaml"
+IDENT_CONF=""
+cleanup_ident() { [ -z "$IDENT_CONF" ] || rm -f "$IDENT_CONF"; }
+trap cleanup_ident EXIT
+
+# yaml_scalar <file> <fleet|top> <key> — the value of <key> from the `fleet:`
+# block (or from the top level), quotes stripped. The bundle is `yaml.safe_dump`
+# output: two-space nested keys, one scalar per line.
+yaml_scalar() {
+    awk -v scope="$2" -v key="$3" -v sq="'" '
+        /^[^ #]/ { infleet = ($0 ~ /^fleet:[ ]*$/) }
+        {
+            if (scope == "fleet") {
+                if (!infleet || $0 !~ /^[ ]+/) next
+                line = $0; sub(/^[ ]+/, "", line)
+            } else {
+                if ($0 ~ /^[ ]/) next
+                line = $0
+            }
+            n = length(key) + 1
+            if (substr(line, 1, n) != key ":") next
+            v = substr(line, n + 1); sub(/^[ ]+/, "", v); sub(/[ ]+$/, "", v)
+            c1 = substr(v, 1, 1)
+            if ((c1 == "\"" || c1 == sq) && length(v) >= 2 && substr(v, length(v), 1) == c1) v = substr(v, 2, length(v) - 2)
+            print v; exit
+        }' "$1" 2>/dev/null
+}
+
+build_identity() {
+    _why=""
+    _tok=""
+    _id=""
+    if ! regular_file "$CREDS_FILE"; then
+        _why="$CREDS_FILE absent (device not enrolled yet, or credentials not delivered)"
+    else
+        _tok="$(yaml_scalar "$CREDS_FILE" fleet token | head -c 200)"
+        _id="$(yaml_scalar "$CREDS_FILE" top device_id | head -c 80)"
+        if [ -z "$_tok" ]; then
+            _why="no fleet token in $CREDS_FILE"
+        elif ! printf '%s' "$_tok" | grep -Eq '^[A-Za-z0-9_-]{16,128}$'; then
+            _why="fleet token in $CREDS_FILE is malformed"
+        elif ! printf '%s' "$_id" | grep -Eq '^[A-Za-z0-9._-]{1,64}$'; then
+            _why="device_id in $CREDS_FILE is missing or malformed"
+        fi
+    fi
+    if [ -n "$_why" ]; then
+        echo "[ga-rauc-install] WARNING: no device identity ($_why) - downloading ANONYMOUSLY. Allowed while the OTA store is open (stage 1); once it requires an identity (stage 2) this device cannot download." >&2
+        return 0
+    fi
+    IDENT_CONF="${GA_OTA_IDENT_DIR:-/run}/ga-rauc-install-ident.$$"
+    if ! ( umask 077
+           printf 'header = "Authorization: Bearer %s"\nheader = "X-GA-Device-Id: %s"\n' "$_tok" "$_id" > "$IDENT_CONF" ); then
+        IDENT_CONF=""
+        echo "[ga-rauc-install] WARNING: could not write the identity config - downloading ANONYMOUSLY" >&2
+        return 0
+    fi
+    echo "[ga-rauc-install] sending device identity ${_id} (token from $CREDS_FILE, never logged)"
+}
+build_identity
+
+# ota_curl <args...> — the download curl, with the identity when there is one.
+ota_curl() {
+    if [ -n "$IDENT_CONF" ]; then
+        curl --config "$IDENT_CONF" "$@"
+    else
+        curl "$@"
+    fi
+}
+
 BASE_URL="https://${OTA_HOST}/releases/${VERSION}"
 if [ -n "$GA_RELEASE" ]; then
     PRIMARY_URL="${BASE_URL}/${GA_RELEASE}/haos_${BOARD}-${VERSION}.raucb"
@@ -218,10 +300,10 @@ mkdir -p "$STAGING_DIR"
 BUNDLE="$STAGING_DIR/ga-rauc-install-${VERSION}.raucb"
 
 echo "[ga-rauc-install] downloading $PRIMARY_URL"
-if ! curl --fail --silent --show-error --location --resolve "$OTA_RESOLVE" --output "$BUNDLE" "$PRIMARY_URL"; then
+if ! ota_curl --fail --silent --show-error --location --resolve "$OTA_RESOLVE" --output "$BUNDLE" "$PRIMARY_URL"; then
     if [ -n "$FALLBACK_URL" ]; then
         echo "[ga-rauc-install] per-rc slot miss — falling back to $FALLBACK_URL" >&2
-        if ! curl --fail --silent --show-error --location --resolve "$OTA_RESOLVE" --output "$BUNDLE" "$FALLBACK_URL"; then
+        if ! ota_curl --fail --silent --show-error --location --resolve "$OTA_RESOLVE" --output "$BUNDLE" "$FALLBACK_URL"; then
             echo "[ga-rauc-install] FATAL: download failed for $PRIMARY_URL and $FALLBACK_URL via the pinned endpoint ${OTA_IP}" >&2
             exit 3
         fi
