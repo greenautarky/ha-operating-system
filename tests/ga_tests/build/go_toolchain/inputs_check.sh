@@ -128,27 +128,14 @@ grep -qE '^include .*go-modfloor\.mk' "$EXT/external.mk" 2>/dev/null \
   && _pass "GOTC-IN-08: external.mk includes go-modfloor.mk (every board that uses the external tree)" \
   || _fail "GOTC-IN-08: external.mk does not include go-modfloor.mk - the POST_PATCH hooks would never load"
 
-# GOTC-IN-10: the module-floor exemption list (go-modfloor.exempt). Everything the
-# exemption may say is a PINNED constant HERE, not read from the file it judges:
-# editing the file alone cannot extend the expiry, add a binary, or move the
-# version. Changing an exemption means changing this block in review.
-X_PATH="usr/bin/runc"; X_MOD="golang.org/x/net"; X_VER="v0.43.0"; X_LAST_EXPIRY="2026-11-30"
-X_ADV="GO-2026-4440,GO-2026-4441,GO-2026-4918,GO-2026-5025,GO-2026-5026,GO-2026-5027,GO-2026-5028,GO-2026-5029,GO-2026-5030,GO-2026-5942,GO-2026-6603,GO-2026-6610,GO-2026-6611,GO-2026-6612,GO-2026-6617"
+# GOTC-IN-10: the module-floor exemption list (go-modfloor.exempt) is PINNED EMPTY here,
+# not read from the file it judges. The one historic entry (runc / x/net v0.43.0, expiry
+# 2026-11-30) was removed by Odoo #1270: runc takes the floors through RUNC_GA_MODBUMP.
+# Adding an exemption means changing this block in review.
 xl="$(ga_go_modfloor_exempt_list "$EXT" 2>/dev/null || true)"
 nx="$(grep -c . <<<"$xl" || true)"
-if [ "$nx" != "1" ]; then
-  _fail "GOTC-IN-10: go-modfloor.exempt holds $nx entries, want exactly 1 ($X_PATH $X_MOD) - a new exemption needs this pinned block changed in review"
-else
-  IFS='|' read -r xp xm xv xa xe xr <<<"$xl"
-  if [ "$xp|$xm|$xv|$xa" = "$X_PATH|$X_MOD|$X_VER|$X_ADV" ]; then _pass "GOTC-IN-10: exemption is exactly $X_PATH / $X_MOD $X_VER / 15 pinned advisory ids"
-  else _fail "GOTC-IN-10: exemption '$xp|$xm|$xv|$xa' differs from the pinned '$X_PATH|$X_MOD|$X_VER|$X_ADV'"; fi
-  if [[ "$xe" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && ! [[ "$xe" > "$X_LAST_EXPIRY" ]]; then _pass "GOTC-IN-10: expiry $xe is not later than the pinned $X_LAST_EXPIRY"
-  else _fail "GOTC-IN-10: expiry '$xe' is missing/malformed or later than $X_LAST_EXPIRY (extension needs Thomas' decision and this constant changed)"; fi
-  if [ "${#xr}" -ge 40 ]; then _pass "GOTC-IN-10: the exemption carries a reason"; else _fail "GOTC-IN-10: exemption reason missing or too short"; fi
-  today="$(date +%F)"
-  if [[ "$xe" > "$today" || "$xe" == "$today" ]]; then _pass "GOTC-IN-10: exemption not expired (expires $xe, today $today)"
-  else _fail "GOTC-IN-10: exemption for $xp EXPIRED $xe (today $today) - bump the module (RUNC_GA_MODBUMP hook) or re-decide"; fi
-fi
+if [ "$nx" = "0" ]; then _pass "GOTC-IN-10: go-modfloor.exempt holds no entries (pinned empty; runc takes the floors via RUNC_GA_MODBUMP)"
+else _fail "GOTC-IN-10: go-modfloor.exempt holds $nx entries, want 0 - an exemption needs this pinned block changed in review"; fi
 
 # GOTC-IN-05: what buildroot itself resolves for the real config.
 if [ ! -f "$BR/package/go/go.mk" ]; then
@@ -178,28 +165,28 @@ else
     # (DOWNLOAD_POST_PROCESS = go) has the go-modbump POST_PATCH hook. A Go package
     # added later without it would ship whatever x/net its upstream resolved to.
     pk="$(sed -n 's/^PACKAGES=//p' <<<"$vars")"
-    q=""; for p in $pk; do [[ "$p" == host-* ]] && continue; u="$(printf '%s' "$p" | tr 'a-z-' 'A-Z_')"; q="$q ${u}_DOWNLOAD_POST_PROCESS ${u}_POST_PATCH_HOOKS"; done
+    q=""; for p in $pk; do [[ "$p" == host-* ]] && continue; u="$(printf '%s' "$p" | tr 'a-z-' 'A-Z_')"; q="$q ${u}_DOWNLOAD_POST_PROCESS ${u}_POST_PATCH_HOOKS ${u}_PRE_PATCH_HOOKS"; done
     pv="$(make -s -C "$BR" O="$O" BR2_EXTERNAL="$E" printvars VARS="$q" 2>/dev/null)"
-    ngo=0; nexempt=0; missing=""
+    ngo=0; missing=""
     for p in $pk; do
       [[ "$p" == host-* ]] && continue
       u="$(printf '%s' "$p" | tr 'a-z-' 'A-Z_')"
       dp="$(sed -n "s/^${u}_DOWNLOAD_POST_PROCESS=//p" <<<"$pv")"
       [ "$dp" = "go" ] || continue
       ngo=$((ngo+1))
-      # PINNED exemption: runc is the only Go package without a hook; GOTC-IN-10 holds its
-      # go-modfloor.exempt entry (version, advisories, expiry) to pinned constants.
+      # runc runs its bump BEFORE the patches (they edit vendor/, `go mod vendor` would wipe
+      # that - Odoo #1270), so its hook is a PRE_PATCH hook; every other package POST_PATCH.
       hk="$(sed -n "s/^${u}_POST_PATCH_HOOKS=//p" <<<"$pv")"
       if [ "$p" = "runc" ]; then
-        nexempt=$((nexempt+1))
-        case " $hk " in *" RUNC_GA_MODBUMP "*) missing="$missing runc(has BOTH a hook and an exemption - remove the exemption)";; esac
+        hk="$(sed -n "s/^${u}_PRE_PATCH_HOOKS=//p" <<<"$pv")"
+        case " $hk " in *" RUNC_GA_MODBUMP "*) ;; *) missing="$missing runc(RUNC_GA_MODBUMP missing from RUNC_PRE_PATCH_HOOKS)";; esac
         continue
       fi
       case " $hk " in *" ${u}_GA_MODBUMP "*) ;; *) missing="$missing $p";; esac
     done
     if [ "$ngo" -eq 0 ]; then _fail "GOTC-IN-09: found no Go package in PACKAGES - the discriminator (DOWNLOAD_POST_PROCESS=go) is broken, not the tree"
     elif [ -n "$missing" ]; then _fail "GOTC-IN-09: Go packages without a go-modbump hook (add <PKG>_GA_MODBUMP in go-modfloor.mk):$missing"
-    else _pass "GOTC-IN-09: all $ngo enabled Go packages are covered: $((ngo-nexempt)) carry the go-modbump hook, $nexempt covered by the pinned runc exemption (GOTC-IN-10)"; fi
+    else _pass "GOTC-IN-09: all $ngo enabled Go packages carry the go-modbump hook (runc as PRE_PATCH, the rest POST_PATCH)"; fi
     # the hook expands to the script, the floors and the sums (not an empty string)
     hv="$(make -s -C "$BR" O="$O" BR2_EXTERNAL="$E" printvars VARS='NETBIRD_GA_MODBUMP DOCKER_CLI_GA_MODBUMP' 2>/dev/null)"
     if grep -q 'scripts/go-modbump.sh' <<<"$hv" && grep -q 'go-modfloor.mk' <<<"$hv" && grep -q 'go-modfloor.sum' <<<"$hv" && sed -n 's/^DOCKER_CLI_GA_MODBUMP=//p' <<<"$hv" | grep -q 'vendor\.mod'; then
