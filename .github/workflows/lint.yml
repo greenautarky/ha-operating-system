@@ -1217,6 +1217,13 @@ jobs:
       - name: Baked snapshots (an empty containerd snapshot store must go red)
         run: ./tests/gates/baked_snapshots/selftest.sh
 
+      # The BUILT updater.json (data.ext4) must carry every version + image of version.json; a source grep
+      # (SRC-06) passed on rc1 while the real seed was Core-only. Fixtures: the real rc13 Core-only seed,
+      # zero-byte, invalid, missing plugin, upstream image name (red); a full seed and the LIVE generator's
+      # output (green).
+      - name: Baked updater.json (a Core-only or empty seed must go red)
+        run: ./tests/gates/baked_updater/selftest.sh
+
       # The Core image the bake ships must be the GA armv7 build at a 2026+ tag
       # and carry what the Supervisor reads (io.hass.version/machine, s6 /init).
       # The 2026.8.2 tag first published 2026-09-22 booted standalone and had

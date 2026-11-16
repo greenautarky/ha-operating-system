@@ -10,7 +10,8 @@ create / add-on install: Core 9 min 04 s of a ~15 min first boot, add-ons 35-72 
   aarch64 -> linux/arm64, from /build/images.arch, an unknown arch fails the bake); fails the bake
   in the first minute when fewer snapshots than images are committed;
 - hassio.mk: writes images.arch (BR2_PACKAGE_HASSIO_ARCH) next to images.expected.
-The finished data.ext4 is judged by scripts/check-baked-snapshots.sh (VER-13, enforcing).
+The finished data.ext4 is judged by scripts/check-baked-snapshots.sh (VER-13; REPORT mode when this patch
+was written, enforcing since the follow-up of 2026-11-16, see CHANGELOG).
 ---
   buildroot-external/package/hassio/dind-import-containers.sh | 20 ++++++++++++++++++--
   buildroot-external/package/hassio/hassio.mk                 |  2 ++

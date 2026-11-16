@@ -27,6 +27,14 @@ First release candidate of BOSv1.6.1. Everything merged on the line since the BO
 - ga-storage-watchdog, reboot step behind GA_STORAGE_WD_REBOOT, default off (#1082, Odoo #2098).
 - DSGW-210 only (no iHost effect): Core pin 2026.10.4.3-dev -> 2026.10.4.4, a -dev Core tag is refused everywhere (#1075, Odoo #1985).
 
+## Unreleased (BOSv1.6.1, feat/1.6-haos18): baked container images unpacked at build time (Odoo #2067, #2065)
+
+- Patch 0135 (#1088): `docker load --platform` per board arch, so the containerd snapshot store is filled in the image and a fresh device no longer unpacks Core (about 9 min on the iHost) and every add-on on first boot. data.ext4 about 2x larger (3471 -> 7140 MiB measured on the rc13 images), image about 8.2 GB.
+- CORRECTION of the #1088 text ("VER-13, enforcing"): VER-13 was in REPORT mode, so the DSGW dev11 bake (tree 3d28fae6, 0135 applied) went green with 0 snapshots. Cause: the bake ran a stale copy of dind-import-containers.sh from the incremental build dir (Buildroot rsyncs it once; update mode never refreshed it). F1 was NOT effective in dev11.
+- Patch 0136: create-data-partition.sh installs the current dind-import-containers.sh into the build dir on every bake (SRC-DIND-01).
+- VER-13 now ENFORCES by default (GA_SNAPSHOT_GATE_MODE=report is the explicit opt-out); fixture proof 0 snapshots -> rc 1.
+- Patch 0137: a failing gen-updater-json.sh stops the bake (it was piped into tee without pipefail and could leave a 0-byte updater.json). New gate VER-14 / scripts/check-baked-updater.sh compares the BUILT updater.json in data.ext4 with version.json (the source grep SRC-06 passed on rc1 while the seed was Core-only).
+
 ## Unreleased (BOSv1.6.1, feat/1.6-haos18): ga-storage-watchdog — reboot when the data partition dies (Odoo #2098; reboot step OFF by default)
 
 K186 2026-11-12: the SD / data partition died and nothing fired for days (HW watchdog petted from RAM by PID 1, docker FailureAction only on dockerd exit, mesh healthy, Supervisor watchdog never reboots the host).

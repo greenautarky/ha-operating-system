@@ -145,6 +145,7 @@ echo "$out" | grep -qE "^ +PASS +VER-12[: ]" && ok "red proof ver12: the same ca
 for b in $GA_BOARDS; do
   out="$(FIXTURE_REAL_BAKE_NO_DATA=1 "$HERE/run-board.sh" "$b" "$W/wm-ver13-$b" 2>&1)"
   echo "$out" | grep -qE "^ +FAIL +VER-13[: ]" && ok "red proof ver13: $b with a real-bake marker and no data.ext4 goes red on VER-13" || bad "red proof ver13: $b did NOT go red on VER-13"
+  echo "$out" | grep -qE "^ +FAIL +VER-14[: ]" && ok "red proof ver14: $b with a real-bake marker and no data.ext4 goes red on VER-14" || bad "red proof ver14: $b did NOT go red on VER-14"
   rm -rf "$W/wm-ver13-$b"
 done
 # the DSGW pin file read as the iHost's (ADDON_PINS left empty for non-ihost boards)

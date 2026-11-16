@@ -1,0 +1,30 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] hassio: a failing gen-updater-json.sh stops the bake (no pipe into tee) (Odoo #2067)
+
+Applies after 0136. create-data-partition.sh has `set -e` but no pipefail, so
+`gen-updater-json.sh ... | sudo tee updater.json` returned tee's 0: a failing generator left a
+0-byte updater.json and the bake went on (reproduced). The generator now runs in a command
+substitution (fatal under set -e) and its output must be a non-empty JSON object.
+---
+ buildroot-external/package/hassio/create-data-partition.sh | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/buildroot-external/package/hassio/create-data-partition.sh b/buildroot-external/package/hassio/create-data-partition.sh
+--- a/buildroot-external/package/hassio/create-data-partition.sh
++++ b/buildroot-external/package/hassio/create-data-partition.sh
+@@ -66,8 +66,13 @@
+ # it on the UPSTREAM name, which is not baked (no 2026 armv7 Core tag; without
+ # internet the plugin install retries forever, Odoo #2065). gen-updater-json.sh
+ # fails the build when a plugin is missing or not baked.
+-"${ga_layer}/package/hassio/gen-updater-json.sh" "${build_dir}/version.json" "${build_dir}/images" "${channel}" \
+-	| sudo tee "${data_dir}/supervisor/updater.json" > /dev/null
++# GA (Odoo #2067): NOT piped into tee -- `set -e` without pipefail returns tee's 0 and a failing
++# generator left a 0-byte updater.json with the bake going on (reproduced). The command
++# substitution below is fatal under set -e; the result must be non-empty valid JSON.
++updater_json=$("${ga_layer}/package/hassio/gen-updater-json.sh" "${build_dir}/version.json" "${build_dir}/images" "${channel}")
++[ -n "${updater_json}" ] && printf '%s' "${updater_json}" | jq -e 'type == "object"' > /dev/null \
++	|| { echo "GA create-data-partition: ERROR: gen-updater-json.sh produced no valid updater.json" >&2; exit 1; }
++printf '%s\n' "${updater_json}" | sudo tee "${data_dir}/supervisor/updater.json" > /dev/null
+ echo "GA create-data-partition: updater.json = $(sudo cat "${data_dir}/supervisor/updater.json" | tr -d '\n ')"
+ 
+ # Tear down docker and unmount the data partition before shrinking

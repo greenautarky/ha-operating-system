@@ -1,0 +1,32 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] hassio: run the current dind-import-containers.sh, not the build dir's stale rsync copy (Odoo #2067)
+
+Applies after 0135. create-data-partition.sh ran /build/dind-import-containers.sh, i.e. the copy
+rsynced into the hassio build dir when Buildroot first extracted the package. The ga-builder keeps
+ga_output between bakes, so the copy was never refreshed: the DSGW dev11 bake (patch 0135 applied,
+VER-13: 0 snapshots) ran the script of 2026-11-12, without `docker load --platform`.
+The script is now installed over the copy on every bake and compared; a failure stops the bake.
+---
+ buildroot-external/package/hassio/create-data-partition.sh | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/buildroot-external/package/hassio/create-data-partition.sh b/buildroot-external/package/hassio/create-data-partition.sh
+--- a/buildroot-external/package/hassio/create-data-partition.sh
++++ b/buildroot-external/package/hassio/create-data-partition.sh
+@@ -36,6 +36,16 @@
+     -v "${build_dir}":/build \
+     -d "docker:${docker_version}-dind" --feature containerd-snapshotter --data-root /mnt/data/docker)
+ 
++# GA (Odoo #2067): run the CURRENT dind-import-containers.sh. The copy in the build dir is an rsync
++# of the package dir made once, when Buildroot first extracts hassio; an incremental workspace
++# (the ga-builder keeps ga_output between bakes) never refreshes it, so the DSGW dev11 bake ran a
++# 4-day-old script without --platform (0 snapshots) although patch 0135 was applied. Overwrite it
++# from the script's own directory on every bake; a failure stops the bake (set -e).
++install -m 0755 "$(dirname "$0")/dind-import-containers.sh" "${build_dir}/dind-import-containers.sh" \
++	|| sudo install -m 0755 "$(dirname "$0")/dind-import-containers.sh" "${build_dir}/dind-import-containers.sh"
++cmp -s "$(dirname "$0")/dind-import-containers.sh" "${build_dir}/dind-import-containers.sh" \
++	|| { echo "GA create-data-partition: ERROR: the build dir's dind-import-containers.sh is not the current one" >&2; exit 1; }
++
+ docker exec "${container}" sh /build/dind-import-containers.sh
+ 
+ sudo bash -ex <<EOF
