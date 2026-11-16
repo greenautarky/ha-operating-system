@@ -1,0 +1,3 @@
+# containerd temp names, not committed snapshots
+mkdir /docker/containerd/daemon/io.containerd.snapshotter.v1.overlayfs/snapshots/new-123456
+mkdir /docker/containerd/daemon/io.containerd.snapshotter.v1.overlayfs/snapshots/new-123457/fs

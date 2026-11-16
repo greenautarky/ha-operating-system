@@ -1,0 +1,3 @@
+# containerd store without the overlayfs snapshotter directory
+mkdir /docker/containerd/daemon/io.containerd.content.v1.content/blobs/sha256
+mkdir /docker/containerd/daemon/io.containerd.snapshotter.v1.native/snapshots

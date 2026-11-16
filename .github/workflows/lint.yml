@@ -1210,6 +1210,13 @@ jobs:
           HAOS_PATCHES_REQUIRE_LIVE: "1"
         run: ./tests/gates/baked_image_platforms/selftest.sh
 
+      # BOSv1.6.0-rc13 baked all 15 images with an EMPTY containerd snapshot store: the device unpacked
+      # them on first boot (Core 9 min 04 s of a ~15 min first boot, Odoo #2067 / #2065). The gate reads
+      # the finished data.ext4 with debugfs; fixtures are the rc13 layout (red) and unpacked layouts
+      # (green), the floor is read from the live script. No haos checkout needed.
+      - name: Baked snapshots (an empty containerd snapshot store must go red)
+        run: ./tests/gates/baked_snapshots/selftest.sh
+
       # The Core image the bake ships must be the GA armv7 build at a 2026+ tag
       # and carry what the Supervisor reads (io.hass.version/machine, s6 /init).
       # The 2026.8.2 tag first published 2026-09-22 booted standalone and had

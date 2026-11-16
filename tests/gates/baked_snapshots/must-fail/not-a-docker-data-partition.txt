@@ -1,0 +1,2 @@
+mkdir /supervisor
+file /supervisor/updater.json
