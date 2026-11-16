@@ -30,14 +30,19 @@ GA_GO_MODFLOOR += golang.org/x/crypto@v0.57.0
 GA_GO_MODFLOOR += golang.org/x/text@v0.42.0
 GA_GO_MODFLOOR += golang.org/x/mod@v0.41.0
 
-# runc is deliberately NOT hooked. Its cgo+seccomp build links golang.org/x/net/bpf only
-# (go list -deps, runc 1.4.3, Go 1.26.9, tags cgo static_build seccomp; govulncheck
-# symbol mode reports GO-2026-6612 and the other x/net advisories as NOT called), and
-# the x/net bump made runc 1.4.3 fail to compile in the BOSv1.5.1-rc3 bake
-# (unknown field IsDefault in config.Device). Instead GOTC-05 carries a PINNED, EXPIRING
-# exemption in go-modfloor.exempt (module, exact version, advisory ids, reason,
-# expiry); it fails after the expiry or when runc's x/net version changes.
-# inputs_check.sh GOTC-IN-09/10 pin this exemption list.
+# runc IS hooked, but as a PRE_PATCH hook, not POST_PATCH like the others (Odoo #1270).
+# runc 1.4.3 carries the HAOS device patches (buildroot/package/runc/0001..0006), and
+# 0001 edits a VENDORED file (vendor/github.com/opencontainers/cgroups/devices/config/
+# device.go, adds IsDefault). go-modbump ends in `go mod vendor`, which rewrites vendor/
+# from the module cache: run AFTER the patches it wiped that edit, and the build failed
+# with "unknown field IsDefault in config.Device" (BOSv1.5.1-rc3). That was never an
+# x/net incompatibility. Run BEFORE the patches, the bump only touches go.mod/go.sum/
+# vendor/golang.org/x/*, the patches then apply on top, and runc builds against
+# x/net 0.60.0 / x/crypto 0.57.0 / x/text 0.42.0 / x/sys 0.48.0 (measured with Go 1.26.9,
+# tags cgo static_build seccomp, patches applied: builds, `go version -m` shows x/net
+# v0.60.0). The pinned, expiring GOTC-05 exemption is gone; go-modfloor.exempt is empty
+# and inputs_check.sh GOTC-IN-10 pins it empty. GOTC-IN-09 requires RUNC_GA_MODBUMP in
+# RUNC_PRE_PATCH_HOOKS.
 #
 # Packages that vendor those modules. -modfile is the module file the package
 # builds with (docker-cli keeps vendor.mod, not go.mod).
@@ -60,6 +65,9 @@ endef
 define OS_AGENT_GA_MODBUMP
 	$(call GA_GO_MODBUMP_RUN)
 endef
+define RUNC_GA_MODBUMP
+	$(call GA_GO_MODBUMP_RUN)
+endef
 define CONTAINERD_GA_MODBUMP
 	$(call GA_GO_MODBUMP_RUN)
 endef
@@ -76,3 +84,5 @@ OS_AGENT_POST_PATCH_HOOKS      += OS_AGENT_GA_MODBUMP
 CONTAINERD_POST_PATCH_HOOKS    += CONTAINERD_GA_MODBUMP
 DOCKER_ENGINE_POST_PATCH_HOOKS += DOCKER_ENGINE_GA_MODBUMP
 DOCKER_CLI_POST_PATCH_HOOKS    += DOCKER_CLI_GA_MODBUMP
+# PRE_PATCH on purpose (see the runc note above): the patches edit vendor/, the bump rewrites it.
+RUNC_PRE_PATCH_HOOKS          += RUNC_GA_MODBUMP

@@ -10,4 +10,8 @@
 #   * the binary embeds that module at any other version (a runc bump forces a re-look).
 #
 # BINARY-PATH|MODULE|PINNED-VERSION|ADVISORY-IDS|EXPIRES|REASON
-usr/bin/runc|golang.org/x/net|v0.43.0|GO-2026-4440,GO-2026-4441,GO-2026-4918,GO-2026-5025,GO-2026-5026,GO-2026-5027,GO-2026-5028,GO-2026-5029,GO-2026-5030,GO-2026-5942,GO-2026-6603,GO-2026-6610,GO-2026-6611,GO-2026-6612,GO-2026-6617|2026-11-30|runc 1.4.3 (cgo, tags static_build seccomp) imports only golang.org/x/net/bpf from x/net; every listed advisory is module-level only, govulncheck source and binary mode report none of them as called (2026-10-13); bumping x/net made runc 1.4.3 fail to compile in the BOSv1.5.1-rc3 bake (unknown field IsDefault in config.Device); re-evaluate on the next runc bump or at expiry
+#
+# EMPTY since Odoo #1270: the one entry (usr/bin/runc, x/net v0.43.0, expiry 2026-11-30)
+# was removed because runc now takes the module floors through RUNC_GA_MODBUMP
+# (go-modfloor.mk). GOTC-IN-10 pins this file to zero entries; a new exemption needs
+# that block changed in review.

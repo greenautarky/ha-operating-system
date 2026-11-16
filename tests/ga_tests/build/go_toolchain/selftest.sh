@@ -334,12 +334,12 @@ ga_go_modfloor_verdict "$MFLOORS" "$XEX" 30.11.2026 < "$FX/modfloor/exempt/must-
 [ "$rc" = 2 ] && _pass "GOTC-FX-XM-E: malformed TODAY refused (rc 2)" || _fail "GOTC-FX-XM-E: malformed TODAY gave rc $rc, want 2"
 # the exempt-list reader: comments stripped, a missing file is "no exemptions"
 _xl="$(ga_go_modfloor_exempt_list "$REPO_ROOT/buildroot-external")"
-[ "$(grep -c . <<<"$_xl")" = 1 ] && [[ "$_xl" == usr/bin/runc\|golang.org/x/net\|* ]] && _pass "GOTC-FX-XM-L: the live go-modfloor.exempt yields one runc entry (comments stripped)" || _fail "GOTC-FX-XM-L: live exempt list read as '$_xl'"
+[ -z "$_xl" ] && _pass "GOTC-FX-XM-L: the live go-modfloor.exempt yields no entries (comments stripped; runc takes the floors via RUNC_GA_MODBUMP, Odoo #1270)" || _fail "GOTC-FX-XM-L: live exempt list read as '$_xl', want empty"
+# the reader strips comments and keeps an entry: proven on a COPY that carries one (the exemption mechanism stays supported)
+_xc="$(mktemp -d)"; { printf '# comment\n\n'; printf '%s\n' "$XEX"; } > "$_xc/go-modfloor.exempt"
+[ "$(ga_go_modfloor_exempt_list "$_xc")" = "$XEX" ] && _pass "GOTC-FX-XM-L: the reader strips comments/blank lines and keeps an entry" || _fail "GOTC-FX-XM-L: reader on a one-entry copy gave '$(ga_go_modfloor_exempt_list "$_xc")'"
+rm -rf "$_xc"
 [ -z "$(ga_go_modfloor_exempt_list "$FX/modfloor/ext-missing")" ] && _pass "GOTC-FX-XM-L: a missing exempt file means no exemptions" || _fail "GOTC-FX-XM-L: missing file yielded entries"
-# the LIVE exemption entry parses under the LIVE verdict (a malformed live file is rc 2 = red in GOTC-05)
-ga_go_modfloor_verdict "$MFLOORS" "$_xl" 2026-10-13 < "$FX/modfloor/exempt/must-pass/runc-pinned.mods" >/dev/null; rc=$?
-[ "$rc" = 0 ] && _pass "GOTC-FX-XM-LIVE: the live exemption entry exempts the runc 1.4.3 scan before expiry" || _fail "GOTC-FX-XM-LIVE: live entry gave rc $rc on the runc scan, want 0"
-
 _xmutant() {  # $1 label, $2 sed expression applied to the live lib; judged by the exemption fixtures
   local m="$XW/xm.sh"
   sed "$2" "$LIB" > "$m"
@@ -443,7 +443,7 @@ GOSTUB
   [[ "$(_g5 "$o")" == *"FAIL"*"reader is broken"* ]] && _pass "GOTC-FX-SEAM-3: an image with zero floored entries fails closed (reader broken)" || _fail "GOTC-FX-SEAM-3: zero floored entries -> '$(_g5 "$o")'"
   # exemption through the real block: expiry rewritten in the COPY (the live date must not make this suite flaky)
   XF="$BW/repo/buildroot-external/go-modfloor.exempt"; XFL="$FX/modfloor/exempt/must-pass/runc-pinned.mods"
-  sed -i 's/|2026-11-30|/|2099-01-01|/' "$XF"
+  printf '%s\n' "${XEX/|2026-11-30|/|2099-01-01|}" > "$XF"
   o="$(_blk "$XFL")"
   { [[ "$(_g5 "$o")" == *"PASS"*"GOTC-05"* ]] && grep -q '1 below-floor entries allowed by a pinned' <<<"$o"; } \
     && _pass "GOTC-FX-SEAM-4: block: runc at the pinned x/net under an unexpired exemption passes, and says it was exempted" || _fail "GOTC-FX-SEAM-4: pinned runc -> '$(_g5 "$o")'"
