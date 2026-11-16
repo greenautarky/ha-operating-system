@@ -42,5 +42,7 @@ case "\$*" in
 esac
 CU
 chmod +x "$W/bin/skopeo" "$W/bin/curl"
+# red proof of VER-13 fail-closed: a REAL-bake marker (images/build.log) without data.ext4
+[ -z "${FIXTURE_REAL_BAKE_NO_DATA:-}" ] || : > "$OUT/images/build.log"
 PATH="$W/bin:$PATH" GA_BOARD="$BOARD" GA_RELEASE="$REL" BR2EXT_NETBIRD="$W/src/buildroot-external" BUILDROOT_DIR="$W/buildroot" \
   bash "${RUNNER:-$W/src/tests/ga_tests/run_build_tests.sh}" "$OUT" 2>&1 | sed 's/\x1b\[[0-9;]*m//g'

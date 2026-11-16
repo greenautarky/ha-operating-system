@@ -1746,8 +1746,13 @@ if [[ -f "$VER_JSON" ]]; then
   # tests/gates/baked_snapshots/selftest.sh. Status read from the command, not from a pipe.
   VER13_CHECKER="${VER10_SRC:+${VER10_SRC}/scripts/check-baked-snapshots.sh}"
   VER13_DATA="${OUT}/images/data.ext4"
-  if [[ ! -d "$IMAGES_DIR" ]] || [[ ! -f "$VER13_DATA" ]]; then
-    _skip "VER-13" "no images dir or no data.ext4 — source-only run"
+  # A real bake (images/build.log exists: the Buildroot build writes it, seen in the rc1 bake log; the matrix fixtures do not) MUST have produced data.ext4: a
+  # missing one there is a failure, never a skip. Only a source-only / fixture run may skip.
+  if [[ -d "$IMAGES_DIR" ]] && [[ ! -f "$VER13_DATA" ]] \
+     && [[ -f "${OUT}/images/build.log" ]]; then
+    _fail "VER-13: this is a real bake output (${OUT}/images/build.log exists) but ${VER13_DATA} is missing — the unpack check cannot run"
+  elif [[ ! -d "$IMAGES_DIR" ]] || [[ ! -f "$VER13_DATA" ]]; then
+    _skip "VER-13" "no images dir or no data.ext4, and no real-bake marker — source-only/fixture run"
   elif [[ -z "$VER13_CHECKER" ]] || [[ ! -x "$VER13_CHECKER" ]]; then
     _fail "VER-13: data.ext4 was built but scripts/check-baked-snapshots.sh was not found or is not executable (looked under '${VER10_SRC:-<unresolved>}')"
   else

@@ -140,6 +140,13 @@ out="$(FIXTURE_CORE_NO_VARIANT=1 "$HERE/run-board.sh" ihost "$W/wm-novariant" 2>
 echo "$out" | grep -qE "^ +FAIL +VER-12[: ]" && ok "red proof ver12: the iHost Core without variant v7 goes red on VER-12" || bad "red proof ver12: Core without variant did NOT go red on VER-12"
 out="$(FIXTURE_CORE_NO_VARIANT=1 "$HERE/run-board.sh" dsgw210 "$W/wm-novariant-d" 2>&1)"
 echo "$out" | grep -qE "^ +PASS +VER-12[: ]" && ok "red proof ver12: the same capture stays green on the DSGW (aarch64: no variant is valid)" || bad "red proof ver12: DSGW lost VER-12"
+# VER-13 fails closed: a real-bake marker without data.ext4 is red on both boards (the clean fixture, no
+# marker, is a pinned SKIP in expected/<board>.skip)
+for b in $GA_BOARDS; do
+  out="$(FIXTURE_REAL_BAKE_NO_DATA=1 "$HERE/run-board.sh" "$b" "$W/wm-ver13-$b" 2>&1)"
+  echo "$out" | grep -qE "^ +FAIL +VER-13[: ]" && ok "red proof ver13: $b with a real-bake marker and no data.ext4 goes red on VER-13" || bad "red proof ver13: $b did NOT go red on VER-13"
+  rm -rf "$W/wm-ver13-$b"
+done
 # the DSGW pin file read as the iHost's (ADDON_PINS left empty for non-ihost boards)
 MUT='s/\[\[ "\$_RBT_BOARD" == ihost \]\] \|\| _RBT_PINS_REL=.*\n/_RBT_PINS_REL=""\n/'
 expect_red pins-ihost dsgw210 VER-10 ihost
