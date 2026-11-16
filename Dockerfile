@@ -93,6 +93,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         vim \
         wget \
         zip \
+        zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # GreenAutarky: the build environment is upstream HAOS 18.x's (Debian trixie,
