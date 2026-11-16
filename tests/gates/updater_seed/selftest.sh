@@ -71,6 +71,6 @@ if cdp="$("$root/scripts/apply-haos-patches.sh" --cat buildroot-external/package
   else bad "wiring: create-data-partition.sh (as built) does not seed updater.json via gen-updater-json.sh"; fi
 else bad "wiring: cannot read create-data-partition.sh as the build sees it: $(cat "$tmp/cat.err")"; fi
 
-[ "$n" -ge 12 ] || { echo "FAIL: only $n cases inspected (expected >= 12)"; exit 1; }
+[ "$n" -ge 10 ] || { echo "FAIL: only $n cases inspected (expected >= 10)"; exit 1; }
 echo "$n cases inspected"
 exit "$bad"

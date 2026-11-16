@@ -82,7 +82,7 @@ index bc717c178..48c7add47 100755
  mkfs.ext4 -L "hassos-data" -E lazy_itable_init=0,lazy_journal_init=0 "${data_img}"
  
  # Mount / init file structs
-@@ -39,10 +42,25 @@ touch "${data_dir}/.docker-use-containerd-snapshotter"
+@@ -39,10 +42,19 @@ touch "${data_dir}/.docker-use-containerd-snapshotter"
  mkdir -p "${data_dir}/supervisor/apparmor"
  curl -fsL -o "${data_dir}/supervisor/apparmor/hassio-supervisor" "${APPARMOR_URL}"
  
@@ -91,20 +91,14 @@ index bc717c178..48c7add47 100755
  EOF
  
 +# Persist build-time updater channel.
-+# GA: plus the baked Core version and image when a Core is baked: on a fresh
-+# device the Supervisor has not fetched the channel yet, and an updater.json
-+# without the image leaves it on the upstream Core name (no 2026 armv7 tag).
-+# Read from the same version.json the bake fetched from.
-+core_version=$(jq -r '.core // empty' "${build_dir}/version.json")
-+core_image=$(jq -r '.images.core // empty' "${build_dir}/version.json")
-+if [ "${core_version}" != "landingpage" ] && ls "${build_dir}"/images/*"${core_version}"@* > /dev/null 2>&1; then
-+	jq -n --arg channel "${channel}" --arg core "${core_version}" --arg image "${core_image}" \
-+		'{channel: $channel, homeassistant: $core, image: {homeassistant: $image}}' \
-+		| sudo tee "${data_dir}/supervisor/updater.json" > /dev/null
-+else
-+	echo "GA create-data-partition: no full Core baked -- updater.json carries the channel only"
-+	jq -n --arg channel "${channel}" '{"channel": $channel}' | sudo tee "${data_dir}/supervisor/updater.json" > /dev/null
-+fi
++# GA: plus every version+image the line bakes (Core, Supervisor, the five
++# plugins), from the same version.json the bake fetched from: on a fresh device
++# the Supervisor has not fetched the channel yet, and a field missing here puts
++# it on the UPSTREAM name, which is not baked (no 2026 armv7 Core tag; without
++# internet the plugin install retries forever, Odoo #2065). gen-updater-json.sh
++# fails the build when a plugin is missing or not baked.
++"${ga_layer}/package/hassio/gen-updater-json.sh" "${build_dir}/version.json" "${build_dir}/images" "${channel}" \
++	| sudo tee "${data_dir}/supervisor/updater.json" > /dev/null
 +echo "GA create-data-partition: updater.json = $(sudo cat "${data_dir}/supervisor/updater.json" | tr -d '\n ')"
 +
  # Tear down docker and unmount the data partition before shrinking
