@@ -1229,6 +1229,16 @@ jobs:
       - name: hassio.mk board pins (mixed pair, off-pin channel, -dev outside dev must go red)
         run: ./tests/gates/hassio_board_pins/selftest.sh
 
+      # The baked updater.json must carry every version+image the line bakes (Core,
+      # Supervisor, cli/dns/audio/multicast/observer, GA image names): a fresh device
+      # has not fetched the channel, and a missing field sends the plugin install to
+      # the upstream name, which is not baked (Odoo #2065). The live generator runs
+      # against the real board fixtures; expectations are pinned literals.
+      - name: Baked updater.json (a Core-only seed or an upstream plugin image must go red)
+        env:
+          HAOS_PATCHES_REQUIRE_LIVE: "1"
+        run: ./tests/gates/updater_seed/selftest.sh
+
       # The Supervisor image the bake ships must be the GA image at exactly the
       # version.yaml pin, and its io.hass labels must agree (version, type, arch).
       # must-pass is the real 2025.11.5.4 config read from the registry.

@@ -2290,7 +2290,11 @@ if [[ -n "$SRC" ]]; then
   # patch 0131), not inside the dind container.
   CDP="${HAOS_EXT_SRC}/package/hassio/create-data-partition.sh"
   if [[ -f "$CDP" ]]; then
-    if grep -q 'version\.json' "$CDP" && grep -q '\.core' "$CDP" && grep -q 'updater\.json' "$CDP"; then
+    # GA: the seed is built by the layer's gen-updater-json.sh (Odoo #2065); the
+    # core version is read from version.json THERE (tests/gates/updater_seed judges the output)
+    GEN_UPD="${_RBT_REPO}/buildroot-external/package/hassio/gen-updater-json.sh"
+    if grep -q 'gen-updater-json\.sh' "$CDP" && grep -q 'updater\.json' "$CDP" \
+       && [[ -f "$GEN_UPD" ]] && grep -q '\.core' "$GEN_UPD"; then
       _pass "SRC-06: updater.json core version is read dynamically from version.json (create-data-partition.sh)"
     elif grep 'updater.json' "$CDP" | grep -q '"latest"'; then
       _fail "SRC-06: updater.json uses 'latest' (HA rejects this)"
