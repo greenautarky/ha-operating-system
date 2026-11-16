@@ -12,6 +12,17 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## BOSv1.6.1-rc1 (iHost, feat/1.6-haos18)
+
+First release candidate of BOSv1.6.1. Everything merged on the line since the BOSv1.6.0 tag (40355e42), from `git log 40355e42..d1013303`:
+- VCCIO5 option B: a new device boots 3.3 V from the image alone, the OTA hook pins the running mode first (#1071, Odoo #1981).
+- Toolchain gate: the bake reports a build toolchain in any baked container, report mode on the 1.6 line (#1069, Odoo #1975).
+- ga_manager 0.277.5 on the 1.6 line, met dedupe (#1078, #1081, Odoo #2059).
+- runc takes the Go module floors, GOTC-05 exemption removed (#1079, Odoo #1270).
+- ga-enroll exits 1 on an incomplete enrolment so Restart=on-failure retries (#1080, Odoo #2005).
+- ga-storage-watchdog, reboot step behind GA_STORAGE_WD_REBOOT, default off (#1082, Odoo #2098).
+- DSGW-210 only (no iHost effect): Core pin 2026.10.4.3-dev -> 2026.10.4.4, a -dev Core tag is refused everywhere (#1075, Odoo #1985).
+
 ## Unreleased (BOSv1.6.1, feat/1.6-haos18): ga-storage-watchdog — reboot when the data partition dies (Odoo #2098; reboot step OFF by default)
 
 K186 2026-11-12: the SD / data partition died and nothing fired for days (HW watchdog petted from RAM by PID 1, docker FailureAction only on dockerd exit, mesh healthy, Supervisor watchdog never reboots the host).
