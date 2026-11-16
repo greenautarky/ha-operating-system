@@ -1,0 +1,233 @@
+#!/bin/sh
+# ga-storage-watchdog — notice that the data partition (/mnt/data) has died and
+# let systemd's service watchdog reboot the device, instead of leaving it up,
+# green and deaf for days.
+#
+# WHY (Odoo #2098). K186, 2026-11-12: the SD / data partition failed ~18:50Z
+# and nothing fired. The hardware watchdog is petted by PID 1 from RAM, docker's
+# FailureAction only covers dockerd exiting, ga-mesh-watchdog saw a healthy mesh,
+# the Supervisor watchdog never reboots the host, ga_manager only turned the LED
+# red. Valves were uncontrolled for days. Every existing watchdog watched a
+# PROXY of the device; this one probes the SUBJECT: can the data partition still
+# be read and written.
+#
+# HOW. Type=notify, WatchdogSec=120 (ga-storage-watchdog.service). The service
+# manager reboots the host (FailureAction=reboot-force) when this script stops
+# sending WATCHDOG=1. The script sends it only while the probes pass:
+#
+#   * every $INTERVAL_S (30 s): O_DIRECT read of a small file on the data
+#     partition. O_DIRECT, because the page cache would otherwise answer a read
+#     from RAM and a dead medium would look fine.
+#   * every $WRITE_EVERY ticks (20 x 30 s = 10 min): write + fsync + O_DIRECT
+#     read-back of a random nonce. Rare on purpose: it wears SD erase blocks.
+#   * a probe that returns an error (EIO, read-only remount, ...) or does not
+#     return within $PROBE_TIMEOUT_S (a D-state hang) is a failure.
+#
+# ARMING, NO PERSISTENT COUNTER. There is no reboot ledger: a ledger would live
+# on the very medium that may be dead. Instead the watchdog ARMS only after
+# $ARM_AFTER consecutive successful probes after boot. Until then it pings
+# unconditionally (so systemd's timer never expires): a dead medium never
+# reaches userspace anyway, and a flaky medium causes a reboot only after a
+# FRESH failure following proven health. Worst case is one reboot per
+# (boot + arming time + WatchdogSec), never a tight loop on a dead disk.
+#
+# REBOOT IS BEHIND A FLAG. Detection and reporting are always on. Only with
+# GA_STORAGE_WD_REBOOT=1 does a failing probe withhold WATCHDOG=1 (and systemd
+# then reboots-force within WatchdogSec). Default 0 (ga-services.conf, override
+# in /mnt/data/ga-services.conf). The flag is read ONCE at start: the override
+# lives on the disk being watched, so it is never re-read mid-failure.
+# With the flag off this script exits 0 on every path, so the unit's
+# FailureAction can never fire from a crash of the script itself; the same holds
+# before arming.
+#
+# REPORT, ALWAYS. Journal lines with systemd's priority prefix (<4> warning,
+# <3> error; tier-0 ships PRIORITY 0-4), /dev/kmsg, /dev/pmsg0 when the kernel
+# has it (pstore, survives a warm reboot, needs no disk), and a status file in
+# RAM ($STATUS_FILE) for ga_manager / fleet-manager (Odoo #2100).
+# ramoops status on the iHost: see the CHANGELOG entry; kmsg is the fallback.
+#
+# Every command is looked up on PATH and every path is overridable so
+# tests/ga_tests/storage_watchdog/selftest.sh runs THIS script with stub dd /
+# systemd-notify and a fault-injectable probe directory.
+set -u
+
+TAG="ga-storage-watchdog"
+
+CONF_DEFAULT="${GA_STORAGE_WD_CONF_DEFAULT:-/etc/ga-services.conf}"
+CONF_OVERRIDE="${GA_STORAGE_WD_CONF_OVERRIDE:-/mnt/data/ga-services.conf}"
+GA_SERVICES_CONF_LIB="${GA_SERVICES_CONF_LIB:-/usr/libexec/ga-services-conf.sh}"
+
+PROBE_FILE="${GA_STORAGE_WD_PROBE_FILE:-/mnt/data/.ga-storage-wd-probe}"
+STATUS_FILE="${GA_STORAGE_WD_STATUS_FILE:-/run/ga-storage-watchdog.json}"
+KMSG="${GA_STORAGE_WD_KMSG:-/dev/kmsg}"
+PMSG="${GA_STORAGE_WD_PMSG:-/dev/pmsg0}"
+NOTIFY="${GA_STORAGE_WD_NOTIFY:-systemd-notify}"
+RUN_DIR="${GA_STORAGE_WD_RUN_DIR:-/run/ga-storage-watchdog}"
+
+INTERVAL_S="${GA_STORAGE_WD_INTERVAL_S:-30}"
+WRITE_EVERY="${GA_STORAGE_WD_WRITE_EVERY:-20}"       # ticks between write probes
+ARM_AFTER="${GA_STORAGE_WD_ARM_AFTER:-3}"            # consecutive good probes
+PROBE_TIMEOUT_S="${GA_STORAGE_WD_PROBE_TIMEOUT_S:-10}"
+MAX_TICKS="${GA_STORAGE_WD_MAX_TICKS:-0}"            # tests only; 0 = forever
+WATCHDOG_S="${GA_STORAGE_WD_WATCHDOG_S:-120}"        # must match WatchdogSec= (only used in log text)
+
+num() { case "${1:-}" in ''|*[!0-9]*) echo "$2" ;; *) echo "$1" ;; esac; }
+INTERVAL_S="$(num "$INTERVAL_S" 30)"; WRITE_EVERY="$(num "$WRITE_EVERY" 20)"
+ARM_AFTER="$(num "$ARM_AFTER" 3)"; PROBE_TIMEOUT_S="$(num "$PROBE_TIMEOUT_S" 10)"
+MAX_TICKS="$(num "$MAX_TICKS" 0)"
+[ "$WRITE_EVERY" -ge 1 ] || WRITE_EVERY=20
+[ "$ARM_AFTER" -ge 1 ] || ARM_AFTER=3
+
+log()  { echo "$TAG: $*"; }
+logw() { echo "<4>$TAG: $*"; }
+loge() { echo "<3>$TAG: $*"; }
+
+# Reason trail that needs no disk: kernel ring buffer (always) and pstore pmsg
+# (only if the kernel exposes /dev/pmsg0).
+trail() {
+    { echo "<2>$TAG: $*" > "$KMSG"; } 2>/dev/null || true
+    [ -w "$PMSG" ] && { echo "$TAG: $*" > "$PMSG"; } 2>/dev/null
+    return 0
+}
+
+# ---- the flag: read once, fail to OFF with a loud line -----------------------
+WD_REBOOT=0
+if [ -r "$GA_SERVICES_CONF_LIB" ]; then
+    # shellcheck disable=SC1090
+    . "$GA_SERVICES_CONF_LIB" 2>/dev/null
+    ga_load_services_conf "$CONF_DEFAULT" "$CONF_OVERRIDE" \
+        || loge "no ga-services.conf readable — GA_STORAGE_WD_REBOOT defaults to 0 (detection only)"
+    WD_REBOOT="$(num "${GA_STORAGE_WD_REBOOT:-0}" 0)"
+else
+    loge "cannot load $GA_SERVICES_CONF_LIB — GA_STORAGE_WD_REBOOT defaults to 0 (detection only)"
+fi
+[ "$WD_REBOOT" = 1 ] || WD_REBOOT=0
+
+armed=0
+# With the flag off, or before arming, nothing this script does may fail the
+# unit (FailureAction=reboot-force is static in the unit file).
+on_exit() {
+    _rc=$?
+    if [ "$armed" = 0 ] || [ "$WD_REBOOT" != 1 ]; then
+        [ "$_rc" -eq 0 ] || loge "exiting (rc $_rc) — not armed or reboot flag off: reporting success to systemd, no reboot"
+        exit 0
+    fi
+    exit "$_rc"
+}
+trap on_exit EXIT
+trap 'exit 0' TERM INT
+
+mkdir -p "$RUN_DIR" 2>/dev/null || true
+ping_wd()  { "$NOTIFY" WATCHDOG=1 >/dev/null 2>&1; }
+status_msg() { "$NOTIFY" "STATUS=$1" >/dev/null 2>&1; }
+
+# ------------------------------------------------------------------ probes
+# Each probe runs in the background; the main loop waits at most
+# $PROBE_TIMEOUT_S. A hung probe (uninterruptible I/O) cannot be killed, so it
+# is abandoned and counted as a failure; no new probe starts until it returns.
+read_probe() {   # O_DIRECT read of the existing probe file
+    dd if="$PROBE_FILE" iflag=direct bs=4096 count=1 of=/dev/null 2>"$RUN_DIR/probe.err"
+}
+write_probe() {  # write a nonce, fsync, O_DIRECT read-back, compare
+    _n="$(dd if=/dev/urandom bs=4096 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n' | cut -c1-4096)"
+    [ -n "$_n" ] || { echo "no nonce" > "$RUN_DIR/probe.err"; return 1; }
+    # 4096 bytes, space padded: O_DIRECT wants whole aligned blocks.
+    printf '%-4096s' "$_n" > "$RUN_DIR/nonce" 2>>"$RUN_DIR/probe.err" || return 1
+    dd if="$RUN_DIR/nonce" of="$PROBE_FILE" bs=4096 count=1 oflag=direct conv=fsync 2>>"$RUN_DIR/probe.err" || return 1
+    dd if="$PROBE_FILE" iflag=direct bs=4096 count=1 of="$RUN_DIR/readback" 2>>"$RUN_DIR/probe.err" || return 1
+    cmp -s "$RUN_DIR/nonce" "$RUN_DIR/readback" || { echo "read-back differs from what was written" >> "$RUN_DIR/probe.err"; return 1; }
+}
+
+hung_pid=""
+last_err=""
+# run_probe KIND -> sets probe_rc (0 ok, 1 error, 2 hung)
+run_probe() {
+    probe_rc=1
+    if [ -n "$hung_pid" ]; then
+        if kill -0 "$hung_pid" 2>/dev/null; then
+            probe_rc=2; last_err="an earlier probe is still blocked in I/O"; return
+        fi
+        hung_pid=""
+    fi
+    rm -f "$RUN_DIR/probe.rc" "$RUN_DIR/probe.err"
+    (
+        if [ "$1" = write ] || [ ! -e "$PROBE_FILE" ]; then write_probe; else read_probe; fi
+        echo $? > "$RUN_DIR/probe.rc.tmp" && mv -f "$RUN_DIR/probe.rc.tmp" "$RUN_DIR/probe.rc"
+    ) >/dev/null 2>&1 &
+    _pid=$!
+    _w=0
+    while [ ! -s "$RUN_DIR/probe.rc" ] && [ "$_w" -lt "$PROBE_TIMEOUT_S" ]; do
+        sleep 1; _w=$(( _w + 1 ))
+    done
+    if [ -s "$RUN_DIR/probe.rc" ]; then
+        if [ "$(cat "$RUN_DIR/probe.rc")" = 0 ]; then probe_rc=0; last_err=""
+        else probe_rc=1; last_err="$(tr '\n' ' ' < "$RUN_DIR/probe.err" 2>/dev/null | cut -c1-200)"; fi
+    else
+        hung_pid="$_pid"; probe_rc=2; last_err="probe did not return within ${PROBE_TIMEOUT_S}s (I/O hang)"
+    fi
+}
+
+# --------------------------------------------------------------- status file
+ok_streak=0; fail_streak=0; last_ok_ts=0; state=unarmed; reason=""
+write_status() {
+    _now="$(date +%s 2>/dev/null || echo 0)"
+    _r="$(printf '%s' "$reason" | tr '"\\' "''")"
+    {
+        printf '{"schema_version":1,"ts":%s,"state":"%s","armed":%s,"reboot_enabled":%s,' "$_now" "$state" "$( [ "$armed" = 1 ] && echo true || echo false)" "$( [ "$WD_REBOOT" = 1 ] && echo true || echo false)"
+        printf '"consecutive_ok":%s,"consecutive_fail":%s,"last_ok_ts":%s,"reason":"%s",' "$ok_streak" "$fail_streak" "$last_ok_ts" "$_r"
+        printf '"arm_after":%s,"probe_file":"%s"}\n' "$ARM_AFTER" "$PROBE_FILE"
+    } > "${STATUS_FILE}.tmp" 2>/dev/null && mv -f "${STATUS_FILE}.tmp" "$STATUS_FILE" 2>/dev/null \
+        || loge "cannot write the status file $STATUS_FILE"
+}
+
+# ---------------------------------------------------------------------- main
+"$NOTIFY" --ready >/dev/null 2>&1 || true   # never block (or fail) the start on a dead disk
+logw "started: probe $PROBE_FILE every ${INTERVAL_S}s (write every ${WRITE_EVERY} ticks), arms after $ARM_AFTER good probes, reboot flag GA_STORAGE_WD_REBOOT=$WD_REBOOT"
+write_status
+tick=0
+while :; do
+    tick=$(( tick + 1 ))
+    kind=read
+    [ $(( (tick - 1) % WRITE_EVERY )) -eq 0 ] && kind=write
+    run_probe "$kind"
+    if [ "$probe_rc" = 0 ]; then
+        ok_streak=$(( ok_streak + 1 )); fail_streak=0
+        last_ok_ts="$(date +%s 2>/dev/null || echo 0)"
+        if [ "$armed" = 0 ] && [ "$ok_streak" -ge "$ARM_AFTER" ]; then
+            armed=1
+            logw "ARMED after $ok_streak consecutive good probes — from now a failing probe withholds WATCHDOG=1 (reboot flag: $WD_REBOOT)"
+        fi
+        if [ "$state" = failing ]; then logw "RECOVERED: storage probe passes again after $fail_streak failure(s)"; fi
+        state="$( [ "$armed" = 1 ] && echo armed || echo unarmed )"; reason=""
+        ping_wd
+        status_msg "storage ok ($kind probe), state=$state"
+    else
+        fail_streak=$(( fail_streak + 1 )); ok_streak=0
+        if [ "$armed" = 1 ]; then
+            state=failing
+            reason="$kind probe failed on $PROBE_FILE: ${last_err:-unknown} (failure #$fail_streak)"
+            if [ "$WD_REBOOT" = 1 ]; then
+                loge "STORAGE DEAD: $reason — withholding WATCHDOG=1, systemd reboots (force) within ${WATCHDOG_S}s unless a probe passes"
+                trail "storage watchdog: $reason — rebooting via WatchdogSec/FailureAction"
+                write_status
+                status_msg "storage FAILING: $last_err"
+                # no ping
+            else
+                loge "STORAGE DEAD: $reason — reboot flag OFF (GA_STORAGE_WD_REBOOT=0): reporting only, still pinging"
+                trail "storage watchdog: $reason — reboot flag off, no reboot"
+                ping_wd
+                status_msg "storage FAILING (reboot off): $last_err"
+            fi
+        else
+            state=unarmed
+            reason="$kind probe failed before arming: ${last_err:-unknown} (failure #$fail_streak)"
+            logw "$reason — not armed yet, pinging so systemd does not act"
+            ping_wd
+            status_msg "storage probe failing, not armed"
+        fi
+    fi
+    write_status
+    [ "$MAX_TICKS" -gt 0 ] && [ "$tick" -ge "$MAX_TICKS" ] && break
+    sleep "$INTERVAL_S"
+done
+exit 0

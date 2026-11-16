@@ -1,0 +1,30 @@
+[Unit]
+Description=Storage-liveness watchdog (probe /mnt/data, reboot the device when it dies - Odoo #2098)
+# The probe needs the data partition; if it is not mounted there is nothing to watch.
+After=mnt-data.mount
+RequiresMountsFor=/mnt/data
+# The reboot a failed watchdog triggers must not be a loop on a dead medium:
+# the script only arms after proven health and never fails the unit before that
+# (see usr/sbin/ga-storage-watchdog).
+# Only reboot-force can act when the data FS is dead: a clean `reboot` unmounts
+# it and hangs. A hung reboot is caught by RebootWatchdogSec / the HW watchdog.
+FailureAction=reboot-force
+
+[Service]
+Type=notify
+# The script's children (systemd-notify) send the pings.
+NotifyAccess=all
+ExecStart=/usr/sbin/ga-storage-watchdog
+# 30 s read cadence + <= 10 s probe timeout: four missed ticks before the
+# watchdog expires, so one transient EIO never reboots; a persistent one does.
+WatchdogSec=120
+Restart=no
+Nice=10
+SyslogIdentifier=ga-storage-watchdog
+SyslogFacility=daemon
+# Warnings/errors (arming, STORAGE DEAD, RECOVERED) only; the per-tick STATUS is
+# not journaled by us. tier-0 ships PRIORITY 0-4.
+LogLevelMax=notice
+
+[Install]
+WantedBy=multi-user.target

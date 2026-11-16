@@ -443,6 +443,17 @@ jobs:
         # cooldown, refused=dead, RECOVERED at info) each go red on their cases.
         run: sh tests/ga_tests/mesh_watchdog/selftest.sh
 
+      - name: Storage-liveness watchdog (Odoo #2098 — pings only while /mnt/data answers; reboot step behind GA_STORAGE_WD_REBOOT)
+        # Drives the LIVE ga-storage-watchdog with stub dd / systemd-notify /
+        # sleep and per-tick fault injection (EIO, hang, slow, corrupt
+        # read-back, vanished file). Must-pass: healthy disk pings every tick,
+        # never-armed and flag-OFF failures keep pinging, recovery. Must-fire:
+        # after arming with the flag ON every fault withholds the ping and
+        # leaves the reason in kmsg. Static: unit WatchdogSec / FailureAction=
+        # reboot-force / Type=notify / enabled, flag default 0. Red-proven by
+        # mutants (always ping, flag ignored, no arming, hang counted ok).
+        run: sh tests/ga_tests/storage_watchdog/selftest.sh
+
       - name: Supervisor cli-install watchdog (Odoo #1706 — one restart per boot, only on the install-retry signature)
         # Drives the LIVE ga-supervisor-cli-watchdog with a fake docker and
         # systemctl. Must-act: supervisor up >= 150 s (monotonic), no hassio_cli,
