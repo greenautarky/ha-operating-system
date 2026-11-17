@@ -29,6 +29,14 @@
 #   * Never park the LAST rung. A device with nothing else to fall to must keep
 #     what it has, however bad — parking it would be this script causing the
 #     outage it exists to prevent. It says so and keeps probing.
+#   * ...but never stop LOOKING (Odoo #2112). "Last rung" is judged from the
+#     NM Wi-Fi scan CACHE, which goes stale (K31, 2026-11-16: hours on a dead
+#     dongle Wi-Fi while the bench Wi-Fi was in range). So before giving up the
+#     ladder forces a rescan, waits a bounded time and re-evaluates; and while
+#     the device stays offline on its last rung it repeats that EVERY tick, so
+#     an SSID that appears later is found. A switch is verified on the next
+#     tick; if the new rung is not `full` either, the previous one is restored
+#     and the candidate is not retried for TRIED_COOLDOWN_S (no flapping).
 #   * A single radio holds ONE association. Falling back to the stick means
 #     taking the customer WiFi down first — that is why parking is an explicit
 #     `down`, not a metric change.
@@ -54,6 +62,16 @@ SYS_NET="${GA_LADDER_SYS_NET:-/sys/class/net}"
 FAIL_THRESHOLD="${GA_LADDER_FAILS:-3}"
 COOLDOWN_S="${GA_LADDER_COOLDOWN_S:-900}"
 NOW="${GA_LADDER_NOW:-$(date -u +%s)}"
+TRIED_DIR="${GA_LADDER_TRIED_DIR:-/run/ga-uplink-tried}"
+RESCAN_WAIT_S="${GA_LADDER_RESCAN_WAIT_S:-8}"
+UP_TIMEOUT_S="${GA_LADDER_UP_TIMEOUT_S:-25}"
+SETTLE_S="${GA_LADDER_SETTLE_S:-90}"
+TRIED_COOLDOWN_S="${GA_LADDER_TRIED_COOLDOWN_S:-600}"
+SWITCH_REC="$STATE.switch"
+RESCAN_REC="$STATE.rescan"
+# per-tick facts published in the status file
+SPARE=""; LAST_RUNG=false; SEARCHING=false
+LAST_RESCAN=$(cat "$RESCAN_REC" 2>/dev/null || true)
 LOG_TAG=ga-uplink-ladder
 
 log() { logger -t "$LOG_TAG" -p "daemon.$1" "$2" 2>/dev/null || echo "$LOG_TAG: $2" >&2; }
@@ -97,21 +115,63 @@ wifi_in_range() {
     $NMCLI -t -f SSID device wifi list 2>/dev/null | grep -qx "$_ssid"
 }
 
-# Rungs that could take over: another profile, allowed to autoconnect, not
-# parked, of an uplink type, and with its medium present.
-spare_rungs() {
+# One line per candidate profile: "OK<TAB>name" or "NO<TAB>name: reason".
+# Non-uplink types (loopback, wireguard, bridge, tun) are not listed at all.
+rung_report() {
     _active="$1"
     $NMCLI -t -f NAME,TYPE,AUTOCONNECT connection show 2>/dev/null | while IFS=: read -r _n _t _a; do
         [ "$_n" = "$_active" ] && continue
-        [ "$_a" = "yes" ] || continue
-        [ -f "$PARK_DIR/$_n" ] && continue
+        case "$_t" in 802-3-ethernet|802-11-wireless|gsm|cdma) ;; *) continue ;; esac
+        if [ -f "$PARK_DIR/$_n" ]; then
+            printf 'NO\t%s: parked (cooldown until %s)\n' "$_n" "$(cat "$PARK_DIR/$_n" 2>/dev/null)"; continue
+        fi
+        if [ -f "$TRIED_DIR/$_n" ]; then
+            _tu=$(cat "$TRIED_DIR/$_n" 2>/dev/null || echo 0)
+            if [ "$NOW" -lt "$_tu" ] 2>/dev/null; then
+                printf 'NO\t%s: tried, not full (retry after %s)\n' "$_n" "$_tu"; continue
+            fi
+            rm -f "$TRIED_DIR/$_n"
+        fi
+        if [ "$_a" != "yes" ]; then printf 'NO\t%s: autoconnect off\n' "$_n"; continue; fi
         case "$_t" in
-            802-3-ethernet)  eth_has_carrier "$_n" && echo "$_n" ;;
-            802-11-wireless) wifi_in_range "$_n" && echo "$_n" ;;
-            gsm|cdma)        echo "$_n" ;;
-            *) ;;   # loopback, wireguard, bridge, tun — not a way out
+            802-3-ethernet)
+                if eth_has_carrier "$_n"; then printf 'OK\t%s\n' "$_n"; else printf 'NO\t%s: no carrier\n' "$_n"; fi ;;
+            802-11-wireless)
+                if wifi_in_range "$_n"; then printf 'OK\t%s\n' "$_n"; else printf 'NO\t%s: SSID not in range\n' "$_n"; fi ;;
+            gsm|cdma) printf 'OK\t%s\n' "$_n" ;;
         esac
     done
+}
+
+# Rungs that could take over: another profile, allowed to autoconnect, not
+# parked, not recently tried, of an uplink type, and with its medium present.
+spare_rungs() { rung_report "$1" | sed -n 's/^OK\t//p'; }
+
+iso_now() { date -u -d "@$NOW" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# The cache is not the world: ask the radio, give it a bounded moment.
+rescan_wait() {
+    $NMCLI device wifi rescan >/dev/null 2>&1
+    sleep "$RESCAN_WAIT_S"
+    LAST_RESCAN=$(iso_now)
+    echo "$LAST_RESCAN" > "$RESCAN_REC" 2>/dev/null
+}
+
+# Sets SPARE (first usable rung, "" if none). Rescans once before giving up and
+# says, at warning level, why every other known rung was rejected (rule 44).
+pick_spare() {
+    _rep=$(rung_report "$1")
+    if ! printf '%s\n' "$_rep" | grep -q '^OK'; then
+        log warning "no spare uplink in the scan cache — forcing a Wi-Fi rescan (${RESCAN_WAIT_S}s) before judging '${1:-none}' the last rung"
+        rescan_wait
+        _rep=$(rung_report "$1")
+    fi
+    SPARE=$(printf '%s\n' "$_rep" | sed -n 's/^OK\t//p' | head -1)
+    printf '%s\n' "$_rep" | sed -n 's/^NO\t//p' | while IFS= read -r _l; do
+        log warning "uplink candidate rejected: $_l"
+    done
+    [ -z "$SPARE" ] || log notice "uplink candidate '$SPARE' is a usable spare"
+    return 0
 }
 
 park() {
@@ -135,6 +195,7 @@ unpark() {
 # could come up with a rung disabled by a decision taken before the reboot.
 unpark_all_on_boot() {
     [ -f "$BOOT_MARK" ] && return 0
+    rm -rf "$TRIED_DIR" "$SWITCH_REC"
     [ -d "$PARK_DIR" ] && for _f in "$PARK_DIR"/*; do
         [ -e "$_f" ] || continue
         unpark "$(basename "$_f")"
@@ -153,10 +214,42 @@ release_expired() {
 }
 
 write_status() {
-    printf '{"rung":"%s","verdict":"%s","strikes":%s,"parked":"%s","updated_at":"%s"}\n' \
+    printf '{"rung":"%s","verdict":"%s","strikes":%s,"parked":"%s","spare":"%s","last_rung":%s,"searching":%s,"last_rescan":"%s","updated_at":"%s"}\n' \
         "$1" "$2" "$3" "$(ls "$PARK_DIR" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')" \
-        "$(date -u -d "@$NOW" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        "$SPARE" "$LAST_RUNG" "$SEARCHING" "$LAST_RESCAN" "$(iso_now)" \
         | "$PUBLISH" "$STATUS" 0644 || log warning "could not publish $STATUS"
+}
+
+# Take a candidate up explicitly (bounded), and remember to verify it next tick.
+switch_to() {
+    _prev="$1"; _cand="$2"
+    $NMCLI -w "$UP_TIMEOUT_S" connection up "$_cand" >/dev/null 2>&1 \
+        || log warning "'connection up $_cand' did not complete within ${UP_TIMEOUT_S}s — NM may still bring it up"
+    echo "$_prev|$_cand|$NOW" > "$SWITCH_REC"
+    log warning "switched '${_prev:-none}' -> '$_cand' — verifying on the next tick, falling back if it is not full either"
+}
+
+# Previous tick moved us to a candidate. Full -> done. Not full after the settle
+# time -> restore the previous rung and bar the candidate for a while.
+# Returns 0 only when it fell back.
+check_switch() {
+    [ -f "$SWITCH_REC" ] || return 1
+    IFS='|' read -r _p _cand _at < "$SWITCH_REC"
+    if [ "$1" = "full" ]; then
+        log notice "candidate '$_cand' verified full — staying on it"
+        rm -f "$SWITCH_REC"; return 1
+    fi
+    [ $((NOW - _at)) -ge "$SETTLE_S" ] || return 1
+    mkdir -p "$TRIED_DIR"; echo $((NOW + TRIED_COOLDOWN_S)) > "$TRIED_DIR/$_cand"
+    rm -f "$SWITCH_REC"
+    if [ -n "$_p" ]; then
+        [ -f "$PARK_DIR/$_p" ] && unpark "$_p"
+        $NMCLI -w "$UP_TIMEOUT_S" connection up "$_p" >/dev/null 2>&1
+        log warning "candidate '$_cand' is not full either ('$1') — fell back to previous '$_p'; '$_cand' barred for ${TRIED_COOLDOWN_S}s"
+    else
+        log warning "candidate '$_cand' is not full ('$1') — barred for ${TRIED_COOLDOWN_S}s, still searching"
+    fi
+    return 0
 }
 
 main() {
@@ -185,16 +278,34 @@ main() {
     log warning "uplink '${_active:-none}' reports '$_verdict' (strike $_strikes/$FAIL_THRESHOLD)"
     write_status "${_active:-none}" "$_verdict" "$_strikes"
 
-    [ "$_strikes" -ge "$FAIL_THRESHOLD" ] || return 0
-    if [ -z "$_active" ]; then
-        log warning "no default route to park — waiting for a rung to come up"
+    if check_switch "$_verdict"; then
+        # fell back: stay one strike short of the threshold so the search
+        # resumes on the very next tick
+        echo $((FAIL_THRESHOLD - 1)) > "$STATE"
+        write_status "${_active:-none}" "$_verdict" $((FAIL_THRESHOLD - 1))
         return 0
     fi
-    if [ -z "$(spare_rungs "$_active")" ]; then
-        log warning "'$_active' is the LAST uplink ('$_verdict') — keeping it. Parking it would take the device off the network entirely."
+
+    [ "$_strikes" -ge "$FAIL_THRESHOLD" ] || return 0
+    pick_spare "$_active"
+    if [ -z "$SPARE" ]; then
+        LAST_RUNG=true; SEARCHING=true
+        if [ -z "$_active" ]; then
+            log warning "NO default route and no usable candidate (after a rescan) — device is OFFLINE, searching again next tick"
+        else
+            log warning "'$_active' is the LAST uplink ('$_verdict') — keeping it, but OFFLINE searching continues every tick. Parking it would take the device off the network entirely."
+        fi
+        write_status "${_active:-none}" "$_verdict" "$_strikes"
+        return 0
+    fi
+    if [ -z "$_active" ]; then
+        switch_to "" "$SPARE"
+        echo 0 > "$STATE"
+        write_status "switching" "$_verdict" 0
         return 0
     fi
     park "$_active" "no internet after $_strikes checks ($_verdict)"
+    switch_to "$_active" "$SPARE"
     echo 0 > "$STATE"
     write_status "switching" "$_verdict" 0
 }
