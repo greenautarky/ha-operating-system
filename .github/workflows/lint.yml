@@ -721,6 +721,16 @@ jobs:
         # pre-change script.
         run: bash tests/gates/check_images_board/selftest.sh
 
+      - name: ga-manager-guard (watchdog toggle + revive a dead ga_manager, Odoo #2166)
+        # Drives the LIVE script against a stateful stub of `docker exec hassio_cli ha addons`:
+        # must-flag = crash -> started, toggle off -> on, the Supervisor's 5-attempt give-up ->
+        # started, failing start -> loud ERROR; must-not-flag = running, deliberate-stop marker,
+        # grace period, not installed, Supervisor unreachable. Mutants (marker ignored, toggle
+        # never set, no grace, never starts, never loud) are red.
+        run: |
+          sh tests/ga_tests/ga_manager_guard/test.sh
+          GA_T_SHELL="busybox sh" sh tests/ga_tests/ga_manager_guard/test.sh
+
       - name: uplink ladder (fallback staircase decisions)
         # Drives the real ladder script against a stub NetworkManager: healthy
         # devices cost no probe traffic, three confirmed strikes switch, the

@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodic ga_manager liveness guard (Odoo #2166)
+
+[Timer]
+# First look 3 min after boot (Supervisor up ~+47 s, add-on starts later); the
+# script itself waits GA_GMG_DOWN_S (600 s) of monotonic down-time before acting.
+OnBootSec=3min
+OnUnitActiveSec=2min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

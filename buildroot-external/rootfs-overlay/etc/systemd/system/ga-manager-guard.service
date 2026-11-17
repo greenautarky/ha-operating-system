@@ -1,0 +1,15 @@
+[Unit]
+Description=Keep ga_manager running: Supervisor watchdog toggle ON, start it when it has been down too long (Odoo #2166)
+After=haos-supervisor.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-manager-guard
+Nice=10
+# docker exec x4 (60 s each) + settle 15 s.
+TimeoutStartSec=300
+SyslogIdentifier=ga-manager-guard
+SyslogFacility=daemon
+# A two-minute timer: keep the quiet info ticks out of the journal; the
+# warning/error lines (<4>/<3>) pass. Guarded by tests/gates/frequent_timer_loglevel.
+LogLevelMax=notice

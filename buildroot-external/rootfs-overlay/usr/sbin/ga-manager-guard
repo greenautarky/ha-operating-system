@@ -1,0 +1,198 @@
+#!/bin/sh
+# ga-manager-guard — host safety net under ga_manager (Odoo #2166).
+#
+# A dead ga_manager means no fm contact, no alarms, no OTA dispatch, no
+# credentials. The Supervisor watchdog revives a crashed add-on, but only
+#   (1) when the per-install watchdog toggle is ON (it defaults to OFF; ga_manager
+#       sets it itself on every start, which is no help on a device where it never
+#       ran or after a Supervisor state reset / reinstall), and
+#   (2) until it gives up (5 failed restarts), after which the add-on stays dead
+#       until the next reboot.
+# This timer-driven script closes both gaps from the HOST, independent of
+# ga_manager having run:
+#
+#   A. TOGGLE. Every tick: add-on installed and its watchdog flag is not true ->
+#      `ha addons options <slug> --watchdog true`, read back, WARNING when it was
+#      off, ERROR when it could not be turned on. Done even while the add-on is
+#      stopped on purpose (the flag is not what a deliberate stop is about).
+#   B. REVIVE. add-on installed, not `started` for >= GA_GMG_DOWN_S (default 600 s,
+#      monotonic, so the Supervisor watchdog and a slow update get their chance
+#      first) and NOT deliberately stopped -> `ha addons start <slug>`, then verify.
+#      After GA_GMG_MAX_FAILS (default 3) consecutive failed starts: ERROR on every
+#      further attempt (rule 44: a fallback that gives up must be loud), status
+#      JSON says `start_failing`.
+#
+# DELIBERATE STOP. The marker GA_GMG_STOP_MARKER (default
+# /mnt/data/.ga-manager-deliberate-stop) means "leave it stopped". It expires
+# after GA_GMG_STOP_TTL_S (default 86400 s, by file mtime): a forgotten marker
+# must not switch the net off for ever. An expired marker is logged and ignored.
+# An operator `ha addons stop` WITHOUT the marker is restarted after the
+# grace period - by design.
+#
+# NOT DONE: no reboot. Rebooting a device for a dead add-on is not safe as a
+# first step (it takes Core and every other add-on down, and on a device with
+# a pending OTA or a customer heating schedule that is an outage); the guard
+# keeps trying and keeps shouting instead. A last-resort reboot is a TODO that
+# needs an argument for its own safety (see the PR).
+#
+# CLOCKS. "Down since" is host uptime (/proc/uptime), kept in /run (tmpfs, one
+# record per boot): an NTP step cannot open or close the grace period.
+#
+# Not installed yet (fresh flash, before ga-bootstrap) -> no-op. Supervisor or
+# hassio_cli unreachable -> no-op, one info line (ga-supervisor-cli-watchdog
+# owns that fault).
+#
+# POSIX /bin/sh (busybox). Every command and path is overridable for the host
+# suite tests/ga_tests/ga_manager_guard.
+set -u
+
+DOCKER="${GA_GMG_DOCKER:-docker}"
+SLUG="${GA_GMG_SLUG:-99f1cad4_ga_manager}"
+STATE_DIR="${GA_GMG_STATE_DIR:-/run}"
+UPTIME_FILE="${GA_GMG_UPTIME_FILE:-/proc/uptime}"
+STOP_MARKER="${GA_GMG_STOP_MARKER:-/mnt/data/.ga-manager-deliberate-stop}"
+STOP_TTL_S="${GA_GMG_STOP_TTL_S:-86400}"
+DOWN_S="${GA_GMG_DOWN_S:-600}"
+MAX_FAILS="${GA_GMG_MAX_FAILS:-3}"
+SETTLE_S="${GA_GMG_SETTLE_S:-15}"
+PUBLISH="${GA_GMG_PUBLISH:-/usr/libexec/ga-share-publish}"
+SHARE_FILE="${GA_GMG_SHARE_FILE:-/mnt/data/supervisor/share/ga-manager-guard.json}"
+NOW_WALL="${GA_GMG_NOW:-$(date -u +%s)}"
+
+DOWN_FILE="$STATE_DIR/ga-manager-guard.down"
+FAIL_FILE="$STATE_DIR/ga-manager-guard.fails"
+STOPLOG_FILE="$STATE_DIR/ga-manager-guard.stop-logged"
+WDFAIL_FILE="$STATE_DIR/ga-manager-guard.wdfail-logged"
+
+# systemd priority prefixes: <3> err, <4> warning, <6> info
+loge() { echo "<3>ga-manager-guard: ERROR: $*"; }
+logw() { echo "<4>ga-manager-guard: $*"; }
+logi() { echo "<6>ga-manager-guard: $*"; }
+
+publish() {  # publish STATE DETAIL
+    _d="$(printf '%s' "$2" | tr '"\\' "''")"
+    _j="$(printf '{"schema_version":1,"ts":%s,"state":"%s","detail":"%s","slug":"%s"}\n' \
+        "$NOW_WALL" "$1" "$_d" "$SLUG")"
+    if [ -x "$PUBLISH" ]; then
+        printf '%s' "$_j" | "$PUBLISH" "$SHARE_FILE" 2>/dev/null || logw "could not publish $SHARE_FILE"
+    fi
+}
+
+uptime_s() {
+    _u="$(cut -d' ' -f1 "$UPTIME_FILE" 2>/dev/null)"; _u="${_u%%.*}"
+    case "$_u" in ''|*[!0-9]*) echo 0 ;; *) echo "$_u" ;; esac
+}
+
+# run_ha <ha args...> -> RUN_RC, RUN_OUT (stdout), RUN_ERR (stderr, without the
+# 2026.10 "addons is deprecated" notice). `addons` works on both CLI generations.
+RUN_ERRF="${TMPDIR:-/tmp}/ga-manager-guard.$$.err"
+trap 'rm -f "$RUN_ERRF"' EXIT
+run_ha() {
+    RUN_OUT="$(timeout 60 "$DOCKER" exec hassio_cli ha "$@" 2>"$RUN_ERRF")"
+    RUN_RC=$?
+    RUN_ERR="$(grep -viE 'is deprecated, please use' "$RUN_ERRF" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
+}
+
+read_info() {  # -> INFO_STATE, INFO_WD ; rc 0 ok, 1 not installed, 2 unreachable
+    run_ha addons info "$SLUG" --raw-json
+    if [ "$RUN_RC" -ne 0 ]; then
+        if printf '%s %s' "$RUN_OUT" "$RUN_ERR" | grep -qiE 'not installed|does not exist|not found|no add-on|not a valid'; then
+            return 1
+        fi
+        return 2
+    fi
+    INFO_STATE="$(printf '%s' "$RUN_OUT" | jq -r '.data.state // empty' 2>/dev/null)"
+    INFO_WD="$(printf '%s' "$RUN_OUT" | jq -r '.data.watchdog | tostring' 2>/dev/null)"
+    [ -n "$INFO_STATE" ] || return 2
+    return 0
+}
+
+mkdir -p "$STATE_DIR" 2>/dev/null
+
+read_info
+case $? in
+    1) logi "$SLUG not installed yet - nothing to guard"; rm -f "$DOWN_FILE" "$FAIL_FILE"; exit 0 ;;
+    2) logi "cannot read $SLUG (rc=$RUN_RC, ${RUN_ERR:-no stderr}) - Supervisor or hassio_cli not ready, no action"; exit 0 ;;
+esac
+
+# --- A. watchdog toggle -------------------------------------------------------
+if [ "$INFO_WD" != "true" ]; then
+    _wd_was="$INFO_WD"
+    run_ha addons options "$SLUG" --watchdog true
+    _set_rc=$RUN_RC; _set_err="$RUN_ERR $RUN_OUT"
+    read_info
+    if [ "$_set_rc" -eq 0 ] && [ "$INFO_WD" = "true" ]; then
+        logw "Supervisor watchdog for $SLUG was '${_wd_was:-unset}' - turned ON (a crash is now restarted by the Supervisor)"
+        publish watchdog_enabled "watchdog toggle was off, turned on"
+    else
+        _m="Supervisor watchdog for $SLUG is OFF and could NOT be turned on (rc=$_set_rc: $(printf '%s' "$_set_err" | cut -c1-160)) - a crashed ga_manager is not restarted by the Supervisor"
+        # ERROR once per boot (journal volume on a 2-min timer), WARNING on the later ticks.
+        if [ -e "$WDFAIL_FILE" ]; then logw "$_m"; else loge "$_m"; : > "$WDFAIL_FILE" 2>/dev/null; fi
+        publish watchdog_set_failed "watchdog off and not settable, rc=$_set_rc"
+    fi
+fi
+
+# --- B. revive ----------------------------------------------------------------
+if [ "$INFO_STATE" = "started" ]; then
+    if [ -e "$DOWN_FILE" ] || [ -e "$FAIL_FILE" ]; then
+        logi "$SLUG is started again - guard state cleared"
+    fi
+    rm -f "$DOWN_FILE" "$FAIL_FILE" "$STOPLOG_FILE"
+    exit 0
+fi
+
+now="$(uptime_s)"
+
+if [ -e "$STOP_MARKER" ]; then
+    _age=$(( NOW_WALL - $(stat -c %Y "$STOP_MARKER" 2>/dev/null || echo "$NOW_WALL") ))
+    if [ "$_age" -lt "$STOP_TTL_S" ]; then
+        if [ ! -e "$STOPLOG_FILE" ]; then
+            logw "$SLUG is '$INFO_STATE' and the deliberate-stop marker $STOP_MARKER is present (age ${_age}s < ${STOP_TTL_S}s) - NOT starting it"
+            : > "$STOPLOG_FILE" 2>/dev/null
+        fi
+        rm -f "$DOWN_FILE" "$FAIL_FILE"
+        publish deliberately_stopped "marker present, age ${_age}s"
+        exit 0
+    fi
+    logw "deliberate-stop marker $STOP_MARKER is ${_age}s old (> ${STOP_TTL_S}s) - expired, ignored"
+fi
+
+if [ ! -s "$DOWN_FILE" ]; then
+    printf '%s\n' "$now" > "$DOWN_FILE" 2>/dev/null
+    logi "$SLUG is '$INFO_STATE' - first seen down; the guard acts after ${DOWN_S}s"
+    exit 0
+fi
+since="$(cat "$DOWN_FILE" 2>/dev/null)"
+case "$since" in ''|*[!0-9]*) since="$now" ;; esac
+down=$(( now - since ))
+[ "$down" -ge 0 ] || down=0
+if [ "$down" -lt "$DOWN_S" ]; then
+    logi "$SLUG is '$INFO_STATE' for ${down}s < ${DOWN_S}s - waiting (the Supervisor watchdog gets the first go)"
+    exit 0
+fi
+
+fails="$(cat "$FAIL_FILE" 2>/dev/null)"
+case "$fails" in ''|*[!0-9]*) fails=0 ;; esac
+
+logw "$SLUG has not been started for ${down}s (state '$INFO_STATE', Supervisor watchdog gave up or is off) - starting it (previous failed starts: $fails)"
+run_ha addons start "$SLUG"
+_start_rc=$RUN_RC; _start_err="$RUN_ERR $RUN_OUT"
+[ "$SETTLE_S" -gt 0 ] && sleep "$SETTLE_S"
+read_info
+if [ "$INFO_STATE" = "started" ]; then
+    logw "$SLUG started by the guard after ${down}s down"
+    rm -f "$DOWN_FILE" "$FAIL_FILE"
+    publish revived "started after ${down}s down at $NOW_WALL"
+    exit 0
+fi
+
+fails=$((fails + 1))
+printf '%s\n' "$fails" > "$FAIL_FILE" 2>/dev/null
+if [ "$fails" -ge "$MAX_FAILS" ]; then
+    loge "$SLUG will NOT start: $fails consecutive start attempts failed (last: rc=$_start_rc, state '$INFO_STATE', $(printf '%s' "$_start_err" | cut -c1-160)) - device has no ga_manager (no fm contact, no alarms, no OTA dispatch); needs a human. Retrying every tick."
+    publish start_failing "$fails failed starts, state $INFO_STATE"
+else
+    logw "start attempt $fails/$MAX_FAILS failed (rc=$_start_rc, state '$INFO_STATE')"
+    publish start_failed "attempt $fails of $MAX_FAILS failed"
+fi
+exit 0
