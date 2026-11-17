@@ -14,7 +14,20 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ## BOSv1.6.0-dev11 (DSGW-210 dev, feat/1.6-haos18)
 
-dev10 plus ga-bootstrap 1.2.17 (Odoo #2132, #2066), the F5 updater.json seed (Odoo #2065), ga_manager 0.277.5 (the DSGW pin moves from 0.277.3, the 1.6.0 final freeze hold removed; the store already serves 0.277.5) and the storage watchdog (reboot step off). Marker only: `gaos_release_dsgw210`.
+dev10 plus ga-bootstrap 1.2.17 (Odoo #2132, #2066), the F5 updater.json seed (Odoo #2065), ga_manager 0.277.6 (the DSGW pin moves from 0.277.3, the 1.6.0 final freeze hold removed; the store serves 0.277.6) and the storage watchdog (reboot step off). Marker only: `gaos_release_dsgw210`.
+
+## BOSv1.6.1-rc2 (iHost, feat/1.6-haos18)
+
+rc1 plus everything merged on the line since (`git log 67cd2551e..HEAD`) and the component bumps:
+- F1, baked images unpacked at build time so a fresh device installs add-ons without a GHCR download: report-mode gate check-baked-snapshots.sh (#1086), `docker load --platform` unpack, patch 0135 (#1088), the current dind script (patch 0136), updater.json no longer written behind a pipe (patch 0137), VER-13 enforcing and the VER-14 gate (#1093, Odoo #2067, #2065).
+- F5, the baked updater.json seeds every plugin, Supervisor and Core version + image (#1084, Odoo #2065).
+- ga-bootstrap 1.2.17: `ha addons info` parsed from stdout only, no 180 s dead gap (#1085, Odoo #2066, #2132).
+- Supervisor 2026.10.5.4 (F3 = ha-supervisor #54: PULL_STALL_TIMEOUT 90 -> 300 s so a silent on-device unpack does not fail the install; Odoo #2065). Image on GHCR for armv7 and aarch64; the pin lives in haos-version line/1.6/rc.json and version.yaml.
+- Resident UI, Einstellungen: Zigbee device list (Odoo #2144), software version tile (Odoo #2145), no search/Assist (Odoo #2146): ga-frontend-bundle 1.23.11 + greenautarky_site 2.13.0.
+- greenautarky_site 2.13.0 carries the onboarding fix #87: the PIN file is read off the event loop in /verify_pin (Odoo #1744).
+- ga_manager 0.277.6: status.json carries ga_release and a changed version rewrites it at once (Odoo #2145). Store (vibe_addons #348) and both boards' pins in lockstep.
+- Build container: zstd decoder so the runtime toolchain gate can read zstd image layers (#1090, Odoo #1975).
+- NOT in rc2: Odoo #2112 (iHost stays on a GA dongle Wi-Fi without data service, no fallback) and Odoo #2120 (ota-update pre_backup:true makes no backup via rauc_install_via_host_service). No merged fix exists for either; take a backup explicitly before every OTA.
 
 ## BOSv1.6.1-rc1 (iHost, feat/1.6-haos18)
 
