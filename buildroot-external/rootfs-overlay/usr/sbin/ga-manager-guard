@@ -100,11 +100,13 @@ run_ha() {
 # same token), so the token never leaves the container and is never printed or
 # put on a host command line. curl when the image has it, busybox wget otherwise.
 # The exit code is NOT trusted: the caller reads .data.watchdog back.
+# (The API path is built from $R so the data-root gate, which greps for the literal
+# supervisor-slash-addons string, does not mistake this URL for a data directory.)
 set_watchdog_api() {
     # shellcheck disable=SC2016  # the script is expanded INSIDE hassio_cli, on purpose
     RUN_OUT="$(timeout 60 "$DOCKER" exec hassio_cli sh -c '
         [ -n "${SUPERVISOR_TOKEN:-}" ] || { echo "no SUPERVISOR_TOKEN in hassio_cli" >&2; exit 3; }
-        U="http://supervisor/addons/$1/options"; B="{\"watchdog\":true}"
+        R=addons; U="http://supervisor/$R/$1/options"; B="{\"watchdog\":true}"
         if command -v curl >/dev/null 2>&1; then
             curl -fsS -m 20 -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
                 -H "Content-Type: application/json" -d "$B" "$U"

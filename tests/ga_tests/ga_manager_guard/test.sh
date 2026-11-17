@@ -35,7 +35,7 @@ cat > "$W/bin/docker" <<'STUB'
 echo "$*" >> "$FAKE/calls"
 if [ "$3" = "sh" ]; then
   [ -f "$FAKE/no_token" ] && { echo "no SUPERVISOR_TOKEN in hassio_cli" >&2; exit 3; }
-  echo "API POST /addons/$7/options" >> "$FAKE/calls"
+  echo "API POST $7" >> "$FAKE/calls"
   [ -f "$FAKE/api_noop" ] && exit 0
   if [ -f "$FAKE/opt_ok" ]; then echo true > "$FAKE/watchdog"; echo '{"result":"ok"}'; else echo "curl: (22) 500" >&2; exit 22; fi
   exit 0
