@@ -60,6 +60,7 @@ SUITES_EXCLUDED="
   wifi_probe_verdict host suite: CI lint.yml host-suites — HW-02b's fixtures
   device_run_lock host suite: CI lint.yml host-suites — the runner's one-run-per-device lock
   uplink_ladder   host suite: CI lint.yml host-suites
+  openstick_backoff host suite: CI lint.yml host-suites — ga-openstick-autoconnect per-SSID back-off (#2112)
   uplink_units    host suite: CI lint.yml host-suites
   board_conf      host suite: CI lint.yml host-suites — per-board values (ga-board.conf, USB port allowlist) of the shared scripts
   share_writers   host suite: CI lint.yml host-suites — needs bubblewrap, drives the writers in a sandbox

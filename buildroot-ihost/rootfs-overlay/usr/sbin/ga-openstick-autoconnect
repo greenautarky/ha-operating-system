@@ -11,6 +11,27 @@
 #   - ga-openstick-autoconnect.timer (every 5 min — picks up new sticks)
 #   - ga-openstick-autoconnect.service (once at boot)
 #
+# NO RE-JOIN LOOP ON A DONGLE WITHOUT INTERNET (Odoo #2112)
+# ---------------------------------------------------------
+# A dongle whose Wi-Fi is up but has no WAN (no SIM, a SIM without a data
+# service) used to be joined, judged not-full by NM, deleted, and joined AGAIN
+# 10 minutes later (5-min timer + 5-min cooldown) - a ~30 s outage on the
+# working uplink every 10 min for as long as the stick broadcasts (K31 bench,
+# 2026-11-17). The ga-uplink-ladder never sees it: the profile is gone before
+# its 2-min tick.
+#
+# So an SSID that proved to have no internet is BARRED, with a growing back-off
+# per SSID (30 min -> 2 h -> 6 h, capped), persisted in /mnt/data so a reboot
+# does not restart the ladder of retries. It is tried again when the bar
+# expires (the stick may be the only uplink later). Two rules keep that from
+# ever costing connectivity:
+#   * The bar only applies while ANOTHER uplink is full. With nothing else
+#     online the dongle is the only way out: a bar is ignored, and a join that
+#     is not full is KEPT (never deleted) - the ladder keeps searching.
+#   * A later `full` verdict on the stick clears the bar.
+# Own state rather than the ladder's /run/ga-uplink-tried: that one is keyed by
+# connection NAME (always "openstick-auto", whatever the SSID), flat 600 s,
+# wiped at every boot, and the ladder never runs for this case at all.
 set -e
 
 # Every path and command is env-overridable so the decision logic runs host-side
@@ -22,11 +43,51 @@ SSID_PREFIX="GA-"
 CONN_NAME="openstick-auto"
 COOLDOWN_FILE="${GA_OPENSTICK_COOLDOWN_FILE:-/mnt/data/.ga-openstick-cooldown}"
 COOLDOWN_SECS=300
+BACKOFF_FILE="${GA_OPENSTICK_BACKOFF_FILE:-/mnt/data/.ga-openstick-backoff}"
+# seconds a failed SSID stays barred, per consecutive failure; the last repeats
+BACKOFF_STEPS="1800 7200 21600"
+BACKOFF_CAP=21600
 PARK_DIR="${GA_LADDER_PARK_DIR:-/run/ga-uplink-parked}"
 LOG_TAG="ga-openstick"
 
 log() { echo "$LOG_TAG: $1"; }
+# bar / unbar / lifted-bar decisions are loud: journal at warning, not info
+warn() { echo "$LOG_TAG: $1"; logger -t "$LOG_TAG" -p daemon.warning "$1" 2>/dev/null || true; }
 now() { date +%s; }
+
+# --- per-SSID back-off: file lines "<ssid>\t<level>\t<until-epoch>" ---------
+bo_field() { # bo_field <ssid> <2|3>
+  [ -f "$BACKOFF_FILE" ] || return 0
+  awk -F'\t' -v s="$1" -v f="$2" '$1==s {print $f; exit}' "$BACKOFF_FILE" 2>/dev/null || true
+}
+bo_drop() { # bo_drop <ssid>
+  [ -f "$BACKOFF_FILE" ] || return 0
+  _t="$BACKOFF_FILE.tmp"
+  awk -F'\t' -v s="$1" '$1!=s' "$BACKOFF_FILE" > "$_t" 2>/dev/null && mv "$_t" "$BACKOFF_FILE" || true
+}
+# remaining bar in seconds (0 = not barred). A clock that jumped backwards
+# (no RTC at boot) must not strand a bar for years: clamp to the cap.
+bo_remaining() {
+  _u=$(bo_field "$1" 3); _n=$(now)
+  case "$_u" in ''|*[!0-9]*) echo 0; return 0 ;; esac
+  [ "$_u" -gt "$_n" ] || { echo 0; return 0; }
+  _r=$((_u - _n)); [ "$_r" -le "$BACKOFF_CAP" ] || _r=$BACKOFF_CAP
+  echo "$_r"
+}
+bar_ssid() { # bar_ssid <ssid> <why>
+  _l=$(bo_field "$1" 2); case "$_l" in ''|*[!0-9]*) _l=0 ;; esac
+  _l=$((_l + 1))
+  _d=$BACKOFF_CAP; _i=0
+  for _st in $BACKOFF_STEPS; do _i=$((_i + 1)); [ "$_i" -eq "$_l" ] && { _d=$_st; break; }; done
+  bo_drop "$1"
+  printf '%s\t%s\t%s\n' "$1" "$_l" "$(( $(now) + _d ))" >> "$BACKOFF_FILE"
+  warn "BARRED $1 for ${_d}s (failure $_l in a row, $2) - not re-joined while another uplink is full; retried when the bar expires"
+}
+unbar_ssid() { # unbar_ssid <ssid>
+  [ -n "$(bo_field "$1" 2)" ] || return 0
+  bo_drop "$1"
+  warn "UNBARRED $1 - it carries internet again (full), back-off reset"
+}
 
 # 1. Check if secret exists (feature disabled without key)
 # This used to `exit 0` in silence. The key is injected at BUILD time from
@@ -52,6 +113,12 @@ fi
 
 # 2. Check if already connected — nothing to do
 if $NMCLI -t -f NAME connection show --active 2>/dev/null | grep -q "$CONN_NAME"; then
+  # An active stick that NM calls full (cached verdict, no traffic) clears any
+  # bar left over from when it had no internet.
+  if [ -s "$BACKOFF_FILE" ] && [ "$($NMCLI -t -f CONNECTIVITY general status 2>/dev/null | head -1)" = "full" ]; then
+    _as=$($NMCLI -g 802-11-wireless.ssid connection show "$CONN_NAME" 2>/dev/null | head -1 || true)
+    [ -z "$_as" ] || unbar_ssid "$_as"
+  fi
   exit 0
 fi
 
@@ -88,6 +155,15 @@ fi
 
 SECRET=$(cat "$KEY_FILE" | tr -d '\n')
 
+# Is there a better rung right now? The stick is not active (step 2), so NM's
+# verdict describes the OTHER uplink. Snapshot it BEFORE joining: afterwards the
+# single radio has left it. Cached verdict first (free); one forced probe only
+# when it is not full, so a stale cache cannot wrongly lift a bar.
+OTHER_FULL=no
+_v=$($NMCLI -t -f CONNECTIVITY general status 2>/dev/null | head -1 || true)
+[ "$_v" = "full" ] || _v=$($NMCLI networking connectivity check 2>/dev/null | head -1 || true)
+[ "$_v" = "full" ] && OTHER_FULL=yes
+
 # 6. Try each SSID — create persistent autoconnect connection
 for SSID in $GA_SSIDS; do
   # Validate format: GA- followed by 4 digits
@@ -100,6 +176,15 @@ for SSID in $GA_SSIDS; do
   if [ ${#PSK} -ne 16 ]; then
     log "HMAC derivation failed for $SSID"
     continue
+  fi
+
+  _rem=$(bo_remaining "$SSID")
+  if [ "$_rem" -gt 0 ]; then
+    if [ "$OTHER_FULL" = "yes" ]; then
+      log "$SSID is barred for another ${_rem}s (no internet on it earlier) - another uplink is full, skipping"
+      continue
+    fi
+    warn "bar on $SSID (${_rem}s left) LIFTED - no other uplink is full, the dongle may be the only way online"
   fi
 
   log "Creating persistent connection for $SSID..."
@@ -152,16 +237,24 @@ for SSID in $GA_SSIDS; do
     done
     if [ "$_verdict" = "full" ]; then
       log "Connected to $SSID — internet verified. Connection is persistent."
+      unbar_ssid "$SSID"
       rm -f "$COOLDOWN_FILE"
       exit 0
-    else
-      log "$SSID connected but NM connectivity is '$_verdict' (not full) — removing connection"
+    elif [ "$OTHER_FULL" = "yes" ]; then
+      warn "$SSID connected but NM connectivity is '$_verdict' (not full) and another uplink is full - removing connection"
       $NMCLI connection delete "$CONN_NAME" 2>/dev/null || true
+      bar_ssid "$SSID" "NM connectivity '$_verdict'"
+    else
+      # Nothing else is online: deleting this would leave the device with no
+      # link at all. Keep it; ga-uplink-ladder keeps searching and moves off it
+      # the moment a real rung appears.
+      warn "$SSID connected but NM connectivity is '$_verdict' (not full) - NO other uplink is full, KEEPING it (never leave the device without a link); no back-off"
+      exit 0
     fi
   else
     log "Failed to create connection for $SSID"
   fi
 done
 
-log "All GA-* SSIDs failed — cooldown ${COOLDOWN_SECS}s"
+log "No GA-* SSID to join (failed or barred) — cooldown ${COOLDOWN_SECS}s"
 echo $(( $(now) + COOLDOWN_SECS )) > "$COOLDOWN_FILE"
