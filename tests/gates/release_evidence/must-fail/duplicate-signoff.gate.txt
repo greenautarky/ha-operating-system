@@ -13,3 +13,5 @@ signoff_ahmad=SIGNED 2026-11-17 by Ahmad
 signoff_ramin=SIGNED 2026-11-17 by Ramin
 gate_151=PASS 2026-11-17 ~13:10
 signoff_ahmad=SIGNED 2026-11-17 by Ahmad
+vccio5_fresh_sd=PASS 2026-11-17 hw_iodomain 9/9 on a fresh SD without the key, boot read ga.vccio5=3v3 (log: fixture)
+vccio5_ota_keeps_1v8=PASS 2026-11-17 OTA from BOSv1.6.0 at 1v8, after reboot ga.vccio5=1v8 (log: fixture)
