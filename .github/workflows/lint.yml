@@ -729,6 +729,13 @@ jobs:
         # rule is removed.
         run: sh tests/ga_tests/uplink_ladder/test.sh
 
+      - name: openstick autoconnect back-off (no re-join loop on a dongle without internet)
+        # Drives the real ga-openstick-autoconnect against a stub nmcli and a
+        # simulated clock. K31 replay (dongle Wi-Fi up, no WAN): 1 join in 30
+        # min, not 3; the dongle-only, full-dongle and reset-on-full cases must
+        # NOT be barred. Red-proven against the pre-fix script (16 failures).
+        run: sh tests/ga_tests/openstick_backoff/test.sh
+
       # A timer that fires every few minutes must not write its routine lines
       # into the persistent journal (Odoo #1225): LogLevelMax=notice on its
       # service, or a named exemption with a reason.
