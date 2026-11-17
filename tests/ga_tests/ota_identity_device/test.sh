@@ -119,7 +119,7 @@ if [ -n "$POLLS" ] && [ "$POLLS" -ge 1 ] && [ "$HITS" = 0 ]; then _rc=0; else _r
 show_verdict "OTAID-03" "the token is on no /proc/*/cmdline while the download runs" "$_rc" "scans during the download: ${POLLS:-0}, hits: ${HITS:-n/a}"
 
 # OTAID-03c: control - the same scan finds a token placed on a command line
-sh -c 'sleep 5' "$TOK" &   # the token is $0 of this sh, i.e. on its command line
+sh -c 'sleep 5; :' "$TOK" &   # the token is $0 of this sh, i.e. on its command line
 CPID=$!
 sleep 1
 CH=$(grep -a -l -f "$T/pat" /proc/[0-9]*/cmdline 2>/dev/null | wc -l)
