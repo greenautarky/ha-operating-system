@@ -96,9 +96,10 @@ done
 # certificate is 60 unless -k.
 cat > "$STUBS/curl" <<'EOF'
 #!/bin/sh
-ip=DNS; out=""; url=""; f=0; k=0; all="$*"
+ip=DNS; out=""; url=""; f=0; k=0; all="$*"; cfg=""
 while [ $# -gt 0 ]; do
   case "$1" in
+    --config) cfg="$2"; shift 2 ;;
     --resolve) ip=${2##*:}; shift 2 ;;
     --output|-o) out="$2"; shift 2 ;;
     --connect-timeout|--max-time|-w|--write-out) shift 2 ;;
@@ -110,6 +111,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 echo "curl $ip $url $all" >> /mnt/data/.calls
+# A --config file is what carries the device identity: record its mode and
+# content (the tokens in this suite are fakes) so a check can assert on them.
+[ -n "$cfg" ] && echo "curlcfg $(stat -c %a "$cfg") $(tr '\n' '|' < "$cfg")" >> /mnt/data/.calls
 ans=$(awk -v ip="$ip" '$1 == ip { print $2; exit }' /mnt/data/.plan)
 [ -n "$ans" ] || ans=dead
 while read -r a b; do
@@ -130,7 +134,7 @@ chmod +x "$STUBS"/*
 
 fresh() {  # <case> <GA_OTA_IPS> — a case dir with its own ga-services.conf
   C="$WORK/case/$1"; rm -rf "$C" 2>/dev/null || sudo -n rm -rf "$C"
-  mkdir -p "$C/data/tmp" "$C/run" "$C/etc"
+  mkdir -p "$C/data/tmp" "$C/data/gm" "$C/run" "$C/etc"
   : > "$C/data/.calls"; : > "$C/data/.plan"
   # The baked file, with only the candidate list replaced: everything else
   # (host, probe path) is what ships.
@@ -162,10 +166,11 @@ sbx() {  # <cmd...>
 }
 resolve() { sbx sh /mnt/.ext/usr/sbin/ga-resolve-ota > "$C/out" 2>&1; echo $? > "$C/rc"; }
 run_installer() {
-  sbx env GA_RESOLVE_OTA_BIN=/mnt/.ext/usr/sbin/ga-resolve-ota \
+  sbx env GA_GM_DATA_DIR=/mnt/data/gm $INSTENV GA_RESOLVE_OTA_BIN=/mnt/.ext/usr/sbin/ga-resolve-ota \
     sh /mnt/.ext/usr/sbin/ga-rauc-install "$@" > "$C/out" 2>&1
   echo $? > "$C/rc"
 }
+INSTENV=""
 out() { tr '\n' ';' < "$C/out"; }
 
 # ── ga-resolve-ota ──────────────────────────────────────────────────────────
@@ -265,8 +270,100 @@ run_installer 16.3.1.9
 ok "OTAF-25 the pinned endpoint does not answer: fail, never retry through name resolution" \
    "! curls | grep -q '^curl DNS ' && ! calls | grep -q '^rauc install' && [ \"\$(cat '$C/rc')\" = 3 ]" "rc=$(cat "$C/rc") calls: $(curls | tr '\n' ';')"
 
+# ── device identity (OTA hardening stage 1, Odoo #2160) ─────────────────────
+# The installer SENDS the device's fleet-manager token + id when it has them,
+# and downloads anonymously (loudly) when it has not. The store is open in
+# stage 1, so "no identity" must never stop an update: that is the lockout
+# guard this block pins. Expected header lines are pinned constants.
+echo "--- ga-rauc-install sends a device identity, and works without one ---"
+TOK=Zq3Xr8Lm0Pw5Yt2Uv7Nb4Hc9Kd1Je6Gs
+ID=KIB-SON-00000017
+# What yaml.safe_dump(sort_keys=True) writes: other blocks carry decoy
+# `token:` / `device_id:` keys on either side of the fleet block.
+write_creds() {  # <token-line-value> — a v2 bundle with that fleet token
+  cat > "$C/data/gm/ga-fleet-credentials.yaml" <<YAML
+aaa:
+  device_id: DECOY-ID-BEFORE
+  token: DECOY-TOKEN-BEFORE-0123456789
+device_id: $ID
+fleet:
+  token: $1
+  url: https://fleet.example.invalid
+mqtt:
+  password: pw
+  token: DECOY-TOKEN-AFTER-0123456789
+version: 2
+YAML
+}
+cfgs() { grep '^curlcfg ' "$C/data/.calls"; }
+idents_left() { ls "$C"/run/ga-rauc-install-ident.* 2>/dev/null; }
+
+fresh id-ok "$M1"
+plan "$M1 200" "DNS 200"; pin "$M1"; write_creds "$TOK"
+run_installer 16.3.1.9 BOSv1.4.0-rc3
+ok "OTAF-30 a device with a fleet token sends it as a Bearer header + its id" \
+   "cfgs | grep -qF 'header = \"Authorization: Bearer $TOK\"|header = \"X-GA-Device-Id: $ID\"|'" "cfgs: $(cfgs) out: $(out)"
+ok "OTAF-30b ... the identity file is mode 600" "cfgs | grep -q '^curlcfg 600 '" "cfgs: $(cfgs)"
+ok "OTAF-30c ... the token is NOT on the curl command line (ps would show it)" \
+   "! curls | grep -qF '$TOK' && ! grep -qF '$TOK' '$C/out'" "calls: $(curls | tr '\n' ';')"
+ok "OTAF-30d ... the identity file is gone once the installer exits" "[ -z \"\$(idents_left)\" ]" "left: $(idents_left)"
+ok "OTAF-30e ... the bundle is still downloaded and installed" \
+   "curls | grep -q 'releases/16.3.1.9/BOSv1.4.0-rc3/haos_ihost-16.3.1.9.raucb' && calls | grep -q '^rauc install '" "out: $(out)"
+ok "OTAF-30f ... the decoy token/id of other blocks are not used" \
+   "! cfgs | grep -q DECOY"
+
+fresh id-fallback "$M1"
+plan "$M1 200" "DNS 200" "MISS /BOSv1.4.0-rc3/"; pin "$M1"; write_creds "$TOK"
+run_installer 16.3.1.9 BOSv1.4.0-rc3
+ok "OTAF-31 the prod-slot fallback download carries the identity too" \
+   "[ \$(cfgs | wc -l) -eq 2 ] && curls | tail -1 | grep -q 'releases/16.3.1.9/haos_ihost-16.3.1.9.raucb'" "cfgs: $(cfgs)"
+
+fresh id-quoted "$M1"
+plan "$M1 200"; pin "$M1"; write_creds "'$TOK'"
+run_installer 16.3.1.9
+ok "OTAF-32 a quoted yaml scalar is unquoted" \
+   "cfgs | grep -qF 'Bearer $TOK\"|'" "cfgs: $(cfgs)"
+
+# ---- the lockout guard: no identity must still download in stage 1 ----
+fresh id-none "$M1"
+plan "$M1 200"; pin "$M1"
+run_installer 16.3.1.9 BOSv1.4.0-rc3
+ok "OTAF-40 STAGE-1 NO-LOCKOUT: no credentials file -> the bundle is still downloaded + installed, rc 0" \
+   "[ \"\$(cat '$C/rc')\" = 0 ] && calls | grep -q '^rauc install ' && curls | grep -q 'releases/'" "rc=$(cat "$C/rc") out: $(out)"
+ok "OTAF-40b ... sent without any identity header" "! cfgs | grep -q . && ! curls | grep -qi 'authorization'"
+ok "OTAF-40c ... and the anonymous download is announced at WARNING level" "grep -q 'WARNING: no device identity' '$C/out'" "out: $(out)"
+
+fresh id-v1 "$M1"
+plan "$M1 200"; pin "$M1"
+printf 'device_id: %s\nmqtt:\n  password: pw\nversion: 1\n' "$ID" > "$C/data/gm/ga-fleet-credentials.yaml"
+run_installer 16.3.1.9
+ok "OTAF-41 a v1 bundle without a fleet block: downloads anonymously, installs, warns" \
+   "[ \"\$(cat '$C/rc')\" = 0 ] && ! cfgs | grep -q . && calls | grep -q '^rauc install ' && grep -q 'WARNING: no device identity' '$C/out'" "out: $(out)"
+
+for bad in "short" "has space in it 0123456789" 'a;b;c;0123456789abcdefghijk' '$(reboot)0123456789abcdefghij'; do
+  fresh id-bad "$M1"
+  plan "$M1 200"; pin "$M1"; write_creds "$bad"
+  run_installer 16.3.1.9
+  ok "OTAF-42 a malformed token ('$bad') is never sent: anonymous, installs, warns" \
+     "[ \"\$(cat '$C/rc')\" = 0 ] && ! cfgs | grep -q . && calls | grep -q '^rauc install ' && grep -q 'WARNING: no device identity' '$C/out'" "out: $(out)"
+done
+
+fresh id-link "$M1"
+plan "$M1 200"; pin "$M1"; write_creds "$TOK"
+mv "$C/data/gm/ga-fleet-credentials.yaml" "$C/data/real-creds"
+ln -s /mnt/data/real-creds "$C/data/gm/ga-fleet-credentials.yaml"
+run_installer 16.3.1.9
+ok "OTAF-43 a symlinked credentials file is not followed: anonymous, installs, warns" \
+   "[ \"\$(cat '$C/rc')\" = 0 ] && ! cfgs | grep -q . && calls | grep -q '^rauc install '" "out: $(out)"
+
+fresh id-dead "$M1"
+plan "$M1 dead"; pin "$M1"; write_creds "$TOK"
+run_installer 16.3.1.9
+ok "OTAF-44 a failed download still leaves no identity file behind" \
+   "[ \"\$(cat '$C/rc')\" = 3 ] && [ -z \"\$(idents_left)\" ]" "rc=$(cat "$C/rc") left: $(idents_left)"
+
 echo ""
 echo "ota_fetch: $pass passed, $fail failed"
 # Assert coverage, not exit code.
-[ $((pass + fail)) -ge 20 ] || { echo "FATAL: only $((pass + fail)) checks ran" >&2; exit 1; }
+[ $((pass + fail)) -ge 36 ] || { echo "FATAL: only $((pass + fail)) checks ran" >&2; exit 1; }
 [ "$fail" = 0 ]
