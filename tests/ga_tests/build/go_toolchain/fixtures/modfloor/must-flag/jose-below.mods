@@ -1,0 +1,4 @@
+usr/bin/a: go1.26.9
+	path	x
+	mod	x	(devel)	
+	dep	github.com/go-jose/go-jose/v4	v4.1.5	h1:AAAA=

@@ -100,10 +100,13 @@ done
 # or deleting the file, is red. BOSv1.5.1-rc2 shipped x/net 0.55-0.59 and x/crypto
 # 0.48 (GO-2026-6612 / GHSA-rm3j-f69w-wqmq, Critical). Raise when an advisory moves them.
 declare -A MIN_MOD=(
-  [golang.org/x/net]="0.60.0"      # GO-2026-6612 Critical (+6603/6610/6611/6617/5942/5026)
+  [golang.org/x/net]="0.62.0"      # CVE-2026-78661 (html parser, 0.62.0); earlier 0.60.0: GO-2026-6612 Critical (+6603/6610/6611/6617/5942/5026)
   [golang.org/x/crypto]="0.56.0"   # GHSA-rm3j-f69w-wqmq Critical (0.52.0), GO-2026-6354/6355 (0.56.0)
   [golang.org/x/text]="0.39.0"     # GO-2026-5970
   [golang.org/x/mod]="0.40.0"      # GO-2026-6179/6180
+  [github.com/klauspost/compress]="1.18.7"  # CVE-2026-63209 (s2 dictionary overflow)
+  [go.opentelemetry.io/otel]="1.41.0"        # CVE-2026-29181 (baggage header amplification)
+  [github.com/go-jose/go-jose/v4]="4.1.6"    # CVE-2026-116587 (JWK RSA validation DoS)
 )
 mfl="$(ga_go_modfloor_list "$EXT" 2>/dev/null || true)"
 if [ -z "$mfl" ]; then

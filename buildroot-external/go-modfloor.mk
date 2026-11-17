@@ -25,10 +25,13 @@
 # THIS file and fails the build tests when any Go binary in the target embeds a
 # listed module below its floor. Same definition for the bump and the check.
 # Format of the lines below is parsed by that gate: one `module@version` per line.
-GA_GO_MODFLOOR += golang.org/x/net@v0.60.0
-GA_GO_MODFLOOR += golang.org/x/crypto@v0.57.0
-GA_GO_MODFLOOR += golang.org/x/text@v0.42.0
+GA_GO_MODFLOOR += golang.org/x/net@v0.62.0
+GA_GO_MODFLOOR += golang.org/x/crypto@v0.58.0
+GA_GO_MODFLOOR += golang.org/x/text@v0.43.0
 GA_GO_MODFLOOR += golang.org/x/mod@v0.41.0
+GA_GO_MODFLOOR += github.com/klauspost/compress@v1.18.7
+GA_GO_MODFLOOR += go.opentelemetry.io/otel@v1.41.0
+GA_GO_MODFLOOR += github.com/go-jose/go-jose/v4@v4.1.6
 
 # runc IS hooked, but as a PRE_PATCH hook, not POST_PATCH like the others (Odoo #1270).
 # runc 1.4.3 carries the HAOS device patches (buildroot/package/runc/0001..0006), and
