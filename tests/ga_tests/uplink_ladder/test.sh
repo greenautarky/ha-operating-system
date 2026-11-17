@@ -37,6 +37,8 @@ case "$*" in
       # the ssid of the profile named last on the command line
       for _a in $*; do :; done; echo "802-11-wireless.ssid:${_a}" ;;
   *"-f SSID device wifi list")          cat "${NM_SCAN:-/dev/null}" ;;
+  "device wifi rescan")                 # a rescan refreshes the scan cache
+      [ -n "${NM_SCAN_AFTER:-}" ] && cp "$NM_SCAN_AFTER" "$NM_SCAN" ;;
   *) : ;;
 esac
 STUB
@@ -52,7 +54,8 @@ run() {   # run <cached> <forced> <profiles-file> [now]
     printf '%s\n' "$2" > "$WORK/forced"
     NM_LOG="$WORK/nm.log" NM_CACHED="$WORK/cached" NM_FORCED="$WORK/forced" \
     NM_ACTIVE="$WORK/active" NM_PROFILES="$3" IP_ROUTE="$WORK/route" \
-    NM_SCAN="${NM_SCAN:-$WORK/scan-two}" NM_IFACE="${NM_IFACE:-eth0}" \
+    NM_SCAN="${NM_SCAN:-$WORK/scan-two}" NM_IFACE="${NM_IFACE:-eth0}" NM_SCAN_AFTER="${NM_SCAN_AFTER:-}" \
+    GA_LADDER_RESCAN_WAIT_S=0 GA_LADDER_TRIED_DIR="$WORK/tried" \
     GA_NMCLI="$WORK/nmcli" GA_IP="$WORK/ip" GA_LADDER_SYS_NET="$WORK/sys" \
     GA_LADDER_STATE="$WORK/state" GA_LADDER_BOOT_MARK="$WORK/booted" \
     GA_LADDER_PARK_DIR="$WORK/parked" GA_LADDER_STATUS="$WORK/status.json" \
@@ -61,6 +64,8 @@ run() {   # run <cached> <forced> <profiles-file> [now]
     GA_LADDER_NOW="${4:-1000000}" GA_LADDER_COOLDOWN_S=900 \
       sh "$LADDER" >/dev/null 2>&1
 }
+rescans() { grep -c "device wifi rescan" "$WORK/nm.log"; }
+nmlog_all() { cat "$WORK/nm.all" 2>/dev/null; }
 parked_count() { ls "$WORK/parked" 2>/dev/null | wc -l | tr -d ' '; }
 probed() { grep -c "networking connectivity check" "$WORK/nm.log"; }
 
@@ -181,6 +186,76 @@ NM_SCAN="$WORK/scan-none" run limited limited "$WORK/two-rungs"
 [ "$(parked_count)" = "0" ] \
     && PASS "an SSID nobody can see is not somewhere to fall to" \
     || FAIL "out-of-range WiFi is not a spare" "parked anyway"
+
+
+# ── Odoo #2112: a device without internet never stops looking ───────────────
+#
+# K31, 2026-11-16: hours on a GA dongle Wi-Fi with no data while the bench
+# Wi-Fi was in range. The spare test read the NM scan CACHE, the cache had aged
+# the SSID out, and the ladder said "LAST uplink - keeping it" for ever.
+printf 'openstick-auto:wlan0\n' > "$WORK/active"
+printf 'openstick-auto:802-11-wireless:yes\nGreenAutarky-Install:802-11-wireless:yes\nWired connection 1:802-3-ethernet:yes\nlo:loopback:yes\nwt0:wireguard:yes\n' > "$WORK/k31-now"
+printf 'GA-5320\n' > "$WORK/scan-stale"
+printf 'GA-5320\nGreenAutarky-Install\n' > "$WORK/scan-fresh"
+reset_state() { rm -rf "$WORK/state" "$WORK/state.switch" "$WORK/state.rescan" "$WORK/parked" "$WORK/booted" "$WORK/tried"; : > "$WORK/nm.all"; }
+tick() { run "$1" "$1" "$2" "$3"; cat "$WORK/nm.log" >> "$WORK/nm.all"; }
+firstline() { grep -n "$1" "$WORK/nm.all" | head -1 | cut -d: -f1; }
+
+echo "--- K31 replay: stale scan cache, SSID in range -> rescan, then park + move ---"
+reset_state
+cp "$WORK/scan-stale" "$WORK/scan-live"
+for t in 1000120 1000240 1000360; do NM_SCAN="$WORK/scan-live" NM_SCAN_AFTER="$WORK/scan-fresh" tick limited "$WORK/k31-now" $t; done
+[ "$(parked_count)" = "1" ] && PASS "stale cache: the dead dongle Wi-Fi is parked after the rescan found the bench SSID" \
+    || FAIL "K31 stale cache parks" "parks=$(parked_count) (0 = the 2026-11-16 outage)"
+r=$(firstline "device wifi rescan"); d=$(firstline "connection down openstick-auto")
+[ -n "$r" ] && [ -n "$d" ] && [ "$r" -lt "$d" ] && PASS "the rescan is logged BEFORE the park" || FAIL "rescan precedes park" "rescan@${r:-none} down@${d:-none}"
+grep -q "connection up GreenAutarky-Install" "$WORK/nm.all" && PASS "the found profile is brought up explicitly (bounded)" || FAIL "explicit up of the candidate" "missing"
+grep -q '"spare":"GreenAutarky-Install"' "$WORK/status.json" || grep -q '"rung":"switching"' "$WORK/status.json" \
+    && PASS "status file reports the switch" || FAIL "status after switch" "$(cat "$WORK/status.json")"
+
+echo "--- offline on the last rung, a known SSID appears later -> found, moved ---"
+reset_state
+printf 'GA-5320\n' > "$WORK/scan-live"
+for t in 1000120 1000240 1000360; do NM_SCAN="$WORK/scan-live" NM_SCAN_AFTER="$WORK/scan-live" tick limited "$WORK/k31-now" $t; done
+[ "$(parked_count)" = "0" ] && PASS "nothing in range: the last rung is kept" || FAIL "last rung kept" "parked"
+[ "$(rescans)" -ge 1 ] && PASS "it rescanned before saying so" || FAIL "rescan before giving up" "none"
+grep -q '"last_rung":true' "$WORK/status.json" && grep -q '"searching":true' "$WORK/status.json" && grep -q '"last_rescan":"[0-9]' "$WORK/status.json" \
+    && PASS "status says last_rung, searching and when it last rescanned" || FAIL "status diagnostics" "$(cat "$WORK/status.json")"
+NM_SCAN="$WORK/scan-live" NM_SCAN_AFTER="$WORK/scan-live" tick limited "$WORK/k31-now" 1000480
+[ "$(rescans)" -ge 1 ] && PASS "it keeps rescanning on every offline tick" || FAIL "rescan every tick while offline" "none on tick 4"
+[ "$(parked_count)" = "0" ] || FAIL "still nothing to move to" "parked"
+NM_SCAN="$WORK/scan-live" NM_SCAN_AFTER="$WORK/scan-fresh" tick limited "$WORK/k31-now" 1000600   # the bench Wi-Fi switches on
+[ "$(parked_count)" = "1" ] && grep -q "connection up GreenAutarky-Install" "$WORK/nm.log" \
+    && PASS "the SSID that appeared later is found and used" || FAIL "late SSID found" "parks=$(parked_count)"
+
+echo "--- no spare is logged loudly with the reason ---"
+reset_state
+printf 'GA-5320\n' > "$WORK/scan-live"
+: > "$WORK/logger.out"
+printf '#!/bin/sh\necho "$*" >> "%s/logger.out"\n' "$WORK" > "$WORK/logger"; chmod +x "$WORK/logger"
+for t in 1000120 1000240 1000360; do PATH="$WORK:$PATH" NM_SCAN="$WORK/scan-live" tick limited "$WORK/k31-now" $t; done
+grep -q "GreenAutarky-Install: SSID not in range" "$WORK/logger.out" && grep -q "Wired connection 1: no carrier" "$WORK/logger.out" \
+    && grep -q "daemon.warning" "$WORK/logger.out" \
+    && PASS "rejected candidates are logged at warning with the reason" || FAIL "loud diagnostics" "$(cat "$WORK/logger.out")"
+
+echo "--- a healthy device never rescans or probes ---"
+reset_state
+for t in 1000120 1000240 1000360 1000480; do NM_SCAN="$WORK/scan-stale" tick full full "$WORK/k31-now" $t; done
+{ [ "$(rescans)" = "0" ] && [ "$(probed)" = "0" ] && ! grep -qE "rescan|connectivity check|connection up" "$WORK/nm.all"; } \
+    && PASS "four healthy ticks: no rescan, no probe, no connection up" || FAIL "healthy is free" "$(tr '\n' ';' < "$WORK/nm.all")"
+
+echo "--- a candidate that is not full either: previous restored, no flapping ---"
+reset_state
+printf 'home-wifi:wlan0\n' > "$WORK/active"
+n=0; t=1000000
+while [ $n -lt 12 ]; do
+    n=$((n+1)); t=$((t+120)); NM_SCAN="$WORK/scan-two" tick limited "$WORK/two-rungs" $t
+done
+ups=$(grep -c "connection up openstick-auto" "$WORK/nm.all")
+[ "$ups" -ge 1 ] && [ "$ups" -le 2 ] && PASS "12 dead ticks: the candidate was tried at most twice (cooldown holds), got $ups" || FAIL "no flapping" "ups=$ups"
+grep -q "connection up home-wifi" "$WORK/nm.all" && PASS "the previous rung was restored when the candidate was not full" || FAIL "fallback to previous" "never restored"
+grep -q "connection modify home-wifi connection.autoconnect yes" "$WORK/nm.all" && PASS "and it is un-parked, so NM may keep it" || FAIL "previous unparked" "missing"
+printf 'home-wifi:wlan0\n' > "$WORK/active"
 
 echo ""
 echo "Results: $pass passed, $fail failed"
