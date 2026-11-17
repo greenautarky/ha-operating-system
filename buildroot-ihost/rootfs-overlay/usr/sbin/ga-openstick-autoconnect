@@ -13,14 +13,20 @@
 #
 set -e
 
-KEY_FILE="/usr/share/ga-wifi/openstick-wifi.key"
+# Every path and command is env-overridable so the decision logic runs host-side
+# against a stub nmcli (tests/ga_tests/openstick_backoff).
+NMCLI="${GA_OPENSTICK_NMCLI:-nmcli}"
+SLEEP="${GA_OPENSTICK_SLEEP:-sleep}"
+KEY_FILE="${GA_OPENSTICK_KEY_FILE:-/usr/share/ga-wifi/openstick-wifi.key}"
 SSID_PREFIX="GA-"
 CONN_NAME="openstick-auto"
-COOLDOWN_FILE="/mnt/data/.ga-openstick-cooldown"
+COOLDOWN_FILE="${GA_OPENSTICK_COOLDOWN_FILE:-/mnt/data/.ga-openstick-cooldown}"
 COOLDOWN_SECS=300
+PARK_DIR="${GA_LADDER_PARK_DIR:-/run/ga-uplink-parked}"
 LOG_TAG="ga-openstick"
 
 log() { echo "$LOG_TAG: $1"; }
+now() { date +%s; }
 
 # 1. Check if secret exists (feature disabled without key)
 # This used to `exit 0` in silence. The key is injected at BUILD time from
@@ -39,20 +45,20 @@ fi
 # profile and recreate it — undoing the park every 5 minutes and pinning the
 # device to a dead uplink. Two mechanisms, one connection: the ladder owns
 # whether it may run, this script owns whether it exists.
-if [ -f "/run/ga-uplink-parked/$CONN_NAME" ]; then
+if [ -f "$PARK_DIR/$CONN_NAME" ]; then
   log "$CONN_NAME is parked by ga-uplink-ladder (no internet on it) — leaving it alone"
   exit 0
 fi
 
 # 2. Check if already connected — nothing to do
-if nmcli -t -f NAME connection show --active 2>/dev/null | grep -q "$CONN_NAME"; then
+if $NMCLI -t -f NAME connection show --active 2>/dev/null | grep -q "$CONN_NAME"; then
   exit 0
 fi
 
 # 3. Check cooldown (avoid scan loops when no stick in range)
 if [ -f "$COOLDOWN_FILE" ]; then
   COOLDOWN_UNTIL=$(cat "$COOLDOWN_FILE" 2>/dev/null || echo 0)
-  NOW=$(date +%s)
+  NOW=$(now)
   if [ "$NOW" -lt "$COOLDOWN_UNTIL" ]; then
     exit 0
   fi
@@ -63,12 +69,12 @@ log "Scanning for OpenStick WiFi..."
 
 # 4. WiFi scan (multiple rescans for reliability)
 for _scan in 1 2 3; do
-  nmcli dev wifi rescan 2>/dev/null
-  sleep 5
+  $NMCLI dev wifi rescan 2>/dev/null
+  $SLEEP 5
 done
 
 # 5. Find GA-* SSIDs sorted by signal strength
-GA_SSIDS=$(nmcli -t -f SSID,SIGNAL dev wifi list 2>/dev/null \
+GA_SSIDS=$($NMCLI -t -f SSID,SIGNAL dev wifi list 2>/dev/null \
   | grep "^${SSID_PREFIX}" \
   | sort -t: -k2 -rn \
   | cut -d: -f1 \
@@ -76,7 +82,7 @@ GA_SSIDS=$(nmcli -t -f SSID,SIGNAL dev wifi list 2>/dev/null \
 
 if [ -z "$GA_SSIDS" ]; then
   log "No GA-* SSIDs found — cooldown ${COOLDOWN_SECS}s"
-  echo $(( $(date +%s) + COOLDOWN_SECS )) > "$COOLDOWN_FILE"
+  echo $(( $(now) + COOLDOWN_SECS )) > "$COOLDOWN_FILE"
   exit 0
 fi
 
@@ -99,7 +105,7 @@ for SSID in $GA_SSIDS; do
   log "Creating persistent connection for $SSID..."
 
   # Remove old connection if exists
-  nmcli connection delete "$CONN_NAME" 2>/dev/null || true
+  $NMCLI connection delete "$CONN_NAME" 2>/dev/null || true
 
   # Create persistent connection with autoconnect + correct priority.
   # wifi.powersave=2 (disable) is REQUIRED — without it nmcli writes the
@@ -111,7 +117,7 @@ for SSID in $GA_SSIDS; do
   # link looks associated. Setting powersave=2 here keeps the OS default in
   # effect for the auto-generated profile.
   # wifi.cloned-mac-address=permanent matches the OS default for stable identity.
-  if nmcli connection add type wifi ifname wlan0 \
+  if $NMCLI connection add type wifi ifname wlan0 \
        con-name "$CONN_NAME" \
        ssid "$SSID" \
        wifi-sec.key-mgmt wpa-psk \
@@ -126,10 +132,10 @@ for SSID in $GA_SSIDS; do
     log "Connection '$CONN_NAME' created for $SSID (autoconnect=yes, priority=10, metric=500, powersave=disabled)"
 
     # Activate now (NM will auto-activate on future boots/scans)
-    nmcli connection up "$CONN_NAME" 2>/dev/null || true
+    $NMCLI connection up "$CONN_NAME" 2>/dev/null || true
 
     # Wait for DHCP
-    sleep 10
+    $SLEEP 10
 
     # Verify internet with the SAME verdict ga-uplink-ladder acts on: NM's own
     # HTTPS probe (https://checkonline.greenautarky.com/online.txt, see
@@ -140,9 +146,9 @@ for SSID in $GA_SSIDS; do
     # Retry a few times: DHCP and the route can lag the association.
     _verdict=""
     for _try in 1 2 3; do
-      _verdict=$(nmcli networking connectivity check 2>/dev/null | head -1)
+      _verdict=$($NMCLI networking connectivity check 2>/dev/null | head -1)
       [ "$_verdict" = "full" ] && break
-      sleep 5
+      $SLEEP 5
     done
     if [ "$_verdict" = "full" ]; then
       log "Connected to $SSID — internet verified. Connection is persistent."
@@ -150,7 +156,7 @@ for SSID in $GA_SSIDS; do
       exit 0
     else
       log "$SSID connected but NM connectivity is '$_verdict' (not full) — removing connection"
-      nmcli connection delete "$CONN_NAME" 2>/dev/null || true
+      $NMCLI connection delete "$CONN_NAME" 2>/dev/null || true
     fi
   else
     log "Failed to create connection for $SSID"
@@ -158,4 +164,4 @@ for SSID in $GA_SSIDS; do
 done
 
 log "All GA-* SSIDs failed — cooldown ${COOLDOWN_SECS}s"
-echo $(( $(date +%s) + COOLDOWN_SECS )) > "$COOLDOWN_FILE"
+echo $(( $(now) + COOLDOWN_SECS )) > "$COOLDOWN_FILE"
