@@ -18,6 +18,11 @@ dev10 plus ga-bootstrap 1.2.17 (Odoo #2132, #2066), the F5 updater.json seed (Od
 
 ## BOSv1.6.1-rc3 (unreleased, iHost, feat/1.6-haos18)
 
+### Release gate: both vccio5 paths are required evidence for iHost releases >= BOSv1.6.1 (Odoo #1981)
+
+- iHost image default VCCIO5 3v3 (option B); OTA keeps the running mode. `create-release.sh --release` now also refuses unless the evidence file carries `vccio5_fresh_sd=PASS <pointer>` (a fresh SD flash without the key booted 3.3 V, read on the device) and `vccio5_ota_keeps_1v8=PASS <pointer>` (a device on BOSv1.6.0 at 1.8 V, OTA'd to the release, still runs 1.8 V after the reboot). A missing, duplicated, empty, non-PASS or pointer-less value is refused and names the field. Not required for non-iHost images or releases below 1.6.1. Field list: `GA_GATE_VCCIO5_FIELDS` in `scripts/lib/release-gate.sh`.
+- Proof: `tests/gates/release_evidence/selftest.sh` 55/55; it reads the LIVE field list, mutates each key six ways (each refusal must name that key), and has seven new must-fail fixtures; red against the previous gate code (7 fixtures pass through, the live-list section aborts), mutation checks (key dropped from the list, bare PASS accepted) each caught.
+
 ### Tests: on-device suites for every rc3 feature (standing rule 2026-11-17)
 
 - Seven new device suites in the `device` lane (`run_all.sh`): `ga_manager_guard_device` (#2166), `ga_manager_stop` (#2165), `uplink_device` (#2112; `BENCH.md` for the dongle scenarios), `ota_identity_device` (#2160, dry run), `resident_info_device` (#2144, #2145), `baked_boot_device` (#2065, #2067 device side), `storage_watchdog_device` (#2098). Destructive steps sit behind `GA_TEST_DESTRUCTIVE=1`; `run_device_tests.sh --ssh` forwards that and `GA_TEST_FRESH_BOOT` / `GA_TEST_MINT_TOKEN` when set to 1. Host-side selftests (dash + busybox) run in CI `host-suites`.

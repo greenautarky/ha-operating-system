@@ -21,6 +21,14 @@
 #   ui_hand_test_thomas=SIGNED <date> by <name>   (DONE <date> also accepted)
 #   signoff_ahmad=SIGNED <date> by <name>
 #   signoff_ramin=SIGNED <date> by <name>
+#   vccio5_fresh_sd=PASS <pointer>        iHost releases >= BOSv1.6.1 ONLY (option B,
+#                                         Odoo #1981): a fresh SD flash WITHOUT the
+#                                         ga_vccio5 key booted 3.3 V, read on the device
+#   vccio5_ota_keeps_1v8=PASS <pointer>   iHost releases >= BOSv1.6.1 ONLY: a device on
+#                                         BOSv1.6.0 at 1.8 V, OTA'd to this release, still
+#                                         runs 1.8 V after the reboot. <pointer> = a short
+#                                         reference to the log/run that shows it (never
+#                                         empty: a bare PASS is refused)
 #   gate_override=<ts> by <user>: <reason>   (appended by --override-gate only)
 # Any other key is free-form evidence and is ignored by the gate.
 #
@@ -32,6 +40,23 @@ GA_GATE_SIGNED_RE='^(SIGNED|DONE) [0-9]{4}-[0-9]{2}-[0-9]{2}'
 GA_GATE_PASSED_RE='^PASS [0-9]{4}-[0-9]{2}-[0-9]{2}'
 # Evidence keys the gate requires.
 GA_GATE_REQUIRED_KEYS="release image image_sha256 k31_reflash_verdict k31_reflash_last_step onboarding ui_hand_test_thomas signoff_ahmad signoff_ramin"
+# Option B evidence (Odoo #1981): required for iHost releases >= BOSv1.6.1 only.
+# The value is "PASS" plus a non-empty evidence pointer.
+GA_GATE_VCCIO5_FIELDS="vccio5_fresh_sd vccio5_ota_keeps_1v8"
+GA_GATE_PASS_POINTER_RE='^PASS [^[:space:]]'
+
+# ga_gate_needs_vccio5 RELEASE IMAGE_FILE — rc 0 when the release is an iHost
+# image (file name bos_ihost*) of base version >= 1.6.1 (rc suffix ignored:
+# BOSv1.6.1-rc3 counts as 1.6.1).
+ga_gate_needs_vccio5() {
+	local rel="$1" img="$2" maj min pat
+	case "$(basename -- "$img")" in bos_ihost*) ;; *) return 1 ;; esac
+	[[ "$rel" =~ ^BOSv([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 1
+	maj="${BASH_REMATCH[1]}"; min="${BASH_REMATCH[2]}"; pat="${BASH_REMATCH[3]}"
+	[ "$maj" -gt 1 ] && return 0
+	[ "$maj" -eq 1 ] && { [ "$min" -gt 6 ] || { [ "$min" -eq 6 ] && [ "$pat" -ge 1 ]; }; } && return 0
+	return 1
+}
 
 # ga_gate_get FILE KEY — prints the value of KEY. rc 0 = exactly one line,
 # 1 = absent, 2 = duplicated (ambiguous: a second line must never win silently).
@@ -82,6 +107,16 @@ ga_release_gate_check() {
 				printf '%s' "$v" | grep -Eq "$GA_GATE_SIGNED_RE" || { echo "  - $k is '$v' (want 'SIGNED <date> by <name>') - not signed"; bad=1; } ;;
 		esac
 	done
+	# Option B (Odoo #1981): both vccio5 paths, iHost >= BOSv1.6.1 only.
+	if ga_gate_needs_vccio5 "$rel" "$img"; then
+		for k in $GA_GATE_VCCIO5_FIELDS; do
+			n=$((n + 1))
+			rc=0; v="$(ga_gate_get "$ev" "$k")" || rc=$?
+			if [ "$rc" -eq 2 ]; then echo "  - $k appears more than once in $ev (ambiguous)"; bad=1; continue; fi
+			if [ "$rc" -ne 0 ] || [ -z "$v" ]; then echo "  - $k is missing or empty (iHost >= BOSv1.6.1 needs 'PASS <evidence pointer>')"; bad=1; continue; fi
+			printf '%s' "$v" | grep -Eq "$GA_GATE_PASS_POINTER_RE" || { echo "  - $k is '$v' (want 'PASS <evidence pointer>')"; bad=1; }
+		done
+	fi
 	# Fail closed on a gate that inspected nothing.
 	if [ "$n" -eq 0 ]; then echo "  - internal: zero required keys were checked"; return 1; fi
 	return "$bad"
