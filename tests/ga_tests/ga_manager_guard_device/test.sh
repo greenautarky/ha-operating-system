@@ -3,9 +3,8 @@
 #
 # The host suite tests/ga_tests/ga_manager_guard drives the LIVE script against a
 # stub hassio_cli; this suite asks the questions only a device can answer: is the
-# unit installed and actually FIRING, does the REAL ha CLI know `options --watchdog`
-# (the PR could not verify the flag - the CLI VERSION on the device decides), and does
-# the guard do what it claims against the REAL Supervisor.
+# unit installed and actually FIRING, does the REAL Supervisor expose the watchdog toggle,
+# and does the guard do what it claims against it.
 #
 # NON-DESTRUCTIVE (always):
 #   GMGD-01..05  script + timer + last run: installed, active, scheduled, firing, rc 0
@@ -15,7 +14,10 @@
 #                device never writes it, so "fresh" is not a property of a healthy
 #                device - absence is the healthy state and is reported as such.
 #   GMGD-07      the Supervisor watchdog toggle of 99f1cad4_ga_manager is ON
-#   GMGD-08      `ha addons options --help` lists --watchdog on THIS CLI (image printed)
+#   GMGD-08      `ha addons info --raw-json` exposes .data.watchdog (a boolean) and it is true.
+#                (hassio_cli 2025.10.2 has NO `ha addons options`: the toggle is written through
+#                the Supervisor API, POST /addons/<slug>/options {"watchdog":true}, and read back
+#                through `ha addons info`; no CLI flag is involved)
 #   GMGD-09      no guard ERROR in this boot's journal
 # DESTRUCTIVE (GA_TEST_DESTRUCTIVE=1; canary only, ~3 min, never during a soak):
 #   GMGD-20      toggle off -> one real guard tick turns it ON again, says WARNING
@@ -42,6 +44,11 @@ MAX_AGE_S=300
 addon_json() { ga_hacli addons info "$SLUG" --raw-json 2>/dev/null; }
 addon_state() { addon_json | jq -r '.data.state // empty' 2>/dev/null; }
 addon_wd()    { addon_json | jq -r '.data.watchdog | tostring' 2>/dev/null; }
+# the toggle write, the way the OS reaches the Supervisor: POST /addons/<slug>/options from inside
+# hassio_cli (it holds SUPERVISOR_TOKEN; the token is expanded there, never on the host command line)
+set_watchdog() {   # set_watchdog <true|false>
+  timeout 60 docker exec hassio_cli sh -c 'curl -sf -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" -d "{\"watchdog\":'"$1"'}" "http://supervisor/addons/'"$SLUG"'/options"' >/dev/null 2>&1
+}
 uptime_s() { _u=$(cut -d' ' -f1 "$UPTIME_FILE" 2>/dev/null); echo "${_u%%.*}"; }
 
 run_test "GMGD-01" "ga-manager-guard is installed and executable" "test -x '$GUARD'"
@@ -95,11 +102,11 @@ WD=$(addon_wd)
 if [ "$WD" = true ]; then _rc=0; else _rc=1; fi
 show_verdict "GMGD-07" "the Supervisor watchdog toggle of $SLUG is ON" "$_rc" "watchdog=$WD state=$(addon_state)"
 
-# The flag the whole guard stands on. The CLI VERSION decides, so print it.
+# The field the guard reads back (and the destructive cases rely on): exposed, boolean, true.
 CLI_IMG=$(docker inspect -f '{{.Config.Image}}' hassio_cli 2>/dev/null)
-HELP=$(ga_hacli addons options --help 2>&1)
-if printf '%s' "$HELP" | grep -q -e '--watchdog'; then _rc=0; else _rc=1; fi
-show_verdict "GMGD-08" "this ha CLI has 'addons options --watchdog' (the guard's toggle write)" "$_rc" "hassio_cli image: ${CLI_IMG:-unknown}"
+WDT=$(addon_json | jq -r '.data.watchdog | type' 2>/dev/null)
+if [ "$WDT" = boolean ] && [ "$WD" = true ]; then _rc=0; else _rc=1; fi
+show_verdict "GMGD-08" "'ha addons info --raw-json' exposes .data.watchdog (boolean) and it is true" "$_rc" "type=${WDT:-none} value=$WD; hassio_cli image: ${CLI_IMG:-unknown}"
 
 ERRS=$(journalctl -t ga-manager-guard -p err -b --no-pager -q 2>/dev/null | wc -l)
 if [ "$ERRS" = 0 ]; then _rc=0; else _rc=1; fi
@@ -110,7 +117,7 @@ if ga_destructive "GMGD-20..23" "toggle repair, kill -9 revive, deliberate stop,
   TD=$(mktemp -d /mnt/data/tmp/ga-gmgd.XXXXXX 2>/dev/null || mktemp -d /tmp/ga-gmgd.XXXXXX)
   restore() {
     rm -f "$MARKER"
-    [ "$(addon_wd)" = true ] || ga_hacli addons options "$SLUG" --watchdog true >/dev/null 2>&1
+    [ "$(addon_wd)" = true ] || set_watchdog true
     [ "$(addon_state)" = started ] || ga_hacli addons start "$SLUG" >/dev/null 2>&1
     rm -rf "$TD"
   }
@@ -121,14 +128,14 @@ if ga_destructive "GMGD-20..23" "toggle repair, kill -9 revive, deliberate stop,
   mkdir -p "$TD/run"
   wait_state() { wait_for "${GA_DEVT_WAIT_S:-$2}" "[ \"\$(ga_hacli addons info $SLUG --raw-json 2>/dev/null | jq -r '.data.state // empty')\" = '$1' ]"; }
 
-  if ! printf '%s' "$HELP" | grep -q -e '--watchdog' || [ "$(addon_state)" != started ]; then
-    show_verdict "GMGD-20" "destructive cases need the --watchdog flag and a started gm" 1 "flag: see GMGD-08; gm state: $(addon_state)"
+  if [ "$(addon_state)" != started ]; then
+    show_verdict "GMGD-20" "destructive cases need a started gm" 1 "gm state: $(addon_state)"
   else
     # 20: toggle repair
-    ga_hacli addons options "$SLUG" --watchdog false >/dev/null 2>&1
+    set_watchdog false
     BEFORE=$(addon_wd)
     : > "$TD/out"
-    tick
+    if [ "$BEFORE" = false ]; then tick; else echo "the toggle write did not take (read-back '$BEFORE')" > "$TD/out"; fi
     AFTER=$(addon_wd)
     if grep -q 'turned ON' "$TD/out"; then W=1; else W=0; fi
     if [ "$BEFORE" = false ] && [ "$AFTER" = true ] && [ "$W" = 1 ]; then _rc=0; else _rc=1; fi

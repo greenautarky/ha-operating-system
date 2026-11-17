@@ -15,10 +15,17 @@ cat > "$W/bin/docker" <<'STUB'
 #!/bin/sh
 # state files in $FAKE: state, watchdog (true/false), has_flag (yes/no), kill_revives (yes/no)
 case "$1" in
-  exec)  shift 3          # exec hassio_cli ha
+  exec)
+    if [ "$3" = sh ]; then   # the Supervisor API write: POST /addons/<slug>/options {"watchdog":<v>}
+      v=$(printf '%s' "$5" | sed -n 's/.*watchdog\\":\(true\|false\)}.*/\1/p')
+      [ -n "$v" ] && [ -f "$FAKE/write_ok" ] && echo "$v" > "$FAKE/watchdog"   # write_ok absent = the write silently does nothing
+      exit 0
+    fi
+    shift 3          # exec hassio_cli ha
     [ "$1" = addons ] || exit 1
     case "$2" in
-      info)    printf '{"result":"ok","data":{"state":"%s","watchdog":%s,"version":"0.277.7"}}\n' "$(cat "$FAKE/state")" "$(cat "$FAKE/watchdog")" ;;
+      info)    if [ -f "$FAKE/no_wd_field" ]; then printf '{"result":"ok","data":{"state":"%s","version":"0.277.7"}}\n' "$(cat "$FAKE/state")"
+               else printf '{"result":"ok","data":{"state":"%s","watchdog":%s,"version":"0.277.7"}}\n' "$(cat "$FAKE/state")" "$(cat "$FAKE/watchdog")"; fi ;;
       options) if [ "$3" = "--help" ]; then [ "$(cat "$FAKE/has_flag")" = yes ] && echo "Flags: --watchdog  watchdog toggle" || echo "Flags: --boot"
                else [ "$(cat "$FAKE/has_flag")" = yes ] && echo "$5" > "$FAKE/watchdog" || exit 1; fi ;;
       start)   echo started > "$FAKE/state" ;;
@@ -55,7 +62,7 @@ chmod +x "$W/bin/"*
 
 good() {   # reset to the known-good device
   rm -rf "$F"; mkdir -p "$F"
-  echo started > "$F/state"; echo true > "$F/watchdog"; echo yes > "$F/has_flag"; echo yes > "$F/kill_revives"
+  echo started > "$F/state"; echo true > "$F/watchdog"; echo yes > "$F/has_flag"; : > "$F/write_ok"; echo yes > "$F/kill_revives"
   echo active > "$F/timer_active"; echo 90000000 > "$F/next"; echo 940000000 > "$F/last_run_us"
   echo success > "$F/result"; echo 0 > "$F/mainstatus"; : > "$F/jerr"
   echo "1000 0.00" > "$W/uptime"; rm -f "$W/share.json" "$W/marker"
@@ -78,7 +85,8 @@ good; echo 0 > "$F/last_run_us"; run GA_DEVT_WAIT_S=1;                  ds_expec
 good; echo 100000000 > "$F/last_run_us"; run;                           ds_expect GMGD-04 FAIL "last run 900 s ago"
 good; echo 1 > "$F/mainstatus"; run;                                    ds_expect GMGD-05 FAIL "last run rc 1"
 good; echo false > "$F/watchdog"; run;                                  ds_expect GMGD-07 FAIL "toggle off"
-good; echo no > "$F/has_flag"; run;                                     ds_expect GMGD-08 FAIL "CLI without --watchdog"
+good; : > "$F/no_wd_field"; run;                                        ds_expect GMGD-08 FAIL "ha addons info does not expose .data.watchdog"
+good; echo false > "$F/watchdog"; run;                                  ds_expect GMGD-08 FAIL "watchdog exposed but false"
 good; echo "<3>ga-manager-guard: ERROR: x" > "$F/jerr"; run;            ds_expect GMGD-09 FAIL "guard ERROR in the journal"
 good; printf '{"state":"start_failing","ts":1}\n' > "$W/share.json"; echo stopped > "$F/state"; run
 ds_expect GMGD-06 FAIL "start_failing while gm is down: the fault is still true"
@@ -94,7 +102,7 @@ for i in 20 21 22 23; do ds_expect "GMGD-$i" PASS "destructive cases, healthy su
 ds_expect GMGD-23 PASS "state=revived published"
 good; echo no > "$F/kill_revives"; run GA_TEST_DESTRUCTIVE=1 GA_DEVT_WAIT_S=2;           ds_expect GMGD-21 FAIL "the Supervisor does not revive a killed gm"
 [ "$(cat "$F/state")" = started ] && { echo "  ok    trap restored gm to started after a red run"; DS_PASS=$((DS_PASS + 1)); } || { echo "  FAIL  gm left $(cat "$F/state")"; DS_FAIL=$((DS_FAIL + 1)); }
-good; echo no > "$F/has_flag"; run GA_TEST_DESTRUCTIVE=1;               ds_expect GMGD-20 FAIL "no --watchdog flag: destructive cases refuse, loudly"
+good; rm -f "$F/write_ok"; run GA_TEST_DESTRUCTIVE=1;                   ds_expect GMGD-20 FAIL "the toggle write silently does nothing: read-back still true"
 
 echo "== mutant guard (does nothing): the destructive cases that depend on it go red"
 printf '#!/bin/sh\nexit 0\n' > "$W/bin/noop-guard"; chmod +x "$W/bin/noop-guard"
