@@ -131,13 +131,25 @@ for SSID in $GA_SSIDS; do
     # Wait for DHCP
     sleep 10
 
-    # Verify internet
-    if curl -sf --connect-timeout 10 http://checkonline.greenautarky.com/online.txt 2>/dev/null | grep -q "NetworkManager is online"; then
+    # Verify internet with the SAME verdict ga-uplink-ladder acts on: NM's own
+    # HTTPS probe (https://checkonline.greenautarky.com/online.txt, see
+    # conf.d/50-ga.conf), not a private plain-HTTP curl. The two can disagree
+    # (a proxy that rewrites HTTP, a portal, a captive redirect): curl "ok"
+    # kept a profile the ladder then parked after three strikes, curl "dead"
+    # deleted one NM called `full` (Odoo #2112). One probe, one verdict.
+    # Retry a few times: DHCP and the route can lag the association.
+    _verdict=""
+    for _try in 1 2 3; do
+      _verdict=$(nmcli networking connectivity check 2>/dev/null | head -1)
+      [ "$_verdict" = "full" ] && break
+      sleep 5
+    done
+    if [ "$_verdict" = "full" ]; then
       log "Connected to $SSID — internet verified. Connection is persistent."
       rm -f "$COOLDOWN_FILE"
       exit 0
     else
-      log "$SSID connected but no internet — removing connection"
+      log "$SSID connected but NM connectivity is '$_verdict' (not full) — removing connection"
       nmcli connection delete "$CONN_NAME" 2>/dev/null || true
     fi
   else
