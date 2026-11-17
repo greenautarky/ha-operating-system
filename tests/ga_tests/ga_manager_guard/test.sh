@@ -24,17 +24,29 @@ FAIL() { echo "  FAIL  $1 ($2)"; fail=$((fail+1)); }
 
 cat > "$W/bin/docker" <<'STUB'
 #!/bin/sh
-# docker exec hassio_cli ha addons <info|options|start> <slug> ...
+# Two shapes reach this stub:
+#   docker exec hassio_cli ha addons <info|start|options> <slug> ...   (the ha CLI)
+#   docker exec hassio_cli sh -c '<script>' _ <slug>                  (Supervisor API POST)
+# The REAL ha CLI (hassio_cli 2025.10.2, measured on K31) has NO `addons options`
+# subcommand: it fails like below. Only the API shape can change the toggle.
 # scenario files in $FAKE: installed, unreachable, state, watchdog (true/false),
-# start_ok (a start moves state to started), opt_ok (an options write sticks)
+# start_ok (a start moves state to started), opt_ok (the API write sticks),
+# api_noop (the API call exits 0 but changes nothing), no_token
 echo "$*" >> "$FAKE/calls"
+if [ "$3" = "sh" ]; then
+  [ -f "$FAKE/no_token" ] && { echo "no SUPERVISOR_TOKEN in hassio_cli" >&2; exit 3; }
+  echo "API POST $7" >> "$FAKE/calls"
+  [ -f "$FAKE/api_noop" ] && exit 0
+  if [ -f "$FAKE/opt_ok" ]; then echo true > "$FAKE/watchdog"; echo '{"result":"ok"}'; else echo "curl: (22) 500" >&2; exit 22; fi
+  exit 0
+fi
 shift 3   # exec hassio_cli ha
 [ -f "$FAKE/unreachable" ] && { echo "Error: Supervisor not reachable" >&2; exit 1; }
 [ -f "$FAKE/installed" ] || { echo "Error: Addon $3 does not exist" >&2; exit 1; }
 case "$2" in
   info) printf '{"result":"ok","data":{"state":"%s","watchdog":%s}}\n' "$(cat "$FAKE/state")" "$(cat "$FAKE/watchdog")" ;;
-  options) if [ -f "$FAKE/opt_ok" ]; then echo true > "$FAKE/watchdog"; else echo "Error: boom" >&2; exit 1; fi ;;
   start) if [ -f "$FAKE/start_ok" ]; then echo started > "$FAKE/state"; else echo "Error: start failed" >&2; exit 1; fi ;;
+  *) echo "Error: unknown command \"$2\" for \"ha addons\"" >&2; exit 1 ;;
 esac
 STUB
 chmod +x "$W/bin/docker"
@@ -52,7 +64,7 @@ tick() {    # tick <uptime-seconds>  -> output in $W/out
     echo $? > "$W/rc"
 }
 starts() { grep -c "addons start" "$W/f/calls" 2>/dev/null || true; }
-optwrites() { grep -c "addons options" "$W/f/calls" 2>/dev/null || true; }
+optwrites() { grep -c "API POST" "$W/f/calls" 2>/dev/null || true; }
 check() { # check <name> <cmd...>
     _n="$1"; shift
     if "$@"; then PASS "$_n"; else FAIL "$_n" "$(tr '\n' '|' < "$W/out" | cut -c1-300)"; fi
@@ -90,6 +102,13 @@ check "GMG-08 recovers on the next tick once start works" state_is started
 
 reset started false; rm -f "$W/f/opt_ok"
 tick 1000; check "GMG-09 toggle cannot be set: ERROR (<3>), not silent" has '<3>ga-manager-guard: ERROR: .*could NOT be turned on'
+
+reset started false; : > "$W/f/api_noop"
+tick 1000; check "GMG-09b API write exits 0 but the toggle stays off: ERROR (read-back, not exit code)" has '<3>ga-manager-guard: ERROR: .*could NOT be turned on'
+check "GMG-09c ... never 'turned ON'" sh -c "! grep -q 'turned ON' '$W/out'"
+
+reset started false; : > "$W/f/no_token"
+tick 1000; check "GMG-09d no SUPERVISOR_TOKEN in hassio_cli: ERROR, not silent" has '<3>ga-manager-guard: ERROR: .*no SUPERVISOR_TOKEN'
 
 # --- must-NOT-flag -----------------------------------------------------------
 reset started true
