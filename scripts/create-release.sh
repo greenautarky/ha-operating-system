@@ -17,7 +17,8 @@
 #                          The release gate (N65, Odoo #2137) refuses unless the
 #                          private evidence for LABEL covers THIS image's sha256:
 #                          k31-reflash step 11 PASS, onboarding, UI hand test,
-#                          sign-off Ahmad + Ramin. See scripts/lib/release-gate.sh.
+#                          sign-off Ahmad + Ramin; iHost >= BOSv1.6.1 also the two
+#                          vccio5 fields. See scripts/lib/release-gate.sh.
 #   --evidence-dir PATH    Where <LABEL>.gate.txt lives (default
 #                          $GA_RELEASE_EVIDENCE_DIR or ~/release-evidence).
 #                          Private on purpose: it holds names and dates.
