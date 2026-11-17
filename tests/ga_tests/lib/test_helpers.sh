@@ -202,6 +202,45 @@ skip_test() {
   _SKIP=$((_SKIP+1))
 }
 
+# --- destructive opt-in, CLI and version helpers (on-device suites) -----------
+# GA_TEST_DESTRUCTIVE=1 is the ONE switch for steps that stop add-ons, kill
+# processes or otherwise disturb a running device (Thomas, 2026-11-17: every
+# feature gets an on-device test; the disturbing half sits behind this flag).
+# It is forwarded to the device by tests/run_device_tests.sh. Never set it on a
+# customer device or on a canary that is inside a soak.
+#   ga_destructive <id> <desc>   0 = flag set (run it); else records a SKIP and returns 1
+ga_destructive() {
+  [ "${GA_TEST_DESTRUCTIVE:-0}" = 1 ] && return 0
+  skip_test "$1" "$2" "destructive - runs only with GA_TEST_DESTRUCTIVE=1 (canary, not during a soak)"
+  return 1
+}
+
+# ga_hacli <ha args...> - the ha CLI the way the OS scripts reach it (ga-manager-guard,
+# ga-addon-prime): inside the hassio_cli container. `addons` works on both CLI generations.
+ga_hacli() { timeout 60 docker exec hassio_cli ha "$@"; }
+
+# ga_ver_ge <have> <want> - dotted numeric version compare (a suffix after the digits,
+# e.g. -rc2, is ignored). 0 when have >= want. POSIX sh (no sort -V on BusyBox).
+ga_ver_ge() {
+  _vh=${1%%[!0-9.]*}; _vw=${2%%[!0-9.]*}
+  [ -n "$_vh" ] || return 1
+  _vi=1
+  while [ "$_vi" -le 4 ]; do
+    _ph=$(printf '%s' "$_vh" | cut -d. -f"$_vi"); _pw=$(printf '%s' "$_vw" | cut -d. -f"$_vi")
+    _ph=${_ph:-0}; _pw=${_pw:-0}
+    [ "$_ph" -gt "$_pw" ] && return 0
+    [ "$_ph" -lt "$_pw" ] && return 1
+    _vi=$((_vi + 1))
+  done
+  return 0
+}
+
+# ga_board - the board this image was built for (VARIANT_ID in os-release: ihost,
+# dsgw210, ...). Empty when unreadable. GA_T_OS_RELEASE relocates the file (selftests).
+ga_board() {
+  sed -n 's/^VARIANT_ID=//p' "${GA_T_OS_RELEASE:-/etc/os-release}" 2>/dev/null | head -n 1 | tr -d "\"' "
+}
+
 # --- Home Assistant port (ADR-0038) -----------------------------------------
 # Core 2026.8+ serves on :80, older Core on :8123. Never hard-code either; see
 # ha_port.sh for the resolution order. The file sits next to this one; the
