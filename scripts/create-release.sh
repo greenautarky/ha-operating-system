@@ -13,6 +13,16 @@
 #   --e2e-results PATH     Playwright JSON results
 #   --device-ip IP         Device IP (for report metadata)
 #   --output-dir PATH      Where to write the release archive (default: releases/)
+#   --release LABEL        REQUIRED. Full release label, e.g. BOSv1.6.1-rc2.
+#                          The release gate (N65, Odoo #2137) refuses unless the
+#                          private evidence for LABEL covers THIS image's sha256:
+#                          k31-reflash step 11 PASS, onboarding, UI hand test,
+#                          sign-off Ahmad + Ramin. See scripts/lib/release-gate.sh.
+#   --evidence-dir PATH    Where <LABEL>.gate.txt lives (default
+#                          $GA_RELEASE_EVIDENCE_DIR or ~/release-evidence).
+#                          Private on purpose: it holds names and dates.
+#   --override-gate REASON Release anyway. REASON (>=15 chars) is written into
+#                          the release evidence file. There is no other bypass.
 #
 # Output:
 #   releases/bos_ihost_CoreBox-16.3_prod_YYYYMMDDHHMMSS_release.tar.gz
@@ -46,6 +56,9 @@ DEVICE_OUTPUT=""
 E2E_RESULTS=""
 DEVICE_IP="${DEVICE_IP:-unknown}"
 OUTPUT_DIR="${OUTPUT_DIR:-releases}"
+RELEASE_LABEL=""
+EVIDENCE_DIR="${GA_RELEASE_EVIDENCE_DIR:-$HOME/release-evidence}"
+GATE_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -54,6 +67,9 @@ while [[ $# -gt 0 ]]; do
     --e2e-results)    E2E_RESULTS="$2"; shift 2 ;;
     --device-ip)      DEVICE_IP="$2"; shift 2 ;;
     --output-dir)     OUTPUT_DIR="$2"; shift 2 ;;
+    --release)        RELEASE_LABEL="$2"; shift 2 ;;
+    --evidence-dir)   EVIDENCE_DIR="$2"; shift 2 ;;
+    --override-gate)  GATE_OVERRIDE="$2"; shift 2 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -69,6 +85,32 @@ IMG_XZ="$(newest_bos_image "${BUILD_DIR}/images/"bos_*.img.xz || true)"
 if [[ -z "$IMG_XZ" ]]; then
   echo "ERROR: No bos_*.img.xz found in ${BUILD_DIR}/images/" >&2
   exit 1
+fi
+
+# --- Release gate (N65, Odoo #2137): no release without complete evidence for
+# THIS image's sha256. Fail closed, before anything is staged. The expected
+# hash is computed from the file being released, never read from the evidence.
+# shellcheck source=lib/release-gate.sh
+. "${SCRIPT_DIR}/lib/release-gate.sh"
+if ! [[ "$RELEASE_LABEL" =~ ^BOSv[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
+  echo "ERROR: --release LABEL is required and must be the full label (e.g. BOSv1.6.1-rc2), got '${RELEASE_LABEL}'" >&2
+  exit 1
+fi
+GATE_EVIDENCE="${EVIDENCE_DIR}/${RELEASE_LABEL}.gate.txt"
+echo "Release gate: ${RELEASE_LABEL} / $(basename "$IMG_XZ") <- ${GATE_EVIDENCE}"
+if GATE_OUT="$(ga_release_gate_check "$GATE_EVIDENCE" "$RELEASE_LABEL" "$IMG_XZ")"; then
+  echo "  gate evidence complete for the exact image sha256"
+else
+  echo "ERROR: release gate REFUSES ${RELEASE_LABEL} (N65) - missing or invalid:" >&2
+  printf '%s\n' "$GATE_OUT" >&2
+  if [[ -n "$GATE_OVERRIDE" ]]; then
+    ga_release_gate_override "$GATE_EVIDENCE" "$RELEASE_LABEL" "$IMG_XZ" "$GATE_OVERRIDE" \
+      || { echo "ERROR: override refused" >&2; exit 1; }
+    echo "WARNING: RELEASE GATE OVERRIDDEN - reason recorded in ${GATE_EVIDENCE}: ${GATE_OVERRIDE}" >&2
+  else
+    echo "Record the missing parts (k31-reflash.sh; release-evidence sign ${RELEASE_LABEL} ...) - or --override-gate \"<written reason>\"." >&2
+    exit 1
+  fi
 fi
 
 # Extract build ID from filename (bos_ihost_CoreBox-16.3_prod_20260331112238.img.xz)

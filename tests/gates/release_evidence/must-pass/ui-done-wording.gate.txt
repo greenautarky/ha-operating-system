@@ -1,0 +1,15 @@
+# must-pass fixture - legacy DONE wording of the UI hand test (prototype rc2 style), free-form lines ignored
+release=BOSv1.6.1-rc2
+image=bos_ihost-18.4.1.6_dev_20261117100010.img.xz
+image_sha256=f4e21e3cde67d089a1612eab4d930e000d87afd8ba6132e992de9c49a59fe297
+bake=ga-ops run 44055298385 (VER-13 enforce PASS 143 snapshots, VER-14 PASS)
+k31_reflash_verdict=PASS
+k31_reflash_at=2026-11-17T12:35:28+01:00
+k31_reflash_run_log=/home/user/cve-work/k31-reflash/20261117-113910/run.log
+k31_reflash_last_step=11
+onboarding=PASS 2026-11-17 ~12:45 testbewohner1116
+ui_hand_test_thomas=DONE 2026-11-17 13:04 - OK except missing GA labels (#1905, not a blocker)
+signoff_ahmad=SIGNED 2026-11-17 by Ahmad
+signoff_ramin=SIGNED 2026-11-17 by Ramin
+gate_151=PASS 2026-11-17 ~13:10
+note=free-form

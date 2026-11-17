@@ -616,6 +616,16 @@ jobs:
       - name: apt-install action (a hang must fail, not wedge)
         run: ./tests/gates/apt_install/selftest.sh
 
+      # N65 / Odoo #2137: create-release.sh must refuse a release without
+      # complete gate evidence for the exact image sha256. The self-test drives
+      # the live scripts/lib/release-gate.sh and scripts/create-release.sh over
+      # must-fail fixtures (missing file, sha mismatch, verdict FAIL, unsigned
+      # Ahmad, the 2026-11-13 run stopped at step 10, ...) and must-pass ones;
+      # it fails if the gate cannot be found. Red-proven: on the previous
+      # create-release.sh a release is produced with no evidence at all.
+      - name: release gate (no release without complete evidence for the exact image sha256)
+        run: ./tests/gates/release_evidence/selftest.sh
+
       # systemd ignores an After=/Before=/Wants= on a unit that does not exist,
       # and StartLimitIntervalSec= in [Service], without failing anything:
       # nine GA directives named hassio-supervisor.service (the image ships
