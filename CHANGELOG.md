@@ -18,6 +18,10 @@ dev10 plus ga-bootstrap 1.2.17 (Odoo #2132, #2066), the F5 updater.json seed (Od
 
 ## BOSv1.6.1-rc3 (unreleased, iHost, feat/1.6-haos18)
 
+### Tests: on-device suites for every rc3 feature (standing rule 2026-11-17)
+
+- Seven new device suites in the `device` lane (`run_all.sh`): `ga_manager_guard_device` (#2166), `ga_manager_stop` (#2165), `uplink_device` (#2112; `BENCH.md` for the dongle scenarios), `ota_identity_device` (#2160, dry run), `resident_info_device` (#2144, #2145), `baked_boot_device` (#2065, #2067 device side), `storage_watchdog_device` (#2098). Destructive steps sit behind `GA_TEST_DESTRUCTIVE=1`; `run_device_tests.sh --ssh` forwards that and `GA_TEST_FRESH_BOOT` / `GA_TEST_MINT_TOKEN` when set to 1. Host-side selftests (dash + busybox) run in CI `host-suites`.
+
 ### Security: Go module floors (x/net 0.62.0, compress, otel, go-jose) and expat 2.10.0 (Odoo #2162)
 
 - **Go module floors raised** in `buildroot-external/go-modfloor.mk` (applies to netbird, telegraf, os-agent, runc, containerd, docker-engine, docker-cli): golang.org/x/net v0.60.0 -> v0.62.0 (CVE-2026-78661), x/crypto v0.57.0 -> v0.58.0 and x/text v0.42.0 -> v0.43.0 (x/net 0.62.0 requires them), and new floors github.com/klauspost/compress v1.18.7 (CVE-2026-63209), go.opentelemetry.io/otel v1.41.0 (CVE-2026-29181), github.com/go-jose/go-jose/v4 v4.1.6 (CVE-2026-116587). `go-modfloor.sum` pins the 26 new go.sum lines (discovered against sum.golang.org, then proven complete by running the hook in its real GOSUMDB=off mode on all seven source trees).

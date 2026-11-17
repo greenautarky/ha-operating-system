@@ -378,8 +378,17 @@ run_ssh() {
     # still clean up, then hand it to the caller. 255 is ssh's own failure
     # (connection lost mid-run): not a verdict either, and not 0.
     local run_rc=0
+    # Opt-in switches of the on-device suites, forwarded ONLY when set to exactly 1 (ssh sends
+    # no environment): GA_TEST_DESTRUCTIVE (stop/kill steps; canary only, never in a soak),
+    # GA_TEST_FRESH_BOOT (this is the first boot after a flash: a registry download is a FAIL),
+    # GA_TEST_MINT_TOKEN (mint a console-login token for the authorized API checks).
+    local fwd=""
+    for v in GA_TEST_DESTRUCTIVE GA_TEST_FRESH_BOOT GA_TEST_MINT_TOKEN; do
+        [[ "${!v:-}" == "1" ]] && fwd="$fwd $v=1"
+    done
+    [[ -n "$fwd" ]] && echo "Forwarding to the device:$fwd"
     # shellcheck disable=SC2086
-    ssh $SSH_OPTS "$SSH_TARGET" "sh $REMOTE_DIR/run_all.sh $suite_args" || run_rc=$?
+    ssh $SSH_OPTS "$SSH_TARGET" "env$fwd sh $REMOTE_DIR/run_all.sh $suite_args" || run_rc=$?
 
     # Cleanup
     ssh $SSH_OPTS "$SSH_TARGET" "rm -rf $REMOTE_DIR" 2>/dev/null || true
