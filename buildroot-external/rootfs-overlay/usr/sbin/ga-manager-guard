@@ -12,7 +12,9 @@
 # ga_manager having run:
 #
 #   A. TOGGLE. Every tick: add-on installed and its watchdog flag is not true ->
-#      `ha addons options <slug> --watchdog true`, read back, WARNING when it was
+#      POST /addons/<slug>/options {"watchdog":true} to the Supervisor API (the `ha`
+#      CLI has NO `addons options` subcommand - measured on K31, hassio_cli 2025.10.2),
+#      then ASSERTED by reading .data.watchdog back; WARNING when it was
 #      off, ERROR when it could not be turned on. Done even while the add-on is
 #      stopped on purpose (the flag is not what a deliberate stop is about).
 #   B. REVIVE. add-on installed, not `started` for >= GA_GMG_DOWN_S (default 600 s,
@@ -93,6 +95,27 @@ run_ha() {
     RUN_ERR="$(grep -viE 'is deprecated, please use' "$RUN_ERRF" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
 }
 
+# set_watchdog_api -> RUN_RC / RUN_ERR. The Supervisor API, called from INSIDE
+# hassio_cli with that container's own SUPERVISOR_TOKEN (the `ha` CLI uses the
+# same token), so the token never leaves the container and is never printed or
+# put on a host command line. curl when the image has it, busybox wget otherwise.
+# The exit code is NOT trusted: the caller reads .data.watchdog back.
+set_watchdog_api() {
+    # shellcheck disable=SC2016  # the script is expanded INSIDE hassio_cli, on purpose
+    RUN_OUT="$(timeout 60 "$DOCKER" exec hassio_cli sh -c '
+        [ -n "${SUPERVISOR_TOKEN:-}" ] || { echo "no SUPERVISOR_TOKEN in hassio_cli" >&2; exit 3; }
+        U="http://supervisor/addons/$1/options"; B="{\"watchdog\":true}"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsS -m 20 -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
+                -H "Content-Type: application/json" -d "$B" "$U"
+        else
+            wget -q -O- -T 20 --header "Authorization: Bearer $SUPERVISOR_TOKEN" \
+                --header "Content-Type: application/json" --post-data "$B" "$U"
+        fi' _ "$SLUG" 2>"$RUN_ERRF")"
+    RUN_RC=$?
+    RUN_ERR="$(tr '\n' ' ' < "$RUN_ERRF" 2>/dev/null | cut -c1-200)"
+}
+
 read_info() {  # -> INFO_STATE, INFO_WD ; rc 0 ok, 1 not installed, 2 unreachable
     run_ha addons info "$SLUG" --raw-json
     if [ "$RUN_RC" -ne 0 ]; then
@@ -118,10 +141,11 @@ esac
 # --- A. watchdog toggle -------------------------------------------------------
 if [ "$INFO_WD" != "true" ]; then
     _wd_was="$INFO_WD"
-    run_ha addons options "$SLUG" --watchdog true
+    set_watchdog_api
     _set_rc=$RUN_RC; _set_err="$RUN_ERR $RUN_OUT"
     read_info
-    if [ "$_set_rc" -eq 0 ] && [ "$INFO_WD" = "true" ]; then
+    # Success = the READ-BACK says true; the write's exit code is not trusted.
+    if [ "$INFO_WD" = "true" ]; then
         logw "Supervisor watchdog for $SLUG was '${_wd_was:-unset}' - turned ON (a crash is now restarted by the Supervisor)"
         publish watchdog_enabled "watchdog toggle was off, turned on"
     else
