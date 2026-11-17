@@ -33,7 +33,7 @@ ds_expect() {   # ds_expect <ID> <PASS|FAIL|SKIP> <why>
   _line=$(grep -E "^ *(PASS|FAIL|SKIP|WARN) +$1:" "$W/out" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | head -1)
   _got=$(printf '%s' "$_line" | awk '{print $1}')
   if [ "$_got" = "$2" ]; then DS_PASS=$((DS_PASS + 1)); echo "  ok    $1 is $2 - $3"
-  else DS_FAIL=$((DS_FAIL + 1)); echo "  FAIL  $1: wanted $2, got '${_got:-no verdict line}' - $3"; echo "        $(printf '%s' "$_line" | cut -c1-200)"; fi
+  else DS_FAIL=$((DS_FAIL + 1)); echo "  FAIL  $1: wanted $2, got '${_got:-no verdict line}' - $3"; echo "        $(printf '%s' "$_line" | cut -c1-200)"; grep -A1 -E "^ *(PASS|FAIL|SKIP|WARN) +$1:" "$W/out" | sed -n 2p | cut -c1-300; fi
 }
 
 ds_done() {

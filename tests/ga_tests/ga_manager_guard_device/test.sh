@@ -23,7 +23,7 @@
 #   GMGD-22      deliberate-stop marker + stop -> the guard leaves it stopped
 #   GMGD-23      marker removed, still stopped -> the guard starts it, state `revived`
 # The destructive cases drive the REAL /usr/sbin/ga-manager-guard by hand with a private
-# state directory and GA_GMG_DOWN_S=1 / GA_GMG_SETTLE_S=5 instead of waiting the 10 min
+# state directory and GA_GMG_DOWN_S=0 / GA_GMG_SETTLE_S=5 instead of waiting the 10 min
 # grace on the timer; every decision is the real script's, against the real Supervisor.
 # A trap restores: marker removed, toggle ON, gm started.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -116,7 +116,7 @@ if ga_destructive "GMGD-20..23" "toggle repair, kill -9 revive, deliberate stop,
   }
   trap restore EXIT INT TERM
   tick() {   # one REAL guard run, private state dir, short grace; output APPENDS to $TD/out
-    GA_GMG_STATE_DIR="$TD/run" GA_GMG_DOWN_S=1 GA_GMG_SETTLE_S=5 "$GUARD" >> "$TD/out" 2>&1
+    GA_GMG_STATE_DIR="$TD/run" GA_GMG_DOWN_S=0 GA_GMG_SETTLE_S=5 "$GUARD" >> "$TD/out" 2>&1
   }
   mkdir -p "$TD/run"
   wait_state() { wait_for "${GA_DEVT_WAIT_S:-$2}" "[ \"\$(ga_hacli addons info $SLUG --raw-json 2>/dev/null | jq -r '.data.state // empty')\" = '$1' ]"; }

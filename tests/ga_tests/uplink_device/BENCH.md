@@ -24,7 +24,7 @@ Restore after every scenario: stick unplugged or powered, install Wi-Fi/Ethernet
 3. Expect, in order: a join of `GA-xxxx`, NM verdict `limited`, then
    `BARRED GA-xxxx for 1800s (failure 1 in a row ...)` at WARNING, profile deleted, device
    back on the install Wi-Fi. `/mnt/data/.ga-openstick-backoff` holds `GA-xxxx<TAB>1<TAB><epoch+1800>`.
-4. Watch 40 min: exactly ONE join in the first 30 min (the unfixed script joined every 10 min,
+4. Watch 40 min: exactly ONE join in the first 30 min (before #1103 the script re-joined every ~10 min,
    ~30 s outage each). After 30 min one retry, then `BARRED ... 7200s (failure 2 ...)`.
 5. Pass: 1 join per bar window, never more; the working uplink was dropped only during the
    join itself.
