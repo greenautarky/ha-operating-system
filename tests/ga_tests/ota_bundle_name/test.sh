@@ -33,4 +33,14 @@ chk "OBN-04 ihost per-rc URL unchanged" "$(head -n 1 "$W/urls")" "https://ota.gr
 run "$D/fixtures/os-release.novariant"
 chk "OBN-05 no VARIANT_ID: falls back to ihost" "$(head -n 1 "$W/urls")" "https://ota.greenautarky.com/releases/18.4.1.6/haos_ihost-18.4.1.6.raucb"
 chk "OBN-06 ... and says so loudly (WARNING)" "$(grep -c 'WARNING: no usable VARIANT_ID' "$W/out")" "1"
-echo "ota_bundle_name: $pass passed, $fail failed"; [ "$fail" -eq 0 ] && [ "$pass" -ge 8 ]
+# OBN-07/08: on the device /etc/os-release is a SYMLINK into /usr/lib (measured on a
+# DSGW, 2026-11-18). Followed only into the trusted dir; elsewhere refused + loud.
+ln -s "$D/fixtures/os-release.dsgw210" "$W/os-release-link"
+: > "$W/urls"; PATH="$W/bin:$PATH" GA_OS_RELEASE="$W/os-release-link" GA_OS_RELEASE_TRUSTED_DIR="$D/fixtures" GA_OTA_ACTIVE_FILE="$W/active" GA_STAGING_DIR="$W/stg" \
+    sh "$SCRIPT" 18.4.1.6 BOSv1.6.0-dev13 >"$W/out" 2>&1
+chk "OBN-07 symlinked os-release (as on the device) -> dsgw210 per-rc URL" "$(head -n 1 "$W/urls")" "https://ota.greenautarky.com/releases/18.4.1.6/BOSv1.6.0-dev13/haos_dsgw210-18.4.1.6.raucb"
+: > "$W/urls"; PATH="$W/bin:$PATH" GA_OS_RELEASE="$W/os-release-link" GA_OS_RELEASE_TRUSTED_DIR="$W/elsewhere" GA_OTA_ACTIVE_FILE="$W/active" GA_STAGING_DIR="$W/stg" \
+    sh "$SCRIPT" 18.4.1.6 >"$W/out" 2>&1
+chk "OBN-08 symlink outside the trusted dir: not followed, ihost fallback" "$(head -n 1 "$W/urls")" "https://ota.greenautarky.com/releases/18.4.1.6/haos_ihost-18.4.1.6.raucb"
+chk "OBN-09 ... and says why (outside the trusted dir)" "$(grep -c 'outside .* not followed' "$W/out")" "1"
+echo "ota_bundle_name: $pass passed, $fail failed"; [ "$fail" -eq 0 ] && [ "$pass" -ge 11 ]
