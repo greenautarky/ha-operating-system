@@ -23,7 +23,16 @@ SPIDEV="${GA_LORA_SPIDEV:-/dev/spidev0.0}"
 SPI_PIPE="${GA_SPI_PIPE:-spi-pipe}"
 SPI_CONFIG="${GA_SPI_CONFIG:-spi-config}"
 BOOT_MARKER="${GA_LORA_BOOT_MARKER:-/mnt/boot/ga-lora}"
-DATA_ROOT="${GA_LORA_DATA_ROOT:-/mnt/data/supervisor}"
+# ga_manager's data directory: the ONE helper that knows the Supervisor data root
+# (apps/ on 2026.10+, addons/ before; ga-data-root.sh). GA_GM_DATA_DIR relocates
+# it (host tests only) - same pattern as the iHost ga-bluetooth-gate.
+if [ -n "${GA_GM_DATA_DIR:-}" ]; then
+    GM_DATA_DIR="$GA_GM_DATA_DIR"
+else
+    # shellcheck disable=SC1090
+    . "${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"
+    GM_DATA_DIR="$(ga_data_root_or_unresolved)/99f1cad4_ga_manager"
+fi
 STATUS="${GA_LORA_STATUS:-/mnt/data/supervisor/share/ga-lora-status.json}"
 PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
 STEP_S="${GA_LORA_STEP_S:-1}"
@@ -38,11 +47,9 @@ publish() {  # enabled source present chip version reason
         | "$PUBLISH" "$STATUS" 0644 || log warning "could not publish $STATUS"
 }
 
-# --- which source enables it (fleet flag in ga_manager's data dir, apps/ then addons/)
+# --- which source enables it (fleet flag in ga_manager's data dir, or the boot marker)
 src=""
-for d in "$DATA_ROOT/apps/data/99f1cad4_ga_manager" "$DATA_ROOT/addons/data/99f1cad4_ga_manager"; do
-    [ -e "$d/ga-lora-enabled" ] && { src="fleet"; break; }
-done
+[ -e "$GM_DATA_DIR/ga-lora-enabled" ] && src="fleet"
 [ -z "$src" ] && [ -e "$BOOT_MARKER" ] && src="boot-marker"
 if [ -z "$src" ]; then
     log info "LoRa off (default): no ga-lora-enabled flag and no $BOOT_MARKER - power lines untouched"

@@ -28,7 +28,7 @@ setup() {
 }
 run() {
     GA_LORA_GPIO_DIR="$WORK/gpio" GA_LORA_SPIDEV="$WORK/spidev" GA_SPI_PIPE="$WORK/spi-pipe" GA_SPI_CONFIG="$WORK/spi-config" \
-    GA_LORA_BOOT_MARKER="$WORK/marker" GA_LORA_DATA_ROOT="$WORK/data" GA_LORA_STATUS="$WORK/status.json" \
+    GA_LORA_BOOT_MARKER="$WORK/marker" GA_GM_DATA_DIR="$WORK/data/apps/data/99f1cad4_ga_manager" GA_LORA_STATUS="$WORK/status.json" \
     GA_SHARE_PUBLISH="$ROOT/buildroot-external/rootfs-overlay/usr/libexec/ga-share-publish" GA_SHARE_STAGE_DIR="$WORK/stage" \
     GA_LORA_STEP_S=0 GA_LORA_LOG_STDERR=1 SPI_LOG="$WORK/spi.log" sh "$SUBJ" > "$WORK/out" 2>&1
     echo $? > "$WORK/rc"
