@@ -1,0 +1,14 @@
+[Unit]
+Description=Gate the LoRa concentrator at boot (default OFF, fleet-managed or manual)
+# Enable sources: ga-lora-enabled in ga_manager's own data directory
+# (ADR-0041) or the manual /mnt/boot/ga-lora marker. Without either, the
+# card's power lines are not touched. Status: /share/ga-lora-status.json.
+RequiresMountsFor=/mnt/data /mnt/boot
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/ga-lora-gate
+
+[Install]
+WantedBy=multi-user.target

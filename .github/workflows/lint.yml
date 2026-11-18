@@ -759,6 +759,11 @@ jobs:
         # file (Odoo #2183, CE R1). Red without the script: 9 of 11 fail.
         run: sh tests/ga_tests/wifi_regdom/test.sh
 
+      - name: LoRa concentrator gate (default OFF, stock power sequence, loud when absent)
+        # Drives the real ga-lora-gate (DSGW overlay) against a stub sysfs GPIO tree
+        # and stub spi-tools (Odoo #2183 c).
+        run: sh tests/ga_tests/lora_gate/test.sh
+
       - name: openstick autoconnect back-off (no re-join loop on a dongle without internet)
         # Drives the real ga-openstick-autoconnect against a stub nmcli and a
         # simulated clock. K31 replay (dongle Wi-Fi up, no WAN): 1 join in 30
