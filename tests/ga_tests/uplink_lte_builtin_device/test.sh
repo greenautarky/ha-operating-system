@@ -17,6 +17,8 @@
 #   ULB-06  SIM inserted and the modem registered           (SKIP without a SIM)
 #   ULB-07  bearer up on a real interface that the status file names   (SKIP without registration)
 #   ULB-08  the modem interface is NOT in the live firewall's LAN allowlist, input ends in a drop
+#   ULB-09  the board names a modem reset port (SIM inserted after boot, #2176): it exists as a char
+#           device and is NOT ModemManager's primary port
 # Destructive (GA_TEST_DESTRUCTIVE=1; needs ULB-06 green; a failsafe restores Ethernet whatever happens):
 #   ULB-20  Ethernet taken away -> the default route is on the modem interface within the bound
 #   ULB-21  ...and the internet answers over it (NM connectivity check = full)
@@ -43,7 +45,7 @@ FAILSAFE_S="${GA_ULB_FAILSAFE_S:-900}"
 # a carrier APN in the image would be a defect: the APN is config (/mnt/boot/ga-lte-apn)
 PINNED_BAD="${GA_ULB_PINNED_BAD:-internet.telekom}"
 
-ids="ULB-01 ULB-02 ULB-03 ULB-04 ULB-05 ULB-06 ULB-07 ULB-08 ULB-20 ULB-21 ULB-22 ULB-23 ULB-24"
+ids="ULB-01 ULB-02 ULB-03 ULB-04 ULB-05 ULB-06 ULB-07 ULB-08 ULB-09 ULB-20 ULB-21 ULB-22 ULB-23 ULB-24"
 if [ "$BOARD" != dsgw210 ]; then
   for _i in $ids; do
     skip_test "$_i" "built-in LTE modem fallback" "board '${BOARD:-unknown}' has no built-in modem - the iHost LTE is a dongle (suite lte_standby)"
@@ -98,7 +100,9 @@ fi
 
 # The LIVE ruleset: the modem interface must not be among the interfaces the allowlist governs
 # (that list is the LAN), and the input chain ends in a default drop.
-IFN="${IF:-ppp0}"
+# jq prints the string "null" for a missing iface: fall back to the bearer name the
+# NM gsm profile creates (ppp0), so the rule check never runs against "null".
+case "${IF:-}" in ''|null) IFN=ppp0 ;; *) IFN=$IF ;; esac
 RS=$(nft list table inet ga_firewall 2>/dev/null)
 if [ -z "$RS" ]; then
   skip_test "ULB-08" "modem interface closed in the live firewall" "firewall table not loaded (marker /mnt/boot/ga-firewall-off, or load failed - suite firewall says which)"
@@ -107,7 +111,14 @@ else
   LAST_IN=$(printf '%s\n' "$RS" | awk '/chain input/{c=1} /chain forward/{c=0} c && /^[[:space:]]+[a-z]/ && !/type filter/{l=$0} END{gsub(/^[[:space:]]+/,"",l); print l}')
   if [ "$LAN_LINES" = 0 ] && [ "$LAST_IN" = drop ]; then _rc=0; else _rc=1; fi
   show_verdict "ULB-08" "modem interface '$IFN' is in no service accept rule, input ends in a default drop" "$_rc" "accept rules naming it: $LAN_LINES; last input rule: '$LAST_IN'"
+
 fi
+# ULB-09 (#2176): the ladder power-cycles a modem stuck in sim-missing via this port.
+RP=$(sh -c '. /usr/share/ga-board.conf 2>/dev/null; echo "${GA_MODEM_RESET_PORT:-}"')
+RPR=$(readlink -f "$RP" 2>/dev/null)
+PRIM=$(mmcli -m any 2>/dev/null | sed -n 's/.*primary port:[[:space:]]*//p' | head -1)
+_rc=1; [ -n "$RP" ] && [ -c "$RPR" ] && [ -n "$PRIM" ] && [ "$(basename "$RPR")" != "$PRIM" ] && _rc=0
+show_verdict "ULB-09" "modem reset port is a char device and not ModemManager's primary port" "$_rc" "GA_MODEM_RESET_PORT='${RP:-unset}' -> '${RPR:-none}', MM primary='${PRIM:-none}'"
 
 # --- destructive: Ethernet away -> modem -> Ethernet back -----------------------------------------
 if ga_destructive "ULB-20..24" "Ethernet down -> LTE within ${BOUND_S}s -> back to Ethernet within ${BACK_S}s"; then

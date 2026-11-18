@@ -83,6 +83,16 @@ LTE_APN_FILE="${GA_LTE_APN_FILE:-/mnt/boot/ga-lte-apn}"
 MODEM_BACK_S="${GA_LADDER_MODEM_BACK_S:-600}"
 MMCLI="${GA_MMCLI:-mmcli}"
 MODEM_JSON=""
+# SIM inserted after the modem started (Odoo #2176): the BG96 ships with SIM
+# detection off (AT+QSIMDET 0,0, measured on DUT2 2026-11-18), so ModemManager
+# keeps the modem `failed / sim-missing` until it is power-cycled, and
+# `mmcli --reset` is unsupported on it. The ladder resets the modem itself
+# (AT+CFUN=1,1 on a port ModemManager does not use as primary), after a grace
+# period, rate-limited and capped per boot. No port configured = no reset.
+MODEM_RESET_PORT="${GA_MODEM_RESET_PORT:-}"
+SIM_GRACE_S="${GA_LADDER_SIM_GRACE_S:-180}"
+SIM_RESET_EVERY_S="${GA_LADDER_SIM_RESET_EVERY_S:-1800}"
+SIM_RESET_MAX="${GA_LADDER_SIM_RESET_MAX:-3}"
 NMCLI="${GA_NMCLI:-nmcli}"
 IP_BIN="${GA_IP:-ip}"
 STATE="${GA_LADDER_STATE:-/run/ga-uplink-ladder.state}"
@@ -189,6 +199,48 @@ modem_status() {
     printf '{"present":%s,"registered":%s,"bearer_up":%s,"iface":"%s","state":"%s","failed_reason":"%s","operator":"%s","tech":"%s","signal":%s}' \
         "$_present" "$_reg" "$_bearer" "$(json_str "$_iface")" "$(json_str "$_mst")" "$(json_str "$_why")" \
         "$(json_str "$_op")" "$(json_str "$_tech")" "$_sig"
+}
+
+# A modem that reports `failed / sim-missing` for longer than SIM_GRACE_S gets a
+# modem power-cycle (AT+CFUN=1,1), at most every SIM_RESET_EVERY_S and at most
+# SIM_RESET_MAX times per boot (the record lives under /run). Anything else
+# (SIM present, modem gone, no reset port) clears the record. Every action and
+# every give-up is logged at warning level (rule 44).
+sim_missing_recover() {
+    [ "$BUILTIN_MODEM" = 1 ] || return 0
+    _rec="$STATE.simmissing"
+    _mm=$($MMCLI -m any -K 2>/dev/null) || _mm=""
+    if [ "$(mm_get 'modem\.generic\.state')" != failed ] \
+        || [ "$(mm_get 'modem\.generic\.state-failed-reason')" != sim-missing ]; then
+        rm -f "$_rec"; return 0
+    fi
+    _first=""; _last=""; _count=""   # set -u: a missing record must not abort the ladder
+    [ -r "$_rec" ] && read -r _first _last _count < "$_rec"
+    _gave_up=0; [ "$_last" = giveup ] && _gave_up=1
+    case "$_first" in ''|*[!0-9]*) _first=$NOW; _last=0; _count=0 ;; esac
+    case "$_last" in ''|*[!0-9]*) _last=0 ;; esac
+    case "$_count" in ''|*[!0-9]*) _count=0 ;; esac
+    if [ $((NOW - _first)) -lt "$SIM_GRACE_S" ]; then
+        printf '%s %s %s\n' "$_first" "$_last" "$_count" > "$_rec"; return 0
+    fi
+    if [ "$_count" -ge "$SIM_RESET_MAX" ]; then
+        [ "$_gave_up" = 0 ] && log warning "modem still sim-missing after $_count reset(s) — giving up until the next boot (insert a SIM, check its seat)"
+        printf '%s giveup %s\n' "$_first" "$_count" > "$_rec"; return 0
+    fi
+    if [ "$_last" -gt 0 ] && [ $((NOW - _last)) -lt "$SIM_RESET_EVERY_S" ]; then
+        printf '%s %s %s\n' "$_first" "$_last" "$_count" > "$_rec"; return 0
+    fi
+    if [ -z "$MODEM_RESET_PORT" ] || [ ! -e "$MODEM_RESET_PORT" ]; then
+        log warning "modem sim-missing for $((NOW - _first))s but no modem reset port (GA_MODEM_RESET_PORT='${MODEM_RESET_PORT}') — cannot re-read the SIM"
+        printf '%s %s %s\n' "$_first" "$NOW" "$_count" > "$_rec"; return 0
+    fi
+    _count=$((_count + 1))
+    if printf 'AT+CFUN=1,1\r' > "$MODEM_RESET_PORT" 2>/dev/null; then
+        log warning "modem sim-missing for $((NOW - _first))s — power-cycling it (AT+CFUN=1,1 on $MODEM_RESET_PORT, reset $_count/$SIM_RESET_MAX) so it re-reads the SIM"
+    else
+        log warning "modem sim-missing: writing AT+CFUN=1,1 to $MODEM_RESET_PORT FAILED (reset $_count/$SIM_RESET_MAX)"
+    fi
+    printf '%s %s %s\n' "$_first" "$NOW" "$_count" > "$_rec"
 }
 
 # The APN is configuration, not code. File on the boot partition > board default
@@ -380,6 +432,7 @@ main() {
     release_expired
     if [ "$BUILTIN_MODEM" = 1 ]; then
         apply_apn
+        sim_missing_recover
         MODEM_JSON=$(modem_status)
     fi
 
