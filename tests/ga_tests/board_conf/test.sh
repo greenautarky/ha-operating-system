@@ -141,20 +141,34 @@ usb() {  # <ports file or ''> <allowlist file> <syspath> <vid> <pid>
     sh "$GA/usr/libexec/ga-usb-authorize" "$3" "$4" "$5" 2>/dev/null
 }
 : > "$W/empty-allow"
-for p in 3-1 3-1.1 3-1.2 3-1.3; do
-  ok "BC-30 DSGW: internal port $p is authorized" \
-     '[ "$(usb "$PORTS" "$W/empty-allow" "/sys/devices/platform/x/usb3/3-1/$p" 1a86 7523)" = "authorize port $p" ]' "got: $(usb "$PORTS" "$W/empty-allow" "/sys/x/$p" 1a86 7523)"
+# Real DSGW sysfs paths (DUT2, 2026-11-18): the hub hangs off the EHCI at
+# ff5c0000.usb; ff5d0000.usb is its OHCI companion, ff600000.usb the xHCI.
+# The BUS number of that EHCI changes between boots (usb3 on one, usb4 on the
+# next: Odoo #2189), so every port case runs on both numberings.
+E=/sys/devices/platform/ff5c0000.usb
+for n in 3 4; do
+  for c in 1 1.1 1.2 1.3; do
+    if [ "$c" = 1 ]; then sp="$E/usb$n/$n-1"; else sp="$E/usb$n/$n-1/$n-$c"; fi
+    ok "BC-30 DSGW: internal port ff5c0000.usb:$c is authorized on bus $n" \
+       '[ "$(usb "$PORTS" "$W/empty-allow" "$sp" 1a86 7523)" = "authorize port ff5c0000.usb:$c" ]' "got: $(usb "$PORTS" "$W/empty-allow" "$sp" 1a86 7523)"
+  done
 done
 ok "BC-31 DSGW: an external port with the SAME VID:PID as the on-board radios stays closed" \
-   '[ "$(usb "$PORTS" "$W/empty-allow" /sys/devices/platform/x/usb3/3-1/3-1.4 1a86 7523)" = "deny 1a86:7523" ]' "got: $(usb "$PORTS" "$W/empty-allow" /sys/x/3-1.4 1a86 7523)"
-ok "BC-32 DSGW: a device on another bus (usb1) stays closed" \
-   '[ "$(usb "$PORTS" "$W/empty-allow" /sys/devices/platform/x/usb1/1-1 0781 5567)" = "deny 0781:5567" ]' "got: $(usb "$PORTS" "$W/empty-allow" /sys/x/1-1 0781 5567)"
-ok "BC-33 DSGW: 3-1.1 is not matched as a prefix of 3-1.10 or 3-1.12" \
-   '[ "$(usb "$PORTS" "$W/empty-allow" /sys/x/3-1.10 1a86 7523)" = "deny 1a86:7523" ] && [ "$(usb "$PORTS" "$W/empty-allow" /sys/x/3-1.12 1a86 7523)" = "deny 1a86:7523" ]' "prefix match"
+   '[ "$(usb "$PORTS" "$W/empty-allow" $E/usb4/4-1/4-1.4 1a86 7523)" = "deny 1a86:7523" ]' "got: $(usb "$PORTS" "$W/empty-allow" $E/usb4/4-1/4-1.4 1a86 7523)"
+ok "BC-32 DSGW: a device on the OTG controller stays closed" \
+   '[ "$(usb "$PORTS" "$W/empty-allow" /sys/devices/platform/ff580000.usb/usb1/1-1 0781 5567)" = "deny 0781:5567" ]' "got: $(usb "$PORTS" "$W/empty-allow" /sys/devices/platform/ff580000.usb/usb1/1-1 0781 5567)"
+ok "BC-33 DSGW: ff5c0000.usb:1.1 is not matched as a prefix of 1.10 or 1.12" \
+   '[ "$(usb "$PORTS" "$W/empty-allow" $E/usb3/3-1/3-1.10 1a86 7523)" = "deny 1a86:7523" ] && [ "$(usb "$PORTS" "$W/empty-allow" $E/usb3/3-1/3-1.12 1a86 7523)" = "deny 1a86:7523" ]' "prefix match"
 ok "BC-34 no ports file (the iHost): nothing is authorized by port" \
-   '[ "$(usb "" "$W/empty-allow" /sys/x/3-1.1 1a86 7523)" = "deny 1a86:7523" ]' "got: $(usb '' "$W/empty-allow" /sys/x/3-1.1 1a86 7523)"
-ok "BC-35 (red proof) a ports file without 3-1.1 closes the modem port" \
-   'grep -v "^3-1.1$" "$PORTS" > "$W/ports-mut"; [ "$(usb "$W/ports-mut" "$W/empty-allow" /sys/x/3-1.1 2c7c 0296)" = "deny 2c7c:0296" ]' "mutation did not flip"
+   '[ "$(usb "" "$W/empty-allow" $E/usb3/3-1/3-1.1 1a86 7523)" = "deny 1a86:7523" ]' "got: $(usb '' "$W/empty-allow" $E/usb3/3-1/3-1.1 1a86 7523)"
+ok "BC-35 (red proof) a ports file without ff5c0000.usb:1.1 closes the modem port" \
+   'grep -v "^ff5c0000.usb:1.1$" "$PORTS" > "$W/ports-mut"; [ "$(usb "$W/ports-mut" "$W/empty-allow" $E/usb4/4-1/4-1.1 2c7c 0296)" = "deny 2c7c:0296" ]' "mutation did not flip"
+ok "BC-38 DSGW: the SAME port chain on another controller stays closed (OHCI companion, xHCI)" \
+   '[ "$(usb "$PORTS" "$W/empty-allow" /sys/devices/platform/ff5d0000.usb/usb3/3-1 1a86 7523)" = "deny 1a86:7523" ] && [ "$(usb "$PORTS" "$W/empty-allow" /sys/devices/platform/ff600000.usb/xhci-hcd.0.auto/usb2/2-1 1a86 7523)" = "deny 1a86:7523" ]' "chain matched across controllers"
+ok "BC-39 a path without a /usbN/ component yields no port key (falls through to VID:PID, denied)" \
+   '[ "$(usb "$PORTS" "$W/empty-allow" /sys/x/3-1.1 1a86 7523)" = "deny 1a86:7523" ]' "got: $(usb "$PORTS" "$W/empty-allow" /sys/x/3-1.1 1a86 7523)"
+ok "BC-42 the shipped DSGW ports file has no bus-number entry (N-chain); every entry is controller:chain" \
+   '! grep -vE "^[[:space:]]*(#|$)" "$PORTS" | grep -qvE "^[A-Za-z0-9._-]+\.usb:[0-9]+(\.[0-9]+)*$"' "$(grep -vE '^[[:space:]]*(#|$)' "$PORTS" | grep -vE '^[A-Za-z0-9._-]+\.usb:[0-9]+(\.[0-9]+)*$' | tr '\n' ' ')"
 # The VID:PID rule next to the port rule, and with several entries (the old
 # helper stripped the newlines and matched only a single-entry list).
 printf '# bench\n1A86:55D3\n0781:5567\n' > "$W/two-allow"
