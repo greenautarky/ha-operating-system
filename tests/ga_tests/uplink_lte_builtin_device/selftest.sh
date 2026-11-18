@@ -72,7 +72,7 @@ EOF
 }
 good() { good_status; good_nft; echo end0 > "$W/route"; }
 run() { ds_run uplink_lte_builtin_device W_LOG="$W/log" W_ROUTE="$W/route" GA_ULB_STATUS="$W/status.json" \
-  GA_ULB_BOARD="${BOARD:-dsgw210}" GA_ULB_BOUND_S=1 GA_ULB_BACK_S=1 FAKE_NFT="$W/nft.out" "$@"; }
+  GA_ULB_IP="$W/bin/ip" GA_ULB_BOARD="${BOARD:-dsgw210}" GA_ULB_BOUND_S=1 GA_ULB_BACK_S=1 FAKE_NFT="$W/nft.out" "$@"; }
 chg() { jq "$1" "$W/status.json" > "$W/s2" && mv "$W/s2" "$W/status.json"; }
 
 echo "== known-good DSGW, registered modem: every non-destructive row PASS, destructive rows SKIP"

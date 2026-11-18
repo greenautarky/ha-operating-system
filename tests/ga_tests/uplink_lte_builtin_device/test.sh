@@ -53,7 +53,8 @@ if [ "$BOARD" != dsgw210 ]; then
 fi
 
 mod() { jq -r "$1" "$STATUS" 2>/dev/null; }
-default_if() { ip -4 route show default 2>/dev/null | head -1 | sed -n 's/.* dev \([^ ]*\).*/\1/p'; }
+IP_BIN="${GA_ULB_IP:-ip}"
+default_if() { $IP_BIN -4 route show default 2>/dev/null | head -1 | sed -n 's/.* dev \([^ ]*\).*/\1/p'; }
 mm_iface() { nmcli -g GENERAL.IP-IFACE device show "$(nmcli -t -f DEVICE,TYPE device 2>/dev/null | awk -F: '$2=="gsm"{print $1; exit}')" 2>/dev/null | head -1; }
 
 # --- non-destructive ---------------------------------------------------------------------------
@@ -122,7 +123,7 @@ if ga_destructive "ULB-20..24" "Ethernet down -> LTE within ${BOUND_S}s -> back 
     restore() { nmcli device connect "$ETH_IF" >/dev/null 2>&1; systemctl stop ulb-restore-eth.timer >/dev/null 2>&1; }
     trap restore EXIT INT TERM
     nmcli device disconnect "$ETH_IF" >/dev/null 2>&1
-    wait_for "$BOUND_S" "[ \"\$(ip -4 route show default | head -1 | sed -n 's/.* dev \\([^ ]*\\).*/\\1/p')\" = '$IF' ]"
+    wait_for "$BOUND_S" "[ \"\$(default_if)\" = '$IF' ]"
     D=$(default_if)
     if [ "$D" = "$IF" ]; then _rc=0; else _rc=1; fi
     show_verdict "ULB-20" "Ethernet gone: the default route is on the modem interface '$IF' within ${BOUND_S}s" "$_rc" "default route on '${D:-none}'"
@@ -133,7 +134,7 @@ if ga_destructive "ULB-20..24" "Ethernet down -> LTE within ${BOUND_S}s -> back 
     if [ "$(mod '.modem.bearer_up')" = true ]; then _rc=0; else _rc=1; fi
     show_verdict "ULB-22" "ga-uplink.json reports the bearer up while on LTE" "$_rc" "rung=$(mod '.rung') bearer_up=$(mod '.modem.bearer_up')"
     restore; trap - EXIT INT TERM
-    wait_for "$BACK_S" "[ \"\$(ip -4 route show default | head -1 | sed -n 's/.* dev \\([^ ]*\\).*/\\1/p')\" = '$ETH_IF' ]"
+    wait_for "$BACK_S" "[ \"\$(default_if)\" = '$ETH_IF' ]"
     D=$(default_if)
     if [ "$D" = "$ETH_IF" ]; then _rc=0; else _rc=1; fi
     show_verdict "ULB-23" "Ethernet back: the default route returns to '$ETH_IF' within ${BACK_S}s" "$_rc" "default route on '${D:-none}'"
