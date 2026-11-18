@@ -63,6 +63,7 @@ SUITES_EXCLUDED="
   wifi_probe_verdict host suite: CI lint.yml host-suites — HW-02b's fixtures
   device_run_lock host suite: CI lint.yml host-suites — the runner's one-run-per-device lock
   uplink_ladder   host suite: CI lint.yml host-suites
+  wifi_regdom     host suite: CI lint.yml host-suites — ga-wifi-regdom (#2183); its device.sh runs by hand on a DSGW
   openstick_backoff host suite: CI lint.yml host-suites — ga-openstick-autoconnect per-SSID back-off (#2112)
   uplink_units    host suite: CI lint.yml host-suites
   ga_manager_guard host suite: CI lint.yml host-suites - ga-manager-guard (watchdog toggle + revive) against a stub hassio_cli (#2166)
