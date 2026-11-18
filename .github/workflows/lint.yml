@@ -754,6 +754,11 @@ jobs:
         # rule is removed.
         run: sh tests/ga_tests/uplink_ladder/test.sh
 
+      - name: Wi-Fi regulatory domain (site file > board default > nothing; DSGW default DE)
+        # Drives the real ga-wifi-regdom against a stub iw and the REAL DSGW board
+        # file (Odoo #2183, CE R1). Red without the script: 9 of 11 fail.
+        run: sh tests/ga_tests/wifi_regdom/test.sh
+
       - name: openstick autoconnect back-off (no re-join loop on a dongle without internet)
         # Drives the real ga-openstick-autoconnect against a stub nmcli and a
         # simulated clock. K31 replay (dongle Wi-Fi up, no WAN): 1 join in 30
