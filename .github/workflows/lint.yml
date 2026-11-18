@@ -764,6 +764,10 @@ jobs:
         # and stub spi-tools (Odoo #2183 c).
         run: sh tests/ga_tests/lora_gate/test.sh
 
+      - name: rtw88 single blob (DSGW-210 ships exactly rtw8821c_fw.bin)
+        # Drives the real post-build hook against a fake TARGET_DIR (Odoo #2186).
+        run: sh tests/ga_tests/rtw88_blob/test.sh
+
       - name: openstick autoconnect back-off (no re-join loop on a dongle without internet)
         # Drives the real ga-openstick-autoconnect against a stub nmcli and a
         # simulated clock. K31 replay (dongle Wi-Fi up, no WAN): 1 join in 30
