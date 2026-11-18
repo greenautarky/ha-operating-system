@@ -424,6 +424,27 @@ env -u GA_BUILTIN_MODEM NM_LOG="$WORK/nm.log" NM_CACHED="$WORK/cached" NM_FORCED
     GA_SHARE_STAGE_DIR="$WORK/stage" GA_LADDER_NOW=1000240 sh "$LADDER" >/dev/null 2>&1
 jq -e '.modem.present==true' "$WORK/status.json" >/dev/null 2>&1 && PASS "run with the REAL DSGW board file only: the status carries the modem object" || FAIL "board file reaches the ladder" "$(cat "$WORK/status.json")"
 
+echo "--- DSGW: SIM inserted after boot -> modem power-cycle (Odoo #2176) ---"
+# Measured on DUT2 2026-11-18: BG96 SIM detection is off (QSIMDET 0,0), ModemManager
+# keeps the modem failed/sim-missing until the modem is power-cycled.
+reset_state; rm -f "$WORK/state.simmissing"; dsgw_env
+export GA_MODEM_RESET_PORT="$WORK/at-port" GA_LADDER_SIM_GRACE_S=180 GA_LADDER_SIM_RESET_EVERY_S=1800 GA_LADDER_SIM_RESET_MAX=2
+stick() { : > "$WORK/at-port"; MM_OUT="${2:-$WORK/mm-nosim}" NM_DEVICES="$WORK/dev-no-sim" tick full "$WORK/dsgw-profiles" "$1"; }
+wrote() { grep -q 'AT+CFUN=1,1' "$WORK/at-port" 2>/dev/null; }
+stick 2000000; ! wrote && [ -s "$WORK/state.simmissing" ] && PASS "sim-missing inside the grace period: no reset, first sighting recorded" || FAIL "grace" "$(cat "$WORK/at-port" "$WORK/state.simmissing" 2>&1)"
+stick 2000200; wrote && PASS "sim-missing past the grace period: AT+CFUN=1,1 written to the reset port" || FAIL "reset after grace" "$(cat "$WORK/state.simmissing" 2>&1)"
+stick 2000400; ! wrote && PASS "no second reset inside SIM_RESET_EVERY_S" || FAIL "rate limit" "reset repeated"
+stick 2002100; wrote && PASS "second reset after SIM_RESET_EVERY_S" || FAIL "second reset" "$(cat "$WORK/state.simmissing" 2>&1)"
+stick 2004000; ! wrote && grep -q giveup "$WORK/state.simmissing" && PASS "cap reached (SIM_RESET_MAX=2): no third reset, give-up recorded" || FAIL "cap" "$(cat "$WORK/state.simmissing" 2>&1)"
+stick 2006000; ! wrote && PASS "after give-up: still no reset" || FAIL "give-up holds" "reset after give-up"
+stick 2006100 "$WORK/mm-reg"; [ ! -e "$WORK/state.simmissing" ] && ! wrote && PASS "SIM read again (registered): record cleared, no reset" || FAIL "clear on recovery" "$(cat "$WORK/state.simmissing" 2>&1)"
+unset GA_MODEM_RESET_PORT; rm -f "$WORK/state.simmissing"
+stick 2010000; stick 2010200; ! wrote && PASS "no reset port configured: nothing written (logged instead)" || FAIL "no port" "wrote without a port"
+export GA_MODEM_RESET_PORT="$WORK/at-port"; rm -f "$WORK/state.simmissing"; dsgw_off
+stick 2020000; stick 2020200; ! wrote && [ ! -e "$WORK/state.simmissing" ] && PASS "iHost (no built-in modem): never resets" || FAIL "iHost inert" "$(cat "$WORK/at-port" 2>&1)"
+unset GA_MODEM_RESET_PORT GA_LADDER_SIM_GRACE_S GA_LADDER_SIM_RESET_EVERY_S GA_LADDER_SIM_RESET_MAX
+grep -q 'GA_MODEM_RESET_PORT:=/dev/lte-ppp' "$BCONF" && PASS "the DSGW board file names the reset port (/dev/lte-ppp = USB interface 03)" || FAIL "board reset port" "missing in $BCONF"
+
 echo ""
 echo "Results: $pass passed, $fail failed"
 exit "$fail"
