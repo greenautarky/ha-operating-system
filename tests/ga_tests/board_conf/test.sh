@@ -87,6 +87,32 @@ r2="$(render_fw "$W/mut.conf")"
 ok "BC-05 (red proof) a different board value flips the ruleset" \
    'printf "%s\n" "$r2" | grep -qF "iifname { \"lan9\" } drop"' "board value not used"
 
+# Odoo #1647 / #2176: the modem uplink is WAN, not LAN. DSGW ppp0 / wwan0, iHost usb0 / rndis0
+# are never named in an accept rule, and the chains END in a default drop, so a carrier-side
+# peer reaches no add-on or UI port. Pinned names, never read from the file under test.
+MODEM_IFACES="ppp0 wwan0 usb0 rndis0"
+modem_closed() {  # <ruleset text> -> 0 when every modem name is unreachable and both chains end in a drop
+  _rs="$1"
+  [ -n "$_rs" ] || return 1
+  for _m in $MODEM_IFACES; do
+    printf '%s\n' "$_rs" | grep -q "\"$_m\"" && return 1
+  done
+  printf '%s\n' "$_rs" | awk '/chain input/{c="i"} /chain forward/{c="f"} c=="i" && /^    [^}]/{li=$0} c=="f" && /^    [^}]/{lf=$0} END{exit !(li=="    drop" && lf=="    ct status dnat drop")}'
+}
+ok "BC-06 iHost (no board file): the modem uplink is not LAN, input and forward end in a default drop" \
+   'modem_closed "$(render_fw "")"' "ruleset: $(render_fw '' | tail -4 | tr '\n' ';')"
+ok "BC-07 DSGW board file: ppp0 / wwan0 are not LAN, input and forward end in a default drop" \
+   'modem_closed "$(render_fw "$BOARD_CONF")"' "ruleset: $(render_fw "$BOARD_CONF" | tail -4 | tr '\n' ';')"
+printf ': "${GA_LAN_IFACES:=end0 wlan0 ppp0}"\n' > "$W/mut-ppp.conf"
+ok "BC-08 (red proof) a board file that lists ppp0 as LAN is caught" \
+   '! modem_closed "$(render_fw "$W/mut-ppp.conf")"' "modem_closed accepted ppp0 as LAN"
+printf ': "${GA_LAN_IFACES:=usb0 end0}"\n' > "$W/mut-usb.conf"
+ok "BC-08b (red proof) a board file that lists usb0 as LAN is caught" \
+   '! modem_closed "$(render_fw "$W/mut-usb.conf")"' "modem_closed accepted usb0 as LAN"
+grep -vxF "	echo \"    drop\"" "$GA/usr/libexec/ga-firewall-gate" > "$W/gate-nodrop"
+ok "BC-09 (red proof) a gate without the final default drop is caught" \
+   '! modem_closed "$(rm -f "$W/rules"; env -u GA_LAN_IFACES PATH="$W/bin:$PATH" NFT_CAPTURE="$W/rules" GA_BOARD_CONF="$BOARD_CONF" sh "$W/gate-nodrop" >/dev/null 2>&1; cat "$W/rules")"' "no-drop mutant accepted"
+
 # --- 2. Ethernet policy --------------------------------------------------------
 eth_conn() {  # <conf or ''> -> the NM connection `disable` takes down
   : > "$W/nm.log"

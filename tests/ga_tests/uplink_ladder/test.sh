@@ -31,6 +31,14 @@ case "$*" in
   *"-f CONNECTIVITY general status")   cat "$NM_CACHED" ;;
   "networking connectivity check")     cat "$NM_FORCED" ;;
   *"-f NAME,DEVICE connection show --active") cat "$NM_ACTIVE" ;;
+  *"-t -f NAME connection show --active")  cut -d: -f1 "$NM_ACTIVE" ;;
+  *"-t -f NAME connection show")           cut -d: -f1 "$NM_PROFILES" ;;
+  *"-t -f DEVICE,TYPE,STATE device")       cat "${NM_DEVICES:-/dev/null}" ;;
+  *"-f connection.type connection show "*)
+      for _a in "$@"; do :; done
+      awk -F: -v n="$_a" '$1==n {print "connection.type:" $2; exit}' "$NM_PROFILES" ;;
+  *"-g gsm.apn connection show "*)         cat "${NM_APN:-/dev/null}" ;;
+  *"-g GENERAL.IP-IFACE device show "*)    echo "${NM_IPIFACE:-ppp0}" ;;
   *"-f NAME,TYPE,AUTOCONNECT connection show") cat "$NM_PROFILES" ;;
   *"-f connection.interface-name connection show "*) echo "connection.interface-name:${NM_IFACE:-eth0}" ;;
   *"-f 802-11-wireless.ssid connection show "*)
@@ -46,7 +54,13 @@ cat > "$WORK/ip" <<'STUB'
 #!/bin/sh
 cat "$IP_ROUTE"
 STUB
-chmod +x "$WORK/nmcli" "$WORK/ip"
+cat > "$WORK/mmcli" <<'STUB'
+#!/bin/sh
+echo "mmcli $*" >> "$NM_LOG"
+[ -s "$MM_OUT" ] || exit 1
+cat "$MM_OUT"
+STUB
+chmod +x "$WORK/nmcli" "$WORK/ip" "$WORK/mmcli"
 
 run() {   # run <cached> <forced> <profiles-file> [now]
     : > "$WORK/nm.log"
@@ -54,6 +68,8 @@ run() {   # run <cached> <forced> <profiles-file> [now]
     printf '%s\n' "$2" > "$WORK/forced"
     NM_LOG="$WORK/nm.log" NM_CACHED="$WORK/cached" NM_FORCED="$WORK/forced" \
     NM_ACTIVE="$WORK/active" NM_PROFILES="$3" IP_ROUTE="$WORK/route" \
+    NM_DEVICES="${NM_DEVICES:-}" NM_APN="${NM_APN:-}" GA_MMCLI="$WORK/mmcli" MM_OUT="${MM_OUT:-$WORK/mm-none}" \
+    GA_BOARD_CONF="$WORK/no-board.conf" GA_LTE_APN_FILE="${GA_LTE_APN_FILE:-$WORK/no-apn-file}" \
     NM_SCAN="${NM_SCAN:-$WORK/scan-two}" NM_IFACE="${NM_IFACE:-eth0}" NM_SCAN_AFTER="${NM_SCAN_AFTER:-}" \
     GA_LADDER_RESCAN_WAIT_S=0 GA_LADDER_TRIED_DIR="$WORK/tried" \
     GA_NMCLI="$WORK/nmcli" GA_IP="$WORK/ip" GA_LADDER_SYS_NET="$WORK/sys" \
@@ -256,6 +272,157 @@ ups=$(grep -c "connection up openstick-auto" "$WORK/nm.all")
 grep -q "connection up home-wifi" "$WORK/nm.all" && PASS "the previous rung was restored when the candidate was not full" || FAIL "fallback to previous" "never restored"
 grep -q "connection modify home-wifi connection.autoconnect yes" "$WORK/nm.all" && PASS "and it is un-parked, so NM may keep it" || FAIL "previous unparked" "missing"
 printf 'home-wifi:wlan0\n' > "$WORK/active"
+
+# ── Odoo #2176: the built-in modem rung (DSGW-210) ───────────────────────────
+#
+# The ladder already listed any `gsm` profile as a rung with no check that a
+# modem exists. On a board with a soldered modem that means a device without a
+# SIM parks its working Ethernet for a rung that cannot carry a packet. And the
+# modem state was invisible to ga_manager (add-on container: no mmcli, no
+# host interfaces). Everything below is gated on GA_BUILTIN_MODEM=1 (board file);
+# the iHost block pins that it stays as it was.
+LTE="DSGW-210 LTE"
+printf 'Wired connection 1:end0\n' > "$WORK/active"; printf 'default dev end0 scope link\n' > "$WORK/route"
+printf 'Wired connection 1:802-3-ethernet:yes\n%s:gsm:yes\nlo:loopback:yes\n' "$LTE" > "$WORK/dsgw-profiles"
+printf 'end0:ethernet:connected\nttyUSB2:gsm:disconnected\nlo:loopback:unmanaged\n' > "$WORK/dev-modem-ok"
+printf 'end0:ethernet:connected\nlo:loopback:unmanaged\n' > "$WORK/dev-no-modem"
+printf 'end0:ethernet:connected\nttyUSB2:gsm:unavailable\nlo:loopback:unmanaged\n' > "$WORK/dev-no-sim"
+printf 'end0:ethernet:connected\nttyUSB2:gsm:connected\nlo:loopback:unmanaged\n' > "$WORK/dev-modem-up"
+cat > "$WORK/mm-reg" <<'MM'
+modem.generic.state                      : registered
+modem.generic.state-failed-reason        : --
+modem.3gpp.operator-name                 : TestNet
+modem.generic.access-technologies.value[1] : lte
+modem.generic.signal-quality.value       : 64
+modem.generic.equipment-identifier       : 000000000000000
+MM
+cat > "$WORK/mm-nosim" <<'MM'
+modem.generic.state                      : failed
+modem.generic.state-failed-reason        : sim-missing
+MM
+: > "$WORK/mm-none"
+mkdir -p "$WORK/sys/end0"; printf '1\n' > "$WORK/sys/end0/carrier"
+dsgw_env() { export GA_BUILTIN_MODEM=1 NM_IFACE=end0; }
+dsgw_off() { unset GA_BUILTIN_MODEM; export NM_IFACE=eth0; }
+dead3() { for t in 1000120 1000240 1000360; do NM_DEVICES="$1" tick limited "$WORK/dsgw-profiles" $t; done; }
+parkfile() { cat "$WORK/parked/$1" 2>/dev/null; }
+mtick() {   # mtick <verdict> <now> [devices-file]: a tick on the DSGW with a registered modem
+    MM_OUT="$WORK/mm-reg" NM_DEVICES="${3:-$WORK/dev-modem-up}" tick "$1" "$WORK/dsgw-profiles" "$2"
+}
+
+echo "--- DSGW: Ethernet dead, modem usable -> Ethernet parked short, modem brought up ---"
+reset_state; dsgw_env
+MM_OUT="$WORK/mm-reg" dead3 "$WORK/dev-modem-ok"
+[ "$(parked_count)" = "1" ] && [ -f "$WORK/parked/Wired connection 1" ] && PASS "3 strikes park the dead Ethernet" || FAIL "park eth on modem fallback" "parked=$(ls "$WORK/parked" 2>/dev/null)"
+[ "$(parkfile 'Wired connection 1')" = "1000960" ] && PASS "falling to the modem parks for the SHORT modem-back window (600 s), not 900 s" || FAIL "short park for modem fallback" "until=$(parkfile 'Wired connection 1')"
+grep -q "connection up $LTE" "$WORK/nm.all" && PASS "the modem profile is brought up explicitly (bounded)" || FAIL "modem up" "$(tr '\n' ';' < "$WORK/nm.all")"
+
+echo "--- DSGW: no modem device -> not a rung, Ethernet is the last rung and is kept ---"
+reset_state; dsgw_env
+: > "$WORK/logger.out"; printf '#!/bin/sh\necho "$*" >> "%s/logger.out"\n' "$WORK" > "$WORK/logger"; chmod +x "$WORK/logger"
+for t in 1000120 1000240 1000360; do PATH="$WORK:$PATH" NM_DEVICES="$WORK/dev-no-modem" tick limited "$WORK/dsgw-profiles" $t; done
+[ "$(parked_count)" = "0" ] && PASS "a board whose modem is missing does not park its working uplink" || FAIL "absent modem is no rung" "parked $(ls "$WORK/parked")"
+grep -q "$LTE: no usable modem" "$WORK/logger.out" && PASS "and says why, at warning" || FAIL "loud rejection" "$(cat "$WORK/logger.out")"
+
+echo "--- DSGW: modem present but no SIM (unavailable) -> not a rung ---"
+reset_state; dsgw_env
+MM_OUT="$WORK/mm-nosim" dead3 "$WORK/dev-no-sim"
+[ "$(parked_count)" = "0" ] && PASS "a SIM-less modem is not somewhere to fall to" || FAIL "no-SIM modem is no rung" "parked"
+
+echo "--- DSGW: back to Ethernet when its park window ends, verified, modem restored if it is still dead ---"
+reset_state; dsgw_env
+printf '%s:ppp0\n' "$LTE" > "$WORK/active"; printf 'default dev ppp0 scope link\n' > "$WORK/route"
+mkdir -p "$WORK/parked"; echo 1000500 > "$WORK/parked/Wired connection 1"; : > "$WORK/booted"
+mtick full 1000400
+{ [ -f "$WORK/parked/Wired connection 1" ] && ! grep -q "connection up Wired connection 1" "$WORK/nm.all"; } && PASS "before the window ends Ethernet stays parked (no flapping)" || FAIL "park holds" "released early"
+mtick full 1000600
+grep -q "connection up Wired connection 1" "$WORK/nm.all" && [ ! -f "$WORK/parked/Wired connection 1" ] && PASS "window over: Ethernet unparked and brought up through the verified switch" || FAIL "return to Ethernet" "$(tr '\n' ';' < "$WORK/nm.all")"
+[ -f "$WORK/state.switch" ] && PASS "the switch is recorded so the next tick can verify it" || FAIL "switch recorded" "no record"
+printf 'Wired connection 1:end0\n' > "$WORK/active"; printf 'default dev end0 scope link\n' > "$WORK/route"
+mtick none 1000800
+grep -q "connection up $LTE" "$WORK/nm.all" && PASS "Ethernet came back but is not full: the modem is restored" || FAIL "modem restored" "$(tr '\n' ';' < "$WORK/nm.all")"
+[ -f "$WORK/parked/Wired connection 1" ] && PASS "and the dead Ethernet is parked again, so it cannot hold the default route" || FAIL "eth re-parked" "not parked"
+printf 'Wired connection 1:end0\n' > "$WORK/active"
+
+echo "--- DSGW: Ethernet back and full -> stays, nothing is switched back and forth ---"
+reset_state; dsgw_env
+printf '%s:ppp0\n' "$LTE" > "$WORK/active"; printf 'default dev ppp0 scope link\n' > "$WORK/route"
+mkdir -p "$WORK/parked"; echo 1000500 > "$WORK/parked/Wired connection 1"; : > "$WORK/booted"
+mtick full 1000600
+printf 'Wired connection 1:end0\n' > "$WORK/active"; printf 'default dev end0 scope link\n' > "$WORK/route"
+mtick full 1000720
+[ "$(parked_count)" = "0" ] && [ ! -f "$WORK/state.switch" ] && ! grep -q "connection up $LTE" "$WORK/nm.log" && PASS "verified full: switch record cleared, modem left alone" || FAIL "stay on Ethernet" "$(tr '\n' ';' < "$WORK/nm.log")"
+[ "$(probed)" = "1" ] && PASS "the verifying tick asked NM for a FRESH verdict (the cache may still describe the modem)" || FAIL "fresh verdict after a switch" "probes=$(probed)"
+mtick full 1000840
+[ "$(probed)" = "0" ] && PASS "and the next healthy tick is free again (no probe)" || FAIL "healthy is free after verification" "probes=$(probed)"
+
+echo "--- DSGW: status carries the modem state for ga_manager ---"
+reset_state; dsgw_env
+mtick full 1000120 "$WORK/dev-modem-ok"
+if jq -e '.modem.present==true and .modem.registered==true and .modem.bearer_up==false and .modem.iface=="ppp0" and .modem.tech=="lte" and .modem.signal==64 and .modem.operator=="TestNet"' "$WORK/status.json" >/dev/null 2>&1
+then PASS "present, registered, bearer down, interface, tech, signal, operator"; else FAIL "modem block" "$(cat "$WORK/status.json")"; fi
+grep -q "000000000000000" "$WORK/status.json" && FAIL "no identifiers in the status" "IMEI leaked" || PASS "no IMEI / ICCID / number in the status file"
+mtick full 1000240
+jq -e '.modem.bearer_up==true and .modem.registered==true' "$WORK/status.json" >/dev/null 2>&1 && PASS "bearer up when NM says the modem device is connected" || FAIL "bearer_up" "$(cat "$WORK/status.json")"
+MM_OUT="$WORK/mm-nosim" NM_DEVICES="$WORK/dev-no-sim" tick full "$WORK/dsgw-profiles" 1000360
+jq -e '.modem.present==true and .modem.registered==false and .modem.state=="failed" and .modem.failed_reason=="sim-missing"' "$WORK/status.json" >/dev/null 2>&1 && PASS "SIM missing: present, not registered, reason carried" || FAIL "sim-missing block" "$(cat "$WORK/status.json")"
+MM_OUT="$WORK/mm-none" NM_DEVICES="$WORK/dev-no-modem" tick full "$WORK/dsgw-profiles" 1000480
+jq -e '.modem.present==false and .modem.registered==false and .modem.bearer_up==false' "$WORK/status.json" >/dev/null 2>&1 && PASS "no modem at all: present=false" || FAIL "absent modem block" "$(cat "$WORK/status.json")"
+
+echo "--- DSGW: the APN is configuration (file > board default > auto) ---"
+reset_state; dsgw_env
+printf 'apn.test.invalid\n' > "$WORK/apn-file"; : > "$WORK/apn-have"
+GA_LTE_APN_FILE="$WORK/apn-file" NM_APN="$WORK/apn-have" mtick full 1000120 "$WORK/dev-modem-ok"
+grep -q "connection modify $LTE gsm.apn apn.test.invalid gsm.auto-config no" "$WORK/nm.log" && PASS "APN from the boot-partition file is applied to the profile" || FAIL "apn from file" "$(tr '\n' ';' < "$WORK/nm.log")"
+printf 'apn.test.invalid\n' > "$WORK/apn-have"
+GA_LTE_APN_FILE="$WORK/apn-file" NM_APN="$WORK/apn-have" mtick full 1000240 "$WORK/dev-modem-ok"
+! grep -q "connection modify" "$WORK/nm.log" && PASS "unchanged APN: no rewrite, no re-dial (idempotent)" || FAIL "apn idempotent" "$(tr '\n' ';' < "$WORK/nm.log")"
+printf 'bad apn;rm -rf /\n' > "$WORK/apn-file"
+GA_LTE_APN_FILE="$WORK/apn-file" NM_APN="$WORK/apn-have" mtick full 1000360 "$WORK/dev-modem-ok"
+grep -q "gsm.auto-config yes" "$WORK/nm.log" && ! grep -q "rm -rf" "$WORK/nm.log" && PASS "an invalid file is ignored, never passed to nmcli; falls to auto" || FAIL "invalid apn ignored" "$(tr '\n' ';' < "$WORK/nm.log")"
+rm -f "$WORK/apn-file"; : > "$WORK/apn-have"
+GA_LTE_APN_DEFAULT=iot.board.invalid NM_APN="$WORK/apn-have" mtick full 1000480 "$WORK/dev-modem-ok"
+grep -q "gsm.apn iot.board.invalid" "$WORK/nm.log" && PASS "no file: the board default (GA_LTE_APN_DEFAULT) is used" || FAIL "board default apn" "$(tr '\n' ';' < "$WORK/nm.log")"
+printf '%s:ppp0\n' "$LTE" > "$WORK/active"
+printf 'apn.test.invalid\n' > "$WORK/apn-file"; : > "$WORK/apn-have"
+GA_LTE_APN_FILE="$WORK/apn-file" NM_APN="$WORK/apn-have" mtick full 1000600
+grep -q "connection up $LTE" "$WORK/nm.log" && PASS "a profile that is up is re-dialled so the new APN takes effect" || FAIL "re-dial on apn change" "$(tr '\n' ';' < "$WORK/nm.log")"
+printf 'Wired connection 1:end0\n' > "$WORK/active"; dsgw_off
+
+echo "--- iHost: a gsm profile is still a rung, nothing modem-related runs (must stay as it was) ---"
+reset_state; dsgw_off
+printf 'Wired connection 1:eth0\n' > "$WORK/active"; printf 'default dev eth0 scope link\n' > "$WORK/route"
+printf '1\n' > "$WORK/sys/eth0/carrier"
+for t in 1000120 1000240 1000360; do NM_DEVICES="$WORK/dev-no-modem" MM_OUT="$WORK/mm-reg" tick limited "$WORK/dsgw-profiles" $t; done
+[ -f "$WORK/parked/Wired connection 1" ] && [ "$(parkfile 'Wired connection 1')" = "1001260" ] && grep -q "connection up $LTE" "$WORK/nm.all" \
+    && PASS "iHost: the gsm profile is a spare as before, the park uses the normal 900 s cooldown" || FAIL "iHost unchanged" "parked=$(ls "$WORK/parked" 2>/dev/null) until=$(parkfile 'Wired connection 1')"
+! grep -q "^mmcli" "$WORK/nm.all" && ! grep -qE "gsm.apn|DEVICE,TYPE,STATE" "$WORK/nm.all" && ! grep -q '"modem"' "$WORK/status.json" \
+    && PASS "iHost: no mmcli, no APN write, no device query, no modem key in the status file" || FAIL "iHost inert" "$(grep -E 'mmcli|gsm.apn|DEVICE,TYPE' "$WORK/nm.all" | head -3) $(cat "$WORK/status.json")"
+printf '0\n' > "$WORK/sys/eth0/carrier"
+printf 'home-wifi:wlan0\n' > "$WORK/active"; printf 'default dev wlan0 scope link\n' > "$WORK/route"
+
+echo "--- DSGW image wiring: board file, NM profile and ladder agree (reachability, not just logic) ---"
+DSGW_OVL="$ROOT/buildroot-dsgw210/board/dusun/dsgw210/rootfs-overlay"
+KEYF="$DSGW_OVL/usr/lib/NetworkManager/system-connections/dsgw210-lte.nmconnection"
+BCONF="$DSGW_OVL/usr/share/ga-board.conf"
+[ -r "$KEYF" ] && [ -r "$BCONF" ] || { FAIL "DSGW image files exist" "missing $KEYF or $BCONF"; }
+KEY_ID=$(sed -n 's/^id=//p' "$KEYF" | head -1)
+BC_PROFILE=$(env -u GA_LTE_PROFILE sh -c '. "$1"; echo "$GA_LTE_PROFILE"' _ "$BCONF")
+[ -n "$KEY_ID" ] && [ "$KEY_ID" = "$BC_PROFILE" ] && PASS "GA_LTE_PROFILE in ga-board.conf is the id= of the shipped NM profile ('$KEY_ID')" || FAIL "profile name coupling" "keyfile id='$KEY_ID' board file='$BC_PROFILE'"
+[ "$(env -u GA_BUILTIN_MODEM sh -c '. "$1"; echo "$GA_BUILTIN_MODEM"' _ "$BCONF")" = 1 ] && PASS "the DSGW board file turns the built-in modem on" || FAIL "GA_BUILTIN_MODEM set on the DSGW" "not 1"
+! grep -qE '^apn=' "$KEYF" && grep -q '^auto-config=true' "$KEYF" && PASS "the shipped profile pins no APN and auto-configures from the SIM" || FAIL "no pinned APN in the image" "$(grep -nE '^apn=|^auto-config' "$KEYF")"
+reset_state
+printf 'Wired connection 1:end0\n' > "$WORK/active"; printf 'default dev end0 scope link\n' > "$WORK/route"
+NM_IFACE=end0 NM_DEVICES="$WORK/dev-modem-ok" MM_OUT="$WORK/mm-reg" tick full "$WORK/dsgw-profiles" 1000120
+# the real board file, no GA_BUILTIN_MODEM in the environment: the ladder must pick it up itself
+: > "$WORK/nm.log"
+env -u GA_BUILTIN_MODEM NM_LOG="$WORK/nm.log" NM_CACHED="$WORK/cached" NM_FORCED="$WORK/forced" NM_ACTIVE="$WORK/active" NM_PROFILES="$WORK/dsgw-profiles" \
+    IP_ROUTE="$WORK/route" NM_SCAN="$WORK/scan-two" NM_IFACE=end0 NM_DEVICES="$WORK/dev-modem-ok" GA_MMCLI="$WORK/mmcli" MM_OUT="$WORK/mm-reg" \
+    GA_BOARD_CONF="$BCONF" GA_LTE_APN_FILE="$WORK/no-apn-file" GA_LADDER_RESCAN_WAIT_S=0 GA_LADDER_TRIED_DIR="$WORK/tried" \
+    GA_NMCLI="$WORK/nmcli" GA_IP="$WORK/ip" GA_LADDER_SYS_NET="$WORK/sys" GA_LADDER_STATE="$WORK/state" GA_LADDER_BOOT_MARK="$WORK/booted" \
+    GA_LADDER_PARK_DIR="$WORK/parked" GA_LADDER_STATUS="$WORK/status.json" GA_SHARE_PUBLISH="$ROOT/buildroot-external/rootfs-overlay/usr/libexec/ga-share-publish" \
+    GA_SHARE_STAGE_DIR="$WORK/stage" GA_LADDER_NOW=1000240 sh "$LADDER" >/dev/null 2>&1
+jq -e '.modem.present==true' "$WORK/status.json" >/dev/null 2>&1 && PASS "run with the REAL DSGW board file only: the status carries the modem object" || FAIL "board file reaches the ladder" "$(cat "$WORK/status.json")"
 
 echo ""
 echo "Results: $pass passed, $fail failed"
