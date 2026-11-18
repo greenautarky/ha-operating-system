@@ -65,6 +65,7 @@ SUITES_EXCLUDED="
   uplink_ladder   host suite: CI lint.yml host-suites
   wifi_regdom     host suite: CI lint.yml host-suites — ga-wifi-regdom (#2183); its device.sh runs by hand on a DSGW
   lora_gate       host suite: CI lint.yml host-suites — ga-lora-gate (#2183 c); on-device: enable via /mnt/boot/ga-lora on a DSGW
+  rtw88_blob      host suite: CI lint.yml host-suites — DSGW post-build keeps one rtw88 blob (#2186); device.sh by hand on a DSGW
   openstick_backoff host suite: CI lint.yml host-suites — ga-openstick-autoconnect per-SSID back-off (#2112)
   uplink_units    host suite: CI lint.yml host-suites
   ga_manager_guard host suite: CI lint.yml host-suites - ga-manager-guard (watchdog toggle + revive) against a stub hassio_cli (#2166)
