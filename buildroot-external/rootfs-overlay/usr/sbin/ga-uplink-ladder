@@ -41,6 +41,28 @@
 #     taking the customer WiFi down first — that is why parking is an explicit
 #     `down`, not a metric change.
 #
+# BUILT-IN MODEM RUNG (boards that have one: DSGW-210; Odoo #2176)
+# ---------------------------------------------------------------
+# A board whose ga-board.conf sets GA_BUILTIN_MODEM=1 has a modem soldered on.
+# On such a board, and ONLY there (the iHost keeps the behaviour above exactly):
+#   * the `gsm` profile is a rung only while NM sees a modem that is usable
+#     (device present, SIM readable, state not unavailable). Without that it is
+#     rejected with the reason, like a cable-less Ethernet profile.
+#   * falling to the modem parks the dead rung for GA_LADDER_MODEM_BACK_S (not
+#     the long cooldown). When that expires the ladder moves back through the
+#     same verified switch as any candidate; if the returning rung is still not
+#     full the modem is restored and the rung is parked again, so a dead
+#     Ethernet cannot hold the default route.
+#   * the APN is a config value, never a literal: /mnt/boot/ga-lte-apn (one
+#     line) wins, then GA_LTE_APN_DEFAULT from the board file, else empty =
+#     ModemManager / NM auto-config from the SIM. Applied to the profile when it
+#     differs; the profile is re-activated only if it is up already.
+#   * the status file gains a `modem` object (present / registered / bearer_up /
+#     iface / operator / tech / signal / state). ga_manager reads it: the add-on
+#     container has no mmcli and no host interfaces.
+# NM ranks the modem profile last (route-metric 700), so Ethernet and WLAN win
+# whenever they are up, and a cable pulled fails over with no ladder tick.
+#
 # It writes /mnt/data/supervisor/share/ga-uplink.json on every change, so the
 # fleet can see which rung a device stands on and why it moved. An uplink that
 # switches silently is how we end up debugging a site instead of reading it.
@@ -49,6 +71,18 @@
 # logic runs host-side against a stub nmcli (tests/ga_tests/uplink_ladder).
 set -u
 
+# Per-board values (GA_BUILTIN_MODEM, GA_LTE_PROFILE, GA_LTE_APN_DEFAULT). Absent
+# on the iHost, which has no built-in modem: everything below then stays inert.
+GA_BOARD_CONF="${GA_BOARD_CONF:-/usr/share/ga-board.conf}"
+# shellcheck disable=SC1090
+[ -r "$GA_BOARD_CONF" ] && . "$GA_BOARD_CONF"
+BUILTIN_MODEM="${GA_BUILTIN_MODEM:-0}"
+LTE_PROFILE="${GA_LTE_PROFILE:-DSGW-210 LTE}"
+LTE_APN_DEFAULT="${GA_LTE_APN_DEFAULT:-}"
+LTE_APN_FILE="${GA_LTE_APN_FILE:-/mnt/boot/ga-lte-apn}"
+MODEM_BACK_S="${GA_LADDER_MODEM_BACK_S:-600}"
+MMCLI="${GA_MMCLI:-mmcli}"
+MODEM_JSON=""
 NMCLI="${GA_NMCLI:-nmcli}"
 IP_BIN="${GA_IP:-ip}"
 STATE="${GA_LADDER_STATE:-/run/ga-uplink-ladder.state}"
@@ -115,6 +149,71 @@ wifi_in_range() {
     $NMCLI -t -f SSID device wifi list 2>/dev/null | grep -qx "$_ssid"
 }
 
+# --- the built-in modem (BUILTIN_MODEM=1 boards only) -----------------------
+# NM's own view of the modem device: "<device>:<state>", empty when none. NM
+# keeps a modem without a readable SIM `unavailable`, so state is the medium test.
+modem_device() {
+    $NMCLI -t -f DEVICE,TYPE,STATE device 2>/dev/null \
+        | awk -F: '$2=="gsm"||$2=="cdma" {print $1":"$3; exit}'
+}
+modem_usable() {
+    _md=$(modem_device); [ -n "$_md" ] || return 1
+    case "${_md#*:}" in unavailable|unmanaged|"") return 1 ;; esac
+    return 0
+}
+profile_type() { $NMCLI -t -f connection.type connection show "$1" 2>/dev/null | cut -d: -f2-; }
+is_modem_profile() { [ "$BUILTIN_MODEM" = 1 ] && [ -n "$1" ] && [ "$(profile_type "$1")" = gsm ]; }
+
+# value of a `mmcli -m any -K` line ("key : value"); empty when absent
+mm_get() { printf '%s\n' "$_mm" | sed -n "s/^$1[[:space:]]*:[[:space:]]*//p" | head -1; }
+json_str() { printf '%s' "$1" | tr -d '"\\' | tr -d '\000-\037'; }
+
+# One JSON object describing the modem, for ga-uplink.json. Published facts only:
+# no IMEI, ICCID or number leaves the device through here.
+modem_status() {
+    _md=$(modem_device); _present=false; _bearer=false; _reg=false
+    _dev=${_md%%:*}; _st=${_md#*:}; _iface=""; _op=""; _tech=""; _sig=null; _mst=""; _why=""
+    _mm=$($MMCLI -m any -K 2>/dev/null) || _mm=""
+    [ -n "$_mm" ] && _present=true
+    [ -n "$_md" ] && _present=true
+    _mst=$(mm_get 'modem\.generic\.state')
+    _why=$(mm_get 'modem\.generic\.state-failed-reason')
+    _op=$(mm_get 'modem\.3gpp\.operator-name')
+    _tech=$(mm_get 'modem\.generic\.access-technologies\.value\[1\]')
+    _q=$(mm_get 'modem\.generic\.signal-quality\.value')
+    case "$_q" in ''|*[!0-9]*) _sig=null ;; *) _sig=$_q ;; esac
+    [ "$_st" = connected ] && _bearer=true
+    case "$_mst" in registered|connected|connecting|disconnecting) _reg=true ;; esac
+    [ "$_bearer" = true ] && _reg=true
+    [ -n "$_dev" ] && _iface=$($NMCLI -g GENERAL.IP-IFACE device show "$_dev" 2>/dev/null | head -1)
+    printf '{"present":%s,"registered":%s,"bearer_up":%s,"iface":"%s","state":"%s","failed_reason":"%s","operator":"%s","tech":"%s","signal":%s}' \
+        "$_present" "$_reg" "$_bearer" "$(json_str "$_iface")" "$(json_str "$_mst")" "$(json_str "$_why")" \
+        "$(json_str "$_op")" "$(json_str "$_tech")" "$_sig"
+}
+
+# The APN is configuration, not code. File on the boot partition > board default
+# > empty (= auto-config from the SIM). Only a sane APN string is accepted.
+apply_apn() {
+    [ "$BUILTIN_MODEM" = 1 ] || return 0
+    $NMCLI -t -f NAME connection show 2>/dev/null | grep -qxF "$LTE_PROFILE" || return 0
+    _want=$(sed -n '1{s/[[:space:]]//g;p;q}' "$LTE_APN_FILE" 2>/dev/null)
+    if [ -n "$_want" ] && ! printf '%s' "$_want" | grep -Eq '^[A-Za-z0-9._-]{1,100}$'; then
+        log warning "ignoring $LTE_APN_FILE: not a valid APN"; _want=""
+    fi
+    [ -n "$_want" ] || _want="$LTE_APN_DEFAULT"
+    _have=$($NMCLI -g gsm.apn connection show "$LTE_PROFILE" 2>/dev/null | head -1)
+    [ "$_want" = "$_have" ] && return 0
+    if [ -n "$_want" ]; then
+        $NMCLI connection modify "$LTE_PROFILE" gsm.apn "$_want" gsm.auto-config no >/dev/null 2>&1
+    else
+        $NMCLI connection modify "$LTE_PROFILE" gsm.apn "" gsm.auto-config yes >/dev/null 2>&1
+    fi
+    log notice "LTE APN set to '${_want:-auto}' (was '${_have:-auto}')"
+    if $NMCLI -t -f NAME connection show --active 2>/dev/null | grep -qxF "$LTE_PROFILE"; then
+        $NMCLI -w "$UP_TIMEOUT_S" connection up "$LTE_PROFILE" >/dev/null 2>&1
+    fi
+}
+
 # One line per candidate profile: "OK<TAB>name" or "NO<TAB>name: reason".
 # Non-uplink types (loopback, wireguard, bridge, tun) are not listed at all.
 rung_report() {
@@ -138,7 +237,9 @@ rung_report() {
                 if eth_has_carrier "$_n"; then printf 'OK\t%s\n' "$_n"; else printf 'NO\t%s: no carrier\n' "$_n"; fi ;;
             802-11-wireless)
                 if wifi_in_range "$_n"; then printf 'OK\t%s\n' "$_n"; else printf 'NO\t%s: SSID not in range\n' "$_n"; fi ;;
-            gsm|cdma) printf 'OK\t%s\n' "$_n" ;;
+            gsm|cdma)
+                if [ "$BUILTIN_MODEM" != 1 ] || modem_usable; then printf 'OK\t%s\n' "$_n"
+                else printf 'NO\t%s: no usable modem (absent, no SIM or not enabled)\n' "$_n"; fi ;;
         esac
     done
 }
@@ -175,12 +276,12 @@ pick_spare() {
 }
 
 park() {
-    _c="$1"; _why="$2"
+    _c="$1"; _why="$2"; _cd="${3:-$COOLDOWN_S}"
     mkdir -p "$PARK_DIR"
-    echo $((NOW + COOLDOWN_S)) > "$PARK_DIR/$_c"
+    echo $((NOW + _cd)) > "$PARK_DIR/$_c"
     $NMCLI connection modify "$_c" connection.autoconnect no >/dev/null 2>&1
     $NMCLI connection down "$_c" >/dev/null 2>&1
-    log warning "parked '$_c' for ${COOLDOWN_S}s — $_why. Falling to the next uplink."
+    log warning "parked '$_c' for ${_cd}s — $_why. Falling to the next uplink."
 }
 
 unpark() {
@@ -209,14 +310,26 @@ release_expired() {
     for _f in "$PARK_DIR"/*; do
         [ -e "$_f" ] || continue
         _until=$(cat "$_f" 2>/dev/null || echo 0)
-        [ "$NOW" -ge "$_until" ] 2>/dev/null && unpark "$(basename "$_f")"
+        if [ "$NOW" -ge "$_until" ] 2>/dev/null; then
+            _r=$(basename "$_f")
+            unpark "$_r"
+            # Built-in modem board, standing on the modem: go BACK through the same
+            # verified switch every candidate gets, instead of leaving it to NM
+            # (a dead Ethernet would take the default route and hold it).
+            if [ "$BUILTIN_MODEM" = 1 ] && [ -n "${_ACTIVE_NOW:-}" ] && ! is_modem_profile "$_r" \
+               && is_modem_profile "$_ACTIVE_NOW" && [ ! -f "$SWITCH_REC" ]; then
+                log notice "modem fallback in use - trying '$_r' again, the modem is restored if it is not full"
+                switch_to "$_ACTIVE_NOW" "$_r"
+            fi
+        fi
     done
 }
 
 write_status() {
-    printf '{"rung":"%s","verdict":"%s","strikes":%s,"parked":"%s","spare":"%s","last_rung":%s,"searching":%s,"last_rescan":"%s","updated_at":"%s"}\n' \
+    _mj=""; [ -z "$MODEM_JSON" ] || _mj=",\"modem\":$MODEM_JSON"
+    printf '{"rung":"%s","verdict":"%s","strikes":%s,"parked":"%s","spare":"%s","last_rung":%s,"searching":%s,"last_rescan":"%s","updated_at":"%s"%s}\n' \
         "$1" "$2" "$3" "$(ls "$PARK_DIR" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')" \
-        "$SPARE" "$LAST_RUNG" "$SEARCHING" "$LAST_RESCAN" "$(iso_now)" \
+        "$SPARE" "$LAST_RUNG" "$SEARCHING" "$LAST_RESCAN" "$(iso_now)" "$_mj" \
         | "$PUBLISH" "$STATUS" 0644 || log warning "could not publish $STATUS"
 }
 
@@ -244,6 +357,10 @@ check_switch() {
     rm -f "$SWITCH_REC"
     if [ -n "$_p" ]; then
         [ -f "$PARK_DIR/$_p" ] && unpark "$_p"
+        # The returning rung is still up and, ranked above the modem, would keep the
+        # default route: park it again (short back-off) so the modem really carries.
+        is_modem_profile "$_p" && ! is_modem_profile "$_cand" \
+            && park "$_cand" "returning from the modem failed ('$1')" "$MODEM_BACK_S"
         $NMCLI -w "$UP_TIMEOUT_S" connection up "$_p" >/dev/null 2>&1
         log warning "candidate '$_cand' is not full either ('$1') — fell back to previous '$_p'; '$_cand' barred for ${TRIED_COOLDOWN_S}s"
     else
@@ -254,19 +371,39 @@ check_switch() {
 
 main() {
     unpark_all_on_boot
+    _ACTIVE_NOW=$(active_connection)
+    # A switch recorded by an EARLIER tick is verified on this one (built-in modem
+    # boards; see the full branch below). Taken before release_expired, which may
+    # record a new switch of its own this tick.
+    _had_switch=0
+    [ "$BUILTIN_MODEM" = 1 ] && [ -f "$SWITCH_REC" ] && _had_switch=1
     release_expired
+    if [ "$BUILTIN_MODEM" = 1 ]; then
+        apply_apn
+        MODEM_JSON=$(modem_status)
+    fi
 
     _active=$(active_connection)
     _strikes=$(cat "$STATE" 2>/dev/null || echo 0)
     case "$_strikes" in ''|*[!0-9]*) _strikes=0 ;; esac
 
     _verdict=$(cached_verdict)
-    if [ "$_verdict" != "full" ]; then
+    # NM's cached verdict can still describe the rung we just left, so the tick
+    # that verifies a switch asks for a fresh one (one probe per switch).
+    if [ "$_verdict" != "full" ] || [ "$_had_switch" = 1 ]; then
         # Suspicion — and only here — costs one request.
         _verdict=$(forced_verdict)
     fi
 
     if [ "$_verdict" = "full" ]; then
+        # check_switch() only runs on a failing tick, so a switch that worked would
+        # leave its record behind and a later blip would be "verified" against it
+        # and undone. Cleared here on the built-in-modem boards only; the iHost
+        # keeps its behaviour unchanged (known gap, tracked in Odoo #2176).
+        if [ "$_had_switch" = 1 ]; then
+            log notice "candidate verified full — staying on '$_active'"
+            rm -f "$SWITCH_REC"
+        fi
         [ "$_strikes" -gt 0 ] && log notice "uplink '$_active' is healthy again after $_strikes strike(s)"
         echo 0 > "$STATE"
         write_status "${_active:-none}" "$_verdict" 0
@@ -304,7 +441,11 @@ main() {
         write_status "switching" "$_verdict" 0
         return 0
     fi
-    park "$_active" "no internet after $_strikes checks ($_verdict)"
+    if is_modem_profile "$SPARE"; then
+        park "$_active" "no internet after $_strikes checks ($_verdict); modem fallback" "$MODEM_BACK_S"
+    else
+        park "$_active" "no internet after $_strikes checks ($_verdict)"
+    fi
     switch_to "$_active" "$SPARE"
     echo 0 > "$STATE"
     write_status "switching" "$_verdict" 0

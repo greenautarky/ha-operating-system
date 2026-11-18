@@ -1,16 +1,18 @@
-# DSGW-210 LTE — Quectel BG96 cellular connection (ModemManager + NM).
+# DSGW-210 LTE - built-in Quectel BG96 cellular connection (ModemManager + NM).
 #
-# Vendor default, shipped read-only on the erofs rootfs. NetworkManager
-# reads connection keyfiles from /usr/lib/NetworkManager/system-connections
-# (this file), /run/... and /etc/NetworkManager/system-connections — the
-# last wins. So to change the APN in the field, drop an edited copy into
-#   /etc/NetworkManager/system-connections/dsgw210-lte.nmconnection
-# (persistent partition), or use HAOS's CONFIG/network/ boot-partition
-# mechanism, or `nmcli connection modify`. Any of those overrides this.
+# Vendor default, shipped read-only on the erofs rootfs. This is the board's
+# fallback uplink: ga-uplink-ladder treats it as a rung (Odoo #2176).
 #
-# To auto-detect the APN from the SIM operator instead of pinning it,
-# delete the `apn=` line and add `auto-config=true` under [gsm];
-# ModemManager then resolves it from the mobile-broadband-provider-info DB.
+# THE APN IS NOT PINNED HERE. [gsm] carries auto-config=true: ModemManager / NM
+# resolve the APN from the SIM operator (mobile-broadband-provider-info).
+# Set it for a SIM that is not in that database (an IoT / fleet SIM) by
+# writing the APN, one line, to /mnt/boot/ga-lte-apn on the boot partition;
+# ga-uplink-ladder applies it to this profile within one tick (<= 2 min) and
+# re-dials if the profile is up. The board default for series production is
+# GA_LTE_APN_DEFAULT in /usr/share/ga-board.conf (empty today = auto).
+# NetworkManager reads profiles from /usr/lib, /run and /etc/NetworkManager/
+# system-connections - the last wins - so an `nmcli connection modify` copy
+# in /etc also overrides this file.
 
 [connection]
 id=DSGW-210 LTE
@@ -23,7 +25,8 @@ autoconnect-retries=0
 autoconnect-priority=-50
 
 [gsm]
-apn=internet.telekom
+# no apn= on purpose (see the header); the ladder writes one when configured
+auto-config=true
 
 [ipv4]
 method=auto
