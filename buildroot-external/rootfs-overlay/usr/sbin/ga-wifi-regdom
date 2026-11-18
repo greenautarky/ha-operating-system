@@ -1,0 +1,53 @@
+#!/bin/sh
+# ga-wifi-regdom — set the Wi-Fi regulatory domain explicitly (Odoo #2183, CE R1).
+#
+# Without an explicit setting the kernel runs on the world domain and adopts the
+# country an access point advertises in its beacons: DUT2 (DSGW-210) showed
+# "country LV" on 2026-11-18. The radio's legal limits must not depend on a
+# neighbour's access point, so the country is configuration:
+#   1. /mnt/boot/ga-wifi-country   (first line, two upper-case letters; set per site)
+#   2. GA_WIFI_COUNTRY from /usr/share/ga-board.conf (board default; DSGW: DE)
+#   3. nothing -> do nothing (the iHost ships no default: behaviour unchanged)
+# The value is applied with `iw reg set` and read back. While associated, cfg80211
+# intersects it with the access point's country IE, so `iw reg get` may show "98"
+# (intersection) — that is reported, not "fixed". Every deviation is logged at
+# warning level (rule 44); an invalid file is refused, never half-applied.
+set -u
+GA_BOARD_CONF="${GA_BOARD_CONF:-/usr/share/ga-board.conf}"
+# shellcheck disable=SC1090
+[ -r "$GA_BOARD_CONF" ] && . "$GA_BOARD_CONF"
+COUNTRY_FILE="${GA_WIFI_COUNTRY_FILE:-/mnt/boot/ga-wifi-country}"
+BOARD_DEFAULT="${GA_WIFI_COUNTRY:-}"
+IW="${GA_IW:-iw}"
+LOG_TAG=ga-wifi-regdom
+log() {   # GA_WIFI_REGDOM_LOG_STDERR=1: tests read the lines
+    if [ "${GA_WIFI_REGDOM_LOG_STDERR:-0}" = 1 ]; then echo "$LOG_TAG: $2" >&2; return; fi
+    logger -t "$LOG_TAG" -p "daemon.$1" "$2" 2>/dev/null || echo "$LOG_TAG: $2" >&2
+}
+
+want=""; src=""
+if [ -e "$COUNTRY_FILE" ]; then
+    _v=$(sed -n '1{s/[[:space:]]//g;p;q}' "$COUNTRY_FILE" 2>/dev/null)
+    if printf '%s' "$_v" | grep -Eq '^[A-Z]{2}$'; then want=$_v; src=$COUNTRY_FILE
+    else log warning "ignoring $COUNTRY_FILE: '$(printf '%s' "$_v" | head -c 16)' is not a two-letter country code"; fi
+fi
+if [ -z "$want" ] && [ -n "$BOARD_DEFAULT" ]; then
+    if printf '%s' "$BOARD_DEFAULT" | grep -Eq '^[A-Z]{2}$'; then want=$BOARD_DEFAULT; src="board default"
+    else log warning "ignoring board default GA_WIFI_COUNTRY='$BOARD_DEFAULT' (not a two-letter code)"; fi
+fi
+if [ -z "$want" ]; then
+    log info "no Wi-Fi country configured (no $COUNTRY_FILE, no board default) - leaving the regulatory domain as it is"
+    exit 0
+fi
+if ! $IW reg set "$want" 2>/dev/null; then
+    log warning "iw reg set $want FAILED (source: $src) - the regulatory domain is NOT set"
+    exit 1
+fi
+sleep "${GA_WIFI_REGDOM_SETTLE_S:-1}"
+got=$($IW reg get 2>/dev/null | sed -n '/^global/,/^$/{s/^country \([A-Z0-9][A-Z0-9]\):.*/\1/p}' | head -1)
+case "$got" in
+    "$want") log notice "Wi-Fi regulatory domain $want (source: $src)" ;;
+    98)      log warning "Wi-Fi country set to $want (source: $src), but the kernel shows the intersection '98': an access point in range advertises another country" ;;
+    *)       log warning "Wi-Fi country set to $want (source: $src), but the kernel reports '${got:-nothing}'" ;;
+esac
+exit 0

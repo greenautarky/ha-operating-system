@@ -1,0 +1,14 @@
+[Unit]
+# Sets the Wi-Fi regulatory domain before NetworkManager brings Wi-Fi up
+# (Odoo #2183): /mnt/boot/ga-wifi-country > board default > nothing.
+Description=Set the Wi-Fi regulatory domain
+RequiresMountsFor=/mnt/boot
+Before=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/ga-wifi-regdom
+
+[Install]
+WantedBy=multi-user.target
