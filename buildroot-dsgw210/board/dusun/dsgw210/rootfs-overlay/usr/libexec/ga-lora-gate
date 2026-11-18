@@ -1,0 +1,99 @@
+#!/bin/sh
+# ga-lora-gate — the DSGW-210's LoRa concentrator (SX1302 mPCIe card): OFF by
+# default, optionally enabled (Odoo #2183 c; mirror of the iHost ga-bluetooth-gate).
+#
+# Enable sources (either one turns it ON):
+#   1. fleet-managed — ga-lora-enabled in ga_manager's OWN data directory
+#      (<supervisor data root>/99f1cad4_ga_manager/, ADR-0041; never /share)
+#   2. manual/recovery — /mnt/boot/ga-lora (operator marker on the boot partition)
+# Default OFF: no source -> the card's power lines are not touched at all.
+#
+# Enabled: run Dusun's stock power sequence (lora_power.sh, ported: power GPIO 83
+# + 86, resets 43 = SX1302, 87 = SX1261, 85 = MCU), then read the SX1302 version
+# register 0x5606 over spidev. 0x10 = SX1302, 0x12 = SX1303. No answer means "no
+# card or not working": that is reported LOUDLY (warning + present=false in the
+# status), never silently (a card that should be there and is not must be seen).
+#
+# Status for ga_manager: /share/ga-lora-status.json via ga-share-publish
+#   {"enabled":bool,"source":"...","present":bool,"chip":"SX1302|SX1303|","version":"0x..","reason":"..."}
+# No packet forwarder is started here (Odoo #2183 step 3, needs an LNS decision).
+set -u
+GPIO_DIR="${GA_LORA_GPIO_DIR:-/sys/class/gpio}"
+SPIDEV="${GA_LORA_SPIDEV:-/dev/spidev0.0}"
+SPI_PIPE="${GA_SPI_PIPE:-spi-pipe}"
+SPI_CONFIG="${GA_SPI_CONFIG:-spi-config}"
+BOOT_MARKER="${GA_LORA_BOOT_MARKER:-/mnt/boot/ga-lora}"
+# ga_manager's data directory: the ONE helper that knows the Supervisor data root
+# (apps/ on 2026.10+, addons/ before; ga-data-root.sh). GA_GM_DATA_DIR relocates
+# it (host tests only) - same pattern as the iHost ga-bluetooth-gate.
+if [ -n "${GA_GM_DATA_DIR:-}" ]; then
+    GM_DATA_DIR="$GA_GM_DATA_DIR"
+else
+    # shellcheck disable=SC1090
+    . "${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"
+    GM_DATA_DIR="$(ga_data_root_or_unresolved)/99f1cad4_ga_manager"
+fi
+STATUS="${GA_LORA_STATUS:-/mnt/data/supervisor/share/ga-lora-status.json}"
+PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
+STEP_S="${GA_LORA_STEP_S:-1}"
+LOG_TAG=ga-lora-gate
+log() {
+    if [ "${GA_LORA_LOG_STDERR:-0}" = 1 ]; then echo "$LOG_TAG: $2" >&2; return; fi
+    logger -t "$LOG_TAG" -p "daemon.$1" "$2" 2>/dev/null || echo "$LOG_TAG: $2" >&2
+}
+publish() {  # enabled source present chip version reason
+    printf '{"enabled":%s,"source":"%s","present":%s,"chip":"%s","version":"%s","reason":"%s"}\n' \
+        "$1" "$2" "$3" "$4" "$5" "$(printf '%s' "$6" | tr -d '"\\' | tr -d '\000-\037')" \
+        | "$PUBLISH" "$STATUS" 0644 || log warning "could not publish $STATUS"
+}
+
+# --- which source enables it (fleet flag in ga_manager's data dir, or the boot marker)
+src=""
+[ -e "$GM_DATA_DIR/ga-lora-enabled" ] && src="fleet"
+[ -z "$src" ] && [ -e "$BOOT_MARKER" ] && src="boot-marker"
+if [ -z "$src" ]; then
+    log info "LoRa off (default): no ga-lora-enabled flag and no $BOOT_MARKER - power lines untouched"
+    publish false none false "" "" "disabled (default)"
+    exit 0
+fi
+
+gpio() {   # gpio <n> <0|1>: export if needed, drive as output
+    _g="$GPIO_DIR/gpio$1"
+    [ -e "$_g/value" ] || echo "$1" > "$GPIO_DIR/export" 2>/dev/null
+    [ -e "$_g/direction" ] || { log warning "GPIO $1 could not be exported"; return 1; }
+    echo out > "$_g/direction" 2>/dev/null && echo "$2" > "$_g/value" 2>/dev/null \
+        || { log warning "GPIO $1 could not be set to $2"; return 1; }
+}
+_gerr=0
+gpio 83 1 || _gerr=1; gpio 86 1 || _gerr=1; gpio 43 0 || _gerr=1; gpio 87 1 || _gerr=1; gpio 85 1 || _gerr=1
+sleep "$STEP_S"
+gpio 43 1 || _gerr=1; gpio 87 0 || _gerr=1; gpio 85 0 || _gerr=1    # SX1302 reset high, SX1261 + MCU reset low
+sleep "$STEP_S"
+gpio 43 0 || _gerr=1; gpio 87 1 || _gerr=1; gpio 85 1 || _gerr=1    # release all resets
+if [ "$_gerr" = 1 ]; then
+    log warning "LoRa enabled ($src) but the power/reset sequence did not complete - see the GPIO lines above"
+fi
+
+# --- does a concentrator answer? (version register 0x5606, SPI mode 0)
+ver=""
+if [ -e "$SPIDEV" ]; then
+    $SPI_CONFIG -d "$SPIDEV" -m 0 -s 2000000 2>/dev/null
+    ver=$(printf '\000\126\006\000\000' | $SPI_PIPE -d "$SPIDEV" -s 2000000 -b 5 2>/dev/null \
+          | od -An -tx1 | tr -s ' \n' ' ' | awk '{print $5}')
+fi
+case "$ver" in
+    10) chip=SX1302 ;;
+    12) chip=SX1303 ;;
+    *)  chip="" ;;
+esac
+if [ -n "$chip" ]; then
+    log notice "LoRa enabled ($src): $chip answers on $SPIDEV (version 0x$ver)"
+    publish true "$src" true "$chip" "0x$ver" "ok"
+    exit 0
+fi
+_why="no answer on $SPIDEV (version '${ver:-none}')"
+[ -e "$SPIDEV" ] || _why="$SPIDEV missing"
+[ "$_gerr" = 1 ] && _why="$_why; power/reset sequence incomplete"
+log warning "LoRa ENABLED ($src) but no concentrator found: $_why - no card fitted, or it is not powered"
+publish true "$src" false "" "${ver:+0x$ver}" "$_why"
+exit 1
