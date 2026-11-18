@@ -42,6 +42,11 @@ run "$WORK/no-board.conf"; [ ! -s "$WORK/iw.log" ] && [ "$(cat "$WORK/rc")" = 0 
 run "$WORK/no-board.conf" "FR"; [ "$(set_to)" = FR ] && PASS "no board default but a site file: the file is applied" || FAIL "file only" "set '$(set_to)'"
 IW_REPORT=98 run "$DSGW_CONF"; grep -q "intersection '98'" "$WORK/out" && [ "$(cat "$WORK/rc")" = 0 ] && PASS "AP advertises another country (98): reported loudly, not an error" || FAIL "98" "$(cat "$WORK/out")"
 IW_SET_FAIL=1 run "$DSGW_CONF"; [ "$(cat "$WORK/rc")" = 1 ] && grep -q "FAILED" "$WORK/out" && PASS "iw reg set fails: exit 1 and a loud line" || FAIL "set fail" "rc=$(cat "$WORK/rc") $(cat "$WORK/out")"
+# The iHost gate (rc3 source, Odoo #2183): the iHost image ships NO ga-board.conf and
+# NO ga-wifi-country, so the script finds no country and never calls iw.
+run "$WORK/does-not-exist.conf"; [ ! -s "$WORK/iw.log" ] && [ "$(cat "$WORK/rc")" = 0 ] && PASS "iHost reality (no board file at all, no site file): iw never called, exit 0" || FAIL "iHost gate" "$(cat "$WORK/iw.log")"
+_ih=$(find "$ROOT/buildroot-ihost" "$ROOT/buildroot-external/rootfs-overlay" -name ga-board.conf -o -name ga-wifi-country 2>/dev/null | head -3)
+[ -z "$_ih" ] && PASS "no iHost/shared overlay ships ga-board.conf or ga-wifi-country (the DSGW file is the only source of a default)" || FAIL "iHost overlay" "$_ih"
 grep -qx 'RequiresMountsFor=/mnt/boot' "$UNIT" && grep -qx 'Before=NetworkManager.service' "$UNIT" && PASS "unit: after /mnt/boot is mounted, before NetworkManager" || FAIL "unit order" "$(grep -E '^(Requires|Before)' "$UNIT")"
 [ "$(readlink "$WANTS")" = ../ga-wifi-regdom.service ] && PASS "unit is enabled (multi-user.target.wants)" || FAIL "enabled" "$(readlink "$WANTS")"
 echo ""
