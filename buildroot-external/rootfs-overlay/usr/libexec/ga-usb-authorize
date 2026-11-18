@@ -5,10 +5,19 @@
 # (missing allowlist, unreadable syspath) leaves the device unauthorized.
 #
 # A board whose USB devices sit behind an on-board hub can also name them by
-# PORT PATH (the sysfs device name, e.g. 3-1.2) in /usr/share/ga-usb-port-allowlist.
-# A port path cannot be taken over by plugging something in: a VID:PID rule
-# would also open an external port to any adapter that carries the same ID.
-# A board without that file (the iHost) is unchanged: VID:PID rules only.
+# PORT PATH in /usr/share/ga-usb-port-allowlist, as <host controller>:<port chain>,
+# e.g. ff5c0000.usb:1.2. A port path cannot be taken over by plugging something
+# in: a VID:PID rule would also open an external port to any adapter that
+# carries the same ID. A board without that file (the iHost) is unchanged:
+# VID:PID rules only.
+#
+# Why not the sysfs name (3-1.2): its first number is the USB BUS number, and
+# the kernel hands bus numbers out in controller probe order, which is async and
+# changes between boots. On the DSGW-210 the on-board hub came up as 3-1 on one
+# boot and 4-1 on the next (Odoo #2189): an allowlist keyed on 3-1 then closed the
+# modem and both radios, and would have opened whatever else landed on bus 3.
+# The controller (the platform device the bus hangs off) and the port chain
+# behind it are fixed by the wiring - the same pair /dev/serial/by-path uses.
 #
 # POSIX /bin/sh. Test hook: GA_USB_ALLOWLIST, GA_USB_PORT_ALLOWLIST and
 # GA_USB_TEST override the list paths and suppress the sysfs write (echo the
@@ -20,13 +29,24 @@ PORT_ALLOWLIST="${GA_USB_PORT_ALLOWLIST:-/usr/share/ga-usb-port-allowlist}"
 LOG_TAG="ga-usb-authorize"
 _log() { logger -t "$LOG_TAG" -p "daemon.$1" "$2" 2>/dev/null || echo "$LOG_TAG: $2" >&2; }
 
-# Port-path rule: an exact line match on the device's sysfs name. Checked first,
+# Port-path rule: an exact line match on <controller>:<chain>. Checked first,
 # because an internal device is identified by where it is, not by what it says.
+# Any doubt about the path (no /usbN/ component, a name that is not N-chain)
+# yields no key, and the device falls through to the VID:PID rule.
+KEY=""
 PORT="${SYS##*/}"
-if [ -n "$PORT" ] && [ -f "$PORT_ALLOWLIST" ] && grep -viE '^[[:space:]]*(#|$)' "$PORT_ALLOWLIST" 2>/dev/null \
-     | tr -d ' \t\r' | grep -qxF "$PORT"; then
-    _log info "authorizing device on allowlisted port ${PORT}"
-    if [ -n "${GA_USB_TEST:-}" ]; then echo "authorize port ${PORT}"; exit 0; fi
+case "$PORT" in
+  [0-9]*-[0-9]*)
+    CHAIN="${PORT#*-}"
+    PRE="${SYS%%/usb[0-9]*}"
+    case "$CHAIN" in *[!0-9.]*) ;; *)
+      if [ "$PRE" != "$SYS" ] && [ -n "${PRE##*/}" ]; then KEY="${PRE##*/}:${CHAIN}"; fi ;;
+    esac ;;
+esac
+if [ -n "$KEY" ] && [ -f "$PORT_ALLOWLIST" ] && grep -viE '^[[:space:]]*(#|$)' "$PORT_ALLOWLIST" 2>/dev/null \
+     | tr -d ' \t\r' | grep -qxF "$KEY"; then
+    _log info "authorizing device on allowlisted port ${KEY} (${PORT})"
+    if [ -n "${GA_USB_TEST:-}" ]; then echo "authorize port ${KEY}"; exit 0; fi
     [ -w "$SYS/authorized" ] && echo 1 > "$SYS/authorized" 2>/dev/null || true
     exit 0
 fi
