@@ -100,7 +100,9 @@ fi
 
 # The LIVE ruleset: the modem interface must not be among the interfaces the allowlist governs
 # (that list is the LAN), and the input chain ends in a default drop.
-IFN="${IF:-ppp0}"
+# jq prints the string "null" for a missing iface: fall back to the bearer name the
+# NM gsm profile creates (ppp0), so the rule check never runs against "null".
+case "${IF:-}" in ''|null) IFN=ppp0 ;; *) IFN=$IF ;; esac
 RS=$(nft list table inet ga_firewall 2>/dev/null)
 if [ -z "$RS" ]; then
   skip_test "ULB-08" "modem interface closed in the live firewall" "firewall table not loaded (marker /mnt/boot/ga-firewall-off, or load failed - suite firewall says which)"
