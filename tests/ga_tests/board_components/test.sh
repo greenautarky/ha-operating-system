@@ -11,7 +11,7 @@
 # from local tarballs (GA_SYNC_FROM_DIR) instead of `oras pull`; placement is the
 # subject, the registry is not.
 #
-#   must-pass: BCT-01..03, 06, 08     must-fail: BCT-04, 05, 07, 09, 10, 11
+#   rows that must stay green: BCT-01..03, 06, 08, 11a/b; rows that must flag: BCT-04, 05, 07, 09, 10, 11c/d
 #
 # Needs yq for the shared block (sync's existing reader; CI runners carry it).
 # Without yq the sync rows FAIL in CI and SKIP loudly elsewhere — never silently.
