@@ -30,7 +30,7 @@ grep -q 'lib/release-gate.sh' "$CR" || { echo "FAIL: create-release.sh does not 
 . "$LIB"
 
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
-IMGNAME=bos_ihost-18.4.1.6_dev_20261117100010.img.xz
+IMGNAME=BOSv1.6.1-rc2_ihost_18.4.1.6.img.xz
 IMG="$T/$IMGNAME"
 printf 'ga-release-gate-fixture-image-v1' > "$IMG"
 # Pinned constant (rule 7): the fixtures carry this hash; it must be the hash of the image.
@@ -97,7 +97,7 @@ strip() { sed '/^vccio5_/d' "$COMPLETE"; }
 strip | sed 's/^release=.*/release=BOSv1.6.0/' > "$T/old.gate.txt"
 out="$(ga_release_gate_check "$T/old.gate.txt" BOSv1.6.0 "$IMG")"; rc=$?
 [[ $rc -eq 0 ]] && ok "BOSv1.6.0 without vccio5 fields -> released (not required below 1.6.1)" || bad "BOSv1.6.0 refused: $out"
-IMGD="$T/bos_dsgw210-18.4.1.6_dev_20261117100010.img.xz"; cp "$IMG" "$IMGD"
+IMGD="$T/BOSv1.6.1-rc2_dsgw210_18.4.1.6.img.xz"; cp "$IMG" "$IMGD"
 strip | sed "s/^image=.*/image=$(basename "$IMGD")/" > "$T/dsgw.gate.txt"
 out="$(ga_release_gate_check "$T/dsgw.gate.txt" "$REL" "$IMGD")"; rc=$?
 [[ $rc -eq 0 ]] && ok "non-iHost image without vccio5 fields -> released (iHost only)" || bad "dsgw image refused: $out"
@@ -110,6 +110,8 @@ done
 echo "== create-release.sh end to end (live script, fake image)"
 BUILD="$T/build"; mkdir -p "$BUILD/images"
 cp "$IMG" "$BUILD/images/$IMGNAME"
+# ADR-0055: the image name no longer says dev/prod, so the CycloneDX SBOM (fail-closed in create-release) is part of the fixture.
+printf '{"bomFormat":"CycloneDX"}\n' > "$BUILD/images/sbom-cyclonedx.json"
 run_cr() { # run_cr OUTDIR ARGS... ; stdout+stderr in $T/cr.out, rc returned
   local out="$1"; shift
   bash "$CR" --build-dir "$BUILD" --output-dir "$out" "$@" >"$T/cr.out" 2>&1
@@ -164,6 +166,14 @@ run_cr "$T/o8" --release "$REL" --evidence-dir "$EV"; rc=$?
 if [[ $rc -eq 0 && -f "$T/o8/${IMGNAME%.img.xz}_release.tar.gz" ]] && grep -q 'gate evidence complete' "$T/cr.out"; then
   ok "complete evidence -> create-release releases"
 else bad "complete evidence: rc=$rc"; sed 's/^/        /' "$T/cr.out"; fi
+
+# The SBOM is CRA release evidence: a release without it is refused, whatever the file is called (the `_prod_` tag
+# that used to decide this is gone from the name, ADR-0055 - without this case the gate would have gone quiet).
+mv "$BUILD/images/sbom-cyclonedx.json" "$T/sbom.keep"
+run_cr "$T/o8b" --release "$REL" --evidence-dir "$EV"; rc=$?
+[[ $rc -ne 0 && ! -e "$T/o8b" ]] && grep -q 'no CycloneDX SBOM' "$T/cr.out" \
+  && ok "no SBOM -> create-release refuses (fail closed on the new file names)" || { bad "no SBOM: rc=$rc"; sed 's/^/        /' "$T/cr.out"; }
+mv "$T/sbom.keep" "$BUILD/images/sbom-cyclonedx.json"
 
 # Evidence for rc2 must not release a different label.
 run_cr "$T/o9" --release BOSv1.6.1-rc3 --evidence-dir "$EV"; rc=$?

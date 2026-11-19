@@ -1033,6 +1033,14 @@ jobs:
       - name: OS version order (16.3.1.10 above 16.3.1.9; lexical/float variants go red)
         run: ./tests/gates/os_version_order/selftest.sh
 
+      # ADR-0055: artifacts and displays are named after the ga_release
+      # (<ga_release>_<board>_<osver>.*, PRETTY_NAME, motd/issue, RAUC description)
+      # while the technical IDs (VERSION_ID, CPE_NAME, compatible/version, the OTA
+      # store name haos_<board>-<ver>.raucb) stay. Live lib + live ga_build.sh rename
+      # + the patched manifest template; five mutants must each go red on their case.
+      - name: ga_release naming (human-facing names move, technical IDs do not)
+        run: ./tests/gates/ga_release_naming/selftest.sh
+
       # The lockstep gate's three verdicts must stay apart: drift FAILS, a canary
       # store is its own outcome, and a release revision like z2m's `2.12.1-3` is
       # not a canary. Runs the real check-images.sh over scratch pin files and a

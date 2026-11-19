@@ -166,6 +166,11 @@ synth_red SYNTH_ETH_IN_BUNDLE=1 BLD-ETH-01 eth-marker-in-bundle
 synth_red SYNTH_NO_SD_MARKER=1  BLD-ETH-01 eth-detector-dead
 synth_red SYNTH_RELEASE=BOSv0.0.1 RFLOOR-01 floor-release-differs
 synth_red SYNTH_NO_META=1       RFLOOR-01 floor-no-meta
+# ADR-0055: the bundle description must name the ga_release the rootfs carries (GA-REL-07)
+synth_red FIXTURE_NO_STAMP=1    GA-REL-05 pretty-not-stamped
+synth_red FIXTURE_NO_STAMP=1    GA-REL-06 motd-not-stamped
+synth_red SYNTH_NO_DESC=1       GA-REL-07 desc-missing
+synth_red SYNTH_DESC_REL=BOSv0.0.1 GA-REL-07 desc-other-release
 synth_red SYNTH_IMG_BLANK1=1    IMG-01    img-slot1-blank
 # BLD-VCC-01 (Odoo #1900, iHost only): the green side is expected/ihost.pass (real generator on the real rc3 DTBs)
 vcc_red() { # <env assignment> <label>

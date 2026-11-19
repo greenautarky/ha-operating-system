@@ -1208,17 +1208,22 @@ if [[ -f "${TARGET}/etc/ga-env.conf" ]]; then
   else
     _fail "ENV-03a: Prod build has NO release suffix ($PROD_VER) — bump VERSION_SUFFIX before releasing"
   fi
-  # PRETTY_NAME must contain GreenAutarky BOS
-  if grep -q 'GreenAutarky BOS' "$OS_RELEASE" 2>/dev/null; then
-    _pass "ENV-03b: Prod build has GreenAutarky BOS branding"
+  # PRETTY_NAME = "GreenAutarky <ga_release> (HAOS <osver>)" (ADR-0055). The
+  # expectation is built from /etc/ga-release and VERSION_ID, two other files -
+  # never from PRETTY_NAME itself.
+  _env_rel="$(head -n 1 "${TARGET}/etc/ga-release" 2>/dev/null | tr -d '\r\n')"
+  _env_want="GreenAutarky ${_env_rel} (HAOS ${PROD_VER})"
+  _env_have="$(sed -n 's/^PRETTY_NAME="\(.*\)"$/\1/p' "$OS_RELEASE" 2>/dev/null | head -n 1)"
+  if [[ -n "$_env_rel" && "$_env_have" == "$_env_want" ]]; then
+    _pass "ENV-03b: PRETTY_NAME is '${_env_have}' (ga_release + HAOS version)"
   else
-    _fail "ENV-03b: Prod build missing GreenAutarky BOS branding"
+    _fail "ENV-03b: PRETTY_NAME is '${_env_have}', expected '${_env_want}' (ADR-0055)"
   fi
-  # Image filename must be bos_ (not haos_ or gaos_)
-  if ls "${OUT}/images/"bos_*.img.xz >/dev/null 2>&1; then
-    _pass "ENV-03c: Prod image has bos_ prefix"
+  # Image filename: <ga_release>_<board>_<osver>.img.xz (not bos_/haos_/gaos_)
+  if [[ -n "$_env_rel" ]] && ls "${OUT}/images/${_env_rel}_${_RBT_BOARD}_${PROD_VER}.img.xz" >/dev/null 2>&1; then
+    _pass "ENV-03c: Prod image is ${_env_rel}_${_RBT_BOARD}_${PROD_VER}.img.xz"
   else
-    _fail "ENV-03c: Prod image missing bos_ prefix"
+    _fail "ENV-03c: expected ${OUT}/images/${_env_rel:-<ga_release>}_${_RBT_BOARD}_${PROD_VER}.img.xz (ADR-0055); found: $(ls "${OUT}/images/" 2>/dev/null | grep '\.img\.xz$' | tr '\n' ' ')"
   fi
 fi
 
@@ -4121,6 +4126,52 @@ else
   _skip "GA-REL-04: os-release GA_RELEASE" "/etc/os-release not at ${OS_REL_FILE}"
 fi
 
+# GA-REL-05/06 (ADR-0055): the human-facing label. PRETTY_NAME, /etc/motd and
+# /etc/issue carry the ga_release; the technical IDs next to them do NOT move.
+# Expectations come from /etc/ga-release and VERSION_ID, not from the files judged.
+_osr_real="${TARGET}/usr/lib/os-release"; [[ -f "$_osr_real" ]] || _osr_real="${TARGET}/etc/os-release"
+if [[ -n "$GA_REL_STAMPED" && -f "$_osr_real" ]]; then
+  _g_ver="$(sed -n 's/^VERSION_ID="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$_osr_real" | head -n 1)"
+  _g_want="GreenAutarky ${GA_REL_STAMPED} (HAOS ${_g_ver})"
+  if [[ -n "$_g_ver" && "$(grep -c '^PRETTY_NAME=' "$_osr_real")" == 1 ]] \
+     && grep -qxF "PRETTY_NAME=\"${_g_want}\"" "$_osr_real"; then
+    _pass "GA-REL-05: PRETTY_NAME is '${_g_want}'"
+  else
+    _fail "GA-REL-05: PRETTY_NAME is not exactly '${_g_want}' (got: $(grep '^PRETTY_NAME=' "$_osr_real" | tr '\n' ' '))"
+  fi
+  # the technical identity must be untouched: CPE_NAME still names haos + the same version
+  if grep -q "^CPE_NAME=.*:haos:${_g_ver}:" "$_osr_real" 2>/dev/null; then
+    _pass "GA-REL-05b: CPE_NAME still carries haos:${_g_ver} (Supervisor reads it)"
+  else
+    _fail "GA-REL-05b: CPE_NAME no longer names haos:${_g_ver} - Supervisor's OS detection would break ($(grep '^CPE_NAME=' "$_osr_real"))"
+  fi
+  if grep -qF "$_g_want" "${TARGET}/etc/motd" 2>/dev/null && grep -qF "$_g_want" "${TARGET}/etc/issue" 2>/dev/null; then
+    _pass "GA-REL-06: /etc/motd and /etc/issue carry '${_g_want}'"
+  else
+    _fail "GA-REL-06: /etc/motd or /etc/issue lacks '${_g_want}'"
+  fi
+else
+  _skip "GA-REL-05/06: PRETTY_NAME + motd + issue" "no /etc/ga-release or os-release in ${TARGET}"
+fi
+# GA-REL-07: the RAUC bundle description (rauc info) carries the same label.
+if [[ -n "$GA_REL_STAMPED" && -f "${OUT}/images/rootfs.erofs" && -n "${_rf_bundle:-}" && -n "${_rf_unsq:-}" && -f "$_rf_bundle" ]]; then
+  _rd_tmp="$(mktemp -d)"
+  if "$_rf_unsq" -q -n -d "${_rd_tmp}/x" "$_rf_bundle" manifest.raucm >/dev/null 2>&1 && [[ -f "${_rd_tmp}/x/manifest.raucm" ]]; then
+    _rd_have="$(sed -n 's/^description=//p' "${_rd_tmp}/x/manifest.raucm" | head -n 1)"
+    _rd_ver="$(sed -n 's/^version=//p' "${_rd_tmp}/x/manifest.raucm" | head -n 1)"
+    if [[ -n "$_rd_ver" && "$_rd_have" == "GreenAutarky ${GA_REL_STAMPED} (HAOS ${_rd_ver})" ]]; then
+      _pass "GA-REL-07: bundle description is '${_rd_have}' (version=${_rd_ver} unchanged)"
+    else
+      _fail "GA-REL-07: bundle description '${_rd_have}' != 'GreenAutarky ${GA_REL_STAMPED} (HAOS ${_rd_ver})'"
+    fi
+  else
+    _fail "GA-REL-07: cannot read manifest.raucm from $(basename "$_rf_bundle")"
+  fi
+  rm -rf "$_rd_tmp"
+else
+  _skip "GA-REL-07: bundle description" "no rootfs/bundle/unsquashfs in this run"
+fi
+
 # =========================================================================
 # Supervisor / Core channel + fork invariants (2026-06-23 audit)
 #
@@ -4890,10 +4941,11 @@ else
   _fail "SBOM-01: prod SBOM fail-closed gate missing or not wired past the tee pipeline"
 fi
 
-# SBOM-02: create-release refuses to stage a prod release without the SBOM.
+# SBOM-02: create-release refuses to stage a prod release without the SBOM (every image but a
+# legacy bos_*_dev_* one is prod since ADR-0027 D9; the file name no longer carries a `_prod_` tag, ADR-0055).
 if [[ -f "$_crel" ]] \
    && grep -qE 'sbom-cyclonedx\.json' "$_crel" \
-   && grep -qE '_prod_' "$_crel" \
+   && grep -qF 'elif [[ "$IMG_BASE" != bos_*_dev_* ]]; then' "$_crel" \
    && grep -qE 'exit 1' "$_crel"; then
   _pass "SBOM-02: create-release fails closed on a prod release with no CycloneDX SBOM"
 else

@@ -1,6 +1,6 @@
-2090879572 images/bos_ihost-18.4.1.6_prod_20261106161119.img.xz
-136 images/bos_ihost-18.4.1.6_prod_20261106161119.img.xz.sha256
-198102005 images/bos_ihost-18.4.1.6_prod_20261106161119.raucb
+2090879572 images/BOSv1.6.0-rc3_ihost_18.4.1.6.img.xz
+136 images/BOSv1.6.0-rc3_ihost_18.4.1.6.img.xz.sha256
+198102005 images/BOSv1.6.0-rc3_ihost_18.4.1.6.raucb
 219574272 images/rootfs.erofs
 ghcr.io_greenautarky_armv7-hassio-audio_2025.08.1@sha256_c900a28ecc924b89e9ccc31c4aef23f65185296282fe6908bcca96d961859dd9.tar
 ghcr.io_greenautarky_armv7-hassio-cli_2025.10.2@sha256_7ddaa2c038b4f1617eaa86d78b59343db7236b3634f19682ecb7c8a141d5de91.tar

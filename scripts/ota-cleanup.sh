@@ -218,9 +218,10 @@ elif [[ "$MODE" == "builder" ]]; then
     # Group baked artifacts by HAOS version (= the X.Y.Z token in the
     # filename), then keep the N newest timestamped bakes per group.
     mapfile -t VERSIONS < <(
-        find "$IMAGES_DIR" -maxdepth 1 -name 'bos_ihost-*.img.xz' \
+        find "$IMAGES_DIR" -maxdepth 1 \( -name 'bos_ihost-*.img.xz' -o -name 'BOSv*_ihost_*.img.xz' \) \
             -printf '%f\n' 2>/dev/null \
-            | sed -E 's/^bos_ihost-([0-9.]+)_.*/\1/' \
+            | grep -v '_provisioning\.img\.xz$' \
+            | sed -E 's/^bos_ihost-([0-9.]+)_.*/\1/; s/^BOSv[^_]+_ihost_([0-9.]+)\.img\.xz$/\1/' \
             | sort -u
     )
 
@@ -228,7 +229,7 @@ elif [[ "$MODE" == "builder" ]]; then
     for v in "${VERSIONS[@]}"; do
         # Bakes for this HAOS-version, newest mtime first.
         mapfile -t BAKES < <(
-            find "$IMAGES_DIR" -maxdepth 1 -name "bos_ihost-${v}_*.img.xz" \
+            find "$IMAGES_DIR" -maxdepth 1 \( -name "bos_ihost-${v}_*.img.xz" -o -name "BOSv*_ihost_${v}.img.xz" \) \
                 -printf '%T@ %f\n' 2>/dev/null \
                 | sort -rn \
                 | awk '{print $2}' \

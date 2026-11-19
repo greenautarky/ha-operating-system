@@ -1,6 +1,6 @@
 # EXPECT: k31_reflash_verdict is missing
 release=BOSv1.6.1-rc2
-image=bos_ihost-18.4.1.6_dev_20261117100010.img.xz
+image=BOSv1.6.1-rc2_ihost_18.4.1.6.img.xz
 image_sha256=f4e21e3cde67d089a1612eab4d930e000d87afd8ba6132e992de9c49a59fe297
 bake=ga-ops run 44055298385 (VER-13 enforce PASS 143 snapshots, VER-14 PASS)
 k31_reflash_at=2026-11-17T12:35:28+01:00

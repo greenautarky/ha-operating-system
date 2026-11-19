@@ -26,7 +26,7 @@
 #                          the release evidence file. There is no other bypass.
 #
 # Output:
-#   releases/bos_ihost_CoreBox-16.3_prod_YYYYMMDDHHMMSS_release.tar.gz
+#   releases/<ga_release>_<board>_<osver>_release.tar.gz   (BOSv1.6.1-rc2_ihost_18.4.1.6_release.tar.gz)
 #
 # Contents:
 #   images/
@@ -75,18 +75,25 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Find the latest image: highest OS version, then newest build timestamp.
+# Find the image OF THIS RELEASE: <label>_<board>_<osver>.img.xz (ADR-0055),
+# highest OS version when several boards/versions of the label sit in images/.
 # Not `ls | sort | tail -1`: that is a lexical sort, which puts
-# bos_ihost-16.3.1.9_… AFTER bos_ihost-16.3.1.10_… (and a …_provisioning image
+# …_16.3.1.9.img.xz AFTER …_16.3.1.10.img.xz (and a …_provisioning image
 # after the disk image of the same build), so the release would package an
 # older build whenever both sit in images/ — and ga-builder keeps several.
 # shellcheck source=lib/os-version.sh
 . "${SCRIPT_DIR}/lib/os-version.sh"
 # shellcheck source=lib/sha-sidecar.sh
 . "${SCRIPT_DIR}/lib/sha-sidecar.sh"
-IMG_XZ="$(newest_bos_image "${BUILD_DIR}/images/"bos_*.img.xz || true)"
+# The label is part of the file name, so a release can only ever pick an image
+# baked for ITS label - and it has to be a valid one before anything is globbed.
+if ! [[ "$RELEASE_LABEL" =~ ^BOSv[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
+  echo "ERROR: --release LABEL is required and must be the full label (e.g. BOSv1.6.1-rc2), got '${RELEASE_LABEL}'" >&2
+  exit 1
+fi
+IMG_XZ="$(newest_bos_image "${BUILD_DIR}/images/"${RELEASE_LABEL:-NO-RELEASE-LABEL}_*.img.xz || true)"
 if [[ -z "$IMG_XZ" ]]; then
-  echo "ERROR: No bos_*.img.xz found in ${BUILD_DIR}/images/" >&2
+  echo "ERROR: No ${RELEASE_LABEL:-<--release LABEL>}_<board>_<osver>.img.xz found in ${BUILD_DIR}/images/" >&2
   exit 1
 fi
 
@@ -95,10 +102,6 @@ fi
 # hash is computed from the file being released, never read from the evidence.
 # shellcheck source=lib/release-gate.sh
 . "${SCRIPT_DIR}/lib/release-gate.sh"
-if ! [[ "$RELEASE_LABEL" =~ ^BOSv[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
-  echo "ERROR: --release LABEL is required and must be the full label (e.g. BOSv1.6.1-rc2), got '${RELEASE_LABEL}'" >&2
-  exit 1
-fi
 GATE_EVIDENCE="${EVIDENCE_DIR}/${RELEASE_LABEL}.gate.txt"
 echo "Release gate: ${RELEASE_LABEL} / $(basename "$IMG_XZ") <- ${GATE_EVIDENCE}"
 if GATE_OUT="$(ga_release_gate_check "$GATE_EVIDENCE" "$RELEASE_LABEL" "$IMG_XZ")"; then
@@ -116,9 +119,11 @@ else
   fi
 fi
 
-# Extract build ID from filename (bos_ihost_CoreBox-16.3_prod_20260331112238.img.xz)
+# The file name no longer carries the build timestamp (ADR-0055); the build id
+# comes from the MANIFEST the same bake wrote ("Build ID:  <YYYYmmddHHMMSS>").
 IMG_BASE="$(basename "$IMG_XZ" .img.xz)"
-BUILD_ID="$(echo "$IMG_BASE" | grep -oP '\d{14}$' || echo "unknown")"
+BUILD_ID="$(sed -n 's/^Build ID:[[:space:]]*\([0-9]\{14\}\)[[:space:]]*$/\1/p' "${BUILD_DIR}/images/configs/MANIFEST.txt" 2>/dev/null | head -n 1 || true)"
+BUILD_ID="${BUILD_ID:-unknown}"
 echo "Release for: $IMG_BASE (build $BUILD_ID)"
 
 # Create temp staging dir
@@ -190,12 +195,12 @@ fi
 # --- 5. SBOMs ---
 echo "[5/6] Collecting SBOMs..."
 # The CycloneDX SBOM is CRA release evidence — a prod release must not be staged
-# without it. Fail closed on a prod build (detected from the _prod_ filename);
-# warn on non-prod. (#772)
+# without it. Fail closed on every build: since ADR-0027 D9 there is one build
+# mode (prod); only a LEGACY bos_*_dev_* image is warn-only. (#772)
 _sbom_cdx="${BUILD_DIR}/images/sbom-cyclonedx.json"
 if [[ -f "$_sbom_cdx" ]]; then
   cp "$_sbom_cdx" "$STAGE_DIR/sbom/"
-elif [[ "$IMG_BASE" == *_prod_* ]]; then
+elif [[ "$IMG_BASE" != bos_*_dev_* ]]; then
   echo "ERROR: prod release has no CycloneDX SBOM ($_sbom_cdx) — refusing to stage a release without it (#772)" >&2
   exit 1
 else

@@ -1,0 +1,24 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] rauc: bundle description carries the ga_release (ADR-0055)
+
+`rauc info <bundle>` shows [update] description. It is the one human-facing
+field of a bundle: "GreenAutarky <ga_release> (HAOS <osver>)". Display only -
+compatible, version and [meta.ga] release (which the release floor reads) are
+untouched, and nothing may parse the description.
+---
+ buildroot-external/ota/manifest.raucm.gtpl | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/buildroot-external/ota/manifest.raucm.gtpl b/buildroot-external/ota/manifest.raucm.gtpl
+--- a/buildroot-external/ota/manifest.raucm.gtpl
++++ b/buildroot-external/ota/manifest.raucm.gtpl
+@@ -2,6 +2,9 @@
+ compatible={{ env "ota_compatible" }}
+ version={{ env "ota_version" }}
+ {{- if env "ota_ga_release" }}
++# Human-facing label for `rauc info` (ADR-0055). Display only: nothing parses it.
++# Never put a "Version:"/"Compatible:" token in it - push-ota.sh greps `rauc info`.
++description=GreenAutarky {{ env "ota_ga_release" }} (HAOS {{ env "ota_version" }})
+ 
+ # The GA release this bundle's rootfs carries in /etc/ga-release. A device's
+ # RAUC pre-install handler (/usr/lib/rauc/ga-release-floor) refuses a bundle

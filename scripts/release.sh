@@ -372,7 +372,7 @@ REMOTE
         echo "  Bake running detached. Monitor with:"
         echo "    ssh $GA_BUILDER_HOST 'pct exec $GA_BUILDER_CTID -- docker logs -f ga-build'"
         echo "  Or poll for the final artifact:"
-        echo "    ssh $GA_BUILDER_HOST 'pct exec $GA_BUILDER_CTID -- ls -lht $GA_BUILDER_REPO_PATH/ga_output/images/bos_ihost-${OS_VERSION}_prod_*.img.xz'"
+        echo "    ssh $GA_BUILDER_HOST 'pct exec $GA_BUILDER_CTID -- ls -lht $GA_BUILDER_REPO_PATH/ga_output/images/*_ihost_${OS_VERSION}.img.xz'"
     fi
     echo ""
 fi
@@ -384,7 +384,7 @@ if [[ "$BAKE_ASYNC" != "true" ]]; then
     echo "     (or re-run with --bake-async to kick it from here)"
 fi
 echo "  2. Once .img.xz + .raucb are produced, copy to laptop + upload:"
-echo "       ./scripts/push-ota.sh --server --raucb /path/to/bos_ihost-${OS_VERSION}_prod_<TS>.raucb"
+echo "       ./scripts/push-ota.sh --server --raucb /path/to/<ga_release>_ihost_${OS_VERSION}.raucb"
 echo "  3. Canary verify on K0 via fleet-manager ota-update job before fleet cascade"
 echo "  4. PUBLISH THE RELEASE EVIDENCE — a promoted version without it is not"
 echo "     traceable, and the build-side copy is overwritten by the NEXT build:"
