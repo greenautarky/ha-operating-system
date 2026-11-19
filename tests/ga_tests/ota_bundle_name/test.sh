@@ -4,7 +4,10 @@
 # the prefix only, so the board stays in the name).
 #   producer: board meta BOARD_ID   consumer: URL ga-rauc-install builds
 # Expected names are pinned constants (rule 7), not read from the script.
-# Real script, only curl stubbed (records the URL, always fails -> exit 3).
+# Real script, only curl stubbed (records the URL, always fails -> exit 3). Since Odoo #2136
+# the installer asks for the slot's .sha256 sidecar first and fetches the bundle only from
+# the slot whose sidecar exists; the stub records the slot URL with that suffix stripped, so
+# the checks still read the bundle URL the board and slot produce.
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 export GA_DATA_ROOT_LIB="$ROOT/buildroot-external/rootfs-overlay/usr/libexec/ga-data-root.sh"
@@ -13,7 +16,7 @@ SCRIPT="$ROOT/buildroot-external/rootfs-overlay/usr/sbin/ga-rauc-install"
 W="$(mktemp -d)" || { echo "ERROR (could not check): mktemp failed" >&2; exit 2; }; mkdir -p "$W/bin" || exit 2; trap 'rm -rf "$W"' EXIT
 # A 404 (every slot "not staged"): exit 22, and the code for --write-out like curl prints it,
 # so the installer takes the prod-slot fallback - which it does on a 404 only (Odoo #2136).
-printf '#!/bin/sh\nfor a; do case "$a" in https://*) echo "$a" >> "%s/urls";; %%{http_code}) printf 404;; esac; done\nexit 22\n' "$W" > "$W/bin/curl"; chmod +x "$W/bin/curl"
+printf '#!/bin/sh\nfor a; do case "$a" in https://*) echo "${a%%.sha256}" >> "%s/urls";; %%{http_code}) printf 404;; esac; done\nexit 22\n' "$W" > "$W/bin/curl"; chmod +x "$W/bin/curl"
 printf '%s\n' "$(printf '100.%d.0.9' 100)" > "$W/active"
 pass=0; fail=0
 chk() { if [ "$2" = "$3" ]; then echo "  PASS  $1"; pass=$((pass+1)); else echo "  FAIL  $1 (want '$3' got '$2')"; fail=$((fail+1)); fi; }

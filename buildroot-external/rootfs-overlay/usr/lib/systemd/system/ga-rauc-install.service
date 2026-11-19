@@ -35,7 +35,11 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-TimeoutStartSec=900s
+# No fixed start timeout (Odoo #2136): the download is resumable, retries with
+# backoff and detects a stall itself (no progress above GA_OTA_LOW_SPEED for
+# GA_OTA_STALL_S); it gives up after its attempt limit or 24 h. A fixed 900 s
+# killed every bundle download on links below ~2 Mbit/s.
+TimeoutStartSec=infinity
 RemainAfterExit=yes
 # No args: the helper reads the request from ga_manager's data directory.
 ExecStart=/usr/sbin/ga-rauc-install

@@ -107,9 +107,12 @@ done
 cat > "$STUBS/curl" <<'EOF'
 #!/bin/sh
 echo "curl $*" >> /mnt/data/.calls
-out=""
-while [ $# -gt 0 ]; do case "$1" in --output|-o) out="$2"; shift 2 ;; *) shift ;; esac; done
-[ -n "$out" ] && echo bundle > "$out"
+out=""; url=""
+while [ $# -gt 0 ]; do case "$1" in --output|-o) out="$2"; shift 2 ;; https://*) url="$1"; shift ;; *) shift ;; esac; done
+# the bundle is "bundle\n"; its .sha256 sidecar names it and hashes exactly that (Odoo #2136)
+if [ -n "$out" ]; then
+  case "$url" in *.sha256) printf '%s  %s\n' "$(printf 'bundle\n' | sha256sum | cut -d' ' -f1)" "$(basename "${url%.sha256}")" > "$out" ;; *) echo bundle > "$out" ;; esac
+fi
 exit 0
 EOF
 chmod +x "$STUBS"/*
