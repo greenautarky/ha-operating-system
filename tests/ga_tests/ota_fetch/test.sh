@@ -96,13 +96,14 @@ done
 # certificate is 60 unless -k.
 cat > "$STUBS/curl" <<'EOF'
 #!/bin/sh
-ip=DNS; out=""; url=""; f=0; k=0; all="$*"; cfg=""
+ip=DNS; out=""; url=""; f=0; k=0; all="$*"; cfg=""; wout=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --config) cfg="$2"; shift 2 ;;
     --resolve) ip=${2##*:}; shift 2 ;;
     --output|-o) out="$2"; shift 2 ;;
-    --connect-timeout|--max-time|-w|--write-out) shift 2 ;;
+    -w|--write-out) wout="$2"; shift 2 ;;
+    --connect-timeout|--max-time) shift 2 ;;
     --fail) f=1; shift ;;
     --insecure) k=1; shift ;;
     --*) shift ;;
@@ -116,17 +117,30 @@ echo "curl $ip $url $all" >> /mnt/data/.calls
 [ -n "$cfg" ] && echo "curlcfg $(stat -c %a "$cfg") $(tr '\n' '|' < "$cfg")" >> /mnt/data/.calls
 ans=$(awk -v ip="$ip" '$1 == ip { print $2; exit }' /mnt/data/.plan)
 [ -n "$ans" ] || ans=dead
-while read -r a b; do
-  [ "$a" = MISS ] && case "$url" in *"$b"*) ans=404 ;; esac
+# Per-URL overrides: "MISS <substr>" = 404, "ERR <code> <substr>" = that HTTP
+# code, "DEAD <substr>" = no connection (7), "TIMEOUT <substr>" = curl 28.
+while read -r a b c; do
+  case "$a" in
+    MISS) case "$url" in *"$b"*) ans=404 ;; esac ;;
+    ERR) case "$url" in *"$c"*) ans="$b" ;; esac ;;
+    DEAD) case "$url" in *"$b"*) ans=dead ;; esac ;;
+    TIMEOUT) case "$url" in *"$b"*) ans=timeout ;; esac ;;
+  esac
 done < /mnt/data/.plan
+# --write-out '%{http_code}': like curl, printed also when the transfer failed
+# (000 = no HTTP answer at all).
+wcode() { [ -n "$wout" ] && printf '%s' "$(printf '%s' "$wout" | sed "s/%{http_code}/$1/")"; return 0; }
 case "$ans" in
-  dead) exit 7 ;;
-  tls) [ "$k" = 1 ] || exit 60; ans=200 ;;
+  dead) wcode 000; exit 7 ;;
+  timeout) wcode 000; exit 28 ;;
+  tls) [ "$k" = 1 ] || { wcode 000; exit 60; }; ans=200 ;;
 esac
 if [ "$ans" -ge 400 ]; then
+  wcode "$ans"
   [ "$f" = 1 ] && exit 22
   exit 0
 fi
+wcode "$ans"
 [ -n "$out" ] && [ "$out" != /dev/null ] && echo bundle > "$out"
 exit 0
 EOF
@@ -243,6 +257,22 @@ pin "$M1"
 run_installer 16.3.1.9 BOSv1.4.0-rc3
 ok "OTAF-21 the prod-slot fallback is pinned too" \
    "curls | grep -q '^curl $M1 https://$OTA_HOST/releases/16.3.1.9/haos_ihost-16.3.1.9.raucb ' && ! curls | grep -q '^curl DNS '" "calls: $(curls | tr '\n' ';')"
+
+# The prod-slot fallback is for a per-rc slot that is NOT STAGED (404) only. Any
+# other failure of the per-rc slot must end the run: falling back on it would
+# install the PROD bundle on a canary that merely lost its link or met a
+# server error (Odoo #2136, decided for BOSv1.6.1-rc3).
+for f in "DEAD /BOSv1.4.0-rc3/:no connection" "TIMEOUT /BOSv1.4.0-rc3/:a timeout" \
+         "ERR 503 /BOSv1.4.0-rc3/:HTTP 503" "ERR 500 /BOSv1.4.0-rc3/:HTTP 500" "ERR 403 /BOSv1.4.0-rc3/:HTTP 403"; do
+  how="${f%%:*}"; what="${f#*:}"
+  fresh "i-nofallback-$(echo "$what" | tr -c 'a-z0-9' '-')" "$M1"
+  plan "$M1 200" "DNS 200" "$how"
+  pin "$M1"
+  run_installer 16.3.1.9 BOSv1.4.0-rc3
+  ok "OTAF-26 per-rc slot fails with $what: NO prod-slot fallback, nothing installed, exit 3" \
+     "! curls | grep -q 'releases/16.3.1.9/haos_ihost-16.3.1.9.raucb ' && ! calls | grep -q '^rauc install' && [ \"\$(cat '$C/rc')\" = 3 ]" \
+     "rc=$(cat "$C/rc") calls: $(curls | tr '\n' ';') out: $(out)"
+done
 
 fresh i-nopin "$M1 $M2"
 plan "$M1 403" "$M2 200" "DNS 200"
