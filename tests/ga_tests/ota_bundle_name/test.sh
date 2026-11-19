@@ -11,7 +11,9 @@ export GA_DATA_ROOT_LIB="$ROOT/buildroot-external/rootfs-overlay/usr/libexec/ga-
 D="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT="$ROOT/buildroot-external/rootfs-overlay/usr/sbin/ga-rauc-install"
 W="$(mktemp -d)" || { echo "ERROR (could not check): mktemp failed" >&2; exit 2; }; mkdir -p "$W/bin" || exit 2; trap 'rm -rf "$W"' EXIT
-printf '#!/bin/sh\nfor a; do case "$a" in https://*) echo "$a" >> "%s/urls";; esac; done\nexit 22\n' "$W" > "$W/bin/curl"; chmod +x "$W/bin/curl"
+# A 404 (every slot "not staged"): exit 22, and the code for --write-out like curl prints it,
+# so the installer takes the prod-slot fallback - which it does on a 404 only (Odoo #2136).
+printf '#!/bin/sh\nfor a; do case "$a" in https://*) echo "$a" >> "%s/urls";; %%{http_code}) printf 404;; esac; done\nexit 22\n' "$W" > "$W/bin/curl"; chmod +x "$W/bin/curl"
 printf '%s\n' "$(printf '100.%d.0.9' 100)" > "$W/active"
 pass=0; fail=0
 chk() { if [ "$2" = "$3" ]; then echo "  PASS  $1"; pass=$((pass+1)); else echo "  FAIL  $1 (want '$3' got '$2')"; fail=$((fail+1)); fi; }
