@@ -9,9 +9,10 @@ GA_HASSIO_SKIP_IMAGES =
 # the iHost pins in version.yaml. They MUST equal dev.json (supervisor, core).
 # Supervisor 2026.10.5.4 = 5.3 + the F3 pull stall timeout (300 s); aarch64 image tag == io.hass.version label.
 GA_HASSIO_SUPERVISOR_PIN = 2026.10.5.4
-# Core = the GA aarch64 release build 2026.10.4.4 (sha256:bb9db4d4..., io.hass.version
-# 2026.10.4.4, arch aarch64). NOT a -dev tag: the Supervisor rates 2026.10.4.3-dev
+# Core = the GA aarch64 release build 2026.10.4.5 (sha256:e4e2cd81..., io.hass.version
+# 2026.10.4.5, arch aarch64; = 2026.10.4.4 rebuilt on the 2026-11-18 Debian refresh,
+# CVE-2026-99306). NOT a -dev tag: the Supervisor rates 2026.10.4.3-dev
 # AwesomeVersion UNKNOWN, so it ignores the baked image (Odoo #1985).
-GA_HASSIO_CORE_PIN = 2026.10.4.4
+GA_HASSIO_CORE_PIN = 2026.10.4.5
 # The iHost's add-on set minus ga_ihosthardwarecontrol (armv7-only), see the file.
 HASSIO_ADDON_IMAGES_JSON = $(BR2_EXTERNAL_DSGW210_PATH)/addon-images.json
