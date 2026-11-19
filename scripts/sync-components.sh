@@ -81,7 +81,8 @@ components_list=$(yq -r '.components | to_entries[] | select(.value != null) | "
 # pre-flight): if they disagree, the build checks something other than what was
 # synced. Compare instead of trusting either.
 awk_list=$(ga_components_block "${VERSION_YAML}" components)
-if [ "$(printf '%s\n' "${components_list}" | sort)" != "$(printf '%s\n' "${awk_list}" | sort)" ]; then
+_norm() { awk 'NF >= 2 && $1 != "null" {print $1, $2}' | sort; }
+if [ "$(printf '%s\n' "${components_list}" | _norm)" != "$(printf '%s\n' "${awk_list}" | _norm)" ]; then
   echo "::error::the shared components: block reads differently with yq and with ga-components.sh:" >&2
   echo "  yq:  $(printf '%s' "${components_list}" | tr '\n' ';')" >&2
   echo "  awk: $(printf '%s' "${awk_list}" | tr '\n' ';')" >&2
@@ -106,6 +107,8 @@ any_failed=0
 while IFS= read -r line; do
   [ -z "${line}" ] && continue
   pkg_name=$(echo "${line}" | awk '{print $1}')
+  # Go-yq can emit a blank-looking line for an empty map; never pull a nameless artifact.
+  case "${pkg_name}" in ""|null) continue ;; esac
   pkg_version=$(echo "${line}" | awk '{print $2}')
 
   # Component domain = pkg_name with dashes → underscores. The OCI tarball
@@ -237,6 +240,9 @@ if [ -n "${overlay_list}" ]; then
   while IFS= read -r line; do
     [ -z "${line}" ] && continue
     pkg_name=$(echo "${line}" | awk '{print $1}')
+    case "${pkg_name}" in ""|null) continue ;; esac
+  # Go-yq can emit a blank-looking line for an empty map; never pull a nameless artifact.
+  case "${pkg_name}" in ""|null) continue ;; esac
     pkg_version=$(echo "${line}" | awk '{print $2}')
 
     # Marker file lives OUTSIDE the rootfs-overlay (= gitignored
