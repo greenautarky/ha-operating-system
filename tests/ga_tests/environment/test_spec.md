@@ -47,12 +47,24 @@
 - **Command**: `echo "test" >> /etc/ga-env.conf 2>&1`
 - **Expected**: Error (read-only filesystem)
 
-### ENV-07: Image filename contains env tag
-- **Action**: Check built image filename includes dev/prod
-- **Command**: `ls /mnt/data/*.raucb 2>/dev/null` (or check os-release)
-- **Expected**: Filename contains `_dev_` or `_prod_`
+### ENV-07: Image filename carries the ga_release (build-time)
+- **Action**: Check the built image filename (ADR-0055)
+- **Command**: `ls ga_output/images/*.img.xz` (build suite ENV-03c)
+- **Expected**: `<ga_release>_<board>_<osver>.img.xz`, e.g. `BOSv1.6.0-dev16_ihost_18.4.1.6.img.xz` (no `_dev_`/`_prod_` tag, no timestamp)
 
 ### ENV-08: os-release contains build info
 - **Action**: Verify GA build metadata in os-release
 - **Command**: `grep GA_ /etc/os-release`
 - **Expected**: `GA_BUILD_ID`, `GA_BUILD_TIMESTAMP`, `GA_ENV` present
+
+### ENV-09: PRETTY_NAME carries the ga_release (ADR-0055)
+- **Command**: `. /etc/os-release; echo "$PRETTY_NAME"`; compare with `cat /etc/ga-release`
+- **Expected**: `GreenAutarky <ga_release> (HAOS <VERSION_ID>)` exactly; built from /etc/ga-release, not from the file under test
+
+### ENV-10 / ENV-11: login banner carries the ga_release
+- **Command**: `grep -F "$(cat /etc/ga-release)" /etc/motd /etc/issue`
+- **Expected**: both match
+
+### ENV-12: technical IDs unchanged
+- **Command**: `. /etc/os-release; echo "$VERSION_ID $CPE_NAME"`
+- **Expected**: VERSION_ID is the plain HAOS version and CPE_NAME contains `:haos:<VERSION_ID>:` (Supervisor reads `hassos`/`haos` + version from the CPE)

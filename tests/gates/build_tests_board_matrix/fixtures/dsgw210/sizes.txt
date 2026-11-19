@@ -1,6 +1,6 @@
-2232413496 images/bos_dsgw210-18.4.1.6_prod_20261106142135.img.xz
-138 images/bos_dsgw210-18.4.1.6_prod_20261106142135.img.xz.sha256
-212249593 images/bos_dsgw210-18.4.1.6_prod_20261106142135.raucb
+2232413496 images/BOSv1.6.0-dev4_dsgw210_18.4.1.6.img.xz
+138 images/BOSv1.6.0-dev4_dsgw210_18.4.1.6.img.xz.sha256
+212249593 images/BOSv1.6.0-dev4_dsgw210_18.4.1.6.raucb
 229888000 images/rootfs.erofs
 ghcr.io_greenautarky_aarch64-hassio-audio_2026.10.0@sha256_d74fd89ac0797614ca0b92291f93151fa5f05d5ce272b814593ec4a11adb3a75.tar
 ghcr.io_greenautarky_aarch64-hassio-cli_2026.10.1@sha256_23441d3668cb9edad0af0eb0ba2f683d777fed9fdc09dbc47e78bb19d4670603.tar

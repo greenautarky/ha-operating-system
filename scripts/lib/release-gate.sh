@@ -46,11 +46,12 @@ GA_GATE_VCCIO5_FIELDS="vccio5_fresh_sd vccio5_ota_keeps_1v8"
 GA_GATE_PASS_POINTER_RE='^PASS [^[:space:]]'
 
 # ga_gate_needs_vccio5 RELEASE IMAGE_FILE — rc 0 when the release is an iHost
-# image (file name bos_ihost*) of base version >= 1.6.1 (rc suffix ignored:
+# image (file name <ga_release>_ihost_<osver>.img.xz, ADR-0055; or a legacy
+# bos_ihost*) of base version >= 1.6.1 (rc suffix ignored:
 # BOSv1.6.1-rc3 counts as 1.6.1).
 ga_gate_needs_vccio5() {
 	local rel="$1" img="$2" maj min pat
-	case "$(basename -- "$img")" in bos_ihost*) ;; *) return 1 ;; esac
+	case "$(basename -- "$img")" in BOSv*_ihost_*|bos_ihost*) ;; *) return 1 ;; esac
 	[[ "$rel" =~ ^BOSv([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 1
 	maj="${BASH_REMATCH[1]}"; min="${BASH_REMATCH[2]}"; pat="${BASH_REMATCH[3]}"
 	[ "$maj" -gt 1 ] && return 0

@@ -121,8 +121,12 @@ if [[ -z "$VERSION" ]]; then
     VERSION=$(rauc info "$RAUCB" 2>/dev/null | grep "Version:" | awk '{print $2}' | tr -d "'" || true)
   fi
   if [[ -z "$VERSION" ]]; then
-    # Try to extract from filename (bos_ihost-16.3.1.1_prod_*.raucb)
-    VERSION=$(basename "$RAUCB" | grep -oP '\d+\.\d+\.\d+\.\d+' || true)
+    # Try to extract from filename (<ga_release>_ihost_16.3.1.1.raucb; legacy bos_ihost-16.3.1.1_prod_*.raucb)
+    # New name: the OS version is the LAST _-field (BOSv1.6.0-dev16_ihost_18.4.1.6.raucb);
+    # a first-match grep would be one label with four dotted fields away from
+    # reading the wrong number.
+    VERSION=$(basename "$RAUCB" | sed -nE 's/^BOSv[^_]+_[a-z0-9]+_([0-9]+(\.[0-9]+)+)\.raucb$/\1/p')
+    [[ -n "$VERSION" ]] || VERSION=$(basename "$RAUCB" | grep -oP '\d+\.\d+\.\d+\.\d+' | head -n 1 || true)
   fi
   [[ -z "$VERSION" ]] && { echo "ERROR: Could not detect version. Use --version"; exit 1; }
 fi

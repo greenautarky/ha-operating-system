@@ -29,7 +29,7 @@ fi
 #  5) Writes build timestamp to /etc/ga-build-id and /etc/os-release in target rootfs
 #  6) Refuses to build unless ota/rel-ca.pem is the pinned OTA root (no auto-creation)
 #  7) Re-finalizes target and rebuilds artifacts using 'all' (this tree has no 'images' target)
-#  8) Renames output images with ga-build-id timestamp suffix (haos_ -> bos_)
+#  8) Renames output images after the ga_release: <ga_release>_<board>_<osver>.* (ADR-0055)
 #  9) Creates provisioning image (factory image with embedded .img.xz)
 # 10) Archives build configurations for reproducibility (see below)
 # 11) Archives Buildroot legal-info (licenses) for compliance
@@ -44,9 +44,9 @@ fi
 #   - Host environment recorded (GCC, Make, Bash versions)
 #
 # Output Artifacts (in ${OUT}/images/):
-#   - bos_ihost-*.img.xz              Compressed disk image
-#   - bos_ihost-*.raucb               RAUC update bundle
-#   - bos_ihost-*_provisioning.img.xz Factory provisioning image
+#   - <ga_release>_<board>_<osver>.img.xz   Compressed disk image (BOSv1.6.0-dev16_ihost_18.4.1.6.img.xz)
+#   - <ga_release>_<board>_<osver>.raucb    RAUC update bundle
+#   - <ga_release>_<board>_<osver>_provisioning.img.xz  Factory provisioning image
 #   - sbom.json                        Software Bill of Materials
 #   - build.log / build.log.xz         Complete build log
 #   - configs/                         Build configuration archive:
@@ -137,6 +137,8 @@ ga_parse_build_args "$@" || exit 1
 . "${SCRIPT_DIR}/lib/pkg-inputs.sh"
 # shellcheck source=lib/sha-sidecar.sh
 . "${SCRIPT_DIR}/lib/sha-sidecar.sh"
+# shellcheck source=lib/ga-release-label.sh
+. "${SCRIPT_DIR}/lib/ga-release-label.sh"
 echo "Building with MODE=$MODE (one build mode, ADR-0027 D9)"
 
 # ---- Paths inside container (layout from scripts/lib/tree-paths.sh) ----
@@ -601,6 +603,12 @@ write_build_id_into_target() {
       fi
     done
     echo "Appended GA_RELEASE=\"$GA_RELEASE\" to /etc/os-release + /usr/lib/os-release"
+    # Human-facing label (ADR-0055): PRETTY_NAME + /etc/motd + /etc/issue carry
+    # the ga_release. VERSION_ID / CPE_NAME stay untouched (Supervisor + RAUC
+    # read them). Fail the build rather than ship the old name.
+    ga_stamp_release_label "${OUT}/target" "$GA_RELEASE" \
+      || { echo "ERROR: could not stamp the ga_release label into os-release/motd/issue" >&2; exit 1; }
+    echo "Stamped PRETTY_NAME + motd + issue: $(sed -n 's/^PRETTY_NAME=//p' "${OUT}/target/usr/lib/os-release")"
   else
     echo "GA_RELEASE not set — skipping /etc/ga-release write (set GA_RELEASE env to enable)"
   fi
@@ -1911,25 +1919,40 @@ get_original_image_basename() {
   echo "$img"
 }
 
-# Rename images with ga-build-id timestamp suffix and the `prod` tag
-# haos_ihost-16.3.1.1.img.xz -> bos_ihost-16.3.1.1_prod_20260119123045.img.xz
-# haos_ihost-16.3.1.1.raucb  -> bos_ihost-16.3.1.1_prod_20260119123045.raucb
+# Rename images after the ga_release (ADR-0055, Thomas 2026-11-19):
+# haos_ihost-16.3.1.1.img.xz -> BOSv1.6.0-dev16_ihost_16.3.1.1.img.xz
+# haos_ihost-16.3.1.1.raucb  -> BOSv1.6.0-dev16_ihost_16.3.1.1.raucb
 #
-# The tag is a constant since ADR-0027 D9 (one build). It stays in the name
-# because consumers match on it: ga-ops release-train refuses to stage a bundle
-# that is not `*_prod_*`, and release.sh / push-ota.sh examples use it.
+# <ga_release>_<board>_<osver>. No timestamp and no `prod` tag any more:
+#   * uniqueness is ga_release + board + osver; the build timestamp stays in
+#     /etc/os-release (GA_BUILD_TIMESTAMP), /etc/ga-build-id and MANIFEST.txt.
+#     Nothing needs it in the name - every consumer that matched on it
+#     (timestamp globs here, newest_bos_image, ga-ops skip_bake) now matches
+#     on the label. A re-bake of the SAME ga_release replaces the earlier files
+#     (said loudly below); that is the intent of a re-bake.
+#   * the `_prod_` tag was a constant since ADR-0027 D9 (one build).
+# NOT renamed: the OTA store file name haos_<board>-<osver>.raucb - devices
+# build that URL (push-ota.sh / release-train stage it under that name).
 rename_images_with_build_id() {
   local orig_base new_base
   orig_base="$(get_original_image_basename)" || return 1
 
-  # Convert haos_ prefix to bos_ and append environment + timestamp
-  local orig_name new_name
-  local env_tag="prod"
-  orig_name="$(basename "$orig_base")"
-  new_name="${orig_name/haos_/bos_}_${env_tag}_${GA_BUILD_TIMESTAMP}"
+  local orig_name new_name board osver
+  orig_name="$(basename "$orig_base")"            # haos_<board>-<osver>
+  [[ "$orig_name" =~ ^haos_([a-z0-9]+)-([0-9]+(\.[0-9]+)+)$ ]] \
+    || { echo "ERROR: cannot split board/osver out of '${orig_name}'" >&2; return 1; }
+  board="${BASH_REMATCH[1]}"; osver="${BASH_REMATCH[2]}"
+  new_name="$(ga_artifact_basename "$GA_RELEASE" "$board" "$osver")" || return 1
   new_base="$(dirname "$orig_base")/${new_name}"
 
   echo "Renaming images: ${orig_name} -> ${new_name}"
+  local _e
+  for _e in img.xz img raucb; do
+    if [[ -f "${new_base}.${_e}" && -f "${orig_base}.${_e}" ]]; then
+      echo "WARNING: replacing ${new_name}.${_e} of an earlier bake of the same ga_release/board/OS version" >&2
+      rm -f "${new_base}.${_e}" "${new_base}.${_e}.sha256"
+    fi
+  done
 
   # Rename .img.xz (compressed disk image)
   if [[ -f "${orig_base}.img.xz" ]]; then
@@ -2952,8 +2975,8 @@ echo "  HA Core FE:     ${GA_FRONTEND_PYVERSION:-unknown} (${GA_FRONTEND_VERSION
 echo ""
 
 echo "  Output images (this build):"
-# Only show images from this build (matching current timestamp)
-for f in "${OUT}/images/"*"${GA_BUILD_TIMESTAMP}"*.img.xz "${OUT}/images/"*"${GA_BUILD_TIMESTAMP}"*.raucb; do
+# Only show images from this build (GA_IMAGE_BASENAME = <ga_release>_<board>_<osver>)
+for f in "${GA_IMAGE_BASENAME}"*.img.xz "${GA_IMAGE_BASENAME}"*.raucb; do
   if [[ -f "$f" ]]; then
     sz="$(du -h "$f" | cut -f1)"
     echo "    $(basename "$f")  ${sz}"
@@ -2994,7 +3017,7 @@ echo "  Build log: ${BUILD_LOG}"
 echo ""
 
 # Flash hint — show the command to flash the image to an SD card
-img_xz="$(ls "${OUT}/images/"*"${GA_BUILD_TIMESTAMP}"*.img.xz 2>/dev/null | head -n 1 || true)"
+img_xz="$(ls "${GA_IMAGE_BASENAME}.img.xz" 2>/dev/null | head -n 1 || true)"
 if [[ -n "$img_xz" ]]; then
   echo "  To flash this image:"
   echo "    ./scripts/verify-sd.sh --all --vccio5 3v3|1v8 $(basename "$img_xz")   # vccio5: choose per flash, no default (Odoo #1944)"
@@ -3005,7 +3028,7 @@ _report="${OUT}/images/reports/build-report.html"
 _img_name="$(basename "$img_xz" 2>/dev/null || echo "none")"
 _img_size="$(du -h "$img_xz" 2>/dev/null | cut -f1 || echo "N/A")"
 _img_sha="$(cut -d' ' -f1 "${img_xz}.sha256" 2>/dev/null || echo "N/A")"
-_raucb="$(ls "${OUT}/images/"*"${GA_BUILD_TIMESTAMP}"*.raucb 2>/dev/null | head -n 1 || true)"
+_raucb="$(ls "${GA_IMAGE_BASENAME}.raucb" 2>/dev/null | head -n 1 || true)"
 _raucb_name="$(basename "$_raucb" 2>/dev/null || echo "none")"
 _raucb_size="$(du -h "$_raucb" 2>/dev/null | cut -f1 || echo "N/A")"
 _cve_sbom_count=$(grep -c "CRITICAL\|HIGH" "${OUT}/images/reports/cve-scan-sbom.txt" 2>/dev/null | head -1 | tr -cd '0-9' || echo "0")

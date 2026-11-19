@@ -61,6 +61,16 @@ while IFS= read -r _f; do
   cp "$_src" "$_tgt/$_f.new" && touch -r "$_tgt/$_f" "$_tgt/$_f.new" && chmod --reference="$_tgt/$_f" "$_tgt/$_f.new" && mv "$_tgt/$_f.new" "$_tgt/$_f" || exit 2; _n=$((_n+1))
 done < "$HERE/overlay-refresh.txt"
 [ "$_n" -gt 0 ] || { echo "make-fixture: overlay-refresh.txt lists no file" >&2; exit 2; }
+# ADR-0055: the captured bakes predate the ga_release label (PRETTY_NAME was "GreenAutarky BOS <ver>, based on
+# Home Assistant", the images bos_*_prod_<ts>). The fixture stands for a bake that already carries it: the
+# LIVE stamper (scripts/lib/ga-release-label.sh, the same one ga_build.sh calls) is applied to the target, and
+# fixtures/<board>/sizes.txt names the artefacts the way the new bake does.
+. "$ROOT/scripts/lib/ga-release-label.sh"
+# FIXTURE_NO_STAMP=1 (red proofs): the bake that forgot the stamp -> GA-REL-05/06 must go red.
+[ -n "${FIXTURE_NO_STAMP:-}" ] || ga_stamp_release_label "$OUT/target" "$(head -n 1 "$OUT/target/etc/ga-release" | tr -d '[:space:]')" || { echo "make-fixture: ga_stamp_release_label failed" >&2; exit 2; }
+# the real stamp lands BEFORE the rootfs is sealed; SRC-19 flags target files newer than rootfs.erofs, so the fixture's
+# stamped files keep the capture's old mtime (same device as overlay-refresh.txt "new:" entries).
+for _f in usr/lib/os-release etc/motd etc/issue; do [ -e "$OUT/target/$_f" ] && touch -d '2026-01-01' "$OUT/target/$_f"; done; true
 cp "$FX/go.mk" "$W/buildroot/package/go/go.mk"
 HV="$OUT/build/hassio-1.0.0"; IMG="$HV/images"; mkdir -p "$IMG" "$OUT/host/bin"
 cp "$FX/version.json" "$HV/version.json"

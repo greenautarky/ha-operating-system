@@ -79,19 +79,21 @@ fixture() {
       if [ "$got" = "$want" ]; then ok "$id"; else bad "$id" "$got want=$want"; fi
     }
     I=/x/images
-    # Higher version wins even when its build is OLDER — version first.
-    pick PICK-1.9-vs-1.10 "$I/bos_ihost-16.3.1.10_prod_20261001000000.img.xz" \
-      "$I/bos_ihost-16.3.1.9_prod_20261008120000.img.xz" \
-      "$I/bos_ihost-16.3.1.10_prod_20261001000000.img.xz"
-    pick PICK-1.10-vs-16.3.2 "$I/bos_ihost-16.3.2_prod_20261001000000.img.xz" \
-      "$I/bos_ihost-16.3.2_prod_20261001000000.img.xz" \
-      "$I/bos_ihost-16.3.1.10_prod_20261008120000.img.xz"
-    # Same version: the newer build; the provisioning image is never the release image.
-    pick PICK-1.10-eq-1.10 "$I/bos_ihost-16.3.1.10_prod_20261008120000.img.xz" \
-      "$I/bos_ihost-16.3.1.10_prod_20261001000000.img.xz" \
-      "$I/bos_ihost-16.3.1.10_prod_20261008120000.img.xz" \
-      "$I/bos_ihost-16.3.1.10_prod_20261008120000_provisioning.img.xz"
-    if newest_bos_image "$I/notes.txt" "$I/bos_ihost-16.3.1.10_prod_2026.img.xz" >/dev/null; then
+    # ADR-0055 names: <ga_release>_<board>_<osver>.img.xz. Higher OS version wins even when its
+    # release label is OLDER - version first.
+    pick PICK-1.9-vs-1.10 "$I/BOSv1.6.0-dev15_ihost_16.3.1.10.img.xz" \
+      "$I/BOSv1.6.0-dev16_ihost_16.3.1.9.img.xz" \
+      "$I/BOSv1.6.0-dev15_ihost_16.3.1.10.img.xz"
+    pick PICK-1.10-vs-16.3.2 "$I/BOSv1.6.0-dev15_ihost_16.3.2.img.xz" \
+      "$I/BOSv1.6.0-dev15_ihost_16.3.2.img.xz" \
+      "$I/BOSv1.6.0-dev16_ihost_16.3.1.10.img.xz"
+    # Same OS version: the higher ga_release (dev9 < dev10, a lexical sort says the opposite); the
+    # provisioning image is never the release image.
+    pick PICK-1.10-eq-1.10 "$I/BOSv1.6.0-dev10_ihost_16.3.1.10.img.xz" \
+      "$I/BOSv1.6.0-dev9_ihost_16.3.1.10.img.xz" \
+      "$I/BOSv1.6.0-dev10_ihost_16.3.1.10.img.xz" \
+      "$I/BOSv1.6.0-dev10_ihost_16.3.1.10_provisioning.img.xz"
+    if newest_bos_image "$I/notes.txt" "$I/bos_ihost-16.3.1.10_prod_20261008120000.img.xz" "$I/BOSv1.6.0_ihost_x.img.xz" >/dev/null; then
       bad PICK-nothing-qualifies "returned 0"; else ok PICK-nothing-qualifies; fi
 
     exit "$n"

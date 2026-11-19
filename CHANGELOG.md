@@ -4,8 +4,12 @@ All notable changes to the GreenAutarky OS (HAOS fork — `ghcr.io/greenautarky/
 
 Versioning follows the upstream HAOS calver (`16.X.Y`) with a GA release
 counter appended (`16.3.1.<N>` — `.1` was V1.1 fleet, `.2` is V1.2-clean,
-etc.). The image filename `bos_ihost-16.3.1.<N>_<env>_<timestamp>.img.xz`
-encodes the same tuple.
+etc.). Until BOSv1.6.1 the image filename was
+`bos_ihost-16.3.1.<N>_<env>_<timestamp>.img.xz`; **from 1.6.2 (ADR-0055) it is
+`<ga_release>_<board>_<osver>.img.xz`** (e.g. `BOSv1.6.2_ihost_18.4.1.6.img.xz`),
+and `/etc/os-release` PRETTY_NAME, `/etc/motd`, `/etc/issue` and the RAUC bundle
+description carry the ga_release. VERSION_ID, CPE_NAME, RAUC compatible/version
+and the OTA store name `haos_<board>-<osver>.raucb` are unchanged.
 
 Earlier release history (pre-2026-05-27) is in the git log + the
 [`ga-ihost-docs/RELEASE-*` docs](https://github.com/greenautarky/ga-ihost-docs).

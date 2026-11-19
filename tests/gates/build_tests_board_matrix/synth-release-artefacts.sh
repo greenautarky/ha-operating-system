@@ -15,6 +15,8 @@
 #   SYNTH_NO_SD_MARKER=1   the SD boot.vfat lacks the marker (dead detector) -> BLD-ETH-01 must FAIL
 #   SYNTH_RELEASE=X        manifest release differs from /etc/ga-release     -> RFLOOR-01 must FAIL
 #   SYNTH_NO_META=1        manifest has no [meta.ga] release                 -> RFLOOR-01 must FAIL
+#   SYNTH_NO_DESC=1        manifest has no [update] description               -> GA-REL-07 must FAIL
+#   SYNTH_DESC_REL=X       description names another ga_release               -> GA-REL-07 must FAIL
 #   SYNTH_IMG_BLANK1=1     slot pair 1 left empty (the pre-#349 layout)      -> IMG-01 must FAIL
 #   SYNTH_NO_HOOK_DECL=1   manifest without [hooks] install-check            -> BLD-VCC-02 must FAIL (iHost)
 #   SYNTH_HOOK_UPSTREAM=1  the bundle hook is upstream's (no ga_vccio5_pin)  -> BLD-VCC-02 must FAIL (iHost)
@@ -40,7 +42,9 @@ else
     grep -q '# ga_vccio5_pin || exit 11' "$T/b/hook" || { echo "synth: SYNTH_HOOK_COMMENTED did not apply (mutation dead)" >&2; exit 2; }
   fi
 fi
-{ printf '[update]\ncompatible=ga-fixture\nversion=1\n\n'
+{ printf '[update]\ncompatible=ga-fixture\nversion=1\n'
+  [ -n "${SYNTH_NO_DESC:-}" ] || printf 'description=GreenAutarky %s (HAOS 1)\n' "${SYNTH_DESC_REL:-$rel}"
+  printf '\n'
   [ -n "${SYNTH_NO_HOOK_DECL:-}" ] || printf '[hooks]\nfilename=hook\nhooks=install-check;\n\n'
   printf '[image.rootfs]\nfilename=rootfs.img\n\n'
   [ -n "${SYNTH_NO_META:-}" ] || printf '[meta.ga]\nrelease=%s\n' "${SYNTH_RELEASE:-$rel}"; } > "$T/b/manifest.raucm"

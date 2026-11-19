@@ -46,35 +46,60 @@ os_version_cmp() {
 	echo 0
 }
 
+# _nbi_label_key LABEL — a sortable key for a GA release label: BOSv1.6.0-dev16
+# < BOSv1.6.0-rc1 < BOSv1.6.0 (dev < rc < final), numeric per field. Prints
+# nothing and fails for anything that is not a label.
+_nbi_label_key() {
+	case "$1" in
+		BOSv[0-9]*.[0-9]*.[0-9]*) ;;
+		*) return 1 ;;
+	esac
+	_nlk_r="${1#BOSv}"; _nlk_b="${_nlk_r%%-*}"; _nlk_s=""
+	case "$_nlk_r" in *-*) _nlk_s="${_nlk_r#*-}" ;; esac
+	case "$_nlk_s" in
+		"")       _nlk_rank=2; _nlk_n=0 ;;
+		rc[0-9]*) _nlk_rank=1; _nlk_n="${_nlk_s#rc}" ;;
+		dev[0-9]*) _nlk_rank=0; _nlk_n="${_nlk_s#dev}" ;;
+		*) return 1 ;;
+	esac
+	case "$_nlk_n" in *[!0-9]*) return 1 ;; esac
+	IFS=. read -r _nlk_x _nlk_y _nlk_z <<EOF
+$_nlk_b
+EOF
+	case "$_nlk_x$_nlk_y$_nlk_z" in *[!0-9]*|"") return 1 ;; esac
+	printf '%05d%05d%05d%d%05d\n' "$_nlk_x" "$_nlk_y" "$_nlk_z" "$_nlk_rank" "$_nlk_n"
+}
+
 # newest_bos_image FILE... — prints the newest disk image among the arguments:
-# highest OS version, then the latest 14-digit build timestamp. Names are the
-# ones ga_build.sh writes: bos_<board>-<ver>_<tag>_<YYYYmmddHHMMSS>.img.xz.
-# Provisioning images (…_provisioning.img.xz) and names that do not parse are
+# highest OS version, then the highest ga_release label. Names are the ones
+# ga_build.sh writes (ADR-0055): <ga_release>_<board>_<osver>.img.xz, e.g.
+# BOSv1.6.0-dev16_ihost_18.4.1.6.img.xz. Provisioning images
+# (…_provisioning.img.xz), legacy bos_* names and names that do not parse are
 # skipped. Exit status 1 when nothing qualifies.
 newest_bos_image() {
-	_nbi_best=""; _nbi_bv=""; _nbi_bt=""
+	_nbi_best=""; _nbi_bv=""; _nbi_bk=""
 	for _nbi_f in "$@"; do
 		_nbi_n="${_nbi_f##*/}"
 		case "$_nbi_n" in
 			*_provisioning.img.xz) continue ;;
-			bos_*-*_*_*.img.xz) ;;
+			BOSv*_*_*.img.xz) ;;
 			*) continue ;;
 		esac
-		_nbi_r="${_nbi_n#*-}"           # <ver>_<tag>_<ts>.img.xz
-		_nbi_v="${_nbi_r%%_*}"
-		_nbi_t="${_nbi_r%.img.xz}"; _nbi_t="${_nbi_t##*_}"
+		_nbi_l="${_nbi_n%%_*}"                 # <ga_release>
+		_nbi_r="${_nbi_n#*_}"                  # <board>_<osver>.img.xz
+		_nbi_r="${_nbi_r#*_}"                  # <osver>.img.xz
+		_nbi_v="${_nbi_r%.img.xz}"
 		os_version_valid "$_nbi_v" || continue
-		case "$_nbi_t" in
-			[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
-			*) continue ;;
-		esac
+		_nbi_k="$(_nbi_label_key "$_nbi_l")" || continue
 		if [ -z "$_nbi_best" ]; then
-			_nbi_best="$_nbi_f"; _nbi_bv="$_nbi_v"; _nbi_bt="$_nbi_t"; continue
+			_nbi_best="$_nbi_f"; _nbi_bv="$_nbi_v"; _nbi_bk="$_nbi_k"; continue
 		fi
 		_nbi_c="$(os_version_cmp "$_nbi_v" "$_nbi_bv")" || continue
-		# 14-digit timestamps fit a 64-bit shell integer.
-		if [ "$_nbi_c" = 1 ] || { [ "$_nbi_c" = 0 ] && [ "$_nbi_t" -gt "$_nbi_bt" ]; }; then
-			_nbi_best="$_nbi_f"; _nbi_bv="$_nbi_v"; _nbi_bt="$_nbi_t"
+		# 21-digit keys do not fit a shell integer: equal-length strings, so a C-locale sort orders them.
+		_nbi_gt=0
+		if [ "$_nbi_k" != "$_nbi_bk" ] && [ "$(printf '%s\n%s\n' "$_nbi_k" "$_nbi_bk" | LC_ALL=C sort | tail -n 1)" = "$_nbi_k" ]; then _nbi_gt=1; fi
+		if [ "$_nbi_c" = 1 ] || { [ "$_nbi_c" = 0 ] && [ "$_nbi_gt" = 1 ]; }; then
+			_nbi_best="$_nbi_f"; _nbi_bv="$_nbi_v"; _nbi_bk="$_nbi_k"
 		fi
 	done
 	[ -n "$_nbi_best" ] || return 1
