@@ -85,8 +85,12 @@ done
 . "${SCRIPT_DIR}/lib/os-version.sh"
 # shellcheck source=lib/sha-sidecar.sh
 . "${SCRIPT_DIR}/lib/sha-sidecar.sh"
-# --release is validated below; the label is part of the file name, so a
-# release can only ever pick an image baked for ITS label.
+# The label is part of the file name, so a release can only ever pick an image
+# baked for ITS label - and it has to be a valid one before anything is globbed.
+if ! [[ "$RELEASE_LABEL" =~ ^BOSv[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
+  echo "ERROR: --release LABEL is required and must be the full label (e.g. BOSv1.6.1-rc2), got '${RELEASE_LABEL}'" >&2
+  exit 1
+fi
 IMG_XZ="$(newest_bos_image "${BUILD_DIR}/images/"${RELEASE_LABEL:-NO-RELEASE-LABEL}_*.img.xz || true)"
 if [[ -z "$IMG_XZ" ]]; then
   echo "ERROR: No ${RELEASE_LABEL:-<--release LABEL>}_<board>_<osver>.img.xz found in ${BUILD_DIR}/images/" >&2
@@ -98,10 +102,6 @@ fi
 # hash is computed from the file being released, never read from the evidence.
 # shellcheck source=lib/release-gate.sh
 . "${SCRIPT_DIR}/lib/release-gate.sh"
-if ! [[ "$RELEASE_LABEL" =~ ^BOSv[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
-  echo "ERROR: --release LABEL is required and must be the full label (e.g. BOSv1.6.1-rc2), got '${RELEASE_LABEL}'" >&2
-  exit 1
-fi
 GATE_EVIDENCE="${EVIDENCE_DIR}/${RELEASE_LABEL}.gate.txt"
 echo "Release gate: ${RELEASE_LABEL} / $(basename "$IMG_XZ") <- ${GATE_EVIDENCE}"
 if GATE_OUT="$(ga_release_gate_check "$GATE_EVIDENCE" "$RELEASE_LABEL" "$IMG_XZ")"; then
@@ -122,7 +122,7 @@ fi
 # The file name no longer carries the build timestamp (ADR-0055); the build id
 # comes from the MANIFEST the same bake wrote ("Build ID:  <YYYYmmddHHMMSS>").
 IMG_BASE="$(basename "$IMG_XZ" .img.xz)"
-BUILD_ID="$(sed -n 's/^Build ID:[[:space:]]*\([0-9]\{14\}\)[[:space:]]*$/\1/p' "${BUILD_DIR}/images/configs/MANIFEST.txt" 2>/dev/null | head -n 1)"
+BUILD_ID="$(sed -n 's/^Build ID:[[:space:]]*\([0-9]\{14\}\)[[:space:]]*$/\1/p' "${BUILD_DIR}/images/configs/MANIFEST.txt" 2>/dev/null | head -n 1 || true)"
 BUILD_ID="${BUILD_ID:-unknown}"
 echo "Release for: $IMG_BASE (build $BUILD_ID)"
 
