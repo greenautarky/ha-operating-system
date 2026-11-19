@@ -45,19 +45,26 @@ ga_artifact_parse() {
 # from the same file, so the label can never disagree with the OS version.
 # Fails (rc 1) on anything it cannot do - a silent skip would ship the old name.
 ga_stamp_release_label() {
-	local t="$1" label="$2" f osver pretty n=0
+	local t="$1" label="$2" f real osver pretty n=0 seen=" "
 	ga_release_label_valid "$label" || { echo "ga_stamp_release_label: bad ga_release '$label'" >&2; return 1; }
 	for f in "$t/usr/lib/os-release" "$t/etc/os-release"; do
 		[ -e "$f" ] || continue
-		osver="$(sed -n 's/^VERSION_ID="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$f" | head -n 1)"
-		[ -n "$osver" ] || { echo "ga_stamp_release_label: no VERSION_ID in $f" >&2; return 1; }
+		# /etc/os-release is a symlink to /usr/lib/os-release: stamp each REAL file once.
+		real="$(readlink -f "$f")" || return 1
+		case "$seen" in *" $real "*) continue ;; esac
+		seen="$seen$real "
+		osver="$(sed -n 's/^VERSION_ID="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$real" | head -n 1)"
+		[ -n "$osver" ] || { echo "ga_stamp_release_label: no VERSION_ID in $real" >&2; return 1; }
 		pretty="$(ga_pretty_name "$label" "$osver")"
-		sed -i --follow-symlinks '/^PRETTY_NAME=/d' "$f"
-		printf 'PRETTY_NAME="%s"\n' "$pretty" >> "$f"
+		sed -i '/^PRETTY_NAME=/d' "$real" || { echo "ga_stamp_release_label: cannot edit $real" >&2; return 1; }
+		printf 'PRETTY_NAME="%s"\n' "$pretty" >> "$real" || return 1
+		# exactly one PRETTY_NAME, and it is ours (a silent half-edit would ship two)
+		[ "$(grep -c '^PRETTY_NAME=' "$real")" = 1 ] && grep -qxF "PRETTY_NAME=\"$pretty\"" "$real" \
+			|| { echo "ga_stamp_release_label: $real does not end up with exactly one PRETTY_NAME=\"$pretty\"" >&2; return 1; }
 		n=$((n + 1))
 	done
 	[ "$n" -gt 0 ] || { echo "ga_stamp_release_label: no os-release under $t" >&2; return 1; }
 	mkdir -p "$t/etc"
-	printf 'Welcome to \033[01;34m%s\033[00m.\n\nUse `ha` to access the Home Assistant CLI.\n' "$pretty" > "$t/etc/motd"
-	printf '%s \\n \\l\n' "$pretty" > "$t/etc/issue"
+	printf 'Welcome to \033[01;34m%s\033[00m.\n\nUse `ha` to access the Home Assistant CLI.\n' "$pretty" > "$t/etc/motd" || return 1
+	printf '%s \\n \\l\n' "$pretty" > "$t/etc/issue" || return 1
 }
