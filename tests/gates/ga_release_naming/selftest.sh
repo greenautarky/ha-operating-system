@@ -9,7 +9,7 @@
 #   scripts/lib/release-gate.sh            ga_gate_needs_vccio5 (file-name driven)
 #   scripts/push-ota.sh                    version-from-filename fallback (extracted)
 #   patches-haos/0114 via apply-haos-patches.sh --cat  the RAUC manifest template
-# FIXTURES: must-pass = names/targets the gate accepts; must-fail = what it must refuse
+# FIXTURES: names and targets the gate lets through (must-pass), and what it has to refuse (must-fail)
 #   (legacy bos_*_prod_<ts> names, the OTA store name haos_<board>-<ver>.raucb, a stamper that
 #   replaced the os-release symlink, one that moved VERSION_ID/CPE_NAME ...).
 # RED PROOF (part of the test): five mutants of the live code, each must go red on the SPECIFIC
@@ -198,7 +198,7 @@ expect_red nosymlink 'STAMP-etc-os-release-still-a-symlink'
 # 3: stamper that "helpfully" renames the technical identity as well
 mutant techmove 'ga_stamp_release_label() { local t="$1" l="$2"; local f="$t/usr/lib/os-release"; sed -i "s/^PRETTY_NAME=.*/PRETTY_NAME=\"GreenAutarky $l (HAOS 18.4.1.6)\"/; s/^VERSION_ID=.*/VERSION_ID=\"$l\"/" "$f"; echo "GreenAutarky $l (HAOS 18.4.1.6)" > "$t/etc/motd"; echo "GreenAutarky $l (HAOS 18.4.1.6)" > "$t/etc/issue"; }'
 expect_red techmove 'TECH-unchanged\[VERSION_ID\]'
-# 4: parser that still accepts the legacy name
+# 4: parser that takes legacy names as artefact names
 mutant legacyparse 'ga_artifact_parse() { [[ "${1##*/}" =~ ^(bos|BOSv)[^_]*_ ]] && echo "BOSv0.0.0 ihost 1"; }'
 expect_red legacyparse 'PARSE-fail\[bos_ihost'
 # 5: the live rename mutated back to the old scheme (bos_ + _prod_ + timestamp)
