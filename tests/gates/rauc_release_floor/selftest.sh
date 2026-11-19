@@ -299,11 +299,11 @@ fi
 # --- D: ga-rauc-install label ------------------------------------------------
 echo "--- D: ga-rauc-install ga_release label ---"
 # Stubs for the environment only: mkdir (the staging dir is /mnt/data/tmp) and
-# curl (records the URL, then fails the download). The label check and the URL
+# curl (records the URL - the .sha256 sidecar suffix stripped, Odoo #2136 - then fails the download). The label check and the URL
 # construction under test run unchanged.
 DS="$W/dstub"; mkdir -p "$DS"
 printf '#!/bin/sh\nexit 0\n' > "$DS/mkdir"
-printf '#!/bin/sh\nfor a; do case "$a" in https://*) echo "$a" >> "%s/curl.log";; esac; done\nexit 22\n' "$W" > "$DS/curl"
+printf '#!/bin/sh\nfor a; do case "$a" in https://*) echo "${a%%.sha256}" >> "%s/curl.log";; esac; done\nexit 22\n' "$W" > "$DS/curl"
 chmod +x "$DS/mkdir" "$DS/curl"
 # ga-rauc-install downloads only through the endpoint ga-resolve-ota pinned
 # (tests/ga_tests/ota_fetch covers that); give it one so this part keeps testing

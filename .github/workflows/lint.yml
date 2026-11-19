@@ -236,6 +236,32 @@ jobs:
         timeout-minutes: 5
         run: sh tests/ga_tests/ota_bundle_name/test.sh
 
+      - name: ota_resume — ga-rauc-install fetches resumably, installs only a verified bundle (Odoo #2136)
+        # The REAL installer with the REAL curl against a REAL HTTPS fixture
+        # (Range, ETag/If-Range, cuts, stalls, 404, refused connections) on a
+        # mesh address inside a network+PID namespace (--kill-child: the
+        # installer's detached reboot cannot outlive a case). Resume after
+        # cuts at ~1.0x wire bytes, stall detection, slot choice by sidecar
+        # (prod fallback only on an HTTP error, never on a network error),
+        # sha256 before install, the request surviving a killed run, a new
+        # request superseding, the status-file seam to ga_manager. Red-proven
+        # against origin/feat/1.6-haos18: 16 of 26 checks fail. dash and
+        # busybox sh (the device's shell).
+        timeout-minutes: 15
+        run: |
+          sh tests/ga_tests/ota_resume/test.sh
+          GA_T_SHELL="busybox sh" sh tests/ga_tests/ota_resume/test.sh
+
+      - name: ota_resume selftest — every guard goes red on its own defect
+        # Ten mutants of the LIVE installer (fallback on any error, no resume,
+        # no sha256 check, request not persisted, a renamed status key, no
+        # stall detection, no supersede, a stale partial kept after a refused
+        # resume, no per-run deadline, attempts reset per run); each must turn
+        # exactly the named check red. A mutation
+        # target no longer in the script fails the step (rule 51).
+        timeout-minutes: 20
+        run: sh tests/ga_tests/ota_resume/selftest.sh
+
       - name: gen_expected.sh works from any cwd (the release-train's call shape)
         # The generator computed its output path relative to the CALLER's cwd and
         # then cd'd to the repo root. So it worked from the repo root — how every
@@ -454,7 +480,7 @@ jobs:
         # mutants (always ping, flag ignored, no arming, hang counted ok).
         run: sh tests/ga_tests/storage_watchdog/selftest.sh
 
-      - name: On-device suites of 2026-11-17 and 2026-11-18 - host-side selftests (ga_manager_guard_device, ga_manager_stop, uplink_device, ota_identity_device, resident_info_device, baked_boot_device, storage_watchdog_device, uplink_lte_builtin_device)
+      - name: On-device suites of 2026-11-17 to 2026-11-19 - host-side selftests (ga_manager_guard_device, ga_manager_stop, uplink_device, ota_identity_device, resident_info_device, baked_boot_device, storage_watchdog_device, uplink_lte_builtin_device, ota_resume_device)
         # The standing rule "every feature gets an on-device test" ships seven suites that run on
         # K31 / DUT2. Their LOGIC is proven here, on every pull request, by driving each LIVE
         # test.sh (and, for the destructive guard cases, the LIVE ga-manager-guard / ga-rauc-install
@@ -463,7 +489,7 @@ jobs:
         # the destructive steps must SKIP without GA_TEST_DESTRUCTIVE, DSGW rows must SKIP with
         # their reason. Both dash and busybox sh (the device's shell).
         run: |
-          for s in ga_manager_guard_device ga_manager_stop uplink_device ota_identity_device resident_info_device baked_boot_device storage_watchdog_device uplink_lte_builtin_device; do
+          for s in ga_manager_guard_device ga_manager_stop uplink_device ota_identity_device resident_info_device baked_boot_device storage_watchdog_device uplink_lte_builtin_device ota_resume_device; do
             echo "=== $s"
             sh tests/ga_tests/$s/selftest.sh || exit 1
             GA_T_SHELL="busybox sh" sh tests/ga_tests/$s/selftest.sh || exit 1

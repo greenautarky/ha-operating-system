@@ -1,0 +1,24 @@
+# ga-rauc-install-resume.service — re-arm an accepted OS install request at boot.
+#
+# ga-rauc-install accepts a request into /mnt/data/ga-ota/request and keeps it
+# there until the bundle is installed or the fetch gives up. A reboot during the
+# download (power cut, watchdog) would otherwise leave the request stranded with
+# its partial download; this unit starts ga-rauc-install.service again, which
+# resumes from the partial (Odoo #2136).
+#
+# It only STARTS the one install unit (--no-block), so a boot re-arm and a
+# path-unit trigger can never run two installs at once.
+
+[Unit]
+Description=Resume an accepted GA OS install request after boot
+After=mnt-data.mount network-online.target
+Requires=mnt-data.mount
+Wants=network-online.target
+ConditionPathExists=/mnt/data/ga-ota/request
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl start --no-block ga-rauc-install.service
+
+[Install]
+WantedBy=multi-user.target

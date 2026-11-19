@@ -104,7 +104,7 @@ NB_UP='{"daemonStatus":"Connected","management":{"url":"https://mgmt.example:443
 
 T0=1790000000
 reset_all() {
-  rm -f "$W"/actions.log "$W"/curl.log "$W"/state/* "$W"/share/* "$W"/ota_state "$W"/sys_state "$W"/jobs "$W"/rauc_op "$W"/systemctl_rc "$W"/out.all "$W"/nm "$W"/wifi_last "$W"/ledger
+  rm -f "$W"/actions.log "$W"/curl.log "$W"/state/* "$W"/share/* "$W"/ota_state "$W"/sys_state "$W"/jobs "$W"/rauc_op "$W"/systemctl_rc "$W"/out.all "$W"/nm "$W"/wifi_last "$W"/ledger "$W"/ota_phase
   echo "$T0" > "$W/now"; echo ok > "$W/mesh"; echo up > "$W/cloud"; echo wt0 > "$W/route_dev"
   printf '%s' "$NB_UP" > "$W/nb_json"
   base_conf; rm -f "$W/fallback" "$W/override.conf"; unset OVR DFL
@@ -116,7 +116,7 @@ tick() {
   GA_MESH_CONF_OVERRIDE="${OVR:-$W/ga-services.conf}" GA_MESH_CONF_DEFAULT="${DFL:-$W/ga-services.conf}" \
   GA_MESH_SYS_NET="$W/sysnet" GA_MESH_STATE_DIR="$W/state" GA_MESH_STATE_FILE="$W/state/wd.state" \
   GA_MESH_SHARE_FILE="$W/share/ga-mesh-watchdog.json" GA_SHARE_PUBLISH="$PUB" GA_SHARE_STAGE_DIR="$W/stage" \
-  GA_MESH_WIFI_LAST_ACTION="$W/wifi_last" GA_MESH_REBOOT_LEDGER="$W/ledger" \
+  GA_MESH_WIFI_LAST_ACTION="$W/wifi_last" GA_MESH_REBOOT_LEDGER="$W/ledger" GA_MESH_OTA_PHASE_FILE="$W/ota_phase" \
   sh "$WD" > "$W/out" 2>&1
   cat "$W/out" >> "$W/out.all"
 }
@@ -157,6 +157,14 @@ run_test "MWD-06" "a cloud outage resets the streak: 2 dead + cloud down + 2 dea
 reset_all; echo dead > "$W/mesh"; echo activating > "$W/ota_state"; ticks 0 14400 600
 run_test "MWD-07" "an OS install in progress (ga-rauc-install activating): no action" \
   "[ -z \"\$(actions)\" ] && [ \"\$(st verdict)\" = held ]"
+reset_all; echo dead > "$W/mesh"; echo activating > "$W/ota_state"; echo installing > "$W/ota_phase"; ticks 0 14400 600
+run_test "MWD-07b" "ga-rauc-install activating in phase installing: no action" \
+  "[ -z \"\$(actions)\" ] && [ \"\$(st verdict)\" = held ]"
+for ph in downloading retrying; do
+  reset_all; echo dead > "$W/mesh"; echo activating > "$W/ota_state"; echo "$ph" > "$W/ota_phase"; ticks 0 14400 600
+  run_test "MWD-07c-$ph" "a resumable OTA download ($ph) does NOT hold back a dead-mesh repair (Odoo #2136)" \
+    "[ -n \"\$(actions)\" ] && [ \"\$(st verdict)\" != held ]"
+done
 reset_all; echo dead > "$W/mesh"; echo installing > "$W/rauc_op"; ticks 0 14400 600
 run_test "MWD-08" "RAUC reports an operation: no action" \
   "[ -z \"\$(actions)\" ] && [ \"\$(st verdict)\" = held ]"
