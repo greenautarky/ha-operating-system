@@ -292,7 +292,9 @@ if [[ $rc -ne 0 ]] && grep -qE 'cannot read gaos_release' <<<"$out"; then
 else bad "unreadable line must be strict and loud (rc=$rc)"; sed 's/^/      /' <<<"$out"; fi
 # must-flag: the OWN_SET_LINES definition cannot be found -> FAIL, never a silent fallback (rule 51c)
 make_repo "1.2.0" "$IMAGE" "BOSv1.5.4"; make_store "1.3.0"
-mkdir -p "$WORK/lone"; cp "$REPIN" "$WORK/lone/repin-addons.py"
+# The pin rules (scripts/lib/pin_policy.py) travel with the script: only check-images.sh, which
+# holds OWN_SET_LINES, is missing here, so this case still proves THAT guard and nothing else.
+mkdir -p "$WORK/lone/lib"; cp "$REPIN" "$WORK/lone/repin-addons.py"; cp "$ROOT/scripts/lib/pin_policy.py" "$WORK/lone/lib/"
 ran=$((ran + 1))
 out="$(REPO_ROOT="$WORK/repo" python3 "$WORK/lone/repin-addons.py" --check --store "$WORK/store" 2>&1)"; rc=$?
 if [[ $rc -ne 0 ]] && grep -qE 'cannot read OWN_SET_LINES' <<<"$out"; then
