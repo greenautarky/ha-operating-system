@@ -2,7 +2,11 @@
   "addons": {
     "mosquitto": {
       "image": "ghcr.io/greenautarky/ga_mosquitto-{arch}",
-      "version": "7.2.6"
+      "version": "7.2.7",
+      "store_ahead": {
+        "reason": "7.2.7 = security rebuild of 7.2.6 (nginx CVE-2026-113425/121810/123007/123633, krb5 deb13u2, Go 1.27.3; MQTT #19), no source change. Pinned for the BOSv1.6.1-rc3 re-bake; store sync follows with the rc3 rollout decision (Manager 2026-11-23).",
+        "until": "2026-12-10"
+      }
     },
     "ga_ihosthardwarecontrol": {
       "image": "ghcr.io/greenautarky/ga_ihosthardwarecontrol-{arch}",
