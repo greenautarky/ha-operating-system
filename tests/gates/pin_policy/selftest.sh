@@ -80,12 +80,26 @@ seq=['2.12.1','2.12.1-11','2.12.1-12','2.12.2']
 assert all(p.is_newer(b,a) for a,b in zip(seq,seq[1:])), 'order'
 assert not p.is_newer('0.0.23','0.0.25')" && ok "ordering 2.12.1 < -11 < -12 < 2.12.2" || bad "ordering wrong"
 
+echo "== hold: the same window rules, via the live CLI (also read by the bake pre-check) =="
+hold_case() { # hold_case <name> <hold-json-or-empty> <want-rc> [<why-must-contain>]
+  printf '{"addons":{"k":{"version":"1"%s}}}\n' "${2:+, \"hold\": $2}" > "$WORK/hold.json"
+  local out rc; out="$(GA_TODAY=$TODAY python3 "$POL" hold "$WORK/hold.json" k)"; rc=$?
+  [[ "$rc" == "$3" ]] && { [[ -z "${4:-}" ]] || grep -q -- "$4" <<<"$out"; } && ok "hold: $1 -> rc $rc" || bad "hold: $1 -> rc $rc (want $3): $out"
+}
+hold_case "valid hold"            "$(SA 'Manager decision' 2026-12-18)" 0
+hold_case "no hold declared"      ""                                    1
+hold_case "expired hold"          "$(SA 'x' 2026-11-01)"                3 "hold expired on 2026-11-01"
+hold_case "hold without a reason" "$(SA '' 2026-12-10)"                 3 "hold has no reason"
+hold_case "hold > 30 days"        "$(SA 'x' 2027-02-01)"                3 "more than 30 days"
+hold_case "malformed hold until"  "$(SA 'x' 18.12.2026)"                3 "not YYYY-MM-DD"
+hold_case "hold not an object"    '"until-2026-12-18"'                  3 "not an object"
+
 echo "== one definition: no consumer re-declares the rules =="
 n="$(grep -lE '^def _is_prerelease|suffix\) and any\(ch\.isalpha' "$ROOT"/scripts/*.py 2>/dev/null | wc -l)"
 [[ "$n" == 0 ]] && ok "no python consumer defines its own _is_prerelease" || bad "$n python consumer(s) still define _is_prerelease"
-grep -qE "grep -q '\[A-Za-z\]'|_sa_until\" < \"\\\$_today\"|\[\[ \"\\\$_sa_until\" [<>]" "$GATE" && bad "check-images.sh still decides the rules itself" || ok "check-images.sh delegates the verdicts to pin_policy.py"
+grep -qE "grep -q '\[A-Za-z\]'|_sa_until\" < \"\\\$_today\"|\[\[ \"\\\$_sa_until\" [<>]|\[\[ \"\\\$hold_until\" [<>]|hold_limit=" "$GATE" && bad "check-images.sh still decides the rules itself" || ok "check-images.sh delegates the verdicts to pin_policy.py"
 
 echo
 echo "pin policy selftest: ${ran} checks, ${fails} failed"
-[[ "$ran" -ge 22 ]] || { echo "FATAL: only ${ran} checks ran"; exit 2; }
+[[ "$ran" -ge 29 ]] || { echo "FATAL: only ${ran} checks ran"; exit 2; }
 [[ "$fails" -eq 0 ]]
