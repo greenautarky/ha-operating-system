@@ -273,8 +273,8 @@ _read_addon_field() {
     esac
 }
 
-# Is this a canary tag rather than a release? SAME RULE as
-# scripts/check-addon-pins.py::_is_prerelease, and it has to stay the same rule:
+# Is this a canary tag rather than a release? Defined ONCE in scripts/lib/pin_policy.py and shared
+# with check-addon-pins.py and repin-addons.py, because it has to stay the same rule:
 # one of them proposes pins and the other blocks the build, so if they disagree
 # the proposer offers a bump the gate then refuses.
 #
@@ -287,12 +287,9 @@ _read_addon_field() {
 # This was `^[0-9]+([.][0-9]+)+$`, which silently dropped every revision tag, so the drift gate never
 # examined ga_zigbee2mqtt (Odoo #1616). sort -V orders `2.12.1-12` after `2.12.1-11` and after `2.12.1`.
 RELEASE_TAG_RE='^[0-9]+([.][0-9]+)+(-[0-9]+)?$'
-_is_prerelease() {
-    _ipr_suffix="${1#*-}"
-    [ "$_ipr_suffix" = "$1" ] && return 1          # no dash at all
-    [ -z "$_ipr_suffix" ] && return 1
-    printf '%s' "$_ipr_suffix" | grep -q '[A-Za-z]'
-}
+PIN_POLICY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/pin_policy.py"
+[ -f "$PIN_POLICY" ] || { echo "FATAL: $PIN_POLICY missing — the pin rules have ONE definition and it is not here"; exit 2; }
+_is_prerelease() { python3 "$PIN_POLICY" is-prerelease "$1"; }   # ONE rule: scripts/lib/pin_policy.py
 
 # A pin may be AHEAD of the store when a newer image is needed on ONE board before the shared store can move
 # (the store is one file for every board and moves with the release set). Declared next to the pin, like a
@@ -301,21 +298,18 @@ _is_prerelease() {
 # than the image bakes. It excuses ONLY "pin newer than the store"; a pin BEHIND the store stays a failure.
 #     "store_ahead": {"reason": "<why, who decided>", "until": "YYYY-MM-DD"}
 ahead_count=0
-_store_ahead_ok() {  # <key> <pinned> <store version>; sets _sa_reason / _sa_until / _sa_why
+_store_ahead_ok() {  # <key> <pinned> <store version>; sets _sa_reason / _sa_until / _sa_why. Verdict: pin_policy.py.
     _sa_reason=""; _sa_until=""; _sa_why=""
     _sa_reason=$(jq -r ".addons.\"$1\".store_ahead.reason // empty" "$ADDON_IMAGES_JSON")
     _sa_until=$(jq -r ".addons.\"$1\".store_ahead.until // empty" "$ADDON_IMAGES_JSON")
-    [ -n "$_sa_reason$_sa_until" ] || return 1
-    local _today="${GA_TODAY:-$(date -u +%F)}" _limit
-    _limit="$(date -u -d "${_today} +30 days" +%F)"
-    if [ -z "$_sa_reason" ]; then _sa_why="store_ahead has no reason"
-    elif ! [[ "$_sa_until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then _sa_why="store_ahead until '${_sa_until}' is not YYYY-MM-DD"
-    elif [[ "$_sa_until" < "$_today" ]]; then _sa_why="store_ahead expired on ${_sa_until}"
-    elif [[ "$_sa_until" > "$_limit" ]]; then _sa_why="store_ahead until ${_sa_until} is more than 30 days ahead"
-    elif [ "$(printf '%s\n%s\n' "$2" "$3" | sort -V | tail -1)" != "$2" ] || [ "$2" = "$3" ]; then
-        _sa_why="store_ahead is declared but the pin is not newer than the store (${2} vs ${3})"
-    fi
-    [ -z "$_sa_why" ]
+    local _rc
+    _sa_why="$(GA_TODAY="${GA_TODAY:-}" python3 "$PIN_POLICY" store-ahead "$ADDON_IMAGES_JSON" "$1" "$2" "$3")"; _rc=$?
+    case "$_rc" in
+        0) return 0 ;;
+        1) _sa_why=""; return 1 ;;
+        3) return 1 ;;
+        *) echo "FATAL: pin_policy.py store-ahead failed (rc=$_rc): $_sa_why"; exit 2 ;;
+    esac
 }
 
 if [ -f "$ADDON_IMAGES_JSON" ] && command -v git >/dev/null 2>&1; then
@@ -427,18 +421,15 @@ fi
 #     "hold": {"reason": "<why, who decided>", "until": "YYYY-MM-DD"}
 # A valid hold turns DRIFT into HOLD (counted, printed, not fatal). It is
 # INVALID - and the drift counts again - when the reason is empty, the date
-# is malformed, already past, or more than HOLD_MAX_DAYS (30) ahead: a hold
-# must end, or it becomes the permanent drift this check exists to find.
-# GA_TODAY overrides today's date for the selftest only.
+# is malformed, already past, or more than 30 days ahead: a hold must end, or
+# it becomes the permanent drift this check exists to find. The verdict is
+# scripts/lib/pin_policy.py's (`hold`); GA_TODAY overrides today for selftests.
 if [ -f "$ADDON_IMAGES_JSON" ] && command -v skopeo >/dev/null 2>&1; then
     echo ""
     echo "--- delivery drift (pinned vs newest tag actually published) ---"
     drift_seen=0
     drift_fatal=0
     held_count=0
-    HOLD_MAX_DAYS=30
-    today="${GA_TODAY:-$(date -u +%F)}"
-    hold_limit="$(date -u -d "${today} +${HOLD_MAX_DAYS} days" +%F)"
     for key in $(jq -r '.addons | keys[]' "$ADDON_IMAGES_JSON"); do
         image=$(jq -r ".addons.\"${key}\".image" "$ADDON_IMAGES_JSON" | sed "s/{arch}/${ARCH}/")
         pinned=$(jq -r ".addons.\"${key}\".version // empty" "$ADDON_IMAGES_JSON")
@@ -497,14 +488,18 @@ if [ -f "$ADDON_IMAGES_JSON" ] && command -v skopeo >/dev/null 2>&1; then
         else
             hold_reason=$(jq -r ".addons.\"${key}\".hold.reason // empty" "$ADDON_IMAGES_JSON")
             hold_until=$(jq -r ".addons.\"${key}\".hold.until // empty" "$ADDON_IMAGES_JSON")
-            hold_why=""
-            if [ -n "$hold_reason$hold_until" ]; then
-                if [ -z "$hold_reason" ]; then hold_why="hold has no reason"
-                elif ! [[ "$hold_until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then hold_why="hold until '${hold_until}' is not YYYY-MM-DD"
-                elif [[ "$hold_until" < "$today" ]]; then hold_why="hold expired on ${hold_until}"
-                elif [[ "$hold_until" > "$hold_limit" ]]; then hold_why="hold until ${hold_until} is more than ${HOLD_MAX_DAYS} days ahead"
-                fi
-                if [ -z "$hold_why" ]; then
+            # The verdict is pin_policy.py's (ONE definition, also read by the bake pre-check).
+            # `|| hold_rc=$?`, not `; hold_rc=$?`: this script runs under set -e, and a bare non-zero
+            # assignment would end it right here with pin_policy's exit code.
+            hold_rc=0
+            hold_why="$(GA_TODAY="${GA_TODAY:-}" python3 "$PIN_POLICY" hold "$ADDON_IMAGES_JSON" "$key")" || hold_rc=$?
+            case "$hold_rc" in
+                0|3) ;;
+                1) hold_why="" ;;
+                *) echo "FATAL: pin_policy.py hold failed (rc=$hold_rc): $hold_why"; exit 2 ;;
+            esac
+            if [ "$hold_rc" != 1 ]; then
+                if [ "$hold_rc" = 0 ]; then
                     held_count=$((held_count + 1))
                     printf "${YELLOW}HOLD${NC}: %s pinned %s, %s is published — held until %s: %s\n" \
                         "$key" "$pinned" "$newest" "$hold_until" "$hold_reason"

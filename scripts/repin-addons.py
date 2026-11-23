@@ -47,8 +47,8 @@ store entry reads the same here as in the gate. Stdlib only — no PyYAML — fo
 same reason the gate uses awk/jq instead of a YAML library: fewer moving parts on
 an operator's laptop, and the same parse either way.
 
-The canary rule (``_is_prerelease``) is the SAME rule as
-``check-images.sh::_is_prerelease`` and ``check-addon-pins.py::_is_prerelease``,
+The canary rule (``_is_prerelease``) and the ``store_ahead`` rule are defined ONCE,
+in ``scripts/lib/pin_policy.py``, shared with check-images.sh and check-addon-pins.py,
 and it has to stay the same: a store on a canary (``1.3.0-ga.1``) is a decision
 to bake a branch build onto every device, never a lock-step repair — so it is
 reported and NEVER auto-pinned. A plain numeric suffix (z2m's ``2.12.1-4``) is a
@@ -85,6 +85,12 @@ import subprocess
 import sys
 import tempfile
 
+# The pin rules live in ONE place (scripts/lib/pin_policy.py), loaded from this
+# script's own directory — never from a REPO_ROOT override — so a selftest over a
+# scratch tree runs the LIVE rules too.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
+import pin_policy  # noqa: E402
+
 # REPO_ROOT is overridable exactly like scripts/check-images.sh honours it, so
 # the selftest can drive this over a scratch tree. Every real invocation derives
 # it from the script location.
@@ -107,18 +113,7 @@ MARKER_LINE_RE = re.compile(r"^(?P<pre>gaos_release:[ \t]*)(?P<ver>\S+)(?P<post>
 MARKER_FMT_RE = re.compile(r"^BOSv\d+\.\d+\.\d+(-rc\d+)?$")
 
 
-def _is_prerelease(version: str) -> bool:
-    """True for a canary tag, False for a normal release or a release revision.
-
-    SAME RULE as scripts/check-images.sh::_is_prerelease and
-    scripts/check-addon-pins.py::_is_prerelease. The naive "contains a dash" test
-    is wrong: z2m ships as ``2.12.1-4`` (upstream version + add-on revision) and
-    treating that as a canary would silently stop repinning z2m forever. Our
-    canary tags carry LETTERS after the dash (``1.3.0-ga.1``).
-    """
-    _, _, suffix = version.partition("-")
-    return bool(suffix) and any(ch.isalpha() for ch in suffix)
-
+_is_prerelease = pin_policy.is_prerelease  # ONE rule: scripts/lib/pin_policy.py
 
 def read_config_field(cfg: pathlib.Path, field: str) -> str | None:
     """Read one top-level scalar from a store add-on config.
@@ -192,10 +187,11 @@ class Comparison:
         self.drift: list[tuple[str, str, str, str]] = []        # (key, image, pinned, store)
         self.prerelease: list[tuple[str, str, str]] = []        # (key, store, pinned)
         self.missing: list[tuple[str, str]] = []                # (key, image)
+        self.ahead: list[tuple[str, str, str, str]] = []        # (key, pinned, store, reason) — declared store_ahead
 
     @property
     def compared(self) -> int:
-        return len(self.ok) + len(self.drift) + len(self.prerelease)
+        return len(self.ok) + len(self.drift) + len(self.prerelease) + len(self.ahead)
 
     @property
     def clean(self) -> bool:
@@ -217,7 +213,16 @@ def compare(pins: dict, store_index: dict[str, tuple[str, str]]) -> Comparison:
             # Store is on a canary, pin holds a release: a decision, not drift.
             c.prerelease.append((key, store_version, pinned))
         elif pinned != store_version:
-            c.drift.append((key, image, pinned, store_version))
+            # A pin deliberately AHEAD of the store, declared and valid, is not
+            # drift — the SAME verdict check-images.sh reaches (pin_policy).
+            declared, ok, why = pin_policy.store_ahead_verdict(
+                entry, pinned, store_version, os.environ.get("GA_TODAY") or None)
+            if declared and ok:
+                c.ahead.append((key, pinned, store_version, str(entry["store_ahead"].get("reason", ""))))
+            else:
+                if declared:
+                    print(f"  INVALID store_ahead {key}: {why} — counted as drift")
+                c.drift.append((key, image, pinned, store_version))
         else:
             c.ok.append((key, pinned))
     return c
@@ -227,8 +232,11 @@ def print_report(c: Comparison, total_pins: int, store_entries: int) -> None:
     print(
         f"inspected {total_pins} pins against {store_entries} store entries: "
         f"{len(c.ok)} in lockstep, {len(c.drift)} drifted, "
-        f"{len(c.prerelease)} on a pre-release, {len(c.missing)} with no store entry"
+        f"{len(c.prerelease)} on a pre-release, {len(c.ahead)} declared ahead of the store, "
+        f"{len(c.missing)} with no store entry"
     )
+    for key, pinned, store_v, reason in c.ahead:
+        print(f"  AHEAD-OF-STORE {key}: pinned {pinned}, store {store_v} — declared store_ahead ({reason[:80]})")
     for key, store_v, pinned in c.prerelease:
         print(f"  PRERELEASE {key}: store is on canary {store_v}, pin holds release {pinned} "
               f"— NOT drift; baking a canary is a deliberate decision, left as-is")

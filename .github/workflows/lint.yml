@@ -683,6 +683,20 @@ jobs:
         # board files existed (10 of 23 cases flip).
         run: sh tests/ga_tests/board_conf/test.sh
 
+      - name: board components - components_<board> staged on that board only
+        # Runs the live sync-components.sh / ga_build pre-flight / build-test
+        # image check against a fixture repo (Odoo #2187). Needs yq (runner
+        # image); without it the sync rows FAIL here, never skip. Red-proven
+        # against today's sync: a board block is silently ignored (DSGW image
+        # lacks the component, BCI-01) and a shared pin lands in the iHost image
+        # (BCI-02).
+        run: bash tests/ga_tests/board_components/test.sh
+      - name: lte_rat - the BG96 RAT config is read, never written (Odoo #2187)
+        # Live dsgw210-lte-rat.sh against a fake BG96 on a pty that logs every
+        # command; a committed must-fail fixture (the pre-#2187 QCFG writes)
+        # proves the guard can go red.
+        run: sh tests/ga_tests/lte_rat/test.sh
+
       - name: build tests - per-board skips (table held to the live runner)
         # tests/ga_tests/build_board_skips.tsv turns a FAIL into a SKIP with a
         # stated reason for one board. The gate checks every row against the live
@@ -1080,6 +1094,11 @@ jobs:
       # green on lockstep. No registry, no network.
       - name: Repin tool (agrees with the lockstep gate; red on drift, green on lockstep)
         run: ./tests/gates/repin_addons/selftest.sh
+      # ONE pin policy (scripts/lib/pin_policy.py): repin-addons.py --check and
+      # check-images.sh must reach the SAME verdict on store_ahead (rc3 bake
+      # 45225913542 was blocked because they did not).
+      - name: pin policy (one definition; repin and check-images agree on store_ahead)
+        run: ./tests/gates/pin_policy/selftest.sh
 
       - name: ssh-posture gate self-test (ADR-0019 — both directions)
         run: ./tests/gates/ssh_posture/selftest.sh

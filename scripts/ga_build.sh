@@ -249,6 +249,19 @@ if [ -f "${REPO_ROOT:-$(pwd)}/version.yaml" ]; then
     exit 1
   fi
 
+  # components_<board>: blocks (Odoo #2187) — this board's pins synced into ITS
+  # overlay, and no board component of any board in the shared overlay.
+  # shellcheck source=lib/tree-paths.sh
+  . "${SCRIPT_DIR}/lib/tree-paths.sh"
+  # shellcheck source=lib/ga-components.sh
+  . "${SCRIPT_DIR}/lib/ga-components.sh"
+  if ! ga_board_components_preflight "${REPO_ROOT:-$(pwd)}" "${BOARD:-ihost}"; then
+    echo "" >&2
+    echo "ABORT: board components out of sync (see FAIL lines above). Fix:" >&2
+    echo "  (host)  cd ${REPO_ROOT:-$(pwd)} && ./scripts/sync-components.sh" >&2
+    exit 1
+  fi
+
   # rootfs_overlays staleness check — fail fast if the on-disk synced
   # version doesn't match version.yaml. Without this, a forgotten
   # `sync-components.sh` ships an image with stale Tier-2 service files
