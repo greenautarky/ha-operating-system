@@ -142,8 +142,9 @@ if [ -n "$GA_RELEASE" ]; then
 fi
 
 # Per-rc slot when a ga_release is given, else the version-only prod slot.
-# With a ga_release we FALL BACK to the prod slot on a 404 so a device is never
-# stranded if the per-rc bundle wasn't staged (e.g. transitional roll).
+# With a ga_release we FALL BACK to the prod slot on a 404 - and only on a 404 -
+# so a device is never stranded if the per-rc bundle wasn't staged (e.g.
+# transitional roll).
 # The endpoint every download below connects to. Read it from the resolver's
 # pick; if there is none yet (boot race, /run cleared), run the resolver once.
 # Only a dotted IPv4 address in the mesh's CGNAT range (first octet 100,
@@ -314,15 +315,22 @@ mkdir -p "$STAGING_DIR"
 BUNDLE="$STAGING_DIR/ga-rauc-install-${VERSION}.raucb"
 
 echo "[ga-rauc-install] downloading $PRIMARY_URL"
-if ! ota_curl --fail --silent --show-error --location --resolve "$OTA_RESOLVE" --output "$BUNDLE" "$PRIMARY_URL"; then
-    if [ -n "$FALLBACK_URL" ]; then
-        echo "[ga-rauc-install] per-rc slot miss — falling back to $FALLBACK_URL" >&2
+# The prod-slot fallback is for a per-rc slot that is NOT STAGED - HTTP 404 -
+# only. Any other failure (no connection, timeout, 5xx, 403, ...) ends the run:
+# falling back on it would install the PROD bundle on a canary that merely lost
+# its link or met a server error (Odoo #2136).
+_rc=0
+_code="$(ota_curl --fail --silent --show-error --location --resolve "$OTA_RESOLVE" \
+    --write-out '%{http_code}' --output "$BUNDLE" "$PRIMARY_URL")" || _rc=$?
+if [ "$_rc" != 0 ]; then
+    if [ -n "$FALLBACK_URL" ] && [ "$_rc" = 22 ] && [ "$_code" = 404 ]; then
+        echo "[ga-rauc-install] per-rc slot miss (404) — falling back to $FALLBACK_URL" >&2
         if ! ota_curl --fail --silent --show-error --location --resolve "$OTA_RESOLVE" --output "$BUNDLE" "$FALLBACK_URL"; then
             echo "[ga-rauc-install] FATAL: download failed for $PRIMARY_URL and $FALLBACK_URL via the pinned endpoint ${OTA_IP}" >&2
             exit 3
         fi
     else
-        echo "[ga-rauc-install] FATAL: download failed for $PRIMARY_URL via the pinned endpoint ${OTA_IP}" >&2
+        echo "[ga-rauc-install] FATAL: download failed for $PRIMARY_URL via the pinned endpoint ${OTA_IP} (curl exit $_rc, HTTP ${_code:-none})${FALLBACK_URL:+ — no prod-slot fallback: only a 404 means the per-rc slot is not staged}" >&2
         exit 3
     fi
 fi

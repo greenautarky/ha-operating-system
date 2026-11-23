@@ -1063,6 +1063,11 @@ jobs:
       # green on lockstep. No registry, no network.
       - name: Repin tool (agrees with the lockstep gate; red on drift, green on lockstep)
         run: ./tests/gates/repin_addons/selftest.sh
+      # ONE pin policy (scripts/lib/pin_policy.py): repin-addons.py --check and
+      # check-images.sh must reach the SAME verdict on store_ahead (rc3 bake
+      # 45225913542 was blocked because they did not).
+      - name: pin policy (one definition; repin and check-images agree on store_ahead)
+        run: ./tests/gates/pin_policy/selftest.sh
 
       - name: ssh-posture gate self-test (ADR-0019 — both directions)
         run: ./tests/gates/ssh_posture/selftest.sh
