@@ -220,8 +220,8 @@ _read_addon_field() {
     esac
 }
 
-# Is this a canary tag rather than a release? SAME RULE as
-# scripts/check-addon-pins.py::_is_prerelease, and it has to stay the same rule:
+# Is this a canary tag rather than a release? Defined ONCE in scripts/lib/pin_policy.py and shared
+# with check-addon-pins.py and repin-addons.py, because it has to stay the same rule:
 # one of them proposes pins and the other blocks the build, so if they disagree
 # the proposer offers a bump the gate then refuses.
 #
@@ -229,12 +229,31 @@ _read_addon_field() {
 # (upstream version plus add-on revision) and treating that as a canary would
 # silently stop pinning z2m forever. Our canary tags carry LETTERS after the
 # dash (`1.3.0-ga.1`); a plain numeric suffix is a release revision.
-_is_prerelease() {
-    _ipr_suffix="${1#*-}"
-    [ "$_ipr_suffix" = "$1" ] && return 1          # no dash at all
-    [ -z "$_ipr_suffix" ] && return 1
-    printf '%s' "$_ipr_suffix" | grep -q '[A-Za-z]'
+PIN_POLICY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/pin_policy.py"
+[ -f "$PIN_POLICY" ] || { echo "FATAL: $PIN_POLICY missing — the pin rules have ONE definition and it is not here"; exit 2; }
+_is_prerelease() { python3 "$PIN_POLICY" is-prerelease "$1"; }   # ONE rule: scripts/lib/pin_policy.py
+
+# A pin may be AHEAD of the store when a newer image is needed on ONE board before the shared store can move
+# (the store is one file for every board and moves with the release set). Declared next to the pin, like a
+# hold, with the same rules (reason; YYYY-MM-DD; not past; at most 30 days ahead), because the store is what
+# provisioning installs from: an undeclared pin ahead of it means a fresh device lands on another version
+# than the image bakes. It excuses ONLY "pin newer than the store"; a pin BEHIND the store stays a failure.
+#     "store_ahead": {"reason": "<why, who decided>", "until": "YYYY-MM-DD"}
+ahead_count=0
+_store_ahead_ok() {  # <key> <pinned> <store version>; sets _sa_reason / _sa_until / _sa_why. Verdict: pin_policy.py.
+    _sa_reason=""; _sa_until=""; _sa_why=""
+    _sa_reason=$(jq -r ".addons.\"$1\".store_ahead.reason // empty" "$ADDON_IMAGES_JSON")
+    _sa_until=$(jq -r ".addons.\"$1\".store_ahead.until // empty" "$ADDON_IMAGES_JSON")
+    local _rc
+    _sa_why="$(GA_TODAY="${GA_TODAY:-}" python3 "$PIN_POLICY" store-ahead "$ADDON_IMAGES_JSON" "$1" "$2" "$3")"; _rc=$?
+    case "$_rc" in
+        0) return 0 ;;
+        1) _sa_why=""; return 1 ;;
+        3) return 1 ;;
+        *) echo "FATAL: pin_policy.py store-ahead failed (rc=$_rc): $_sa_why"; exit 2 ;;
+    esac
 }
+
 
 # --- WHICH LINE IS THIS TREE? (Odoo #1758, Thomas decision 2026-11-11) ---
 #
@@ -348,7 +367,13 @@ if [ -f "$ADDON_IMAGES_JSON" ] && command -v git >/dev/null 2>&1; then
                 printf "${YELLOW}PRERELEASE${NC}: %s — store is on canary %s, pin holds release %s. NOT a failure: baking a canary is a decision, not a lockstep repair. Pin it deliberately, or wait for the release.\n" \
                     "$key" "$found_version" "$expected_version"
                 prerelease_count=$((prerelease_count + 1))
+            elif _store_ahead_ok "$key" "$expected_version" "$found_version"; then
+                # Declared, reasoned, expiring: the pin is AHEAD of the store on purpose (pin_policy.py).
+                printf "${YELLOW}AHEAD-OF-STORE${NC}: %s pinned %s, vibe_addons/%s is %s — declared (store_ahead) until %s: %s\n" \
+                    "$key" "$expected_version" "$(basename "$found_dir")" "$found_version" "$_sa_until" "$_sa_reason"
+                ahead_count=$((ahead_count + 1))
             else
+                [ -n "${_sa_why:-}" ] && printf "${RED}STORE_AHEAD INVALID${NC}: %s — %s; counted as a lockstep break\n" "$key" "$_sa_why"
                 printf "${RED}FAIL${NC}: %s version mismatch — addon-images.json=%s vibe_addons/%s=%s — bump one to match\n" \
                     "$key" "$expected_version" "$(basename "$found_dir")" "$found_version"
                 lockstep_count=$((lockstep_count + 1))
@@ -504,6 +529,7 @@ echo "Unverified:   ${auth_count} (private, no registry credentials)"
 echo "Pre-release:  ${prerelease_count} (store on a canary, pin on a release — deliberate, not drift)"
 echo "Line-own-set: ${line_ahead_count} (store on a newer line than this one's pin — own-set mode, not drift)"
 echo "Held:         ${held_count:-0} (pin deliberately behind the newest published image — declared hold with reason and end date)"
+echo "Ahead-of-store: ${ahead_count:-0} (pin deliberately newer than the store - declared store_ahead with reason and end date)"
 
 if [ "${drift_fatal:-0}" = "1" ]; then
     echo ""
