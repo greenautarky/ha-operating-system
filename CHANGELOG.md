@@ -16,7 +16,14 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 dev10 plus ga-bootstrap 1.2.17 (Odoo #2132, #2066), the F5 updater.json seed (Odoo #2065), ga_manager 0.277.6 (the DSGW pin moves from 0.277.3, the 1.6.0 final freeze hold removed; the store serves 0.277.6) and the storage watchdog (reboot step off). Marker only: `gaos_release_dsgw210`.
 
-## BOSv1.6.1-rc3 (unreleased, iHost, feat/1.6-haos18)
+## BOSv1.6.1-rc3 (iHost, feat/1.6-haos18)
+
+rc2 plus: Core 2026.10.4.5 + ga_influxdbv1 0.0.23 (CVE-2026-99306, #1125); ga_manager 0.277.11 (#1114); OTA falls back to the prod slot only on a 404 (#1132, Odoo #2136); os-release symlink fix (#1118); USB allowlist keyed on controller:chain (#1122, DSGW only, no iHost effect); the storage watchdog reboot step is now ON by default.
+
+### Storage watchdog: reboot step default ON (Odoo #2098)
+
+- `GA_STORAGE_WD_REBOOT=1` in the baked `/etc/ga-services.conf` (was 0). Decision after K31 storage-watchdog soak #2 (PASS, Odoo #2098). A device can still opt out with `GA_STORAGE_WD_REBOOT=0` in `/mnt/data/ga-services.conf` (read once at service start). The script's own fallback when no conf is readable stays 0 (detection only, logged loud): an unreadable config must never arm a reboot.
+- Proof: `tests/ga_tests/storage_watchdog/selftest.sh` SWD-22 now asserts exactly one `GA_STORAGE_WD_REBOOT=1` assignment in the baked conf; red against the previous conf (20/21, SWD-22 FAIL), green after.
 
 ### Release gate: both vccio5 paths are required evidence for iHost releases >= BOSv1.6.1 (Odoo #1981)
 
