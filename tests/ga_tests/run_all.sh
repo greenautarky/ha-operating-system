@@ -69,6 +69,7 @@ SUITES_EXCLUDED="
   openstick_backoff host suite: CI lint.yml host-suites — ga-openstick-autoconnect per-SSID back-off (#2112)
   uplink_units    host suite: CI lint.yml host-suites
   ga_manager_guard host suite: CI lint.yml host-suites - ga-manager-guard (watchdog toggle + revive) against a stub hassio_cli (#2166)
+  board_components host suite: CI lint.yml host-suites — components_<board>: staged on that board only (sync, ga_build pre-flight, image check; #2187)
   lte_rat         host suite: CI lint.yml host-suites — dsgw210-lte-rat.sh reads, never writes, the BG96 RAT config (#2187)
   board_conf      host suite: CI lint.yml host-suites — per-board values (ga-board.conf, USB port allowlist) of the shared scripts; its device.sh (USB port allowlist, #2189) by hand on a DSGW
   share_writers   host suite: CI lint.yml host-suites — needs bubblewrap, drives the writers in a sandbox

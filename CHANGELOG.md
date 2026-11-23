@@ -16,7 +16,20 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 dev10 plus ga-bootstrap 1.2.17 (Odoo #2132, #2066), the F5 updater.json seed (Odoo #2065), ga_manager 0.277.6 (the DSGW pin moves from 0.277.3, the 1.6.0 final freeze hold removed; the store serves 0.277.6) and the storage watchdog (reboot step off). Marker only: `gaos_release_dsgw210`.
 
-## BOSv1.6.1-rc3 (unreleased, iHost, feat/1.6-haos18)
+## BOSv1.6.1-rc3 (iHost, feat/1.6-haos18)
+
+**Re-bake pins (2026-11-23).** The first rc3 bake (ga-ops run 45149580691) was blocked by the CVE gate (10 fixable CRITICAL in 3 images) and the drift gate. It now pins:
+- **Core 2026.10.4.6:** 2026.10.4.5 rebuilt FROM the base pinned at apt20261123. It fixes mariadb CVE-2026-44172 and CVE-2026-49261, and is the first use of the WP-D base-pin emergency path (ga-core-armv7 #17; runs 45152219770 and 45159954488).
+- **ga_influxdbv1 0.0.25:** 0.0.24 slim, i.e. Chronograf and Kapacitor removed (Odoo #1973, ADR-0044 Amendment 2026-11-12), plus the nginx CVE-2026-113425/121810/123007/123633 rebuild. It is in rc3 by Manager decision; the rc3 K31 fresh-flash gate checks influx. The field store stays DRAFT until that gate is green (`store_ahead` declared).
+- **ga_hmvapp_addon stays at 2.6.3**, with a hold until 2026-12-18: 2.6.4 is published but unproven (Nuitka/runtime-module checks pending).
+- **mosquitto 7.2.7:** a security rebuild of 7.2.6 with no source change (MQTT #19). It fixes nginx CVE-2026-113425/121810/123007/123633 and updates krb5 to deb13u2 and Go to 1.27.3. `store_ahead` is declared.
+
+rc2 plus: Core 2026.10.4.5 + ga_influxdbv1 0.0.23 (CVE-2026-99306, #1125); ga_manager 0.277.11 (#1114); OTA falls back to the prod slot only on a 404 (#1132, Odoo #2136); os-release symlink fix (#1118); USB allowlist keyed on controller:chain (#1122, DSGW only, no iHost effect); the storage watchdog reboot step is now ON by default.
+
+### Storage watchdog: reboot step default ON (Odoo #2098)
+
+- `GA_STORAGE_WD_REBOOT=1` in the baked `/etc/ga-services.conf` (was 0). Decision after K31 storage-watchdog soak #2 (PASS, Odoo #2098). A device can still opt out with `GA_STORAGE_WD_REBOOT=0` in `/mnt/data/ga-services.conf` (read once at service start). The script's own fallback when no conf is readable stays 0 (detection only, logged loud): an unreadable config must never arm a reboot.
+- Proof: `tests/ga_tests/storage_watchdog/selftest.sh` SWD-22 now asserts exactly one `GA_STORAGE_WD_REBOOT=1` assignment in the baked conf; red against the previous conf (20/21, SWD-22 FAIL), green after.
 
 ### Release gate: both vccio5 paths are required evidence for iHost releases >= BOSv1.6.1 (Odoo #1981)
 

@@ -2018,6 +2018,23 @@ elif [[ -d "${OUT}/../buildroot-external" ]]; then
 elif [[ -d "$(dirname "$0")/../../buildroot-external" ]]; then
   BLD_FE_SRC="$(cd "$(dirname "$0")/../.." && pwd)"
 fi
+# BLD-BC-01/02: board components (components_<board>:, Odoo #2187) are in THIS
+# board's image at the pinned version, and no other board's components are. Reads
+# the blocks with the same reader as sync-components.sh and the ga_build pre-flight.
+if [[ -n "$BLD_FE_SRC" && -f "${BLD_FE_SRC}/scripts/lib/ga-components.sh" && -d "${TARGET}/usr/share/ga" ]]; then
+  # tree-paths.sh is already loaded at the top of this script (the lib needs it)
+  # shellcheck source=../../scripts/lib/ga-components.sh
+  . "${BLD_FE_SRC}/scripts/lib/ga-components.sh"
+  while IFS= read -r _bc_line; do
+    case "$_bc_line" in
+      PASS*) _pass "BLD-BC: ${_bc_line#PASS }" ;;
+      FAIL*) _fail "BLD-BC: ${_bc_line#FAIL }" ;;
+    esac
+  done < <(ga_board_components_image_check "${BLD_FE_SRC}/version.yaml" "$TARGET" "${GA_BOARD:-ihost}")
+else
+  _skip "BLD-BC: board components in the image" "needs the source tree and a built rootfs"
+fi
+
 if [[ -n "$BLD_FE_SRC" ]]; then
   GA_ONBOARD_DIR="${BLD_FE_SRC}/buildroot-external/rootfs-overlay/usr/share/ga/custom_components/greenautarky_site"
   if [[ -f "${GA_ONBOARD_DIR}/__init__.py" ]] && [[ -f "${GA_ONBOARD_DIR}/manifest.json" ]]; then
