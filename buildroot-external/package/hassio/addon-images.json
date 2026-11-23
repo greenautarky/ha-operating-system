@@ -34,7 +34,11 @@
     },
     "ga_hmvapp_addon": {
       "image": "ghcr.io/greenautarky/ga_hmvapp_addon-{arch}",
-      "version": "2.6.3"
+      "version": "2.6.3",
+      "hold": {
+        "reason": "2.6.4 (Odoo #1969: no build toolchain, no unused scikit-learn/joblib) is published but not proven: Nuitka/obfuscation check and runtime-module check #2192 pending, device proof pending. Pin stays 2.6.3 until both (Thomas/Manager 2026-11-23, BOSv1.6.1-rc3).",
+        "until": "2026-12-18"
+      }
     }
   }
 }
