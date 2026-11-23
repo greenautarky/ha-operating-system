@@ -395,7 +395,7 @@ fi
 #     "hold": {"reason": "<why, who decided>", "until": "YYYY-MM-DD"}
 # A valid hold turns DRIFT into HOLD (counted, printed, not fatal). It is
 # INVALID - and the drift counts again - when the reason is empty, the date
-# is malformed, already past, or more than HOLD_MAX_DAYS (30) ahead: a hold
+# is malformed, already past, or more than 30 days ahead (pin_policy.py): a hold
 # must end, or it becomes the permanent drift this check exists to find.
 # GA_TODAY overrides today's date for the selftest only.
 if [ -f "$ADDON_IMAGES_JSON" ] && command -v skopeo >/dev/null 2>&1; then
@@ -404,9 +404,9 @@ if [ -f "$ADDON_IMAGES_JSON" ] && command -v skopeo >/dev/null 2>&1; then
     drift_seen=0
     drift_fatal=0
     held_count=0
-    HOLD_MAX_DAYS=30
-    today="${GA_TODAY:-$(date -u +%F)}"
-    hold_limit="$(date -u -d "${today} +${HOLD_MAX_DAYS} days" +%F)"
+    # The hold verdict is scripts/lib/pin_policy.py's (ONE definition, also read by the ga-ops bake pre-check).
+    PIN_POLICY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/pin_policy.py"
+    [ -f "$PIN_POLICY" ] || { echo "FATAL: $PIN_POLICY missing - the hold rule has ONE definition and it is not here"; exit 2; }
     for key in $(jq -r '.addons | keys[]' "$ADDON_IMAGES_JSON"); do
         image=$(jq -r ".addons.\"${key}\".image" "$ADDON_IMAGES_JSON" | sed "s/{arch}/${ARCH}/")
         pinned=$(jq -r ".addons.\"${key}\".version // empty" "$ADDON_IMAGES_JSON")
@@ -465,14 +465,16 @@ if [ -f "$ADDON_IMAGES_JSON" ] && command -v skopeo >/dev/null 2>&1; then
         else
             hold_reason=$(jq -r ".addons.\"${key}\".hold.reason // empty" "$ADDON_IMAGES_JSON")
             hold_until=$(jq -r ".addons.\"${key}\".hold.until // empty" "$ADDON_IMAGES_JSON")
-            hold_why=""
-            if [ -n "$hold_reason$hold_until" ]; then
-                if [ -z "$hold_reason" ]; then hold_why="hold has no reason"
-                elif ! [[ "$hold_until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then hold_why="hold until '${hold_until}' is not YYYY-MM-DD"
-                elif [[ "$hold_until" < "$today" ]]; then hold_why="hold expired on ${hold_until}"
-                elif [[ "$hold_until" > "$hold_limit" ]]; then hold_why="hold until ${hold_until} is more than ${HOLD_MAX_DAYS} days ahead"
-                fi
-                if [ -z "$hold_why" ]; then
+            # `|| hold_rc=$?`, not `; hold_rc=$?`: this script runs under set -e.
+            hold_rc=0
+            hold_why="$(GA_TODAY="${GA_TODAY:-}" python3 "$PIN_POLICY" hold "$ADDON_IMAGES_JSON" "$key")" || hold_rc=$?
+            case "$hold_rc" in
+                0|3) ;;
+                1) hold_why="" ;;
+                *) echo "FATAL: pin_policy.py hold failed (rc=$hold_rc): $hold_why"; exit 2 ;;
+            esac
+            if [ "$hold_rc" != 1 ]; then
+                if [ "$hold_rc" = 0 ]; then
                     held_count=$((held_count + 1))
                     printf "${YELLOW}HOLD${NC}: %s pinned %s, %s is published — held until %s: %s\n" \
                         "$key" "$pinned" "$newest" "$hold_until" "$hold_reason"

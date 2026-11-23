@@ -848,6 +848,11 @@ jobs:
       - name: Supervisor image (upstream, off-pin or mislabelled must go red)
         run: ./tests/gates/supervisor_image/selftest.sh
 
+      - name: SUP-LAYOUT the Supervisor-layout check flags an add-on base and passes the real Supervisors
+        # Same files as master and feat/1.6-haos18: the ga-ops bake pre-check runs the BAKED tree's own
+        # judge (no cross-line fallback), so this line carries it too. Listings exported from real images.
+        run: bash tests/ga_tests/supervisor_layout/selftest.sh
+
       # The setup wizard is vendored, not built here: the component is pulled
       # from GHCR at OS build time, so BLD-FE-03 only ever runs on the builder
       # and never on a pull request. A release shipped a bundle built from a
