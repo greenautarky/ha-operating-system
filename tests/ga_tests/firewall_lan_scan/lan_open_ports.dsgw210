@@ -1,0 +1,7 @@
+# TCP ports a DSGW-210 may answer as OPEN from its LAN (end0), one per line.
+# Measured on DUT2 BOSv1.6.0-dev16 2026-11-23 (nmap -sT -p- from the LAN):
+#   80    Home Assistant frontend (GA http entry)
+#   22222 sshd (certificate auth, ADR-0019)
+# Everything else must be filtered (default deny). Adding a port is a security review.
+80
+22222

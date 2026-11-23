@@ -657,6 +657,11 @@ jobs:
         # board files existed (10 of 23 cases flip).
         run: sh tests/ga_tests/board_conf/test.sh
 
+      - name: firewall_lan_scan - LAN-side open ports vs the pinned per-board list (Odoo #2193)
+        # Judges nmap -oG output: a real DSGW scan must pass; an extra open port,
+        # reject-instead-of-drop, a partial scan and an empty scan must not.
+        run: sh tests/ga_tests/firewall_lan_scan/test.sh
+
       - name: build tests - per-board skips (table held to the live runner)
         # tests/ga_tests/build_board_skips.tsv turns a FAIL into a SKIP with a
         # stated reason for one board. The gate checks every row against the live
