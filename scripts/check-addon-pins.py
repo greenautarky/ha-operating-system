@@ -46,6 +46,12 @@ import sys
 
 import yaml
 
+# The pin rules live in ONE place (scripts/lib/pin_policy.py), loaded from this
+# script's own directory — never from a REPO_ROOT override — so a selftest over a
+# scratch tree still runs the LIVE rules.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
+import pin_policy  # noqa: E402
+
 PINS = pathlib.Path("buildroot-external/package/hassio/addon-images.json")
 
 
@@ -77,18 +83,7 @@ def store_image_index(store_root: pathlib.Path) -> dict[str, str]:
     return index
 
 
-def _is_prerelease(version: str) -> bool:
-    """True for a canary tag, False for a normal release.
-
-    The naive test — "does it contain a dash" — is wrong here: z2m ships as
-    `2.12.1-3`, upstream version plus add-on revision, and treating that as a
-    canary would silently stop proposing z2m pins forever. Our canary tags carry
-    letters after the dash (`1.3.0-ga.1`); a plain numeric suffix is a release
-    revision.
-    """
-    _, _, suffix = version.partition("-")
-    return bool(suffix) and any(ch.isalpha() for ch in suffix)
-
+_is_prerelease = pin_policy.is_prerelease  # ONE rule: scripts/lib/pin_policy.py
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
