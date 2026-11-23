@@ -157,8 +157,8 @@ run_test "SWD-20" "unit: Type=notify, NotifyAccess=all, WatchdogSec set, Failure
   "grep -q '^Type=notify' '$UNIT' && grep -q '^NotifyAccess=all' '$UNIT' && grep -q '^WatchdogSec=[0-9]' '$UNIT' && grep -q '^FailureAction=reboot-force' '$UNIT' && grep -q '^Restart=no' '$UNIT'"
 run_test "SWD-21" "unit is enabled (multi-user.target.wants symlink resolves to it)" \
   "[ \"\$(readlink -f '$OVL/etc/systemd/system/multi-user.target.wants/ga-storage-watchdog.service')\" = \"\$(readlink -f '$UNIT')\" ]"
-run_test "SWD-22" "reboot flag defaults to 0 in the baked ga-services.conf" \
-  "grep -q '^GA_STORAGE_WD_REBOOT=0' '$OVL/etc/ga-services.conf'"
+run_test "SWD-22" "reboot flag defaults to 1 (ON) in the baked ga-services.conf, exactly one assignment (BOSv1.6.1-rc3, Odoo #2098)" \
+  "[ \"\$(grep -c '^GA_STORAGE_WD_REBOOT=' '$OVL/etc/ga-services.conf')\" = 1 ] && grep -q '^GA_STORAGE_WD_REBOOT=1\$' '$OVL/etc/ga-services.conf'"
 run_test "SWD-23" "the script reads that same flag name, and gates the ping on it" \
   "grep -q 'GA_STORAGE_WD_REBOOT' '$WD' && grep -q 'WD_REBOOT\" = 1' '$WD'"
 cadence="$(sed -n 's/^INTERVAL_S="\${GA_STORAGE_WD_INTERVAL_S:-\([0-9]*\)}".*/\1/p' "$WD")"
