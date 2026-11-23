@@ -128,6 +128,13 @@ run_case "revision pin behind newest revision -> DRIFT" \
 run_case "pin 2.12.1 behind 2.12.1-12 -> DRIFT" \
     "2.12.1" "$R,\"2.12.1\"" "" 1 'DRIFT.*ga_manager pinned 2.12.1 but 2.12.1-12'
 
+# The real BOSv1.6.1-rc3 case (2026-11-23): gm 0.277.12 published, rc3 freezes 0.277.11.
+G='"0.277.11","0.277.12"'
+run_case "rc3: gm 0.277.11 held while 0.277.12 is published -> HOLD, bake passes" \
+    "0.277.11" "$G" '{"reason":"rc3 freezes gm 0.277.11; 0.277.12 goes to dev17/DUT2 first","until":"2026-11-05"}' 0 'HOLD.*ga_manager.*held until 2026-11-05'
+run_case "rc3: the same pin WITHOUT the hold -> DRIFT, bake fails" \
+    "0.277.11" "$G" "" 1 'DRIFT.*ga_manager pinned 0.277.11 but 0.277.12'
+
 echo
 echo "ran $ran, failed $fails"
 [ "$ran" -gt 0 ] || { echo "FATAL: no case ran"; exit 1; }
