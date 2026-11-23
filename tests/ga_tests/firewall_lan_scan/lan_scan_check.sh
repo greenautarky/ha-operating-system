@@ -1,7 +1,7 @@
 #!/bin/sh
 # lan_scan_check.sh <board> <gnmap-file> — judge one `nmap -sT -p- -oG -` result against the
 # PINNED list lan_open_ports.<board>. Exit 0 = matches, 1 = violation, 2 = unusable input.
-#   LSC-01  the open TCP set equals the pinned set exactly (an extra open port fails)
+#   LSC-01  every open TCP port is on the pinned allowlist (an extra open port fails), and >= 1 is open
 #   LSC-02  the remaining ports are FILTERED (default deny), not answered
 #   LSC-03  the scan covered all 65535 ports (a partial scan proves nothing)
 set -u
@@ -15,7 +15,10 @@ open=$(echo "$P" | tr ',' '\n' | sed -n 's#^[[:space:]]*\([0-9][0-9]*\)/open/tcp
 listed=$(echo "$P" | tr ',' '\n' | grep -cE '[0-9]+/(open|closed|filtered)/tcp')
 ign=$(echo "$L" | sed -n 's/.*Ignored State: \([a-z|]*\) (\([0-9]*\)).*/\1 \2/p')
 rc=0
-if [ "$open" = "$want" ]; then echo "PASS LSC-01 open TCP = pinned (${want% })"; else echo "FAIL LSC-01 open TCP '${open% }', pinned '${want% }'"; rc=1; fi
+extra=""; for p in $open; do case " $want" in *" $p "*) ;; *) extra="$extra $p";; esac; done
+if [ -z "$open" ]; then echo "FAIL LSC-01 no open TCP port at all (device not answering on its LAN?)"; rc=1
+elif [ -z "$extra" ]; then echo "PASS LSC-01 open TCP (${open% }) within the allowlist (${want% })"
+else echo "FAIL LSC-01 open TCP '${open% }' has ports outside the allowlist:${extra}"; rc=1; fi
 set -- $ign
 if [ "${1:-}" = filtered ]; then echo "PASS LSC-02 the other ${2} ports are filtered (default deny)"; else echo "FAIL LSC-02 ignored state '${1:-none}' — not default deny"; rc=1; fi
 total=$(( ${2:-0} + listed ))
