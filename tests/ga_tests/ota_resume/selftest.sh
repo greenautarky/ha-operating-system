@@ -20,14 +20,12 @@ pass=0; fail=0
 PASS() { echo "  PASS  $1"; pass=$((pass+1)); }
 FAIL() { echo "  FAIL  $1${2:+ ($2)}"; fail=$((fail+1)); }
 
-# known-good: every check passes on the live installer
-sh "$SUITE" > "$W/live.out" 2>&1
-if [ $? = 0 ] && grep -q ' 0 failed' "$W/live.out" && ! grep -q '^  FAIL' "$W/live.out"; then
-  PASS "SELF-00 the live installer passes the whole suite"
-else
-  FAIL "SELF-00 the live installer passes the whole suite" "$(grep '^  FAIL' "$W/live.out" | head -3 | tr '\n' ';')"
-  echo "--- ota_resume selftest: baseline red, mutants not run ---"; exit 1
-fi
+# All runs are independent (own work dir, own network+PID namespace) and mostly
+# wait, so they run IN PARALLEL: serially they took ~33 min (a 65 s backoff case
+# per run) and hit the CI step timeout. The known-good baseline is still
+# evaluated FIRST - a mutant result means nothing against a red baseline.
+: > "$W/jobs"
+( sh "$SUITE" > "$W/live.out" 2>&1; echo $? > "$W/live.rc" ) &
 
 mutant() {  # <name> <old> <new>
   python3 -I - "$LIVE" "$W/$1" "$2" "$3" <<'PYEOF'
@@ -45,11 +43,23 @@ expect() {  # <id> <mutant> <desc> <check-id>...
   if ! mutant "$_m" "$MOLD" "$MNEW" > "$W/$_m.mut" 2>&1; then
     FAIL "$_id $_d" "$(cat "$W/$_m.mut")"; return
   fi
-  GA_OTAR_INSTALLER="$W/$_m" sh "$SUITE" > "$W/$_m.out" 2>&1
-  _miss=""
-  for _c in "$@"; do grep -q "^  FAIL  $_c " "$W/$_m.out" || _miss="$_miss $_c"; done
-  if [ -z "$_miss" ]; then PASS "$_id $_d: red on $*"
-  else FAIL "$_id $_d" "not red:$_miss; red were: $(grep '^  FAIL' "$W/$_m.out" | cut -c9-20 | tr '\n' ' ')"; fi
+  ( GA_OTAR_INSTALLER="$W/$_m" sh "$SUITE" > "$W/$_m.out" 2>&1 ) &
+  printf '%s|%s|%s|%s\n' "$_id" "$_m" "$_d" "$*" >> "$W/jobs"
+}
+evaluate() {
+  wait
+  if [ "$(cat "$W/live.rc" 2>/dev/null)" = 0 ] && grep -q ' 0 failed' "$W/live.out" && ! grep -q '^  FAIL' "$W/live.out"; then
+    PASS "SELF-00 the live installer passes the whole suite"
+  else
+    FAIL "SELF-00 the live installer passes the whole suite" "$(grep '^  FAIL' "$W/live.out" | head -3 | tr '\n' ';')"
+    echo "--- ota_resume selftest: baseline red, mutant results not counted ---"; exit 1
+  fi
+  while IFS='|' read -r _id _m _d _checks; do
+    _miss=""
+    for _c in $_checks; do grep -q "^  FAIL  $_c " "$W/$_m.out" || _miss="$_miss $_c"; done
+    if [ -z "$_miss" ]; then PASS "$_id $_d: red on $_checks"
+    else FAIL "$_id $_d" "not red:$_miss; red were: $(grep '^  FAIL' "$W/$_m.out" | cut -c9-20 | tr '\n' ' ')"; fi
+  done < "$W/jobs"
 }
 
 MOLD='        if [ "$_rc" != 22 ] || [ "$_code" != 404 ]; then'
@@ -104,5 +114,6 @@ MOLD='( while :; do sleep "$HEARTBEAT_S"; write_status installing "$_isize" "$_i
 MNEW='( : ) &'
 expect SELF-12 m-no-install-heartbeat "no status heartbeat during rauc install" OTAR-19
 
+evaluate
 echo "--- ota_resume selftest: $pass passed, $fail failed ---"
 [ "$fail" = 0 ]

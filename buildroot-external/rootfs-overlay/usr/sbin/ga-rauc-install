@@ -223,7 +223,6 @@ write_status() {  # <phase> [bytes] [total] [error] [next_retry_at]
     fi
     return 0
 }
-write_status queued
 
 # Per-rc slot when a ga_release is given, else the version-only prod slot.
 # With a ga_release we FALL BACK to the prod slot on a 404 so a device is never
@@ -439,6 +438,9 @@ STATUS_EVERY_S="$(num_or "${GA_OTA_STATUS_EVERY_S:-}" 10 GA_OTA_STATUS_EVERY_S)"
 # readers (gm prefetch) treat a status older than 10 min as a dead writer.
 HEARTBEAT_S="$(num_or "${GA_OTA_HEARTBEAT_S:-}" 60 GA_OTA_HEARTBEAT_S)"
 [ "$HEARTBEAT_S" -ge 1 ] || HEARTBEAT_S=1
+# The first status is written only now: every key of the schema (max_attempts
+# included) has its value. Written earlier, "queued" carried max_attempts null.
+write_status queued
 [ "$MAX_ATTEMPTS" -ge 1 ] || MAX_ATTEMPTS=1
 [ "$STATUS_EVERY_S" -ge 1 ] || STATUS_EVERY_S=1
 
