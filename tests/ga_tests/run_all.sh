@@ -69,6 +69,7 @@ SUITES_EXCLUDED="
   openstick_backoff host suite: CI lint.yml host-suites — ga-openstick-autoconnect per-SSID back-off (#2112)
   uplink_units    host suite: CI lint.yml host-suites
   ga_manager_guard host suite: CI lint.yml host-suites - ga-manager-guard (watchdog toggle + revive) against a stub hassio_cli (#2166)
+  firewall_lan_scan host suite: CI lint.yml host-suites — nmap -oG judged against lan_open_ports.<board> (#2193); live: lan_scan.sh <ip> <board> from a LAN host
   board_conf      host suite: CI lint.yml host-suites — per-board values (ga-board.conf, USB port allowlist) of the shared scripts; its device.sh (USB port allowlist, #2189) by hand on a DSGW
   share_writers   host suite: CI lint.yml host-suites — needs bubblewrap, drives the writers in a sandbox
   host_control    host suite: CI lint.yml host-suites — needs bubblewrap, drives the host control units in a sandbox (ADR-0041)

@@ -1,0 +1,1 @@
+Host: DEVICE 	Ports: 80/open/tcp//http///, 8123/closed/tcp//polipo///, 22222/open/tcp//easyengine///	Ignored State: filtered (997)

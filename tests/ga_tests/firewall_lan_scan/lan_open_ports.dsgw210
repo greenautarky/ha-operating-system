@@ -1,0 +1,8 @@
+# TCP ports a dsgw210 may answer as OPEN from its LAN (GA_LAN_IFACES). ALLOWLIST, pinned from the
+# reviewed policy in buildroot-external/rootfs-overlay/usr/libexec/ga-firewall-gate (NOT from a scan):
+#   HOST_ALLOW_TCP=22222 (sshd, on-site diagnostics), CONTAINER_ALLOW_TCP=80, 8123 (HA Core UI).
+# Which of them answer depends on what listens (Core 2026.10 serves :80, older Core :8123).
+# Any other open port fails; everything else must be filtered (default deny). Changing this = security review.
+80
+8123
+22222
