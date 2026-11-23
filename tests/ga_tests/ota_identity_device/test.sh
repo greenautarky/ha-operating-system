@@ -65,9 +65,13 @@ STUB
 cat > "$T/bin/curl" <<'STUB'
 #!/bin/sh
 echo "curl $*" >> "$OTAID_T/$OTAID_RUN.args"
-n=$#; prev=""
+n=$#; prev=""; out=""; side=""
 while [ "$n" -gt 0 ]; do
   a="$1"; shift; n=$((n - 1))
+  [ "$prev" = "--output" ] && out="$a"
+  # the .sha256 sidecar (Odoo #2136): answered below with the hash of the probe object
+  # under the bundle's name, so the installer verifies and reaches `rauc info`
+  case "$a" in https://ota.*.sha256) side="${a%.sha256}"; side="${side##*/}" ;; esac
   if [ "$prev" = "--config" ]; then
     echo "mode=$(stat -c %a "$a" 2>/dev/null)" >> "$OTAID_T/$OTAID_RUN.conf"
     sed 's/Bearer .*/Bearer <redacted>/' "$a" >> "$OTAID_T/$OTAID_RUN.conf" 2>/dev/null
@@ -86,13 +90,18 @@ while kill -0 "$pid" 2>/dev/null; do
   hits=$((hits + h))
 done
 echo "polls=$polls hits=$hits" >> "$OTAID_T/$OTAID_RUN.scan"
-wait "$pid"
+wait "$pid"; rc=$?
+if [ "$rc" = 0 ] && [ -n "$side" ] && [ -n "$out" ]; then
+  printf '%s  %s\n' "$(sha256sum "$out" | cut -d' ' -f1)" "$side" > "$out.t" && mv -f "$out.t" "$out"
+fi
+exit "$rc"
 STUB
 chmod +x "$T/bin/rauc" "$T/bin/curl"
 
 dry_run() {   # dry_run <name> <gm-data-dir>  -> $T/<name>.out, $T/<name>.rc
   OTAID_T="$T" OTAID_REALCURL="$REALCURL" OTAID_RUN="$1" OTAID_URL="https://ota.greenautarky.com${PROBE_PATH}" \
   PATH="$T/bin:$PATH" GA_GM_DATA_DIR="$2" GA_STAGING_DIR="$T/stage" \
+  GA_OTA_STATE_DIR="$T/state-$1" GA_OTA_PHASE_FILE="$T/phase-$1" GA_OTA_MAX_ATTEMPTS=1 \
     "$INSTALLER" 0.0.0.0 > "$T/$1.out" 2>&1
   echo $? > "$T/$1.rc"
 }

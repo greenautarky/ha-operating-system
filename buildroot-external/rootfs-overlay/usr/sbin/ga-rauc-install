@@ -22,12 +22,31 @@
 #                                        use the passed version + optional
 #                                        ga_release. For operator debug.
 #
-# Either path validates the version regex, then downloads the OTA bundle. With
-# a ga_release it pulls the per-rc canary slot
-# releases/<version>/<ga_release>/haos_<board>-<version>.raucb (falling back to
-# the version-only prod slot on 404); without one it pulls the prod slot
-# releases/<version>/haos_<board>-<version>.raucb. Then `rauc info` +
-# `rauc install` + a 5-second-delayed reboot.
+# Either path validates the version regex, then FETCHES the OTA bundle and only
+# then INSTALLS it (Odoo #2136):
+#
+#   accept   the request is copied into the host-owned state directory
+#            /mnt/data/ga-ota/ (the request file in ga_manager's directory is
+#            removed as before, so a re-write re-triggers). The accepted request
+#            survives a failed attempt, a killed run and a reboot
+#            (ga-rauc-install-resume.service restarts it at boot).
+#   fetch    the slot is chosen by its .sha256 sidecar: the per-rc canary slot
+#            releases/<version>/<ga_release>/haos_<board>-<version>.raucb, and
+#            the version-only prod slot only when the canary slot answers with
+#            an HTTP error (404) - never on a network error. The bundle is
+#            downloaded into <bundle>.part with HTTP Range resume (If-Range on
+#            the stored ETag), stall detection (--speed-limit/--speed-time)
+#            instead of a total timeout, and retries with exponential backoff
+#            until GA_OTA_MAX_ATTEMPTS or the deadline after acceptance.
+#   verify   sha256 of the complete download == the sidecar, else the partial
+#            is discarded and fetched again.
+#   install  `rauc info` + `rauc install` + a 5-second-delayed reboot - only
+#            after a complete, verified download.
+#
+# Progress is written as JSON to ga-rauc-install.status in ga_manager's data
+# directory (schema 1, see tests/ga_tests/ota_resume/fixtures/), so the add-on
+# can report it to the fleet-manager. A new request in ga_manager's directory
+# supersedes the running one between attempts.
 #
 # Every download connects to the OTA endpoint ga-resolve-ota pinned in
 # /run/ga-resolve-ota.active, via `curl --resolve`. Name resolution is not
@@ -79,9 +98,33 @@ GA_RELEASE="${2:-}"
 # device or FIFO. A symlink would let the writer point the read elsewhere.
 regular_file() { [ -f "$1" ] && [ ! -L "$1" ]; }
 
+# The accepted request (host-owned, root only): line 1 version, line 2
+# ga_release (may be empty), line 3 the fetch attempts used so far. Attempts,
+# not a wall-clock time: a device that accepts a request before NTP has set the
+# clock would otherwise see its deadline expire the moment the clock jumps.
+# GA_OTA_STATE_DIR relocates it (host tests only).
+STATE_DIR="${GA_OTA_STATE_DIR:-/mnt/data/ga-ota}"
+STATE_REQ="$STATE_DIR/request"
+STATUS_FILE="$GM_DATA_DIR/ga-rauc-install.status"
+# The current phase for host consumers (ga-mesh-watchdog holds back only while
+# the phase is NOT a resumable download). GA_OTA_PHASE_FILE: host tests only.
+PHASE_FILE="${GA_OTA_PHASE_FILE:-/run/ga-rauc-install.phase}"
+ATTEMPTS_USED=""
+
+gm_request_pending() { [ -e "$REQUEST_FILE" ] || [ -L "$REQUEST_FILE" ]; }
+
+if [ -z "$VERSION" ] && ! gm_request_pending && regular_file "$STATE_REQ"; then
+    # No new request: resume the accepted one (boot re-arm, or a run that was
+    # killed). The values pass the same validation below as a fresh request.
+    VERSION="$(sed -n 1p "$STATE_REQ" | head -c 64 | tr -d '[:space:]')"
+    GA_RELEASE="$(sed -n 2p "$STATE_REQ" | head -c 64 | tr -d '[:space:]')"
+    ATTEMPTS_USED="$(sed -n 3p "$STATE_REQ" | head -c 8 | tr -d '[:space:]')"
+    echo "[ga-rauc-install] resuming accepted request VERSION='$VERSION' GA_RELEASE='${GA_RELEASE}' from $STATE_REQ"
+fi
+
 if [ -z "$VERSION" ]; then
-    if [ ! -e "$REQUEST_FILE" ] && [ ! -L "$REQUEST_FILE" ]; then
-        echo "[ga-rauc-install] FATAL: no VERSION arg and $REQUEST_FILE absent" >&2
+    if ! gm_request_pending; then
+        echo "[ga-rauc-install] FATAL: no VERSION arg, $REQUEST_FILE absent and no accepted request in $STATE_REQ" >&2
         exit 2
     fi
     if ! regular_file "$REQUEST_FILE"; then
@@ -95,10 +138,11 @@ if [ -z "$VERSION" ]; then
         echo "[ga-rauc-install] FATAL: $REQUEST_RC_FILE is not a regular file — request refused and removed" >&2
         exit 2
     fi
-    # Read THEN delete — the delete is the dedupe gate. If install fails,
-    # the file is gone and a re-trigger requires a fresh write (which is
-    # the desired behaviour: don't retry a known-bad version on every
-    # path event).
+    # Read THEN delete — the delete is the dedupe gate: a re-trigger requires a
+    # fresh write. The request itself is not lost with the file: it is
+    # accepted into $STATE_REQ below, and the FETCH is retried from there. A
+    # failed INSTALL is not retried (a known-bad bundle is not installed again
+    # on every path event).
     VERSION="$(head -c 64 "$REQUEST_FILE" | tr -d '[:space:]')"
     # Read the optional ga_release sidecar BEFORE removing the request file.
     if [ -z "$GA_RELEASE" ] && [ -f "$REQUEST_RC_FILE" ]; then
@@ -141,10 +185,48 @@ if [ -n "$GA_RELEASE" ]; then
     fi
 fi
 
+# ── accept: persist the validated request (Odoo #2136) ──────────────────────
+# From here on the request lives in the host-owned state directory, so a
+# failed fetch attempt, a killed run or a reboot does not lose it.
+case "$ATTEMPTS_USED" in
+    "" | *[!0-9]* ) ATTEMPTS_USED=0 ;;
+esac
+# save_state <attempts used> — false when it could not be written
+save_state() {
+    mkdir -p "$STATE_DIR" && chmod 0700 "$STATE_DIR" \
+       && printf '%s\n%s\n%s\n' "$VERSION" "$GA_RELEASE" "$1" > "$STATE_REQ.tmp" \
+       && mv -f "$STATE_REQ.tmp" "$STATE_REQ"
+}
+if ! save_state "$ATTEMPTS_USED" 2>/dev/null; then
+    echo "[ga-rauc-install] WARNING: could not persist the request in $STATE_REQ - a reboot during the download will lose it" >&2
+fi
+clear_state() { rm -f "$STATE_REQ" "$STATE_REQ.tmp"; }
+
+# ── status file for ga_manager (schema 1) ───────────────────────────────────
+# One JSON object, replaced atomically. Keys and types are pinned by the
+# fixtures in tests/ga_tests/ota_resume/fixtures/ (the seam ga_manager reads).
+# A status that cannot be written never fails the update.
+ATTEMPT="$ATTEMPTS_USED"
+json_str() { printf '%s' "$1" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g' | head -c 300; }
+json_num() { case "$1" in "" | *[!0-9]* ) printf 'null' ;; * ) printf '%s' "$1" ;; esac; }
+write_status() {  # <phase> [bytes] [total] [error] [next_retry_at]
+    { printf '%s\n' "$1" > "$PHASE_FILE.tmp" && mv -f "$PHASE_FILE.tmp" "$PHASE_FILE"; } 2>/dev/null
+    [ -d "$GM_DATA_DIR" ] || return 0
+    _st="$STATUS_FILE.tmp.$$"
+    if printf '{"schema":1,"version":"%s","ga_release":"%s","phase":"%s","bytes":%s,"total":%s,"attempt":%s,"max_attempts":%s,"next_retry_at":%s,"error":"%s","updated":%s}\n' \
+        "$(json_str "$VERSION")" "$(json_str "$GA_RELEASE")" "$1" "$(json_num "${2:-}")" "$(json_num "${3:-}")" \
+        "$(json_num "$ATTEMPT")" "$(json_num "${MAX_ATTEMPTS:-}")" "$(json_num "${5:-}")" \
+        "$(json_str "${4:-}")" "$(date +%s)" 2>/dev/null > "$_st"; then
+        mv -f "$_st" "$STATUS_FILE" 2>/dev/null || rm -f "$_st"
+    else
+        rm -f "$_st"
+    fi
+    return 0
+}
+
 # Per-rc slot when a ga_release is given, else the version-only prod slot.
-# With a ga_release we FALL BACK to the prod slot on a 404 - and only on a 404 -
-# so a device is never stranded if the per-rc bundle wasn't staged (e.g.
-# transitional roll).
+# With a ga_release we FALL BACK to the prod slot on a 404 so a device is never
+# stranded if the per-rc bundle wasn't staged (e.g. transitional roll).
 # The endpoint every download below connects to. Read it from the resolver's
 # pick; if there is none yet (boot race, /run cleared), run the resolver once.
 # Only a dotted IPv4 address in the mesh's CGNAT range (first octet 100,
@@ -170,18 +252,25 @@ read_pinned_ip() {
     fi
     printf '%s' "$_ip"
 }
-OTA_IP="$(read_pinned_ip)"
-if [ -z "$OTA_IP" ]; then
-    echo "[ga-rauc-install] no pinned OTA endpoint in $OTA_ACTIVE_FILE — running $RESOLVE_OTA_BIN" >&2
-    "$RESOLVE_OTA_BIN" >&2 || true
+# pin_endpoint — set OTA_IP/OTA_RESOLVE from the resolver's pick; false when
+# there is none. Called before EVERY attempt: ga-resolve-ota re-pins every five
+# minutes, so a retry after a dead path uses the path that answers now.
+OTA_IP=""
+OTA_RESOLVE=""
+pin_endpoint() {
     OTA_IP="$(read_pinned_ip)"
-fi
-if [ -z "$OTA_IP" ]; then
-    echo "[ga-rauc-install] FATAL: no pinned OTA endpoint — $OTA_ACTIVE_FILE is missing or invalid after running $RESOLVE_OTA_BIN; refusing to download via name resolution" >&2
-    exit 3
-fi
-OTA_RESOLVE="${OTA_HOST}:443:${OTA_IP}"
-echo "[ga-rauc-install] OTA endpoint: ${OTA_HOST} pinned to ${OTA_IP} (from $OTA_ACTIVE_FILE)"
+    if [ -z "$OTA_IP" ]; then
+        echo "[ga-rauc-install] no pinned OTA endpoint in $OTA_ACTIVE_FILE — running $RESOLVE_OTA_BIN" >&2
+        "$RESOLVE_OTA_BIN" >&2 || true
+        OTA_IP="$(read_pinned_ip)"
+    fi
+    if [ -z "$OTA_IP" ]; then
+        echo "[ga-rauc-install] no pinned OTA endpoint — $OTA_ACTIVE_FILE is missing or invalid after running $RESOLVE_OTA_BIN; refusing to download via name resolution" >&2
+        return 1
+    fi
+    OTA_RESOLVE="${OTA_HOST}:443:${OTA_IP}"
+    echo "[ga-rauc-install] OTA endpoint: ${OTA_HOST} pinned to ${OTA_IP} (from $OTA_ACTIVE_FILE)"
+}
 
 # The bundle name carries the board: haos_<BOARD_ID>-<version>.raucb, the name
 # Buildroot gives the bundle (VARIANT_ID in /etc/os-release is the board's
@@ -297,6 +386,7 @@ ota_curl() {
 }
 
 BASE_URL="https://${OTA_HOST}/releases/${VERSION}"
+BUNDLE_NAME="haos_${BOARD}-${VERSION}.raucb"
 if [ -n "$GA_RELEASE" ]; then
     PRIMARY_URL="${BASE_URL}/${GA_RELEASE}/haos_${BOARD}-${VERSION}.raucb"
     FALLBACK_URL="${BASE_URL}/haos_${BOARD}-${VERSION}.raucb"
@@ -309,36 +399,251 @@ fi
 # (see device:/etc/fstab) — a 230 MB raucb bundle does not fit there,
 # curl returns error 23 mid-download. /mnt/data/tmp/ is created by
 # /usr/lib/tmpfiles.d/ga-mnt-data-tmp.conf and aged out at 7 days by
-# systemd-tmpfiles-clean.timer.
+# systemd-tmpfiles-clean.timer (a partial download older than that is
+# fetched from the start again).
 STAGING_DIR="${GA_STAGING_DIR:-/mnt/data/tmp}"  # GA_STAGING_DIR: host tests only
 mkdir -p "$STAGING_DIR"
 BUNDLE="$STAGING_DIR/ga-rauc-install-${VERSION}.raucb"
+PART="$BUNDLE.part"          # the download in progress (resumable)
+PART_SHA="$PART.sha256"      # the sidecar hash the partial belongs to
+PART_ETAG="$PART.etag"       # the ETag the partial was served with
+PART_HDR="$PART.hdr"         # response headers of the current attempt
+PART_CODE="$PART.code"       # HTTP status of the current attempt
+SIDECAR="$PART.sidecar"      # the sidecar of the current attempt
 
-echo "[ga-rauc-install] downloading $PRIMARY_URL"
-# The prod-slot fallback is for a per-rc slot that is NOT STAGED - HTTP 404 -
-# only. Any other failure (no connection, timeout, 5xx, 403, ...) ends the run:
-# falling back on it would install the PROD bundle on a canary that merely lost
-# its link or met a server error (Odoo #2136).
-_rc=0
-_code="$(ota_curl --fail --silent --show-error --location --resolve "$OTA_RESOLVE" \
-    --write-out '%{http_code}' --output "$BUNDLE" "$PRIMARY_URL")" || _rc=$?
-if [ "$_rc" != 0 ]; then
-    if [ -n "$FALLBACK_URL" ] && [ "$_rc" = 22 ] && [ "$_code" = 404 ]; then
-        echo "[ga-rauc-install] per-rc slot miss (404) — falling back to $FALLBACK_URL" >&2
-        if ! ota_curl --fail --silent --show-error --location --resolve "$OTA_RESOLVE" --output "$BUNDLE" "$FALLBACK_URL"; then
-            echo "[ga-rauc-install] FATAL: download failed for $PRIMARY_URL and $FALLBACK_URL via the pinned endpoint ${OTA_IP}" >&2
-            exit 3
+# A newer request replaces an older one: partials of other versions only
+# take space on the data partition.
+for _old in "$STAGING_DIR"/ga-rauc-install-*.raucb.part; do
+    [ -e "$_old" ] || continue
+    [ "$_old" = "$PART" ] || rm -f "$_old" "$_old".sha256 "$_old".etag "$_old".hdr "$_old".code "$_old".sidecar
+done
+
+# ── fetch tuning (GA_OTA_*: host tests and operator debug only) ────────────
+# num_or <value> <default> <name> — a non-number is announced, never used.
+num_or() {
+    case "$1" in
+        "" ) printf '%s' "$2" ;;
+        *[!0-9]* ) echo "[ga-rauc-install] WARNING: $3='$1' is not a number - using $2" >&2; printf '%s' "$2" ;;
+        * ) printf '%s' "$1" ;;
+    esac
+}
+STALL_S="$(num_or "${GA_OTA_STALL_S:-}" 300 GA_OTA_STALL_S)"            # abort an attempt after this long below LOW_SPEED
+LOW_SPEED="$(num_or "${GA_OTA_LOW_SPEED:-}" 1024 GA_OTA_LOW_SPEED)"     # bytes/s that count as progress
+MAX_ATTEMPTS="$(num_or "${GA_OTA_MAX_ATTEMPTS:-}" 48 GA_OTA_MAX_ATTEMPTS)" # per request, across reboots
+DEADLINE_S="$(num_or "${GA_OTA_DEADLINE_S:-}" 86400 GA_OTA_DEADLINE_S)" # per run, by uptime (not the wall clock)
+BACKOFF_S="$(num_or "${GA_OTA_BACKOFF_S:-}" 30 GA_OTA_BACKOFF_S)"       # first pause, doubled per failure
+BACKOFF_MAX_S="$(num_or "${GA_OTA_BACKOFF_MAX_S:-}" 900 GA_OTA_BACKOFF_MAX_S)"
+STATUS_EVERY_S="$(num_or "${GA_OTA_STATUS_EVERY_S:-}" 10 GA_OTA_STATUS_EVERY_S)"
+# Heartbeat while nothing else writes the status (backoff pause, rauc install):
+# readers (gm prefetch) treat a status older than 10 min as a dead writer.
+HEARTBEAT_S="$(num_or "${GA_OTA_HEARTBEAT_S:-}" 60 GA_OTA_HEARTBEAT_S)"
+[ "$HEARTBEAT_S" -ge 1 ] || HEARTBEAT_S=1
+# The first status is written only now: every key of the schema (max_attempts
+# included) has its value. Written earlier, "queued" carried max_attempts null.
+write_status queued
+[ "$MAX_ATTEMPTS" -ge 1 ] || MAX_ATTEMPTS=1
+[ "$STATUS_EVERY_S" -ge 1 ] || STATUS_EVERY_S=1
+
+fsize() { stat -c %s "$1" 2>/dev/null || echo 0; }
+
+# total_from_headers <offset> — the full size from the last response's
+# Content-Range (".../TOTAL") or offset + Content-Length; empty when unknown.
+total_from_headers() {
+    [ -f "$PART_HDR" ] || return 0
+    tr -d '\r' < "$PART_HDR" | awk -v off="$1" '
+        tolower($1) == "content-range:" { n = split($0, a, "/"); t = a[n]; cl = "" }
+        tolower($1) == "content-length:" { cl = $2 }
+        /^HTTP\// { t = ""; cl = "" }
+        END { if (t ~ /^[0-9]+$/) print t; else if (cl ~ /^[0-9]+$/) print off + cl }'
+}
+
+# A newer request in ga_manager's directory supersedes this run: start over
+# with it (the identity file is removed first, exec skips the EXIT trap).
+supersede_if_requested() {
+    gm_request_pending || return 0
+    echo "[ga-rauc-install] a new request arrived in $REQUEST_FILE - it supersedes VERSION='$VERSION'"
+    cleanup_ident
+    exec /bin/sh "$0"
+}
+
+# fetch_sidecar <url> — the slot's .sha256 into $SIDECAR; prints
+# "<curl exit> <http code>" (the code as curl's --write-out gives it).
+fetch_sidecar() {
+    rm -f "$SIDECAR"
+    _rc=0
+    _sc="$(ota_curl --fail --silent --show-error --location --resolve "$OTA_RESOLVE" \
+        --connect-timeout 30 --max-time 120 --write-out '%{http_code}' \
+        --output "$SIDECAR" "$1.sha256")" || _rc=$?
+    printf '%s %s' "$_rc" "$(printf '%s' "$_sc" | head -c 3)"
+}
+
+# attempt_fetch — one attempt. Returns 0 = complete and verified ($BUNDLE),
+# 1 = transient (retry), 2 = permanent (give up). Sets FETCH_ERR.
+FETCH_ERR=""
+attempt_fetch() {
+    if ! pin_endpoint; then
+        FETCH_ERR="no pinned OTA endpoint"
+        return 1
+    fi
+
+    # The slot is the one whose sidecar exists. Only a 404 (curl 22 + HTTP
+    # 404: not staged there) moves on to the prod slot. Any other failure - no
+    # connection, timeout, 5xx, 403 - is retried on the SAME slot: falling back
+    # on it would install the prod bundle on a canary that merely lost its link
+    # or met a server error (the rule of BOSv1.6.1-rc3, #1132).
+    URL=""
+    for _u in "$PRIMARY_URL" $FALLBACK_URL; do
+        echo "[ga-rauc-install] downloading $_u.sha256"
+        _r="$(fetch_sidecar "$_u")"
+        _rc="${_r%% *}"; _code="${_r#* }"
+        if [ "$_rc" = 0 ]; then URL="$_u"; break; fi
+        if [ "$_rc" != 22 ] || [ "$_code" != 404 ]; then
+            FETCH_ERR="sidecar $_u.sha256: curl exit $_rc, HTTP ${_code:-none} via ${OTA_IP}"
+            return 1
         fi
+        [ "$_u" = "$PRIMARY_URL" ] && [ -n "$FALLBACK_URL" ] && \
+            echo "[ga-rauc-install] per-rc slot miss (404) — falling back to $FALLBACK_URL" >&2
+    done
+    if [ -z "$URL" ]; then
+        FETCH_ERR="not staged: download failed for $PRIMARY_URL${FALLBACK_URL:+ and $FALLBACK_URL} via the pinned endpoint ${OTA_IP}"
+        return 2
+    fi
+    _want="$(awk 'NR == 1 { print $1 }' "$SIDECAR" 2>/dev/null | tr 'A-F' 'a-f')"
+    _name="$(awk 'NR == 1 { print $2 }' "$SIDECAR" 2>/dev/null | sed 's|^\*||; s|.*/||')"
+    if ! printf '%s' "$_want" | LC_ALL=C grep -Eq '^[0-9a-f]{64}$' || [ "$_name" != "$BUNDLE_NAME" ]; then
+        FETCH_ERR="sidecar $URL.sha256 is malformed or names '$_name', not $BUNDLE_NAME"
+        return 1
+    fi
+
+    # A partial that belongs to another build of this slot starts over.
+    if [ -s "$PART" ] && [ "$(cat "$PART_SHA" 2>/dev/null)" != "$_want" ]; then
+        echo "[ga-rauc-install] the partial download belongs to another build - starting from 0"
+        rm -f "$PART" "$PART_ETAG"
+    fi
+    printf '%s\n' "$_want" > "$PART_SHA"
+
+    _off="$(fsize "$PART")"
+    set -- --fail --silent --show-error --location --resolve "$OTA_RESOLVE" \
+        --connect-timeout 30 --speed-limit "$LOW_SPEED" --speed-time "$STALL_S" \
+        --dump-header "$PART_HDR" --write-out '%{http_code}' --output "$PART"
+    if [ "$_off" -gt 0 ]; then
+        set -- "$@" --continue-at -
+        # If-Range: the server sends the rest only if the file is still the
+        # one the partial came from, else the whole file (handled below).
+        _etag="$(cat "$PART_ETAG" 2>/dev/null)"
+        # LC_ALL=C: in a UTF-8 locale grep orders a bracket range by collation,
+        # not by byte, and this range then rejects a valid ETag (measured).
+        if printf '%s' "$_etag" | LC_ALL=C grep -Eq '^"[!#-~]{1,128}"$'; then
+            set -- "$@" --header "If-Range: $_etag"
+        fi
+        echo "[ga-rauc-install] resuming $URL at byte $_off"
     else
-        echo "[ga-rauc-install] FATAL: download failed for $PRIMARY_URL via the pinned endpoint ${OTA_IP} (curl exit $_rc, HTTP ${_code:-none})${FALLBACK_URL:+ — no prod-slot fallback: only a 404 means the per-rc slot is not staged}" >&2
+        echo "[ga-rauc-install] downloading $URL"
+    fi
+    rm -f "$PART_HDR" "$PART_CODE"
+    ota_curl "$@" "$URL" > "$PART_CODE" &
+    _cpid=$!
+    _n=0
+    while kill -0 "$_cpid" 2>/dev/null; do
+        if [ $((_n % STATUS_EVERY_S)) -eq 0 ]; then
+            write_status downloading "$(fsize "$PART")" "$(total_from_headers "$_off")"
+        fi
+        _n=$((_n + 1))
+        sleep 1
+    done
+    _rc=0
+    wait "$_cpid" || _rc=$?
+    _code="$(head -c 3 "$PART_CODE" 2>/dev/null)"
+    _etag="$(tr -d '\r' < "$PART_HDR" 2>/dev/null | awk 'tolower($1) == "etag:" { e = $2 } END { print e }')"
+    [ -n "$_etag" ] && printf '%s\n' "$_etag" > "$PART_ETAG"
+
+    case "$_rc" in
+        0 ) ;;
+        22 )
+            if [ "$_code" = 416 ]; then
+                echo "[ga-rauc-install] the server has nothing past byte $_off - checking the partial as complete"
+            else
+                FETCH_ERR="HTTP $_code for $URL"
+                return 1
+            fi ;;
+        23 )
+            FETCH_ERR="cannot write $PART (data partition full?)"
+            return 2 ;;
+        33 )
+            # The server would not resume (range or If-Range refused).
+            rm -f "$PART" "$PART_ETAG"
+            FETCH_ERR="the server did not resume - starting from 0"
+            return 1 ;;
+        * )
+            FETCH_ERR="curl exit $_rc after $(fsize "$PART") bytes from $URL via ${OTA_IP}"
+            return 1 ;;
+    esac
+
+    write_status verifying "$(fsize "$PART")" "$(fsize "$PART")"
+    _have="$(sha256sum "$PART" 2>/dev/null | awk '{ print $1 }')"
+    if [ "$_have" != "$_want" ]; then
+        rm -f "$PART" "$PART_ETAG"
+        FETCH_ERR="sha256 mismatch for $URL (got ${_have:-none}, sidecar $_want) - partial discarded"
+        return 1
+    fi
+    mv -f "$PART" "$BUNDLE"
+    rm -f "$PART_SHA" "$PART_ETAG" "$PART_HDR" "$PART_CODE" "$SIDECAR"
+    echo "[ga-rauc-install] downloaded $(fsize "$BUNDLE") bytes, sha256 verified against $URL.sha256"
+    return 0
+}
+
+# uptime_s — seconds since boot: immune to the clock being set during the run.
+uptime_s() { cut -d. -f1 /proc/uptime 2>/dev/null || echo 0; }
+
+# ── fetch: retry until verified, a permanent error, MAX_ATTEMPTS or the deadline
+_pause="$BACKOFF_S"
+_run_start="$(uptime_s)"
+while :; do
+    supersede_if_requested
+    ATTEMPT=$((ATTEMPT + 1))
+    save_state "$ATTEMPT" 2>/dev/null || true
+    _frc=0
+    attempt_fetch || _frc=$?
+    [ "$_frc" = 0 ] && break
+    _now="$(date +%s)"
+    if [ $(( $(uptime_s) - _run_start )) -ge "$DEADLINE_S" ]; then
+        FETCH_ERR="$FETCH_ERR (deadline of ${DEADLINE_S}s for this run reached)"
+        _frc=2
+    fi
+    if [ "$_frc" = 2 ] || [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
+        write_status failed "$(fsize "$PART")" "" "$FETCH_ERR"
+        clear_state
+        echo "[ga-rauc-install] FATAL: download failed after $ATTEMPT attempt(s): $FETCH_ERR" >&2
         exit 3
     fi
-fi
-echo "[ga-rauc-install] downloaded $(stat -c %s "$BUNDLE" 2>/dev/null || wc -c < "$BUNDLE") bytes"
+    echo "[ga-rauc-install] attempt $ATTEMPT/$MAX_ATTEMPTS failed: $FETCH_ERR - retrying in ${_pause}s" >&2
+    write_status retrying "$(fsize "$PART")" "" "$FETCH_ERR" $((_now + _pause))
+    # Sleep in short slices so a superseding request is not kept waiting, and
+    # rewrite the status every minute: a reader (gm prefetch) treats a status
+    # older than 10 min as stale, and a backoff pause lasts up to 15 min.
+    _left="$_pause"
+    _beat=0
+    while [ "$_left" -gt 0 ]; do
+        supersede_if_requested
+        _slice=5; [ "$_left" -lt 5 ] && _slice="$_left"
+        sleep "$_slice"
+        _left=$((_left - _slice))
+        _beat=$((_beat + _slice))
+        if [ "$_beat" -ge "$HEARTBEAT_S" ]; then
+            write_status retrying "$(fsize "$PART")" "" "$FETCH_ERR" $((_now + _pause))
+            _beat=0
+        fi
+    done
+    _pause=$((_pause * 2)); [ "$_pause" -gt "$BACKOFF_MAX_S" ] && _pause="$BACKOFF_MAX_S"
+done
 
+# ── install: only a complete, verified bundle gets here ─────────────────────
 echo "[ga-rauc-install] verifying RAUC bundle"
+write_status installing "$(fsize "$BUNDLE")" "$(fsize "$BUNDLE")"
 if ! rauc info "$BUNDLE" >/dev/null 2>&1; then
     echo "[ga-rauc-install] FATAL: rauc info refuses the bundle (truncated? wrong signature?)" >&2
+    write_status failed "" "" "rauc info refuses the bundle"
+    clear_state
     rm -f "$BUNDLE"
     exit 4
 fi
@@ -352,14 +657,25 @@ if [ -x "$JOURNAL_DUMP_BIN" ]; then
 fi
 
 echo "[ga-rauc-install] installing $BUNDLE"
+# rauc install runs for minutes without writing anything: keep the status fresh.
+_isize="$(fsize "$BUNDLE")"
+( while :; do sleep "$HEARTBEAT_S"; write_status installing "$_isize" "$_isize"; done ) &
+_hb=$!
+stop_heartbeat() { kill "$_hb" 2>/dev/null || true; wait "$_hb" 2>/dev/null || true; }
 if ! rauc install "$BUNDLE"; then
+    stop_heartbeat
     echo "[ga-rauc-install] FATAL: rauc install failed" >&2
     rm -f "$BUNDLE"
+    write_status failed "" "" "rauc install failed"
+    clear_state
     exit 5
 fi
 
+stop_heartbeat
 echo "[ga-rauc-install] install OK — scheduling reboot in 5s"
 rm -f "$BUNDLE"
+write_status rebooting
+clear_state
 sync
 # Detach so the systemd unit can exit cleanly before reboot — otherwise
 # the path-unit's triggered .service appears hung until reboot fires.

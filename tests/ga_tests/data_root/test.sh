@@ -105,12 +105,15 @@ run_test "DR-12" "ga-rauc-slots on an apps-only tree publishes ga-rauc-slots.jso
 # ga-rauc-install (real script, real entry path, no VERSION arg): the request is read from
 # the root the RUNNING Supervisor uses. Rolled-back device: Supervisor 2025.x, request only
 # under addons/, a stale apps/ with a NEWER ga_manager dir next to it. The script stops at
-# its "no pinned OTA endpoint" FATAL (rc 3), after the request was read and removed.
+# its "no pinned OTA endpoint" FATAL (rc 3), after the request was read and removed. (Since
+# Odoo #2136 a missing endpoint is retried; one attempt keeps this a single fast pass.)
 fetch buildroot-external/rootfs-overlay/usr/sbin/ga-rauc-install "$W/rinst"
 mk rb "apps addons"; gm rb apps 2000; gm rb addons 1000
 printf '1.2.3.4\n' > "$W/rb/supervisor/addons/data/$GMSLUG/ga-rauc-install-request"
 rinst() { PATH="$W/bin:$PATH" GA_T_SUPVER="$2" GA_SUPERVISOR_DIR="$W/$1/supervisor" GA_DATA_ROOT_LIB="$LIB" \
-  GA_OTA_ACTIVE_FILE="$W/none.active" GA_RESOLVE_OTA_BIN=/bin/true $SH "$W/rinst" >"$W/$1.rinst.out" 2>&1; }
+  GA_OTA_ACTIVE_FILE="$W/none.active" GA_RESOLVE_OTA_BIN=/bin/true \
+  GA_STAGING_DIR="$W/$1.stage" GA_OTA_STATE_DIR="$W/$1.state" GA_OTA_PHASE_FILE="$W/$1.phase" GA_OTA_MAX_ATTEMPTS=1 \
+  $SH "$W/rinst" >"$W/$1.rinst.out" 2>&1; }
 run_test "DR-13" "ga-rauc-install on a rolled-back device (Supervisor 2025.x, request only under addons/): request read from addons/, removed, run reaches the OTA step" \
   "rinst rb 2025.11.5.4; [ \$? -eq 3 ] && grep -q \"read VERSION='1.2.3.4'.*addons/data\" '$W/rb.rinst.out' && [ ! -e '$W/rb/supervisor/addons/data/$GMSLUG/ga-rauc-install-request' ]"
 mk up "apps addons"; gm up apps 1000; gm up addons 2000

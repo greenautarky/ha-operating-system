@@ -1,0 +1,1 @@
+{"schema":1,"version":"18.4.1.6","ga_release":"BOSv1.6.2-rc1","phase":"retrying","bytes":1048576,"total":null,"attempt":1,"max_attempts":48,"next_retry_at":1795000030,"error":"curl exit 28 after 1048576 bytes from https://ota.greenautarky.com/releases/18.4.1.6/BOSv1.6.2-rc1/haos_ihost-18.4.1.6.raucb via 192.0.2.10","updated":1795000000}

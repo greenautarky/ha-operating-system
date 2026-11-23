@@ -1,0 +1,1 @@
+{"schema":1,"version":"18.4.1.6","ga_release":"","phase":"failed","bytes":null,"total":null,"attempt":1,"max_attempts":48,"next_retry_at":null,"error":"not staged: download failed for https://ota.greenautarky.com/releases/18.4.1.6/haos_ihost-18.4.1.6.raucb via the pinned endpoint 192.0.2.10","updated":1795000000}

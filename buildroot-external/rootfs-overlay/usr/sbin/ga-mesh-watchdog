@@ -82,6 +82,11 @@ NB_SOCK="${GA_MESH_NB_SOCK:-unix:///var/run/netbird.sock}"
 MGMT_URL_DEFAULT="${GA_MESH_MGMT_URL:-https://api.netbird.io:443}"
 SIGNAL_URL_DEFAULT="${GA_MESH_SIGNAL_URL:-https://signal.netbird.io:443}"
 OTA_UNIT="${GA_MESH_OTA_UNIT:-ga-rauc-install.service}"
+# ga-rauc-install's current phase (Odoo #2136). While it is a resumable
+# download the watchdog does NOT hold back: the fetch survives a NetBird
+# restart or a reboot, and it may run for hours on a slow link - holding back
+# for all of it would leave a dead mesh unrepaired while the download needs it.
+OTA_PHASE_FILE="${GA_MESH_OTA_PHASE_FILE:-/run/ga-rauc-install.phase}"
 # ga-wifi-watchdog's last action ("<action> <epoch>") and its reboot ledger
 # (one epoch per line). The ledger is SHARED: this watchdog reads it and writes
 # its own reboot into it, so the two can never add up to more reboots than
@@ -353,8 +358,11 @@ fi
 
 # --------------------------------------------------------------- 3. guards
 guard=""
-if [ "$(systemctl is-active "$OTA_UNIT" 2>/dev/null)" = activating ]; then
-    guard="an OS install is running ($OTA_UNIT activating)"
+_ota_phase=""
+[ -f "$OTA_PHASE_FILE" ] && _ota_phase="$(head -c 32 "$OTA_PHASE_FILE" 2>/dev/null | tr -d '[:space:]')"
+if [ "$(systemctl is-active "$OTA_UNIT" 2>/dev/null)" = activating ] \
+   && ! case "$_ota_phase" in queued|downloading|retrying|verifying) true ;; *) false ;; esac; then
+    guard="an OS install is running ($OTA_UNIT activating${_ota_phase:+, phase $_ota_phase})"
 else
     _op="$(busctl get-property de.pengutronix.rauc / de.pengutronix.rauc.Installer Operation 2>/dev/null | awk '{print $2}' | tr -d '"')"
     [ -n "$_op" ] && [ "$_op" != idle ] && guard="RAUC reports operation '$_op'"

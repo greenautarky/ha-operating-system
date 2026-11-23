@@ -103,7 +103,7 @@ while [ $# -gt 0 ]; do
     --resolve) ip=${2##*:}; shift 2 ;;
     --output|-o) out="$2"; shift 2 ;;
     -w|--write-out) wout="$2"; shift 2 ;;
-    --connect-timeout|--max-time) shift 2 ;;
+    --connect-timeout|--max-time|--speed-limit|--speed-time|--dump-header|--continue-at|--header|-C|-H) shift 2 ;;
     --fail) f=1; shift ;;
     --insecure) k=1; shift ;;
     --*) shift ;;
@@ -141,7 +141,10 @@ if [ "$ans" -ge 400 ]; then
   exit 0
 fi
 wcode "$ans"
-[ -n "$out" ] && [ "$out" != /dev/null ] && echo bundle > "$out"
+# the bundle is "bundle\n"; its .sha256 sidecar names it and hashes exactly that (Odoo #2136)
+if [ -n "$out" ] && [ "$out" != /dev/null ]; then
+  case "$url" in *.sha256) printf '%s  %s\n' "$(printf 'bundle\n' | sha256sum | cut -d' ' -f1)" "$(basename "${url%.sha256}")" > "$out" ;; *) echo bundle > "$out" ;; esac
+fi
 exit 0
 EOF
 chmod +x "$STUBS"/*
@@ -345,8 +348,8 @@ ok "OTAF-30f ... the decoy token/id of other blocks are not used" \
 fresh id-fallback "$M1"
 plan "$M1 200" "DNS 200" "MISS /BOSv1.4.0-rc3/"; pin "$M1"; write_creds "$TOK"
 run_installer 16.3.1.9 BOSv1.4.0-rc3
-ok "OTAF-31 the prod-slot fallback download carries the identity too" \
-   "[ \$(cfgs | wc -l) -eq 2 ] && curls | tail -1 | grep -q 'releases/16.3.1.9/haos_ihost-16.3.1.9.raucb'" "cfgs: $(cfgs)"
+ok "OTAF-31 the prod-slot fallback download carries the identity too (every curl, the last fetches the prod bundle)" \
+   "[ \$(cfgs | wc -l) -ge 2 ] && [ \$(cfgs | wc -l) -eq \$(curls | wc -l) ] && curls | tail -1 | grep -q 'releases/16.3.1.9/haos_ihost-16.3.1.9.raucb '" "cfgs: $(cfgs | wc -l) curls: $(curls | tr '\n' ';')"
 
 fresh id-quoted "$M1"
 plan "$M1 200"; pin "$M1"; write_creds "'$TOK'"
