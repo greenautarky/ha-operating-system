@@ -38,6 +38,7 @@
 #   OTAR-16  the per-run deadline counts uptime, ends retries before the limit
 #   OTAR-17  the attempt count is persisted: a resumed run continues it
 #   OTAR-18  a long backoff pause keeps the status fresh (heartbeat)
+#   OTAR-19  a long rauc install keeps the status fresh; the writer stops after
 #
 # GA_OTAR_INSTALLER replaces the installer under test (red proof against an
 # older version). GA_T_SHELL runs it with another shell ("busybox sh" = the
@@ -100,7 +101,7 @@ cat > "$STUBS/rauc" <<'EOF'
 #!/bin/sh
 case "$1" in
   info) exit 0 ;;
-  install) echo "rauc install $2 $(sha256sum "$2" | cut -d' ' -f1)" >> "$OTAR_CASE/calls"; exit 0 ;;
+  install) echo "rauc install $2 $(sha256sum "$2" | cut -d' ' -f1)" >> "$OTAR_CASE/calls"; sleep "${OTAR_RAUC_SLEEP:-0}"; exit 0 ;;
 esac
 exit 1
 EOF
@@ -325,6 +326,27 @@ _hb=$?
 ok "OTAR-18 a backoff pause rewrites the status (heartbeat <= 60 s; readers treat > 10 min as stale)" \
    "[ $_hb = 0 ]" "$(tr '\n' ' ' < "$WORK/hb.check")"
 
+fresh r19
+INSTENV="OTAR_RAUC_SLEEP=5 GA_OTA_HEARTBEAT_S=1"
+run "$V1" "$RC"
+INSTENV=""
+python3 -I - "$C/statuslog" "$C/gm/ga-rauc-install.status" > "$WORK/hbi.check" 2>&1 <<'PYEOF2'
+import json, sys
+# snapshots + the FINAL file (the namespace ends right after the last write)
+text = open(sys.argv[1]).read() + open(sys.argv[2]).read()
+dec = json.JSONDecoder(); i = 0; seen = []
+while i < len(text):
+    while i < len(text) and text[i].isspace(): i += 1
+    if i >= len(text): break
+    obj, i = dec.raw_decode(text, i); seen.append(obj)
+ts = sorted({s["updated"] for s in seen if s["phase"] == "installing"})
+print("installing updates:", ts, "last phase:", seen[-1]["phase"] if seen else None)
+sys.exit(0 if len(ts) >= 3 and seen and seen[-1]["phase"] == "rebooting" else 1)
+PYEOF2
+_hbi=$?
+ok "OTAR-19 a long rauc install rewrites the status (heartbeat) and the writer stops with the install" \
+   "[ $_hbi = 0 ] && [ \"\$(rc)\" = 0 ]" "$(tr '\n' ' ' < "$WORK/hbi.check") rc=$(rc)"
+
 fresh r09
 printf '%s\n' "$V1" > "$C/gm/ga-rauc-install-request"
 printf '%s\n' "$RC" > "$C/gm/ga-rauc-install-request.rc"
@@ -407,7 +429,7 @@ ok "OTAR-13b the boot re-arm unit starts the ONE install unit when a request is 
 
 # coverage (rule 9): every case must have actually run the installer
 ran=0; for d in "$WORK"/case/*; do [ -s "$d/out" ] && ran=$((ran+1)); done
-ok "OTAR-99 all 18 cases ran the installer" "[ $ran = 18 ]" "ran=$ran"
+ok "OTAR-99 all 19 cases ran the installer" "[ $ran = 19 ]" "ran=$ran"
 
 echo "--- ota_resume: $pass passed, $fail failed ---"
 [ "$fail" = 0 ]

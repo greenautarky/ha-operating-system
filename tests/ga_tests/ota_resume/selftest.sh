@@ -100,5 +100,9 @@ MOLD='            write_status retrying "$(fsize "$PART")" "" "$FETCH_ERR" $((_n
 MNEW='            _beat=0'
 expect SELF-11 m-no-heartbeat "no status heartbeat during a backoff pause" OTAR-18
 
+MOLD='( while :; do sleep "$HEARTBEAT_S"; write_status installing "$_isize" "$_isize"; done ) &'
+MNEW='( : ) &'
+expect SELF-12 m-no-install-heartbeat "no status heartbeat during rauc install" OTAR-19
+
 echo "--- ota_resume selftest: $pass passed, $fail failed ---"
 [ "$fail" = 0 ]

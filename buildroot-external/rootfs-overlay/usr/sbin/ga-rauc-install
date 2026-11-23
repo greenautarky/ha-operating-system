@@ -435,6 +435,10 @@ DEADLINE_S="$(num_or "${GA_OTA_DEADLINE_S:-}" 86400 GA_OTA_DEADLINE_S)" # per ru
 BACKOFF_S="$(num_or "${GA_OTA_BACKOFF_S:-}" 30 GA_OTA_BACKOFF_S)"       # first pause, doubled per failure
 BACKOFF_MAX_S="$(num_or "${GA_OTA_BACKOFF_MAX_S:-}" 900 GA_OTA_BACKOFF_MAX_S)"
 STATUS_EVERY_S="$(num_or "${GA_OTA_STATUS_EVERY_S:-}" 10 GA_OTA_STATUS_EVERY_S)"
+# Heartbeat while nothing else writes the status (backoff pause, rauc install):
+# readers (gm prefetch) treat a status older than 10 min as a dead writer.
+HEARTBEAT_S="$(num_or "${GA_OTA_HEARTBEAT_S:-}" 60 GA_OTA_HEARTBEAT_S)"
+[ "$HEARTBEAT_S" -ge 1 ] || HEARTBEAT_S=1
 [ "$MAX_ATTEMPTS" -ge 1 ] || MAX_ATTEMPTS=1
 [ "$STATUS_EVERY_S" -ge 1 ] || STATUS_EVERY_S=1
 
@@ -623,7 +627,7 @@ while :; do
         sleep "$_slice"
         _left=$((_left - _slice))
         _beat=$((_beat + _slice))
-        if [ "$_beat" -ge 60 ]; then
+        if [ "$_beat" -ge "$HEARTBEAT_S" ]; then
             write_status retrying "$(fsize "$PART")" "" "$FETCH_ERR" $((_now + _pause))
             _beat=0
         fi
@@ -651,7 +655,13 @@ if [ -x "$JOURNAL_DUMP_BIN" ]; then
 fi
 
 echo "[ga-rauc-install] installing $BUNDLE"
+# rauc install runs for minutes without writing anything: keep the status fresh.
+_isize="$(fsize "$BUNDLE")"
+( while :; do sleep "$HEARTBEAT_S"; write_status installing "$_isize" "$_isize"; done ) &
+_hb=$!
+stop_heartbeat() { kill "$_hb" 2>/dev/null || true; wait "$_hb" 2>/dev/null || true; }
 if ! rauc install "$BUNDLE"; then
+    stop_heartbeat
     echo "[ga-rauc-install] FATAL: rauc install failed" >&2
     rm -f "$BUNDLE"
     write_status failed "" "" "rauc install failed"
@@ -659,6 +669,7 @@ if ! rauc install "$BUNDLE"; then
     exit 5
 fi
 
+stop_heartbeat
 echo "[ga-rauc-install] install OK — scheduling reboot in 5s"
 rm -f "$BUNDLE"
 write_status rebooting
