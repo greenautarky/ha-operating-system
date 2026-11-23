@@ -87,7 +87,7 @@ import tempfile
 
 # The pin rules live in ONE place (scripts/lib/pin_policy.py), loaded from this
 # script's own directory — never from a REPO_ROOT override — so a selftest over a
-# scratch tree still runs the LIVE rules.
+# scratch tree runs the LIVE rules too.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
 import pin_policy  # noqa: E402
 

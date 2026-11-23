@@ -7,7 +7,7 @@
 # check-images.sh honoured a declared store_ahead and repin-addons.py --check
 # did not. Every case below runs BOTH live consumers over the same scratch tree
 # and store, and asserts the verdict of each:
-#   must-pass: store_ahead valid (pin newer, reason, until within 30 days)
+#   must-pass: a valid declaration (pin newer, with a reason and an end date in range)
 #   must-fail: expired; no reason; until > 30 days; malformed date; pin BEHIND
 #              the store with a store_ahead; pin ahead WITHOUT a store_ahead
 # Plus the module's own rules (is_prerelease, ordering) via its CLI, and a
