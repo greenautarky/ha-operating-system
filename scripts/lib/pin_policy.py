@@ -17,6 +17,11 @@ Rules
   ``"store_ahead": {"reason": "...", "until": "YYYY-MM-DD"}``: a reason, a
   valid date, not past, at most MAX_DAYS ahead, and the pin really newer than
   the store. It never excuses a pin BEHIND the store.
+* hold: a pin may stay BEHIND the newest published image when declared next
+  to it, ``"hold": {"reason": "...", "until": "YYYY-MM-DD"}``, with the same
+  window rules (reason; valid date; not past; at most MAX_DAYS ahead). Also
+  read by ga-ops scripts/bake_precheck.py from the baked tree, so the bake's
+  pre-check and the tree's own gate cannot disagree about a hold.
 """
 from __future__ import annotations
 
@@ -46,6 +51,41 @@ def is_newer(a: str, b: str) -> bool:
     return a != b and _key(a) > _key(b)
 
 
+def _window(kind: str, decl, today: str | None):
+    """The declaration rules shared by hold and store_ahead. None = valid, else why not."""
+    if not isinstance(decl, dict):
+        return f"{kind} is not an object"
+    reason = str(decl.get("reason") or "").strip()
+    until = str(decl.get("until") or "").strip()
+    today_d = datetime.date.fromisoformat(today) if today else datetime.datetime.now(datetime.timezone.utc).date()
+    if not reason:
+        return f"{kind} has no reason"
+    if not _DATE_RE.match(until):
+        return f"{kind} until '{until}' is not YYYY-MM-DD"
+    try:
+        until_d = datetime.date.fromisoformat(until)
+    except ValueError:
+        return f"{kind} until '{until}' is not a valid date"
+    if until_d < today_d:
+        return f"{kind} expired on {until}"
+    if until_d > today_d + datetime.timedelta(days=MAX_DAYS):
+        return f"{kind} until {until} is more than {MAX_DAYS} days ahead"
+    return None
+
+
+def hold_verdict(entry: dict, today: str | None = None):
+    """Return (declared, ok, why) for a pin held BEHIND the newest published image.
+
+    Whether the pin really is behind is the caller's measurement (it lists the
+    registry); this decides only whether the declaration excuses it.
+    """
+    h = entry.get("hold") if isinstance(entry, dict) else None
+    if not h:
+        return False, False, None
+    why = _window("hold", h, today)
+    return True, why is None, why
+
+
 def store_ahead_verdict(entry: dict, pinned: str, store: str, today: str | None = None):
     """Return (declared, ok, why).
 
@@ -56,21 +96,9 @@ def store_ahead_verdict(entry: dict, pinned: str, store: str, today: str | None 
     sa = entry.get("store_ahead") if isinstance(entry, dict) else None
     if not sa:
         return False, False, None
-    reason = str(sa.get("reason") or "").strip()
-    until = str(sa.get("until") or "").strip()
-    today_d = datetime.date.fromisoformat(today) if today else datetime.datetime.now(datetime.timezone.utc).date()
-    if not reason:
-        return True, False, "store_ahead has no reason"
-    if not _DATE_RE.match(until):
-        return True, False, f"store_ahead until '{until}' is not YYYY-MM-DD"
-    try:
-        until_d = datetime.date.fromisoformat(until)
-    except ValueError:
-        return True, False, f"store_ahead until '{until}' is not a valid date"
-    if until_d < today_d:
-        return True, False, f"store_ahead expired on {until}"
-    if until_d > today_d + datetime.timedelta(days=MAX_DAYS):
-        return True, False, f"store_ahead until {until} is more than {MAX_DAYS} days ahead"
+    why = _window("store_ahead", sa, today)
+    if why:
+        return True, False, why
     if not is_newer(str(pinned), str(store)):
         return True, False, f"store_ahead is declared but the pin is not newer than the store ({pinned} vs {store})"
     return True, True, None
@@ -81,19 +109,24 @@ def _main(argv: list[str]) -> int:
 
     pin_policy.py is-prerelease VERSION              -> exit 0 yes / 1 no
     pin_policy.py store-ahead JSON KEY PINNED STORE   -> exit 0 ok; 1 not declared; 3 invalid (why on stdout)
+    pin_policy.py hold JSON KEY                       -> exit 0 ok; 1 not declared; 3 invalid (why on stdout)
     GA_TODAY=YYYY-MM-DD overrides today (selftests only).
     """
     import os
     if len(argv) == 2 and argv[0] == "is-prerelease":
         return 0 if is_prerelease(argv[1]) else 1
-    if len(argv) == 5 and argv[0] == "store-ahead":
-        _, path, key, pinned, store = argv
+    if (len(argv) == 5 and argv[0] == "store-ahead") or (len(argv) == 3 and argv[0] == "hold"):
+        path, key = argv[1], argv[2]
         try:
             entry = (json.load(open(path)).get("addons") or {}).get(key) or {}
         except (OSError, ValueError) as e:
             print(f"cannot read {path}: {e}")
             return 2
-        declared, ok, why = store_ahead_verdict(entry, pinned, store, os.environ.get("GA_TODAY") or None)
+        today = os.environ.get("GA_TODAY") or None
+        if argv[0] == "hold":
+            declared, ok, why = hold_verdict(entry, today)
+        else:
+            declared, ok, why = store_ahead_verdict(entry, argv[3], argv[4], today)
         if not declared:
             return 1
         if ok:
