@@ -1,63 +1,63 @@
 #!/bin/sh
-# DSGW-210 LTE — pin the Quectel BG96 to Cat-M1 / LTE-M.
+# DSGW-210 LTE — READ the Quectel BG96's radio-access configuration, never write it.
 #
-# ModemManager + NetworkManager own the LTE connection (a `gsm` profile);
-# this one-shot only forces the radio-access technology, which is a
-# Quectel-proprietary QCFG knob ModemManager does not expose:
-#   nwscanmode=3  -> LTE only (no 2G/EGPRS fallback)
-#   iotopmode=0   -> Cat-M1 (LTE-M), not NB-IoT
-# The trailing ",1" saves both to the modem's non-volatile memory, so on
-# any subsequent boot the modem already comes up as Cat-M1 — re-asserting
-# here every boot is just idempotent insurance for a virgin/swapped modem.
+# Decision 2026-11-19 (Odoo #2187, option A): the modem's non-volatile RAT/band
+# configuration stays as the manufacturer shipped it. The modem chooses LTE-M,
+# NB-IoT or 2G itself. Until BOSv1.6.0-dev16 this script wrote
+# nwscanmode=3 / iotopmode=0 into the NVM on every boot; that changed the
+# certified configuration and, once, raced ModemManager's probe of the same AT
+# port (the modem was marked invalid for the whole boot).
 #
-# Runs Before=ModemManager.service so the AT port is still free; MM grabs
-# it exclusively once it probes the modem. Always exits 0 — LTE is a
-# fallback link and must never delay or block the boot.
+# Now: read nwscanmode, nwscanseq, iotopmode, band and the firmware revision,
+# log them and leave them in $STATUS (JSON) so a deviation from the stock values
+# can be seen per device. A unit whose NVM an older image already rewrote keeps
+# those values until someone restores them deliberately — that is logged, not
+# fixed here. Only QUERY forms are sent (AT+QCFG="name" without a value);
+# tests/ga_tests/lte_rat must-fail on any set form.
 #
-# NB: ModemManager's BG96 support models only one mode combo (2g/3g/4g)
-# and mis-labels a Cat-M1 link as "access tech: gsm" in `mmcli` — that is
-# cosmetic. The real RAT is what this script sets; confirm with
-# `AT+QNWINFO` / `AT+QCSQ`, not `mmcli`.
+# Runs Before=ModemManager.service so the AT port is still free. Always exits 0:
+# LTE is a fallback link and must never delay or block the boot.
 
-AT=/dev/lte-at
+AT=${GA_LTE_AT:-/dev/lte-at}
+STATUS=${GA_LTE_RAT_STATUS:-/run/dsgw210-lte-rat.json}
+OUT=${GA_LTE_RAT_TMP:-/tmp/lte-rat.out}
+REPLY_S=${GA_LTE_RAT_REPLY_S:-3}
 log() { echo "dsgw210-lte-rat: $*"; }
 
-# Send an AT command; return 0 only if the modem answers "OK" within ~3 s.
-# Reader is started before the write so a fast reply is not missed.
-at() {
-	( timeout 3 cat "$AT" > /tmp/lte-rat.out 2>/dev/null & )
+# q CMD — send one QUERY, leave the reply in $OUT; 0 only if the modem said OK.
+q() {
+	( timeout "$REPLY_S" cat "$AT" > "$OUT" 2>/dev/null & )
 	sleep 0.3
 	printf '%s\r' "$1" > "$AT" 2>/dev/null || return 1
-	sleep 3
-	grep -q 'OK' /tmp/lte-rat.out 2>/dev/null
+	sleep "$REPLY_S"
+	grep -q 'OK' "$OUT" 2>/dev/null
 }
+# val NAME — the value list of +QCFG: "NAME",<values> from the last reply.
+val() { sed -n "s/^+QCFG: \"$1\",\([^[:cntrl:]]*\).*/\1/p" "$OUT" | head -1 | tr -d ' "'; }
 
-# Wait for the AT port node to appear (modem USB enumeration).
 w=0
 while [ ! -e "$AT" ]; do
 	w=$((w + 1))
-	if [ "$w" -gt 30 ]; then
-		log "$AT absent after ~60 s — skipping (NV setting persists from a prior boot)"
-		exit 0
-	fi
+	if [ "$w" -gt 30 ]; then log "$AT absent after ~60 s — nothing read"; exit 0; fi
 	sleep 2
 done
 stty -F "$AT" 115200 raw -echo 2>/dev/null || true
 
-# The port node can exist several seconds before the modem firmware
-# accepts AT commands — wait until it actually answers, else the QCFG
-# writes are sent into the void.
 w=0
-until at 'AT'; do
+until q 'AT'; do
 	w=$((w + 1))
-	if [ "$w" -gt 20 ]; then
-		log "modem not answering AT after ~70 s — skipping (NV setting persists)"
-		exit 0
-	fi
+	if [ "$w" -gt 20 ]; then log "modem not answering AT — nothing read"; exit 0; fi
 	sleep 1
 done
 
-if at 'AT+QCFG="nwscanmode",3,1'; then log "nwscanmode=3 (LTE only) set"; else log "nwscanmode set: no OK from modem"; fi
-if at 'AT+QCFG="iotopmode",0,1';  then log "iotopmode=0 (Cat-M1) set";   else log "iotopmode set: no OK from modem";  fi
-rm -f /tmp/lte-rat.out
+json="{"
+for k in nwscanmode nwscanseq iotopmode band; do
+	if q "AT+QCFG=\"$k\""; then v=$(val "$k"); else v=""; fi
+	log "$k=${v:-<no answer>}"
+	json="$json\"$k\":\"$v\","
+done
+if q 'AT+QGMR'; then fw=$(grep -v -e '^AT' -e '^OK' -e '^[[:space:]]*$' "$OUT" | head -1 | tr -d '\r '); else fw=""; fi
+log "firmware=${fw:-<no answer>}"
+printf '%s"firmware":"%s","written":false,"ts":%s}\n' "$json" "$fw" "$(date +%s)" > "$STATUS" 2>/dev/null || true
+rm -f "$OUT"
 exit 0

@@ -1,7 +1,7 @@
 [Unit]
-Description=DSGW-210 LTE — force Quectel BG96 to Cat-M1/LTE-M
+Description=DSGW-210 LTE — read (never write) the Quectel BG96 RAT configuration
 Documentation=file:/usr/bin/dsgw210-lte-rat.sh
-# The radio-gpio service powers the modem; this must finish before
+# The radio-gpio service powers the modem; this reads before
 # ModemManager claims the modem's AT port (it holds it exclusively).
 After=dsgw210-radio-gpio.service
 Before=ModemManager.service

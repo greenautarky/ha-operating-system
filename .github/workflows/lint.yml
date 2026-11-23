@@ -665,6 +665,11 @@ jobs:
         # lacks the component, BCI-01) and a shared pin lands in the iHost image
         # (BCI-02).
         run: bash tests/ga_tests/board_components/test.sh
+      - name: lte_rat - the BG96 RAT config is read, never written (Odoo #2187)
+        # Live dsgw210-lte-rat.sh against a fake BG96 on a pty that logs every
+        # command; a committed must-fail fixture (the pre-#2187 QCFG writes)
+        # proves the guard can go red.
+        run: sh tests/ga_tests/lte_rat/test.sh
 
       - name: build tests - per-board skips (table held to the live runner)
         # tests/ga_tests/build_board_skips.tsv turns a FAIL into a SKIP with a
