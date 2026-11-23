@@ -95,5 +95,10 @@ MOLD='ATTEMPT="$ATTEMPTS_USED"'
 MNEW='ATTEMPT=0'
 expect SELF-10 m-attempts-reset "the attempt count restarts on every run (endless retries across reboots)" OTAR-17
 
+MOLD='            write_status retrying "$(fsize "$PART")" "" "$FETCH_ERR" $((_now + _pause))
+            _beat=0'
+MNEW='            _beat=0'
+expect SELF-11 m-no-heartbeat "no status heartbeat during a backoff pause" OTAR-18
+
 echo "--- ota_resume selftest: $pass passed, $fail failed ---"
 [ "$fail" = 0 ]

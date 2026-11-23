@@ -37,6 +37,7 @@
 #   OTAR-15  a store without Range support: the partial is dropped, fetched whole
 #   OTAR-16  the per-run deadline counts uptime, ends retries before the limit
 #   OTAR-17  the attempt count is persisted: a resumed run continues it
+#   OTAR-18  a long backoff pause keeps the status fresh (heartbeat)
 #
 # GA_OTAR_INSTALLER replaces the installer under test (red proof against an
 # older version). GA_T_SHELL runs it with another shell ("busybox sh" = the
@@ -304,6 +305,26 @@ run
 ok "OTAR-17 attempts carry across runs (reboots): 5 used + 1 = the limit of 6, gives up" \
    "[ \"\$(rc)\" = 3 ] && grep -q 'after 6 attempt' '$C/out' && [ \"\$(grep -c 'downloading https.*sha256' '$C/out')\" = 1 ]" "rc=$(rc) out: $(out)"
 
+fresh r18 '{"refuse": [".sha256"]}'
+INSTENV="GA_OTA_BACKOFF_S=65 GA_OTA_MAX_ATTEMPTS=2"
+run "$V1" "$RC"
+INSTENV=""
+python3 -I - "$C/statuslog" > "$WORK/hb.check" 2>&1 <<'PYEOF2'
+import json, sys
+text = open(sys.argv[1]).read()
+dec = json.JSONDecoder(); i = 0; seen = []
+while i < len(text):
+    while i < len(text) and text[i].isspace(): i += 1
+    if i >= len(text): break
+    obj, i = dec.raw_decode(text, i); seen.append(obj)
+ts = sorted({s["updated"] for s in seen if s["phase"] == "retrying"})
+print("retrying updates:", ts)
+sys.exit(0 if len(ts) >= 2 and ts[-1] - ts[0] >= 55 else 1)
+PYEOF2
+_hb=$?
+ok "OTAR-18 a backoff pause rewrites the status (heartbeat <= 60 s; readers treat > 10 min as stale)" \
+   "[ $_hb = 0 ]" "$(tr '\n' ' ' < "$WORK/hb.check")"
+
 fresh r09
 printf '%s\n' "$V1" > "$C/gm/ga-rauc-install-request"
 printf '%s\n' "$RC" > "$C/gm/ga-rauc-install-request.rc"
@@ -386,7 +407,7 @@ ok "OTAR-13b the boot re-arm unit starts the ONE install unit when a request is 
 
 # coverage (rule 9): every case must have actually run the installer
 ran=0; for d in "$WORK"/case/*; do [ -s "$d/out" ] && ran=$((ran+1)); done
-ok "OTAR-99 all 17 cases ran the installer" "[ $ran = 17 ]" "ran=$ran"
+ok "OTAR-99 all 18 cases ran the installer" "[ $ran = 18 ]" "ran=$ran"
 
 echo "--- ota_resume: $pass passed, $fail failed ---"
 [ "$fail" = 0 ]

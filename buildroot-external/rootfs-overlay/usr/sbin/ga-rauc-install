@@ -612,13 +612,21 @@ while :; do
     fi
     echo "[ga-rauc-install] attempt $ATTEMPT/$MAX_ATTEMPTS failed: $FETCH_ERR - retrying in ${_pause}s" >&2
     write_status retrying "$(fsize "$PART")" "" "$FETCH_ERR" $((_now + _pause))
-    # Sleep in short slices so a superseding request is not kept waiting.
+    # Sleep in short slices so a superseding request is not kept waiting, and
+    # rewrite the status every minute: a reader (gm prefetch) treats a status
+    # older than 10 min as stale, and a backoff pause lasts up to 15 min.
     _left="$_pause"
+    _beat=0
     while [ "$_left" -gt 0 ]; do
         supersede_if_requested
         _slice=5; [ "$_left" -lt 5 ] && _slice="$_left"
         sleep "$_slice"
         _left=$((_left - _slice))
+        _beat=$((_beat + _slice))
+        if [ "$_beat" -ge 60 ]; then
+            write_status retrying "$(fsize "$PART")" "" "$FETCH_ERR" $((_now + _pause))
+            _beat=0
+        fi
     done
     _pause=$((_pause * 2)); [ "$_pause" -gt "$BACKOFF_MAX_S" ] && _pause="$BACKOFF_MAX_S"
 done
