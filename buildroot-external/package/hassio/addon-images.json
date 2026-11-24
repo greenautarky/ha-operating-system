@@ -14,11 +14,7 @@
     },
     "ga_influxdbv1": {
       "image": "ghcr.io/greenautarky/ga_influxdbv1-{arch}",
-      "version": "0.0.25",
-      "store_ahead": {
-        "reason": "0.0.25 = 0.0.24 slim (Odoo #1973) + nginx CVE-2026-113425/121810/123007/123633 rebuild (influxDBv1 #40). In BOSv1.6.1-rc3 by Manager decision 2026-11-23; the field store (vibe_addons) stays DRAFT until the rc3 K31 fresh-flash gate checks influx (authenticated write/read), then store go by Thomas.",
-        "until": "2026-12-10"
-      }
+      "version": "0.0.26"
     },
     "ga_zigbee2mqtt": {
       "image": "ghcr.io/greenautarky/ga_zigbee2mqtt-{arch}",
