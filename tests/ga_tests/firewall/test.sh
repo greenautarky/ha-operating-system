@@ -206,11 +206,27 @@ else
 fi
 
 # =========================================================================
+# B2. Mesh audit counters (read-only: counts, decides nothing)
+# =========================================================================
+MA_TABLE="inet ga_mesh_audit"
+_ma=$(nft list table $MA_TABLE 2>/dev/null)
+run_test "FW-60" "mesh audit table loaded with its per-port set and both chains" \
+  "printf '%s\n' \"\$_ma\" | grep -q 'set by_port' && printf '%s\n' \"\$_ma\" | grep -q 'hook prerouting' && printf '%s\n' \"\$_ma\" | grep -q 'hook forward'"
+# Exactly the two chain policies may say accept; no other verdict may appear anywhere. An absent
+# table is red here too (an empty text holds no verdict and would pass).
+fw_audit_no_verdict() {
+  [ "$(printf '%s\n' "$_ma" | grep -c 'policy accept;')" = 2 ] || return 1
+  ! printf '%s\n' "$_ma" | sed -e 's/policy accept;//' -e 's/ct status ! dnat//' -e 's/ct status & dnat == 0//' \
+    | grep -Eqw 'drop|reject|queue|accept|jump|goto|return|dnat|snat|redirect|masquerade|notrack'
+}
+run_test "FW-61" "mesh audit table holds no verdict (nothing can be dropped by it)" "fw_audit_no_verdict"
+
+# =========================================================================
 # C. Reachability permutations (E2E — external prober needed, documented)
 # =========================================================================
 skip_test "FW-40" "LAN client CANNOT reach :22222 or a published container port when blocked"      "E2E: needs a LAN prober host"
-skip_test "FW-41" "mesh peer CAN still reach :8099/:8123 when firewall on" "E2E: needs a NetBird peer"
+skip_test "FW-41" "mesh peer CAN still reach ssh/:8099/HA UI when firewall on" "run from a mesh peer: firewall/mesh_probe.sh"
 skip_test "FW-42" "WiFi ingress behaves same as wired ingress (both LAN)"  "E2E: needs a WiFi LAN prober"
-skip_test "FW-43" "device stays fleet-reachable after enable (no lockout)" "E2E: fleet-manager poll check"
+skip_test "FW-43" "device stays fleet-reachable after enable (no lockout)" "run from a mesh peer: firewall/mesh_probe.sh"
 
 suite_end

@@ -1,0 +1,65 @@
+#!/bin/sh
+# ga-mesh-audit — count new inbound flows on the mesh interface, per port.
+#
+# COUNT ONLY. It decides nothing about a packet: the table holds no verdict
+# statement and its chains have policy accept. It is a table of its own, loaded
+# in a transaction of its own, so a kernel that rejects it leaves the host
+# firewall (table ga_firewall) exactly as it is.
+#
+# The prerouting hook sits before DNAT, so a published container port is counted
+# under the port the peer asked for. No addresses are kept, only protocol, port
+# and counts; nothing is written to disk and the counts start at 0 on every boot.
+#
+#   ga-mesh-audit start | stop | show
+set -u
+IFACE=wt0
+TABLE=ga_mesh_audit
+
+rules() {
+	cat <<EOR
+table inet $TABLE {
+  counter new_total { }
+  counter routed_total { }
+  set by_port {
+    type inet_proto . inet_service
+    size 512
+    flags dynamic
+    counter
+  }
+  chain count_in {
+    type filter hook prerouting priority -150; policy accept;
+    iifname "$IFACE" ct state new counter name new_total
+    iifname "$IFACE" ct state new meta l4proto { tcp, udp } add @by_port { meta l4proto . th dport }
+  }
+  chain count_routed {
+    type filter hook forward priority -10; policy accept;
+    iifname "$IFACE" ct state new ct status & dnat == 0 counter name routed_total
+  }
+}
+EOR
+}
+
+case "${1:-}" in
+start)
+	command -v nft >/dev/null 2>&1 || { echo "ga-mesh-audit: nft missing, nothing counted"; exit 0; }
+	nft delete table inet "$TABLE" 2>/dev/null
+	if rules | nft -f -; then
+		echo "ga-mesh-audit: counting new flows on $IFACE"
+	else
+		echo "ga-mesh-audit: table rejected, nothing counted"
+		logger -t ga-mesh-audit -p daemon.warning "table rejected, nothing counted" 2>/dev/null
+	fi
+	exit 0
+	;;
+stop)
+	nft delete table inet "$TABLE" 2>/dev/null
+	exit 0
+	;;
+show)
+	nft list table inet "$TABLE"
+	;;
+*)
+	echo "usage: ga-mesh-audit start|stop|show" >&2
+	exit 2
+	;;
+esac
