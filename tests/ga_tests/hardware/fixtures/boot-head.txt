@@ -1,0 +1,2 @@
+Nov 24 21:58:01 KiBu kernel: Booting Linux on physical CPU 0x0
+Nov 24 21:58:01 KiBu kernel: Linux version 6.12.0 (builder) #1 SMP

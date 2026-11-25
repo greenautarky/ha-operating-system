@@ -3,5 +3,8 @@
 # (names only); everything else fails, which is what a host without the suite's device state does.
 case "$1" in
   ps) cut -d' ' -f1 "$GA_HEALTH_FIXTURE/containers.txt" ;;
+  exec) # `docker exec <ctr> cat /proc/net/tcp /proc/net/tcp6` answers from the fixture (the mosquitto
+        # image has no netstat/ss); a fixture without tcp.txt means an empty socket table
+        [ "$3" = cat ] && { cat "$GA_HEALTH_FIXTURE/tcp.txt" 2>/dev/null; exit 0; }; exit 1 ;;
   *)  exit 1 ;;
 esac

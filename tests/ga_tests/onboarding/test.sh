@@ -63,18 +63,13 @@ require_ha_port "OB-00"
 # Both run unauthenticated (curl with no token). The wizard URL is
 # `/greenautarky-setup.html` (the actual page) — NOT `/greenautarky-setup`
 # (which is the view that itself 302s).
-# We probe `/` the way the device label's QR code hits it, not the way a bare
-# `curl /` does. The label encodes `/?pin=<pin>&device=<id>`, and the setup
-# panel reads both back out of `window.location` to auto-fill the six digits.
-# A redirect that answers with a bare path drops them, so a customer who has
-# just scanned the code is still asked to read the PIN off the label and type
-# it in — the one thing the QR code exists to avoid. Probing without a query
-# string cannot see that at all, which is how it survived unnoticed on every
-# device whose redirect worked (OB-WR-03).
+# We probe `/` the way the device label's QR code hits it (`/?pin=<pin>&device=<id>`), not
+# the way a bare `curl /` does: a probe without a query string cannot see what the redirect
+# does with it (OB-WR-03). Since 2.12.13 the PIN is deliberately NOT carried over (#1895/#1917).
 _wizard_probe_pin="000000"
 _wizard_probe_device="ob-wr-probe"
 
-_wizard_completed=$(jq -r '.data.completed // false' /mnt/data/supervisor/homeassistant/.storage/greenautarky_site 2>/dev/null || echo "false")
+_wizard_completed=$(jq -r '.data.completed // false' "${GA_OB_SITE_STORE:-/mnt/data/supervisor/homeassistant/.storage/greenautarky_site}" 2>/dev/null || echo "false")
 _root_redirect=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --connect-timeout 5 \
   "$HA_BASE/?pin=${_wizard_probe_pin}&device=${_wizard_probe_device}" 2>/dev/null)
 
@@ -82,11 +77,11 @@ if [ "$_wizard_completed" = "false" ]; then
   run_test "OB-WR-01" "/ redirects to /greenautarky-setup.html (wizard incomplete)" \
     "echo \"\$_root_redirect\" | grep -qE '^302 .*greenautarky-setup\.html'"
 
-  # Reaching the wizard is necessary but not sufficient. Separate assertion, so
-  # a lost PIN reports as a lost PIN instead of hiding inside OB-WR-01 or, worse,
-  # passing because OB-WR-01 only ever looked at the status and the path.
-  run_test "OB-WR-03" "/ carries the label's ?pin= through to the wizard" \
-    "echo \"\$_root_redirect\" | grep -qE 'greenautarky-setup\.html\?.*pin=${_wizard_probe_pin}'"
+  # greenautarky_site 2.12.13 (F3c, Odoo #1895/#1917): the permanent label PIN must not
+  # travel in a URL, so the redirect DROPS ?pin= on purpose and keeps only ?device= (a label,
+  # not a secret). Asserted both ways: the PIN is not forwarded AND device still is.
+  run_test "OB-WR-03" "/ redirect does NOT forward the label's ?pin= (device= is kept)" \
+    "echo \"\$_root_redirect\" | grep -qE '^302 .*greenautarky-setup\.html\?(.*&)?device=${_wizard_probe_device}(&|\$)' && ! echo \"\$_root_redirect\" | grep -qiE 'pin=|${_wizard_probe_pin}'"
 else
   skip_test "OB-WR-01" "wizard already completed — incomplete-state gate doesn't apply"
   skip_test "OB-WR-03" "wizard already completed — incomplete-state gate doesn't apply"
@@ -227,22 +222,18 @@ fi
 run_test "PW-01" "Password reset page accessible" \
   "curl -sf --connect-timeout 5 $HA_BASE/greenautarky-password-reset 2>/dev/null | grep -qi 'passwort'"
 
-# The PIN endpoints are RATE LIMITED, and the check one line above deliberately
-# trips the limiter — so 429 is a correct answer here and its absence made the
-# outcome depend on test order. Same defect, same day, as the Playwright suite's
-# users-endpoint check (ha-operating-system#485); this is the sweep that should
-# have followed it. 429 proves the view is registered and guarding, which is
-# what these two assert.
-run_test "PW-02" "Password reset API rejects wrong PIN" \
-  "HTTP_CODE=\$(curl -sf --connect-timeout 5 -o /dev/null -w '%{http_code}' \
-   -X POST $HA_BASE/api/greenautarky_site/password_reset/users \
-   -H 'Content-Type: application/json' -d '{\"pin\": \"000000\"}' 2>/dev/null); \
-   [ \"\$HTTP_CODE\" = '401' ] || [ \"\$HTTP_CODE\" = '404' ] || [ \"\$HTTP_CODE\" = '429' ]"
+# Password reset by device PIN is switched off on purpose (Odoo #1895): the API answers
+# 403 with code password_reset_disabled for every body. Asserted EXACTLY: status 403 AND that
+# code. A reset that goes through (200), a rate-limit 429, an unregistered view (404) or any
+# other refusal is a different state and stays red - never "any 4xx".
+pw_disabled() {   # pw_disabled <url> <json body>
+  _r=$(curl -s --connect-timeout 5 -w '\n%{http_code}' -X POST "$1" -H 'Content-Type: application/json' -d "$2" 2>/dev/null)
+  [ "$(printf '%s\n' "$_r" | tail -n 1)" = 403 ] && printf '%s\n' "$_r" | grep -Eq '"code": ?"password_reset_disabled"'
+}
+run_test "PW-02" "Password reset API refuses a wrong PIN: 403 password_reset_disabled" \
+  "pw_disabled $HA_BASE/api/greenautarky_site/password_reset/users '{\"pin\": \"000000\"}'"
 
-run_test "PW-03" "Password reset API rejects missing fields" \
-  "HTTP_CODE=\$(curl -sf --connect-timeout 5 -o /dev/null -w '%{http_code}' \
-   -X POST $HA_BASE/api/greenautarky_site/password_reset \
-   -H 'Content-Type: application/json' -d '{\"pin\": \"000000\", \"username\": \"\", \"new_password\": \"\"}' 2>/dev/null); \
-   [ \"\$HTTP_CODE\" = '400' ] || [ \"\$HTTP_CODE\" = '401' ] || [ \"\$HTTP_CODE\" = '404' ] || [ \"\$HTTP_CODE\" = '429' ]"
+run_test "PW-03" "Password reset API refuses empty fields: 403 password_reset_disabled" \
+  "pw_disabled $HA_BASE/api/greenautarky_site/password_reset '{\"pin\": \"000000\", \"username\": \"\", \"new_password\": \"\"}'"
 
 suite_end

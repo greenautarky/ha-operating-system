@@ -29,7 +29,7 @@ regressions from kernel updates, device tree changes, and firmware issues.
 | HW-09 | Zigbee serial device | Internal UART `/dev/ttyS4` (EFR32; ttyS3 is the LED MCU) |
 | HW-10 | eMMC block device | `/dev/mmcblk*` present |
 | HW-11 | Root filesystem type | Reports mount type (squashfs/erofs expected) |
-| HW-12 | Kernel not tainted | `/proc/sys/kernel/tainted` == 0 |
+| HW-12 | Kernel not tainted | `/proc/sys/kernel/tainted` == 0, or exactly 512 with only the known rockchip_pm_domain_probe / clk_bulk_put boot WARN (taint.sh) |
 | HW-13 | No critical driver errors | No `probe.*failed` or `driver.*error` in dmesg (excl. known) |
 | HW-15 | Watchdog device present | `/dev/watchdog*` exists |
 | HW-SUM | dmesg error summary | Count of `error`/`fail` lines in dmesg (informational) |

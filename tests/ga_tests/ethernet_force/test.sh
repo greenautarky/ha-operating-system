@@ -24,8 +24,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 suite_start "Ethernet force-marker (shipping gate)"
 
-FORCE_BOOT=/mnt/boot/ga-ethernet-force
-STATUS=/mnt/data/supervisor/share/ga-ethernet-status.json
+FORCE_BOOT="${GA_ETHF_FORCE_BOOT:-/mnt/boot/ga-ethernet-force}"
+STATUS="${GA_ETHF_STATUS:-/mnt/data/supervisor/share/ga-ethernet-status.json}"
+MANAGE="${GA_ETHF_BIN:-/usr/sbin/ga-manage-ethernet}"
 
 # --- the marker itself -------------------------------------------------------
 if [ -e "$FORCE_BOOT" ]; then
@@ -48,9 +49,21 @@ if [ -f "$STATUS" ]; then
     printf '        source=%s enabled=%s\n' "${SRC:-?}" "${EN:-?}"
     case "$SRC" in
         force-boot)
-            run_test "ETHF-03" "effective state is not the flash-time override" "false"
-            printf '        The running system still has eth0 forced up by the boot marker.\n'
-            printf '        Removing the file is not enough until the device reboots.\n'
+            # Between the marker's retirement and the next boot the RUNNING state still
+            # reports force-boot: that is legitimately "pending a reboot", but only when ALL of
+            # it holds - the marker file is gone, the status itself says boot_marker=absent
+            # (written by retire), and a fresh evaluation (what the next boot applies) is
+            # no longer force-boot. Anything else is the override still in force.
+            BM=$(sed -n 's/.*"boot_marker"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$STATUS" | head -1)
+            NEXT=$("$MANAGE" status 2>/dev/null | sed -n 's/^ethernet_source=//p' | head -1)
+            if [ ! -e "$FORCE_BOOT" ] && [ "$BM" = absent ] && [ -n "$NEXT" ] && [ "$NEXT" != force-boot ]; then
+                run_test "ETHF-03" "effective state is not the flash-time override (retired, pending reboot: next boot decides '$NEXT')" "true"
+            else
+                run_test "ETHF-03" "effective state is not the flash-time override" "false"
+                printf '        The running system still has eth0 forced up by the boot marker\n'
+                printf '        (marker file %s, status boot_marker=%s, next-boot source=%s).\n' "$([ -e "$FORCE_BOOT" ] && echo present || echo absent)" "${BM:-?}" "${NEXT:-?}"
+                printf '        Removing the file is not enough until the device reboots.\n'
+            fi
             ;;
         "")
             run_test "ETHF-03" "effective state is not the flash-time override" "false"

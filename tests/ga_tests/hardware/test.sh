@@ -153,8 +153,11 @@ run_test_show "HW-11" "Root filesystem type" \
 
 # --- Kernel health ---
 
-run_test "HW-12" "Kernel not tainted" \
-  "[ \"\$(cat /proc/sys/kernel/tainted 2>/dev/null)\" = '0' ]"
+# 0, or exactly 512 with the one known boot WARN (rockchip_pm_domain_probe / clk_bulk_put); taint.sh.
+. "$SCRIPT_DIR/taint.sh"
+_hw_taint=$(cat /proc/sys/kernel/tainted 2>/dev/null)
+_hw_taint_msg=$(wifi_kernel_log | hw_taint_verdict "$_hw_taint"); _hw_taint_rc=$?
+show_verdict "HW-12" "Kernel not tainted (or only the known boot WARN)" "$_hw_taint_rc" "$_hw_taint_msg"
 
 run_test "HW-13" "No critical driver errors in dmesg" \
   "! dmesg | grep -iE 'probe.*failed|driver.*error|firmware.*failed' | grep -v 'rtw_8723ds' | grep -qi 'fail\|error'"
