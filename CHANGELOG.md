@@ -12,6 +12,12 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18, BOSv1.6.2)
+
+### Ethernet: the flash-time override stays until something declares the uplink (Odoo #2180)
+
+The override is retired after converge only when a remote marker names this device or the onboarding choice is recorded; otherwise it stays, logged at err. `ga-ethernet-retire-recheck.path` retires it when the declaration arrives later.
+
 ## BOSv1.6.0-dev11 (DSGW-210 dev, feat/1.6-haos18)
 
 dev10 plus ga-bootstrap 1.2.17 (Odoo #2132, #2066), the F5 updater.json seed (Odoo #2065), ga_manager 0.277.6 (the DSGW pin moves from 0.277.3, the 1.6.0 final freeze hold removed; the store serves 0.277.6) and the storage watchdog (reboot step off). Marker only: `gaos_release_dsgw210`.

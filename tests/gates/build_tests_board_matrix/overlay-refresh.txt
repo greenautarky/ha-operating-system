@@ -16,3 +16,7 @@ usr/libexec/ga-rauc-slots
 usr/libexec/ga-stage-vendored-components
 etc/systemd/system/ga-ethernet-retire.path
 usr/lib/systemd/system/ga-rauc-install.path
+# Odoo #2180: the recheck for a late Ethernet declaration (fixtures predate it)
+new:etc/systemd/system/ga-ethernet-retire-recheck.path
+new:etc/systemd/system/ga-ethernet-retire-recheck.service
+new:etc/systemd/system/paths.target.wants/ga-ethernet-retire-recheck.path

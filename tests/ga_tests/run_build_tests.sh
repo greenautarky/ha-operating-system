@@ -706,6 +706,9 @@ grep -qE '^ExecStartPost=.*systemctl.*stop[[:space:]]+ga-ethernet-retire\.path' 
 grep -q '^ConditionPathExists=/mnt/boot/ga-ethernet-force' "${TARGET}/etc/systemd/system/ga-ethernet-retire.path" 2>/dev/null \
   && _pass "CFG-49h: retire.path does not arm on a device with nothing to retire" \
   || _fail "CFG-49h: retire.path has no ConditionPathExists — it arms on every boot of every already-retired device"
+[[ -L "${TARGET}/etc/systemd/system/paths.target.wants/ga-ethernet-retire-recheck.path" && -f "${TARGET}/etc/systemd/system/ga-ethernet-retire-recheck.service" ]] \
+  && _pass "CFG-49k: the recheck for a late Ethernet declaration is installed and enabled" \
+  || _fail "CFG-49k: ga-ethernet-retire-recheck missing - a kept override would only be retired at a later boot"
 # CFG-49i/j (ADR-0041): the trigger is ga_manager's marker in its OWN data dir
 # under the pinned slug, and the unit re-checks it before retiring. The /share
 # copy is mounted into every share:rw add-on and must not reach /mnt/boot.

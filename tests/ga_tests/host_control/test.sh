@@ -276,9 +276,39 @@ ok "HCTL-30 a converged marker in the shared directory retires nothing" \
 ok "HCTL-30b ... and the unit still exits 0, so its disarm step runs (no re-trigger loop)" \
    "[ \"\$(cat '$C/rc')\" = 0 ]" "rc=$(cat "$C/rc")"
 
+# Odoo #2180: converged but undeclared -> the marker stays, loudly, exit 0.
+eth_case() { # <name>: fresh device, marker + converged
+  fresh "$1"; : > "$C/boot/ga-ethernet-force"; printf 'converged\n' > "$GM/.ga_converged"
+}
+kept() { ok "$1" "ran && [ -e '$C/boot/ga-ethernet-force' ] && [ \"\$(cat '$C/rc')\" = 0 ] && grep -q 'KEEPING' '$C/out'" "rc=$(cat "$C/rc") out: $(tr '\n' ';' < "$C/out")"; }
+gone() { ok "$1" "ran && [ ! -e '$C/boot/ga-ethernet-force' ] && [ \"\$(cat '$C/rc')\" = 0 ] && ! grep -q 'KEEPING' '$C/out'" "rc=$(cat "$C/rc") out: $(tr '\n' ';' < "$C/out")"; }
+LBL=KIB-SON-00000000
+eth_case eth-undeclared; run_unit "$RET_SVC"
+kept "HCTL-33 converged without any declaration keeps the override"
+eth_case eth-noident; printf '%s\n' "$LBL" > "$GM/ga-ethernet-force"; run_unit "$RET_SVC"
+kept "HCTL-34 a remote marker but no identity (nobody to name) keeps the override"
+eth_case eth-foreign; printf 'KIB-SON-00000001\n' > "$GM/ga-ethernet-force"; printf '{"device_id": "%s"}\n' "$LBL" > "$GM/ga-identity.json"; run_unit "$RET_SVC"
+kept "HCTL-35 a remote marker naming another device keeps the override"
+eth_case eth-garbage; printf 'GA_ETHERNET_ENABLED=maybe\n' > "$C/data/ga-env.conf"; run_unit "$RET_SVC"
+kept "HCTL-36 a garbled onboarding value is no declaration"
+eth_case eth-declared; printf '%s\n' "$LBL" > "$GM/ga-ethernet-force"; printf '{"device_id": "%s"}\n' "$LBL" > "$GM/ga-identity.json"; run_unit "$RET_SVC"
+gone "HCTL-37 a remote marker naming this device retires the override"
+eth_case eth-true; printf 'GA_ETHERNET_ENABLED=true\n' > "$C/data/ga-env.conf"; run_unit "$RET_SVC"
+gone "HCTL-38 GA_ETHERNET_ENABLED=true retires the override"
+eth_case eth-false; printf 'GA_ETHERNET_ENABLED=false\n' > "$C/data/ga-env.conf"; run_unit "$RET_SVC"
+gone "HCTL-39 an explicit onboarding NO retires the override (the choice wins)"
+# the declaration arriving later, through the recheck unit
+RCK="$EXT_ETC_UNITS/ga-ethernet-retire-recheck"
+eth_case eth-later; run_unit "$RET_SVC"
+printf '%s\n' "$LBL" > "$GM/ga-ethernet-force"; printf '{"device_id": "%s"}\n' "$LBL" > "$GM/ga-identity.json"; run_unit "$RCK.service"
+ok "HCTL-39b kept first, then retired by the recheck once declared" "[ ! -e '$C/boot/ga-ethernet-force' ]" "out: $(tr '\n' ';' < "$C/out")"
+ok "HCTL-39c the recheck never disarms the main trigger and never watches for existence" \
+   "! grep -q '^ExecStartPost' '$RCK.service' && ! grep -qE '^PathExists' '$RCK.path' && [ \"\$(grep -c '^PathChanged=.*/ga-ethernet-force\$' '$RCK.path')\" = 2 ] && [ -L '$EXT_ETC_UNITS/paths.target.wants/ga-ethernet-retire-recheck.path' ]"
+
 fresh eth-gm
 : > "$C/boot/ga-ethernet-force"
 printf 'converged\n' > "$GM/.ga_converged"
+printf 'GA_ETHERNET_ENABLED=true\n' > "$C/data/ga-env.conf"
 run_unit "$RET_SVC"
 ok "HCTL-31 the converged marker in ga_manager's data directory retires the override" \
    "[ ! -e '$C/boot/ga-ethernet-force' ] && [ \"\$(cat '$C/rc')\" = 0 ]" "rc=$(cat "$C/rc") out: $(tr '\n' ';' < "$C/out")"

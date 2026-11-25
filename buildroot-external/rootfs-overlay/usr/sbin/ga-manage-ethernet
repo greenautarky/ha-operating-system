@@ -9,7 +9,9 @@
 #   ga-manage-ethernet retire     # delete the flash-time override, link untouched
 #   ga-manage-ethernet retire-if-converged
 #                                 # `retire`, only when ga_manager's converged
-#                                 # marker is a regular file in its data dir
+#                                 # marker is a regular file in its data dir AND
+#                                 # something declares the uplink for the next
+#                                 # boot (Odoo #2180); otherwise the marker stays
 #                                 # (what ga-ethernet-retire.service runs)
 #
 # STATE — absent is OFF
@@ -193,6 +195,11 @@ override_source() {
     return 0
   fi
 
+  remote_override
+}
+
+# Echoes force-config when ga_manager's marker names THIS device, else nothing.
+remote_override() {
   # Remote marker lives in ga_manager's addon-private /data, not in /share,
   # read under the pinned slug. A symlink is not a marker.
   _remote=""
@@ -380,6 +387,19 @@ do_retire() {
   write_status "$_en" "$_src"
 }
 
+# What decides Ethernet at the next boot once the flash-time marker is gone?
+# Echoes the declaration, or nothing when there is none. An explicit
+# GA_ETHERNET_ENABLED=false IS one (the onboarding choice): keeping the marker
+# would override it.
+next_boot_declaration() {
+  _rem=$(remote_override)
+  if [ -n "$_rem" ]; then echo "$_rem"; return 0; fi
+  if [ -f "$GA_ENV_FILE" ]; then
+    sed -n 's/^GA_ETHERNET_ENABLED=\(true\|false\)[[:space:]]*$/onboarding-\1/p' "$GA_ENV_FILE" | tail -1
+  fi
+  return 0
+}
+
 # `retire`, gated on the trigger ga-ethernet-retire.path watches: ga_manager's
 # converged marker, a regular file at the pinned data path. A symlink, a
 # directory or a missing marker retires nothing. Exit 0 either way — the unit's
@@ -387,6 +407,16 @@ do_retire() {
 # be re-triggered by the .path unit for as long as the path exists.
 do_retire_if_converged() {
   if [ -f "$CONVERGED_MARKER" ] && [ ! -L "$CONVERGED_MARKER" ]; then
+    # Odoo #2180: converged does not mean the uplink is declared. Retiring
+    # without a declaration switched Ethernet OFF at the next boot and left
+    # the device unreachable. ga-ethernet-retire-recheck.path comes back here
+    # when a declaration arrives; every boot does as well.
+    if [ -e "$FORCE_BOOT" ] && [ -z "$(next_boot_declaration)" ]; then
+      _msg="converged, but nothing declares Ethernet for this device (no valid remote marker naming it, no GA_ETHERNET_ENABLED) - KEEPING $FORCE_BOOT, Ethernet stays forced on. Declare it: ga_manager option ethernet.force_enabled, or the onboarding choice."
+      logger -t ga-manage-ethernet -p daemon.err "$_msg" 2>/dev/null || true
+      echo "WARNING: $_msg" >&2
+      return 0
+    fi
     do_retire
     return
   fi
