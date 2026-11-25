@@ -1,0 +1,3 @@
+buildroot-dsgw210/board/dusun/dsgw210/patches/linux/0005-a.patch
+buildroot-dsgw210/board/dusun/dsgw210/patches/linux/arm64/readme.txt
+docs/6.18.54/x.md
