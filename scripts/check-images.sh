@@ -175,7 +175,9 @@ check_image() {
 
         if [ -n "$token" ]; then
             local http_code
-            http_code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.docker.distribution.manifest.list.v2+json" "$api_url" 2>/dev/null || echo "000")
+            # All four manifest types: GHCR answers 404 (not 406) when the stored type is not in
+            # Accept, which reads as "missing" (a plain OCI manifest did, 2026-11-25).
+            http_code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.docker.distribution.manifest.list.v2+json" "$api_url" 2>/dev/null || echo "000")
             if [ "$http_code" = "200" ]; then
                 printf "${GREEN}  OK${NC}  %s\n" "$full"
                 pass_count=$((pass_count + 1))
