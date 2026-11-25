@@ -171,7 +171,9 @@ else bad "live .runtime-toolchain-gate does not parse (rc=$rc): $(tail -2 <<<"$o
 # A text grep for "exit 1" was not enough: it found the BROKEN branch's exit
 # and stayed green when the rc-1 branch did not abort (fault injection,
 # 2026-11-12).
-_block="$(awk '/^# 11c\) No baked container ships a build toolchain/{f=1} /^# Post-build integrity checks/{f=0} f' "$BUILD")"
+_block="$(awk '/^# 11c\) No baked container ships a build toolchain/{f=1} /^# 11d\) |^# Post-build integrity checks/{f=0} f' "$BUILD")"
+# exactly one build step: the next step's gate must not run inside this test
+if grep -q 'check-rootfs-commands' <<<"$_block"; then bad "the cut-out 11c block contains another step's gate"; fi
 ran=$((ran + 1))
 if [[ -n "$_block" ]] && grep -qE 'check-runtime-toolchain\.py"? +--image-tars' <<<"$_block" && grep -q '\.runtime-toolchain-gate' <<<"$_block"; then
   ok "ga_build.sh 11c calls the gate with the live policy"
