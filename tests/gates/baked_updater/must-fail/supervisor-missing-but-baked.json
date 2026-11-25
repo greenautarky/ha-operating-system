@@ -1,5 +1,5 @@
 {
-  "channel": "stable",
+  "channel": "stable","auto_update":false,
   "homeassistant": "2026.10.4.4",
   "cli": "2025.10.2",
   "dns": "2026.09.1",

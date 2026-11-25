@@ -29,7 +29,12 @@ for verdict in must-fail must-pass; do
     else [ "$RC" = 0 ] && grep -q ' 0 problem' <<<"$OUT" && ok "$verdict/$name -> green" || bad "$verdict/$name rc=$RC :: $OUT"; fi
   done
 done
-[ "$n" -ge 8 ] || bad "only $n fixtures ran"
+# the auto_update rule itself fires, not some other check (the rest of these fixtures is a full seed)
+for f in "$HERE"/must-fail/auto-update-*.json; do
+  run "$W/must-fail-$(basename "$f" .json).ext4"
+  [ "$(grep -c ' BAD ' <<<"$OUT")" = 1 ] && grep -q 'BAD   auto_update is' <<<"$OUT" && ok "$(basename "$f" .json): only the auto_update rule" || bad "$(basename "$f" .json) :: $OUT"
+done
+[ "$n" -ge 11 ] || bad "only $n fixtures ran"
 # the live generator's own output must satisfy the gate (generator and gate agree)
 "$GEN" "$HERE/version.json" "$W/imgs" stable > "$W/gen.json" 2>/dev/null && mk "$W/gen.json" "$W/gen.ext4" && run "$W/gen.ext4"
 [ "$RC" = 0 ] && ok "output of the live gen-updater-json.sh -> green" || bad "live generator output rc=$RC :: $OUT"
