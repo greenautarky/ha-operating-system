@@ -1,0 +1,17 @@
+[Unit]
+# ga-ethernet-retire.path fires once per boot. When nothing declared the uplink at
+# that moment the marker is kept (Odoo #2180); this watches for the declaration.
+# PathChanged only: an existing file must not re-trigger (no hot loop).
+Description=Re-check the flash-time Ethernet override when its replacement is declared
+ConditionPathExists=/mnt/boot/ga-ethernet-force
+
+[Path]
+PathChanged=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-ethernet-force
+PathChanged=/mnt/data/supervisor/apps/data/99f1cad4_ga_manager/ga-ethernet-force
+PathChanged=/mnt/data/supervisor/addons/data/99f1cad4_ga_manager/ga-identity.json
+PathChanged=/mnt/data/supervisor/apps/data/99f1cad4_ga_manager/ga-identity.json
+PathChanged=/mnt/data/ga-env.conf
+Unit=ga-ethernet-retire-recheck.service
+
+[Install]
+WantedBy=paths.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Retire the flash-time Ethernet override now that the uplink may be declared
+After=ga-ethernet-guard.service
+# Its OWN unit, not ga-ethernet-retire.service: that one disarms its trigger after
+# every run, and a declaration can arrive BEFORE converge (Odoo #2180).
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ga-manage-ethernet retire-if-converged
