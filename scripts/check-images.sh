@@ -372,6 +372,7 @@ if [ -f "$ADDON_IMAGES_JSON" ] && command -v git >/dev/null 2>&1; then
                 # Declared, reasoned, expiring: the pin is AHEAD of the store on purpose.
                 printf "${YELLOW}AHEAD-OF-STORE${NC}: %s pinned %s, vibe_addons/%s is %s — declared (store_ahead) until %s: %s\n" \
                     "$key" "$expected_version" "$(basename "$found_dir")" "$found_version" "$_sa_until" "$_sa_reason"
+                printf "${RED}::warning::%s${NC}\n" "$(python3 "$PIN_POLICY" ahead-line "$key" "$expected_version" "$found_version")"
                 ahead_count=$((ahead_count + 1))
             else
                 [ -n "${_sa_why:-}" ] && printf "${RED}STORE_AHEAD INVALID${NC}: %s — %s; counted as a lockstep break\n" "$key" "$_sa_why"

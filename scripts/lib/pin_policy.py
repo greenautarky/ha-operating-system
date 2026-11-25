@@ -104,12 +104,19 @@ def store_ahead_verdict(entry: dict, pinned: str, store: str, today: str | None 
     return True, True, None
 
 
+def ahead_line(key: str, pinned: str, store: str) -> str:
+    """What a pin ahead of the store means on a device. ONE wording for every gate."""
+    return (f"NOT RUNNING on a fresh device: {key} installs store {store}; the baked {pinned} is unused "
+            "(a bench device needs the bench store)")
+
+
 def _main(argv: list[str]) -> int:
     """CLI for shell consumers.
 
     pin_policy.py is-prerelease VERSION              -> exit 0 yes / 1 no
     pin_policy.py store-ahead JSON KEY PINNED STORE   -> exit 0 ok; 1 not declared; 3 invalid (why on stdout)
     pin_policy.py hold JSON KEY                       -> exit 0 ok; 1 not declared; 3 invalid (why on stdout)
+    pin_policy.py ahead-line KEY PINNED STORE         -> the sentence for a pin ahead of the store
     GA_TODAY=YYYY-MM-DD overrides today (selftests only).
     """
     import os
@@ -133,6 +140,9 @@ def _main(argv: list[str]) -> int:
             return 0
         print(why)
         return 3
+    if len(argv) == 4 and argv[0] == "ahead-line":
+        print(ahead_line(*argv[1:]))
+        return 0
     print(_main.__doc__, file=sys.stderr)
     return 2
 

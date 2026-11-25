@@ -237,6 +237,7 @@ def print_report(c: Comparison, total_pins: int, store_entries: int) -> None:
     )
     for key, pinned, store_v, reason in c.ahead:
         print(f"  AHEAD-OF-STORE {key}: pinned {pinned}, store {store_v} — declared store_ahead ({reason[:80]})")
+        print(f"  ::warning::{pin_policy.ahead_line(key, pinned, store_v)}")
     for key, store_v, pinned in c.prerelease:
         print(f"  PRERELEASE {key}: store is on canary {store_v}, pin holds release {pinned} "
               f"— NOT drift; baking a canary is a deliberate decision, left as-is")

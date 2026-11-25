@@ -479,6 +479,12 @@ jobs:
         # reboot-force / Type=notify / enabled, flag default 0. Red-proven by
         # mutants (always ping, flag ignored, no arming, hang counted ok).
         run: sh tests/ga_tests/storage_watchdog/selftest.sh
+      # A pin ahead of the store is baked and never runs; the suite must see that.
+      - name: Versions running (an add-on that does not run its pin must go red)
+        run: |
+          set -eu
+          python3 scripts/gen-running-versions.py --check
+          sh tests/ga_tests/versions_running/selftest.sh
 
       - name: On-device suites of 2026-11-17 to 2026-11-19 - host-side selftests (ga_manager_guard_device, ga_manager_stop, uplink_device, ota_identity_device, resident_info_device, baked_boot_device, storage_watchdog_device, uplink_lte_builtin_device, ota_resume_device)
         # The standing rule "every feature gets an on-device test" ships seven suites that run on
