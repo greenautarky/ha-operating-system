@@ -2,11 +2,7 @@
   "addons": {
     "mosquitto": {
       "image": "ghcr.io/greenautarky/ga_mosquitto-{arch}",
-      "version": "7.2.7",
-      "store_ahead": {
-        "reason": "Same security rebuild as the iHost pin (BOSv1.6.1-rc3): 7.2.7 = security rebuild of 7.2.6 (nginx CVE-2026-113425/121810/123007/123633, krb5 deb13u2, Go 1.27.3; MQTT #19), no source change. Pinned for the BOSv1.6.1-rc3 re-bake; store sync follows with the rc3 rollout decision (Manager 2026-11-23).",
-        "until": "2026-12-10"
-      }
+      "version": "7.2.7"
     },
     "ga_influxdbv1": {
       "image": "ghcr.io/greenautarky/ga_influxdbv1-{arch}",
@@ -22,9 +18,9 @@
     },
     "ga_manager": {
       "image": "ghcr.io/greenautarky/ga_manager-{arch}",
-      "version": "0.277.12",
+      "version": "0.277.14",
       "store_ahead": {
-        "reason": "dsgw210 dev17 proves 0.277.12 (influx_freshness, ga_manager #410) on DUT2 before any store sync; unproven candidate, so the field store (vibe_addons) stays at 0.277.11 (Manager 2026-11-24, BOSv1.6.2-dev17).",
+        "reason": "DUT2 proves 0.277.14 (Odoo #1877 MQTT identity binding, influx_freshness) before any store sync; the field store stays at 0.277.11 (Manager 2026-11-25, BOSv1.6.2-dev18). Seed from the bench store.",
         "until": "2026-12-18"
       }
     },
