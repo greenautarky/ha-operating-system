@@ -1,0 +1,266 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Stefan Agner <stefan@agner.ch>
+Date: Thu, 3 Mar 2022 14:24:37 +0100
+Subject: [PATCH] Separate Device handling for default AllowDevices
+
+Signed-off-by: Stefan Agner <stefan@agner.ch>
+[GA: the vendored device.go hunk rebased onto runc 1.4.4 (opencontainers/cgroups v0.1.0):
+ one context line, `json:"gid,omitzero"`. Nothing else changed.]
+---
+ libcontainer/specconv/spec_linux.go           | 96 ++++++++++++-------
+ libcontainer/specconv/spec_linux_test.go      |  8 +-
+ .../cgroups/devices/config/device.go          |  3 +
+ 3 files changed, 70 insertions(+), 37 deletions(-)
+
+diff --git a/libcontainer/specconv/spec_linux.go b/libcontainer/specconv/spec_linux.go
+index 5713460e..37507b41 100644
+--- a/libcontainer/specconv/spec_linux.go
++++ b/libcontainer/specconv/spec_linux.go
+@@ -236,6 +236,7 @@ func KnownMemoryPolicyFlags() []string {
+ var AllowedDevices = []*devices.Device{
+ 	// allow mknod for any device
+ 	{
++		IsDefault: true,
+ 		Rule: devices.Rule{
+ 			Type:        devices.CharDevice,
+ 			Major:       devices.Wildcard,
+@@ -245,6 +246,7 @@ var AllowedDevices = []*devices.Device{
+ 		},
+ 	},
+ 	{
++		IsDefault: true,
+ 		Rule: devices.Rule{
+ 			Type:        devices.BlockDevice,
+ 			Major:       devices.Wildcard,
+@@ -254,10 +256,11 @@ var AllowedDevices = []*devices.Device{
+ 		},
+ 	},
+ 	{
+-		Path:     "/dev/null",
+-		FileMode: 0o666,
+-		Uid:      0,
+-		Gid:      0,
++		Path:      "/dev/null",
++		FileMode:  0o666,
++		Uid:       0,
++		Gid:       0,
++		IsDefault: true,
+ 		Rule: devices.Rule{
+ 			Type:        devices.CharDevice,
+ 			Major:       1,
+@@ -267,10 +270,11 @@ var AllowedDevices = []*devices.Device{
+ 		},
+ 	},
+ 	{
+-		Path:     "/dev/random",
+-		FileMode: 0o666,
+-		Uid:      0,
+-		Gid:      0,
++		Path:      "/dev/random",
++		FileMode:  0o666,
++		Uid:       0,
++		Gid:       0,
++		IsDefault: true,
+ 		Rule: devices.Rule{
+ 			Type:        devices.CharDevice,
+ 			Major:       1,
+@@ -280,10 +284,11 @@ var AllowedDevices = []*devices.Device{
+ 		},
+ 	},
+ 	{
+-		Path:     "/dev/full",
+-		FileMode: 0o666,
+-		Uid:      0,
+-		Gid:      0,
++		Path:      "/dev/full",
++		FileMode:  0o666,
++		Uid:       0,
++		Gid:       0,
++		IsDefault: true,
+ 		Rule: devices.Rule{
+ 			Type:        devices.CharDevice,
+ 			Major:       1,
+@@ -293,10 +298,11 @@ var AllowedDevices = []*devices.Device{
+ 		},
+ 	},
+ 	{
+-		Path:     "/dev/tty",
+-		FileMode: 0o666,
+-		Uid:      0,
+-		Gid:      0,
++		Path:      "/dev/tty",
++		FileMode:  0o666,
++		Uid:       0,
++		Gid:       0,
++		IsDefault: true,
+ 		Rule: devices.Rule{
+ 			Type:        devices.CharDevice,
+ 			Major:       5,
+@@ -306,10 +312,11 @@ var AllowedDevices = []*devices.Device{
+ 		},
+ 	},
+ 	{
+-		Path:     "/dev/zero",
+-		FileMode: 0o666,
+-		Uid:      0,
+-		Gid:      0,
++		Path:      "/dev/zero",
++		FileMode:  0o666,
++		Uid:       0,
++		Gid:       0,
++		IsDefault: true,
+ 		Rule: devices.Rule{
+ 			Type:        devices.CharDevice,
+ 			Major:       1,
+@@ -319,10 +326,11 @@ var AllowedDevices = []*devices.Device{
+ 		},
+ 	},
+ 	{
+-		Path:     "/dev/urandom",
+-		FileMode: 0o666,
+-		Uid:      0,
+-		Gid:      0,
++		Path:      "/dev/urandom",
++		FileMode:  0o666,
++		Uid:       0,
++		Gid:       0,
++		IsDefault: true,
+ 		Rule: devices.Rule{
+ 			Type:        devices.CharDevice,
+ 			Major:       1,
+@@ -333,6 +341,7 @@ var AllowedDevices = []*devices.Device{
+ 	},
+ 	// /dev/pts/ - pts namespaces are "coming soon"
+ 	{
++		IsDefault: true,
+ 		Rule: devices.Rule{
+ 			Type:        devices.CharDevice,
+ 			Major:       136,
+@@ -342,6 +351,7 @@ var AllowedDevices = []*devices.Device{
+ 		},
+ 	},
+ 	{
++		IsDefault: true,
+ 		Rule: devices.Rule{
+ 			Type:        devices.CharDevice,
+ 			Major:       5,
+@@ -421,12 +431,14 @@ func CreateLibcontainerConfig(opts *CreateOpts) (*configs.Config, error) {
+ 		config.Mounts = append(config.Mounts, cm)
+ 	}
+ 
+-	defaultDevs, err := createDevices(spec, config)
++	err = createDevices(spec, config)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+ 
+-	c, err := CreateCgroupConfig(opts, defaultDevs)
++	defaultAllowedDevices := createDefaultDevicesCgroups(config)
++
++	c, err := CreateCgroupConfig(opts, defaultAllowedDevices)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -1020,21 +1032,22 @@ func stringToDeviceRune(s string) (devices.Type, error) {
+ 	}
+ }
+ 
+-func createDevices(spec *specs.Spec, config *configs.Config) ([]*devices.Device, error) {
++func createDevices(spec *specs.Spec, config *configs.Config) error {
+ 	// If a spec device is redundant with a default device, remove that default
+ 	// device (the spec one takes priority).
+-	dedupedAllowDevs := []*devices.Device{}
+-
+ next:
+ 	for _, ad := range AllowedDevices {
+-		if ad.Path != "" && spec.Linux != nil {
++		if ad.Path == "" {
++			continue next
++		}
++
++		if spec.Linux != nil {
+ 			for _, sd := range spec.Linux.Devices {
+ 				if sd.Path == ad.Path {
+ 					continue next
+ 				}
+ 			}
+ 		}
+-		dedupedAllowDevs = append(dedupedAllowDevs, ad)
+ 		if ad.Path != "" {
+ 			config.Devices = append(config.Devices, ad)
+ 		}
+@@ -1054,7 +1067,7 @@ next:
+ 			}
+ 			dt, err := stringToDeviceRune(d.Type)
+ 			if err != nil {
+-				return nil, err
++				return err
+ 			}
+ 			if d.FileMode != nil {
+ 				filemode = *d.FileMode &^ unix.S_IFMT
+@@ -1074,7 +1087,24 @@ next:
+ 		}
+ 	}
+ 
+-	return dedupedAllowDevs, nil
++	return nil
++}
++
++func createDefaultDevicesCgroups(config *configs.Config) []*devices.Device {
++	defaultAllowedDevices := []*devices.Device{}
++next:
++	for _, ad := range AllowedDevices {
++		if ad.Path != "" {
++			for _, device := range config.Devices {
++				if ad.Path == device.Path && !device.IsDefault {
++					continue next
++				}
++			}
++		}
++		defaultAllowedDevices = append(defaultAllowedDevices, ad)
++	}
++
++	return defaultAllowedDevices
+ }
+ 
+ func setupUserNamespace(spec *specs.Spec, config *configs.Config) error {
+diff --git a/libcontainer/specconv/spec_linux_test.go b/libcontainer/specconv/spec_linux_test.go
+index 3e532d49..1a25bc61 100644
+--- a/libcontainer/specconv/spec_linux_test.go
++++ b/libcontainer/specconv/spec_linux_test.go
+@@ -895,17 +895,17 @@ func TestCreateDevices(t *testing.T) {
+ 
+ 	conf := &configs.Config{}
+ 
+-	defaultDevs, err := createDevices(spec, conf)
++	err := createDevices(spec, conf)
+ 	if err != nil {
+ 		t.Errorf("failed to create devices: %v", err)
+ 	}
+ 
+-	// Verify the returned default devices has the /dev/tty entry deduplicated
++	// Verify the returned devices has the /dev/tty entry deduplicated
+ 	found := false
+-	for _, d := range defaultDevs {
++	for _, d := range conf.Devices {
+ 		if d.Path == "/dev/tty" {
+ 			if found {
+-				t.Errorf("createDevices failed: returned a duplicated device entry: %v", defaultDevs)
++				t.Errorf("createDevices failed: returned a duplicated device entry: %v", conf.Devices)
+ 			}
+ 			found = true
+ 		}
+diff --git a/vendor/github.com/opencontainers/cgroups/devices/config/device.go b/vendor/github.com/opencontainers/cgroups/devices/config/device.go
+index 295575cb..90a24c96 100644
+--- a/vendor/github.com/opencontainers/cgroups/devices/config/device.go
++++ b/vendor/github.com/opencontainers/cgroups/devices/config/device.go
+@@ -24,6 +24,9 @@ type Device struct {
+ 
+ 	// Gid of the device.
+ 	Gid uint32 `json:"gid,omitzero"`
++
++	// Is Default Device
++	IsDefault bool `json:"is_default"`
+ }
+ 
+ // Permissions is a cgroupv1-style string to represent device access. It
