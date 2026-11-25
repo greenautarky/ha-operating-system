@@ -57,6 +57,9 @@ make_case 0.0.25 0.0.23 "$(SA 'rc3 by Manager decision' 2026-12-10)"; verdicts
 [[ "$rrc" == 0 ]] && grep -q 'AHEAD-OF-STORE ga_influxdbv1' <<<"$rout" && ok "repin --check: valid store_ahead -> 0, AHEAD-OF-STORE" \
   || bad "repin --check rejects a valid store_ahead (rc=$rrc): $(grep -E 'DRIFT|FAIL' <<<"$rout" | head -2)"
 [[ "$gdrift" == 0 ]] && ok "check-images.sh: valid store_ahead -> out of lockstep: 0" || bad "check-images.sh: out of lockstep: ${gdrift:-?}"
+for w in rout gout; do grep -q 'NOT RUNNING on a fresh device: ga_influxdbv1 installs store 0.0.23; the baked 0.0.25 is unused' <<<"${!w}" && ok "$w says loudly that the pin does not run" || bad "$w is silent about the pin that does not run"; done
+make_case 0.0.25 0.0.25 ""; verdicts
+for w in rout gout; do grep -q 'NOT RUNNING' <<<"${!w}" && bad "$w warns without a store_ahead" || ok "$w: no warning when pin == store"; done
 
 echo "== must-fail: both consumers count it as drift =="
 case_fail() { # case_fail <name> <pin> <store> <sa-json-or-empty> <repin-out-must-contain>
@@ -101,5 +104,5 @@ grep -qE "grep -q '\[A-Za-z\]'|_sa_until\" < \"\\\$_today\"|\[\[ \"\\\$_sa_until
 
 echo
 echo "pin policy selftest: ${ran} checks, ${fails} failed"
-[[ "$ran" -ge 29 ]] || { echo "FATAL: only ${ran} checks ran"; exit 2; }
+[[ "$ran" -ge 33 ]] || { echo "FATAL: only ${ran} checks ran"; exit 2; }
 [[ "$fails" -eq 0 ]]
