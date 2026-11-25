@@ -1,5 +1,5 @@
 #!/bin/sh
-# Self-test for lib/sample_window.sh and its use by idle_perf IDLE-05 / IDLE-10b.
+# Self-test for lib/sample_window.sh and its use by idle_perf IDLE-05 (IDLE-10b: time_share_selftest.sh).
 # Host-side, no device. Run from repo root:
 #   sh tests/ga_tests/lib/sample_window_selftest.sh
 #
@@ -68,7 +68,7 @@ got=$(sample_window 3 0 none | grep -c .)
 [ "$got" -eq 0 ] && ok "a sampler that prints nothing yields no sample" || bad "empty sampler yielded $got samples"
 
 # 7. the suite really judges IDLE-05 and IDLE-10b on the window
-for id in IDLE-05 IDLE-10b; do
+for id in IDLE-05; do
   blk=$(grep -B3 -A1 "run_test_show \"$id\"" "$SUITE")
   echo "$blk" | grep -q 'window_p90' && echo "$blk" | grep -q '\-n \\"\$' \
     && ok "$id in idle_perf/test.sh is judged on window_p90 and fails on no samples" \
