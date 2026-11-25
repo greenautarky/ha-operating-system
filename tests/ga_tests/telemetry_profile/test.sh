@@ -53,4 +53,13 @@ fi
 run_test "TPR-06" "the .path starts the runtime unit, not ordered before the shippers" \
   "systemctl show -p Triggers --value ga-telemetry-profile.path | grep -qw ga-telemetry-profile-runtime.service && ! systemctl show -p Before --value ga-telemetry-profile-runtime.service | grep -qE 'fluent-bit|telegraf'"
 
+# TPR-07: the urgent lane runs exactly when lte_saver is applied on a known LTE path.
+if [ "${APPLIED:-}" = lte_saver ] && [ "$(jq -r .active_path "$REQ" 2>/dev/null)" = lte ]; then
+  run_test "TPR-07" "urgent error lane runs (lte_saver, active path lte)" \
+    "systemctl is-active --quiet fluent-bit-tier0-urgent.service"
+else
+  run_test "TPR-07" "urgent error lane does not run (no lte_saver on a known LTE path)" \
+    "systemctl cat fluent-bit-tier0-urgent.service >/dev/null 2>&1 && ! systemctl is-active --quiet fluent-bit-tier0-urgent.service"
+fi
+
 suite_end

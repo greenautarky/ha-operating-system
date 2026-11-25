@@ -82,7 +82,7 @@ EXPECTED_PROGRAMS: dict[str, int] = {
     "buildroot-external/rootfs-overlay/usr/libexec/ga-rauc-slots": 11,
     "buildroot-external/rootfs-overlay/usr/sbin/ga-manager-guard": 2,
     "buildroot-external/rootfs-overlay/usr/sbin/ga-mesh-watchdog": 3,
-    "buildroot-external/rootfs-overlay/usr/sbin/ga-telemetry-profile-apply": 1,
+    "buildroot-external/rootfs-overlay/usr/sbin/ga-telemetry-profile-apply": 2,
 }
 MIN_FILES = 200
 

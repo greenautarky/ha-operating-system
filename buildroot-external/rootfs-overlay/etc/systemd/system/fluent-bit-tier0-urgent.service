@@ -1,0 +1,21 @@
+[Unit]
+Description=Fluent Bit Tier-0 urgent lane (errors only, on a known LTE path)
+Documentation=https://github.com/greenautarky/ga-ihost-docs/blob/main/PRIVACY_TIERS.md
+# Not enabled: ga-telemetry-profile-apply starts and stops it. Same data and legal
+# basis as tier-0, only sooner. PartOf: whatever restarts tier-0 (a new Loki
+# credential, a backend IP change) restarts this lane too.
+After=network-online.target netbird.service fluent-bit-tier0.service
+Wants=network-online.target
+PartOf=fluent-bit-tier0.service
+ConditionPathExists=/run/ga-telemetry/lte-saver/tier0-urgent.conf
+
+[Service]
+Type=simple
+# Written by fluent-bit-tier0.service (ordered before this unit). No fallback: without
+# it this lane fails and retries, and the batched lane ships the errors.
+EnvironmentFile=/mnt/data/fluent-bit/env
+ExecStart=/usr/bin/fluent-bit -c /run/ga-telemetry/lte-saver/tier0-urgent.conf
+Restart=on-failure
+RestartSec=60
+MemoryMax=32M
+CPUQuota=5%
