@@ -8,7 +8,8 @@
 # They prove the IMAGE. They cannot prove that a device booting it did not go to the
 # registry anyway - that is what this suite looks at, on the running system:
 #
-#   BKD-01  /mnt/data/supervisor/updater.json is a JSON object with a channel
+#   BKD-01  /mnt/data/supervisor/updater.json is a JSON object with a channel and
+#           auto_update exactly false (Odoo #1615: else the device follows the channel)
 #   BKD-02  it carries version AND a ghcr.io/greenautarky image for each of cli dns audio
 #           multicast observer and the Supervisor (+ Core when a homeassistant container
 #           exists). VER-14 pins the artefact against version.json; here the expectation is
@@ -33,8 +34,8 @@ UPD="${GA_BKD_UPDATER:-/mnt/data/supervisor/updater.json}"
 PLUGINS="cli dns audio multicast observer"
 SUPLOG_CMD="${GA_BKD_SUPLOG_CMD:-docker logs hassio_supervisor}"
 
-if jq -e 'type == "object" and ((.channel // "") != "")' "$UPD" >/dev/null 2>&1; then _rc=0; else _rc=1; fi
-show_verdict "BKD-01" "updater.json is a JSON object with a channel" "$_rc" "$UPD channel='$(jq -r '.channel // empty' "$UPD" 2>/dev/null)'"
+if jq -e 'type == "object" and ((.channel // "") != "") and .auto_update == false' "$UPD" >/dev/null 2>&1; then _rc=0; else _rc=1; fi
+show_verdict "BKD-01" "updater.json is a JSON object with a channel and auto_update false" "$_rc" "$UPD channel='$(jq -r '.channel // empty' "$UPD" 2>/dev/null)' auto_update='$(jq -c '.auto_update' "$UPD" 2>/dev/null)'"
 
 # Required: the five plugins and the Supervisor (this runs ON a running Supervisor), plus Core when
 # a homeassistant container exists (a board may skip Core). The image must be the GA registry's: an
