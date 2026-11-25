@@ -15,11 +15,13 @@ configures; it must be justified in the CI call.
 
 A command is REQUIRED unless the same script probes it (`command -v X`,
 `type X`, `which X`, `[ -x /path/X ]`): then it is optional and only reported.
-The allowlist (one `command<TAB>script glob<TAB>reason` per line) is for calls
-that never run on this rootfs; an entry that excuses nothing is a failure.
+The allowlist (one `command<TAB>script glob<TAB>reason[<TAB>until YYYY-MM-DD]` per
+line) is for calls that never run on this rootfs, or are accepted until a date; an
+entry that excuses nothing, or whose date has passed, is a failure.
 Exit 0 ok, 1 missing command or stale allowlist entry, 2 could not judge.
 """
 import argparse
+import datetime
 import fnmatch
 import os
 import pathlib
@@ -484,14 +486,20 @@ def main():
     if len(scripts) < a.min_scripts:
         print(f"check-rootfs-commands: FATAL: only {len(scripts)} scripts found (min {a.min_scripts})")
         return 2
-    allow = []
+    allow, expired = [], 0
     af = pathlib.Path(a.allow) if a.allow else repo / "buildroot-external/rootfs-commands.allow"
     for ln in af.read_text().splitlines():
         if ln.strip() and not ln.startswith("#"):
             f = ln.split("\t")
-            if len(f) != 3 or not f[2].strip():
+            until = f[3].strip() if len(f) == 4 else ""
+            if len(f) not in (3, 4) or not f[2].strip() or len(f) == 4 and not re.fullmatch(r"until \d{4}-\d\d-\d\d", until):
                 print(f"check-rootfs-commands: FATAL: {af.name}: need command<TAB>glob<TAB>reason: {ln!r}")
                 return 2
+            today = os.environ.get("GA_TODAY") or datetime.date.today().isoformat()
+            if until and until[6:] < today:
+                print(f"  EXPIRED   allowlist entry {f[0]} / {f[1]}: {until}")
+                expired += 1
+                continue
             allow.append((f[0], f[1], f[2], f[0] + "\t" + f[1]))
     # functions of the shared libraries a script sources (named in it by file name)
     libs = {}
@@ -536,7 +544,7 @@ def main():
     if total < a.min_scripts:
         print("check-rootfs-commands: FATAL: parsed almost no calls")
         return 2
-    return 1 if missing or stale else 0
+    return 1 if missing or stale or expired else 0
 
 
 if __name__ == "__main__":
