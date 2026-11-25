@@ -338,8 +338,8 @@ rauc_helper_pins() {
       }
       if (l ~ /^ota_curl\(\)[[:space:]]*\{/) { inw = 1; next }
       if (inw && l ~ /^\}/) { inw = 0; next }
-      if (inw) { if (l ~ /(^|[^[:alnum:]_])curl[[:space:]]/) { wc++; if (index(l, "\"$@\"") == 0) wbad++ } ; next }
-      if (l ~ /(^|[;|&!{`]|\$\(|if|elif|while|until|then|do|else)[[:space:]]*(![[:space:]]*)?(ota_)?curl[[:space:]]/) {
+      if (inw) { if (l ~ /(^|[^[:alnum:]_])curl([[:space:]]|$)/) { wc++; if (index(l, "\"$@\"") == 0) wbad++ } ; next }
+      if (l ~ /(^|[;|&!{`]|\$\(|if|elif|while|until|then|do|else)[[:space:]]*(![[:space:]]*)?(ota_)?curl([[:space:]]|$)/) {
         n++
         # pinned on the line itself, or the call forwards an argument list that carries the pin
         if (index(l, ENVIRON["NEEDLE"]) == 0 && !(pinned && index(l, "\"$@\"") > 0)) bad++ } }
