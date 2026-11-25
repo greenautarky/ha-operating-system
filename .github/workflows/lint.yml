@@ -785,6 +785,11 @@ jobs:
         # pre-change script.
         run: bash tests/gates/check_images_board/selftest.sh
 
+      # Without skopeo the check asks GHCR with curl; a manifest type missing from Accept read as
+      # "image missing" (OCI manifests, 2026-11-25).
+      - name: pre-flight image check - curl fallback accepts every manifest type
+        run: ./tests/gates/check_images_curl/selftest.sh
+
       - name: ga-manager-guard (watchdog toggle + revive a dead ga_manager, Odoo #2166)
         # Drives the LIVE script against a stateful stub of `docker exec hassio_cli ha addons`:
         # must-flag = crash -> started, toggle off -> on, the Supervisor's 5-attempt give-up ->
