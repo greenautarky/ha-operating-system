@@ -1301,6 +1301,15 @@ jobs:
       - name: Runtime toolchain gate (a compiler in a baked container must go red)
         run: ./tests/gates/runtime_toolchain/selftest.sh
 
+      # 14 target scripts called `logger` and the image had none. Every external command
+      # our scripts call must be in the rootfs; live scripts of both boards against the
+      # recorded target, red without logger.
+      - name: Rootfs commands (a script that calls an absent command must go red)
+        run: |
+          set -eu
+          git submodule update --init --depth 1 haos
+          ./tests/gates/rootfs_commands/selftest.sh
+
       # BOSv1.6.0-rc4 baked the Core image config without variant v7 (an old skopeo in the
       # download-cache path dropped it); the Supervisor re-pulled the Core on first boot
       # (Odoo #1637). Every baked image must declare the board's os/arch/variant; the real rc4
