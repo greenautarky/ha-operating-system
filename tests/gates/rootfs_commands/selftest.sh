@@ -50,6 +50,9 @@ pass "an allowed call with a reason"     'nope x; cat y' 'nope\tbuildroot-extern
 }
 mk 'cat x' 'nope\tbuildroot-external/*\tnever runs here\n'; gate; { [ "$rc" = 1 ] && grep -q STALE <<<"$out"; }; check "MUST-FLAG a stale allowlist entry" $? "$out"
 mk 'cat x' 'nope\tbuildroot-external/*\t\n'; gate; [ "$rc" = 2 ]; check "MUST-FAIL-CLOSED an allowlist entry without a reason" $? "$out"
+mk 'nope x; cat y' 'nope\tbuildroot-external/*\twhy\tuntil 2999-01-01\n'; gate; [ "$rc" = 0 ]; check "MUST-PASS a dated entry" $? "$out"
+mk 'nope x; cat y' 'nope\tbuildroot-external/*\twhy\tuntil 2020-01-01\n'; gate; { [ "$rc" = 1 ] && grep -q EXPIRED <<<"$out"; }; check "MUST-FLAG an expired entry" $? "$out"
+mk 'nope x; cat y' 'nope\tbuildroot-external/*\twhy\tsoon\n'; gate; [ "$rc" = 2 ]; check "MUST-FAIL-CLOSED an entry with an unreadable date" $? "$out"
 mk 'cat x'; rm -rf "$W/t"; gate; [ "$rc" = 2 ]; check "MUST-FAIL-CLOSED no target" $? "$out"
 mk 'cat x'; rm "$W/t/usr/bin/"c1*; gate; [ "$rc" = 2 ]; check "MUST-FAIL-CLOSED a target with almost no commands" $? "$out"
 mk 'cat x'; out="$(python3 "$GATE" --board ihost --repo "$W/r" --target "$W/t" 2>&1)"; [ $? = 2 ]; check "MUST-FAIL-CLOSED almost no scripts" $? "$out"
@@ -61,17 +64,29 @@ for b in ihost dsgw210; do
   tar -xJf "$FX/ga_output.tar.xz" -C "$W/fx-$b" || { echo "FATAL: cannot unpack the $b recording"; exit 2; }
   [ ! -f "$FX/reconstruct.sh" ] || bash "$FX/reconstruct.sh" "$W/fx-$b/ga_output" || { echo "FATAL: reconstruct.sh failed for $b"; exit 2; }
   T="$W/fx-$b/ga_output/target"
+  # the tree as the bake has it: our overlays PLUS the Tier-2 files it places there (git ignores them;
+  # BOSv1.6.1-rc5 stopped on one that CI had never seen)
+  L="$W/live-$b"; mkdir -p "$L/buildroot-external"
+  cp -r "$ROOT/buildroot-external/rootfs-overlay" "$ROOT/buildroot-external/package" "$ROOT/buildroot-external/rootfs-commands.allow" "$L/buildroot-external/"; cp -r "$ROOT/buildroot-$b" "$L/"
+  tar -xJf "$FX/synced.tar.xz" -C "$L/buildroot-external/rootfs-overlay" --strip-components=1 || { echo "FATAL: cannot unpack the $b Tier-2 files"; exit 2; }
+  for f in usr/libexec/ga-boot-timing usr/sbin/ga-bootstrap; do [ -f "$L/buildroot-external/rootfs-overlay/$f" ] || { echo "FATAL: Tier-2 file $f is not in the $b recording"; exit 2; }; done
   # the recordings predate CONFIG_LOGGER; the command counts only while the fragment really sets it
   plus=(); grep -qx 'CONFIG_LOGGER=y' "$ROOT/buildroot-external/busybox-ga.fragment" && [ ! -e "$T/usr/bin/logger" ] && plus=(--plus logger)
-  out="$(python3 "$GATE" --board "$b" --target "$T" "${plus[@]}" 2>&1)"; rc=$?
+  out="$(python3 "$GATE" --board "$b" --repo "$L" --target "$T" "${plus[@]}" 2>&1)"; rc=$?
   echo "        $(tail -1 <<<"$out")"
   # the status goes through a variable: a $(...) in the message would replace $? before it is read
   { [ "$rc" = 0 ] && grep -qE "$b: [0-9]{2,} scripts, [0-9]{3,} calls, .* 0 missing" <<<"$out"; }; st=$?
   check "$b: every command exists" "$st" "$out"
   if [ "${#plus[@]}" -gt 0 ]; then
-    out="$(python3 "$GATE" --board "$b" --target "$T" 2>&1)"; rc=$?
+    out="$(python3 "$GATE" --board "$b" --repo "$L" --target "$T" 2>&1)"; rc=$?
     { [ "$rc" = 1 ] && grep -q 'MISSING   logger' <<<"$out" && [ "$(grep -c MISSING <<<"$out")" = 1 ]; }; check "$b: RED without logger, and only for logger" $? "$out"
   fi
+  sed -i '/^systemd-analyze/d' "$L/buildroot-external/rootfs-commands.allow"
+  out="$(python3 "$GATE" --board "$b" --repo "$L" --target "$T" "${plus[@]}" 2>&1)"; rc=$?
+  { [ "$rc" = 1 ] && grep -q 'MISSING   systemd-analyze' <<<"$out" && [ "$(grep -c MISSING <<<"$out")" = 1 ]; }; check "$b: RED on the Tier-2 script without its allow entry (the rc5 stop)" $? "$out"
+  cp "$ROOT/buildroot-external/rootfs-commands.allow" "$L/buildroot-external/"
+  out="$(GA_TODAY=2027-01-01 python3 "$GATE" --board "$b" --repo "$L" --target "$T" "${plus[@]}" 2>&1)"; rc=$?
+  { [ "$rc" = 1 ] && grep -q 'EXPIRED   allowlist entry systemd-analyze' <<<"$out"; }; check "$b: RED after the entry's date" $? "$out"
 done
 
 echo "== the LIVE 11d block of ga_build.sh"
@@ -84,5 +99,5 @@ for want in 0 1 2; do
   check "gate exit $want -> build $([ "$want" = 0 ] && echo goes on || echo stops)" "$st"
 done
 echo "rootfs_commands selftest: $ran checks, $fails failed"
-[ "$ran" -ge 34 ] || { echo "FATAL: only $ran checks ran"; exit 2; }
+[ "$ran" -ge 41 ] || { echo "FATAL: only $ran checks ran"; exit 2; }
 [ "$fails" = 0 ]
