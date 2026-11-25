@@ -14,6 +14,8 @@
 #   supervisor, homeassistant (Core)   version AND image, required when --images-dir holds that image
 #                                      (a board may skip them, GA_HASSIO_SKIP_IMAGES)
 #   channel                            must be present
+#   auto_update                        must be false (pinned literal, Odoo #1615): else a fresh device can
+#                                      leave the baked Supervisor for the channel one on its first start
 # FAIL CLOSED: data.ext4 / updater.json missing, empty or not a JSON object, version.json unreadable.
 #
 #   check-baked-updater.sh --data-img data.ext4 --version-json version.json [--images-dir DIR]
@@ -53,6 +55,8 @@ else:
         return bool(images_dir) and bool(glob.glob(images_dir + "/*" + pat + "@*"))
     if not upd.get("channel"):
         finding("updater.json has no channel")
+    if upd.get("auto_update") is not False:
+        finding("auto_update is %r, must be false (a fresh device would follow the channel)" % (upd.get("auto_update"),))
     want = [("cli", True), ("dns", True), ("audio", True), ("multicast", True), ("observer", True)]
     for p, req in want:
         want_v, want_i = vj.get(p), (vj.get("images") or {}).get(p)

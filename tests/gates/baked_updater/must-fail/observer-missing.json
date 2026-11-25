@@ -1,5 +1,5 @@
 {
-  "channel": "stable",
+  "channel": "stable","auto_update":false,
   "homeassistant": "2026.10.4.4",
   "supervisor": "2026.10.5.1",
   "cli": "2025.10.2",

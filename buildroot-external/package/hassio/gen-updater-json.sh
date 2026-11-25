@@ -12,6 +12,11 @@
 #     = build error (exit 1, message on stderr);
 #   - supervisor and Core: seeded when baked (a board may skip them,
 #     GA_HASSIO_SKIP_IMAGES); otherwise said so on stderr and left out.
+#   - auto_update false, ALWAYS: a fresh device keeps the Supervisor it was baked
+#     and proven with; the first updater reload in the Supervisor's start() would
+#     else move it to the channel version before ga-bootstrap runs (Odoo #1615).
+#     The GA Supervisor defaults to false since 2026.10.5.3; the seed does not
+#     depend on which Supervisor is baked.
 # Image names stay templates ("{arch}") exactly as in version.json: the
 # Supervisor formats them itself.
 set -euo pipefail
@@ -23,7 +28,7 @@ channel=${3:?channel missing}
 fail() { echo "gen-updater-json: ERROR: $*" >&2; exit 1; }
 baked() { compgen -G "${img_dir}/*${1}@*" > /dev/null; } # <name>_<version>
 
-out=$(jq -n --arg channel "${channel}" '{channel: $channel}')
+out=$(jq -n --arg channel "${channel}" '{channel: $channel, auto_update: false}')
 
 core_version=$(jq -r '.core // empty' "${vj}")
 core_image=$(jq -r '.images.core // empty' "${vj}")
