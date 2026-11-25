@@ -20,9 +20,9 @@ chmod +x "$W/bin/"*
 F="$W/f"; mkdir -p "$F"
 run() { ds_run ping FAKE="$F"; }
 
-printf 'default via 10.20.30.1 dev eth0 proto dhcp metric 100\n10.20.30.0/24 dev eth0\n' > "$F/route"; echo 10.20.30.1 > "$F/up"; run
+printf 'default via gw-a dev eth0 proto dhcp metric 100\nlan-a dev eth0\n' > "$F/route"; echo gw-a > "$F/up"; run
 ds_expect PING-03 PASS "default route found, gateway answers"
-grep -q 'from ip route: 10.20.30.1' "$W/out" && { echo "  ok    the gateway is shown in the title"; DS_PASS=$((DS_PASS+1)); } || { echo "  FAIL  title lacks the gateway"; DS_FAIL=$((DS_FAIL+1)); }
+grep -q 'from ip route: gw-a' "$W/out" && { echo "  ok    the gateway is shown in the title"; DS_PASS=$((DS_PASS+1)); } || { echo "  FAIL  title lacks the gateway"; DS_FAIL=$((DS_FAIL+1)); }
 : > "$F/up"; run;                  ds_expect PING-03 FAIL "gateway does not answer"
-: > "$F/route"; echo 10.20.30.1 > "$F/up"; run; ds_expect PING-03 FAIL "no default route"
+: > "$F/route"; echo gw-a > "$F/up"; run; ds_expect PING-03 FAIL "no default route"
 ds_done

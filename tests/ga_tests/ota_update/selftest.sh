@@ -26,7 +26,7 @@ fi
 exit 0
 STUB
 chmod +x "$W/bin/curl"
-echo 100.64.1.1 > "$W/pin"
+echo pinned-endpoint > "$W/pin"
 codes() {   # codes <promoted> <prod bundle> <sha> <rc slot>
   printf 'PROMOTED.json %s\nhaos_ihost-18.4.1.6.raucb %s\nhaos_ihost-18.4.1.6.raucb.sha256 %s\nBOSv1.6.1-rc9/haos_ihost-18.4.1.6.raucb %s\nBOSv1.6.1/haos_ihost-18.4.1.6.raucb %s\n' "$1" "$2" "$3" "$4" "$4" > "$F/codes"
 }
