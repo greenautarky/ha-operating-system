@@ -1458,6 +1458,12 @@ jobs:
           git submodule update --init --depth 1 haos
           HAOS_PATCHES_REQUIRE_LIVE=1 ./tests/gates/haos_patches/selftest.sh
 
+      # daemon.json as the build sees it (upstream + patches-haos 0138): the pinned
+      # max-download-attempts, every upstream key, accepted by the dockerd version the
+      # image runs. A bad file keeps dockerd from starting. Needs haos/ (step above).
+      - name: Docker daemon.json (max-download-attempts; a bad or flag-duplicated key must go red)
+        run: ./tests/gates/docker_daemon_json/selftest.sh
+
       # A rootfs that outgrows the 256 MiB system slot of a fresh HAOS 18.x
       # image does not fail the build; genimage or RAUC refuse it later, on the
       # device. scripts/check-rootfs-size.sh (called by ga_build.sh on every
