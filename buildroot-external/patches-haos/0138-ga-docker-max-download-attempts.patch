@@ -1,0 +1,28 @@
+From: GreenAutarky OS <noreply@greenautarky.invalid>
+Subject: [PATCH] docker daemon.json: max-download-attempts 25 (Odoo #2136)
+
+dockerd gives one layer 5 connections and then fails the pull. Every connection
+that ends early is resumed, but it counts. On a slow link that cut each
+connection after 20 MiB a 375 MiB layer needed 19 and could never finish.
+25 covers that layer with 30 % margin (25 x 20 MiB = 500 MiB per layer; the
+largest layer of GA Core 2026.10.4.6 armv7 is 243 MiB = 13 connections).
+
+Read by the graph-driver (overlay2) image service only. With the containerd
+snapshotter (the default of a freshly flashed data partition) dockerd does not
+use the key; containerd reconnects without an attempt budget while it makes
+progress. tests/gates/docker_daemon_json pins the value.
+---
+ buildroot-external/rootfs-overlay/etc/docker/daemon.json | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/buildroot-external/rootfs-overlay/etc/docker/daemon.json b/buildroot-external/rootfs-overlay/etc/docker/daemon.json
+--- a/buildroot-external/rootfs-overlay/etc/docker/daemon.json
++++ b/buildroot-external/rootfs-overlay/etc/docker/daemon.json
+@@ -5,5 +5,6 @@
+     },
+     "data-root": "/mnt/data/docker",
+     "bip": "172.30.232.1/23",
+-    "ipv6": true
++    "ipv6": true,
++    "max-download-attempts": 25
+ }
