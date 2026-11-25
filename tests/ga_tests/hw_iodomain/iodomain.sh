@@ -24,9 +24,8 @@ IOD_MASK=254     # 0xFE: bits 1..7 (vccio1..7); bit 0 is pmuio, not judged here
 # judged against it. Both sets are measurements, never read from the DT under test:
 #   1v8  0x140=0xA6, vccio5 -> vcc_1v8   K170/K31 2026-11-05, iHost-A 2026-11-11
 #   3v3  0x140=0x86, vccio5 -> vcc_3v3   iHost-A/-B 2026-11-11
-# Pin drive (IOD-06) is the SAME in both modes: 83/84/86 = 12 mA, MDC pin 82 = 2 mA,
-# measured on iHost-A in both modes and iHost-B at 3v3 (REAL captures). The earlier
-# "pin 82 = 4 mA" came from a MODELLED fixture and could not pass on iHost-A.
+# Pin drive (IOD-06) is the SAME in both modes: 83/84/86 = 12 mA (REAL captures). MDC pin 82
+# is not judged: no value is set by our DT (2 mA on iHost-A, 4 mA on K31), Odoo #2007.
 IOD_BOOTCFG="${IOD_BOOTCFG:-/mnt/boot/haos-config.txt}"
 
 # iod_mode <haos-config.txt> — print 3v3 exactly when boot.scr would load the 3.3 V
@@ -205,10 +204,13 @@ iod_pinconf_ma() {
   echo "$_m"
 }
 
-# iod_pinconf_verdict <file> — pins 83,84,86 = 12 mA, pin 82 = 2 mA (PINNED, both modes).
+# iod_pinconf_verdict <file> — pins 83,84,86 = 12 mA (PINNED, both modes).
+# Pin 82 (MDC) is NOT judged: our DT sets no drive strength there, so the value is whatever
+# the earlier boot stage left (2 mA on iHost-A, 4 mA on K31 rc4) - Odoo #2007. If the DT
+# ever pins it, put 82 back with that value.
 iod_pinconf_verdict() {
   _bad=0
-  for _pe in 83:12 84:12 86:12 82:2; do
+  for _pe in 83:12 84:12 86:12; do
     _pn=${_pe%%:*}; _pw=${_pe##*:}
     if _pg=$(iod_pinconf_ma "$1" "$_pn"); then
       [ "$_pg" -eq "$_pw" ] || { printf 'pin %s drives %s mA, known-good is %s mA\n' "$_pn" "$_pg" "$_pw"; _bad=1; }
@@ -216,7 +218,7 @@ iod_pinconf_verdict() {
       printf 'pin %s: no mA figure in %s (fail closed)\n' "$_pn" "$1"; _bad=1
     fi
   done
-  [ "$_bad" -eq 0 ] && echo "pins 83/84/86 = 12 mA, pin 82 = 2 mA"
+  [ "$_bad" -eq 0 ] && echo "pins 83/84/86 = 12 mA (pin 82 not judged, #2007)"
   return "$_bad"
 }
 

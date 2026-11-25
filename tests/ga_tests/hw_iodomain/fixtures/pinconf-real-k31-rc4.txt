@@ -1,0 +1,6 @@
+pin 82 (gpio2-18): output drive strength (4 mA), input schmitt enabled
+pin 83 (gpio2-19): output drive strength (12 mA), input schmitt enabled
+pin 84 (gpio2-20): output drive strength (12 mA), input schmitt enabled
+pin 85 (gpio2-21): output drive strength (4 mA), input schmitt enabled, pin output (0 level)
+pin 86 (gpio2-22): output drive strength (12 mA), input schmitt enabled
+pin 87 (gpio2-23): output drive strength (4 mA), input schmitt enabled, pin output (0 level)

@@ -1,0 +1,1 @@
+Nov 24 21:58:05 KiBu kernel: BUG: unable to handle kernel NULL pointer dereference

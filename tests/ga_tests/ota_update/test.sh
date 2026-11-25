@@ -18,7 +18,7 @@ OTA_DATA_MARKER="/mnt/data/.ota_test_data"
 RAUCB="${RAUCB_PATH:-}"
 
 BOOTED_SLOT=$(rauc status 2>/dev/null | grep 'Booted from:' | grep -oE 'kernel\.[01]' || echo "unknown")
-VERSION_ID=$(grep 'VERSION_ID=' /etc/os-release 2>/dev/null | cut -d= -f2)
+VERSION_ID="${GA_OTA_VERSION_ID:-$(grep 'VERSION_ID=' /etc/os-release 2>/dev/null | cut -d= -f2)}"
 
 # =========================================================================
 # Health checks (always run in every phase)
@@ -241,16 +241,33 @@ fi
 # Read-only: HEAD requests and one small sidecar. Nothing is installed.
 # ---------------------------------------------------------------------------
 OTA_BASE="https://ota.greenautarky.com/releases/${VERSION_ID}"
-DEV_RELEASE=$(head -1 /etc/ga-release 2>/dev/null | tr -d '[:space:]')
+DEV_RELEASE=$(head -1 "${GA_OTA_RELEASE_FILE:-/etc/ga-release}" 2>/dev/null | tr -d '[:space:]')
 # Ask the server the way ga-rauc-install downloads: through the endpoint
 # ga-resolve-ota pinned, never through name resolution. A check that resolves
 # the name itself measures a path the download does not take.
-OTA_PIN=$(head -c 64 /run/ga-resolve-ota.active 2>/dev/null | tr -d '[:space:]')
+OTA_PIN=$(head -c 64 "${GA_OTA_PIN_FILE:-/run/ga-resolve-ota.active}" 2>/dev/null | tr -d '[:space:]')
 OTA_CURL="curl --resolve ota.greenautarky.com:443:${OTA_PIN:-unpinned}"
 
-run_test "OTA-12" "the OTA host answers via the pinned endpoint" \
-  "$OTA_CURL -fsS --max-time 20 -o /dev/null -w '%{http_code}' '$OTA_BASE/PROMOTED.json' | grep -q '^200$'"
+# Promotion state, asked the server (not assumed). The prod slot (PROMOTED.json, the
+# version-only bundle) exists for promoted FINAL releases only. A pre-release label
+# (ota_prod_slot_required, same predicate as NET-16c) on a server that ANSWERS 404 for
+# PROMOTED.json = "not promoted yet": OTA-13..15 are an explicit SKIP and OTA-12 accepts
+# the 404 as "the host answered". Anything else is strict: a FINAL label, a promoted
+# release (200) on any label, and any non-answer (000, 403, 5xx) are judged as before.
+. "$SCRIPT_DIR/../network/checks.sh"
+PROMO_CODE=$($OTA_CURL -s -o /dev/null -w '%{http_code}' --max-time 20 "$OTA_BASE/PROMOTED.json" 2>/dev/null)
+NOT_PROMOTED=0
+if ! ota_prod_slot_required "$DEV_RELEASE" && [ "$PROMO_CODE" = 404 ]; then NOT_PROMOTED=1; fi
 
+run_test "OTA-12" "the OTA host answers via the pinned endpoint (PROMOTED.json HTTP ${PROMO_CODE:-none})" \
+  "[ '$PROMO_CODE' = 200 ] || [ '$NOT_PROMOTED' = 1 ]"
+
+if [ "$NOT_PROMOTED" = 1 ]; then
+  _np="not promoted: pre-release build ($DEV_RELEASE), PROMOTED.json answers 404"
+  skip_test "OTA-13" "the production slot names the release it serves" "$_np"
+  skip_test "OTA-14" "the production bundle is downloadable" "$_np"
+  skip_test "OTA-15" "the production bundle ships its checksum" "$_np"
+else
 run_test "OTA-13" "the production slot names the release it serves" \
   "$OTA_CURL -fsS --max-time 20 '$OTA_BASE/PROMOTED.json' | grep -q '\"ga_release\"'"
 
@@ -264,13 +281,17 @@ run_test "OTA-14" "the production bundle is downloadable" \
 
 run_test "OTA-15" "the production bundle ships its checksum" \
   "$OTA_CURL -fsS --max-time 20 '$OTA_BASE/haos_ihost-${VERSION_ID}.raucb.sha256' | grep -qE '^[0-9a-f]{64}  haos_ihost'"
+fi
 
 # The rc slot for the release THIS device runs. A device on an rc whose slot
 # was pruned cannot be re-installed or rolled forward without a re-stage — the
-# check says so while it is cheap to fix, not during an incident.
+# check says so while it is cheap to fix, not during an incident. "Never staged"
+# and "pruned" look the same from the device, so this one is NOT skipped for
+# pre-release builds: an rc that was never staged is red until push-ota stages it.
 if [ -n "$DEV_RELEASE" ]; then
-  run_test "OTA-16" "this device's own release ($DEV_RELEASE) is still staged" \
-    "[ \"\$($OTA_CURL -s -o /dev/null -I -w '%{http_code}' --max-time 30 '$OTA_BASE/$DEV_RELEASE/haos_ihost-${VERSION_ID}.raucb')\" = 200 ]"
+  _rc_code=$($OTA_CURL -s -o /dev/null -I -w '%{http_code}' --max-time 30 "$OTA_BASE/$DEV_RELEASE/haos_ihost-${VERSION_ID}.raucb" 2>/dev/null)
+  run_test "OTA-16" "this device's own release ($DEV_RELEASE) is still staged (HTTP ${_rc_code:-none})" \
+    "[ '$_rc_code' = 200 ]"
 else
   skip_test "OTA-16" "/etc/ga-release is empty — cannot ask for this device's slot"
 fi
@@ -295,14 +316,36 @@ in_mesh() {
 run_test "OTA-17" "the pinned OTA endpoint is a mesh address (${OTA_PIN:-none})" \
   "in_mesh '$OTA_PIN'"
 
-# Static, on the shipped helper: every curl in it pins the endpoint, and the
-# pin is the resolver's file. A curl without --resolve would follow DNS.
-RAUC_HELPER=/usr/sbin/ga-rauc-install
+# Static, on the shipped helper: every real download call site pins the endpoint
+# (`--resolve "$OTA_RESOLVE"`, the resolver's file). The helper calls curl through
+# the ota_curl wrapper (identity config): a call site is an `ota_curl` or a bare `curl`
+# at command position, continuation lines joined, comments and echo text ignored. The
+# call site is pinned on its own line or forwards "$@" of a `set --` list that holds the pin
+# (the resumable fetch builds its arguments that way). The wrapper's own curl lines must forward "$@" (else every pin is dropped). A bare curl
+# OUTSIDE the wrapper, or an ota_curl without the pin, follows DNS = red. Zero call
+# sites inspected is a failure.
+RAUC_HELPER="${GA_RAUC_HELPER:-/usr/sbin/ga-rauc-install}"
 rauc_helper_pins() {
   grep -q '/run/ga-resolve-ota.active' "$RAUC_HELPER" || return 1
-  _curls=$(grep -E '^[[:space:]]*(if ! )?curl ' "$RAUC_HELPER")
-  [ -n "$_curls" ] || return 1          # zero curl lines inspected is a failure
-  ! printf '%s\n' "$_curls" | grep -qv -- '--resolve "$OTA_RESOLVE"'
+  _res=$(NEEDLE='--resolve "$OTA_RESOLVE"' awk '
+    { l = $0
+      if (l ~ /^[[:space:]]*#/) next
+      while (l ~ /\\[[:space:]]*$/) { sub(/\\[[:space:]]*$/, " ", l); if ((getline nx) > 0) l = l nx; else break }
+      if (l ~ /^[A-Za-z_][A-Za-z_0-9]*\(\)[[:space:]]*\{/) { pinned = 0 }   # positional params are per function
+      if (l ~ /^[[:space:]]*set[[:space:]]+--[[:space:]]/) {            # an argument list built with set --
+        if (index(l, ENVIRON["NEEDLE"]) > 0) pinned = 1
+        else if (l !~ /set[[:space:]]+--[[:space:]]+"\$@"/) pinned = 0   # a fresh list without the pin
+      }
+      if (l ~ /^ota_curl\(\)[[:space:]]*\{/) { inw = 1; next }
+      if (inw && l ~ /^\}/) { inw = 0; next }
+      if (inw) { if (l ~ /(^|[^[:alnum:]_])curl([[:space:]]|$)/) { wc++; if (index(l, "\"$@\"") == 0) wbad++ } ; next }
+      if (l ~ /(^|[;|&!{`]|\$\(|if|elif|while|until|then|do|else)[[:space:]]*(![[:space:]]*)?(ota_)?curl([[:space:]]|$)/) {
+        n++
+        # pinned on the line itself, or the call forwards an argument list that carries the pin
+        if (index(l, ENVIRON["NEEDLE"]) == 0 && !(pinned && index(l, "\"$@\"") > 0)) bad++ } }
+    END { printf "%d %d %d %d\n", n, bad, wc, wbad }' "$RAUC_HELPER")
+  set -- $_res
+  [ "$1" -gt 0 ] && [ "$2" -eq 0 ] && [ "$3" -gt 0 ] && [ "$4" -eq 0 ]
 }
 run_test "OTA-18" "ga-rauc-install downloads only through the pinned endpoint" \
   "rauc_helper_pins"

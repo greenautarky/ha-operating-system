@@ -221,7 +221,16 @@ run_test "SLOT-33b" "never writes the slot picture into the add-on-writable /sha
 # anyway made it fail on every provisioned device — a red check that says nothing
 # about the device. It stays a real test on the build host, where the glob is
 # genuinely empty.
-if ls -d /mnt/data/supervisor/addons/data/*_ga_manager /mnt/data/supervisor/apps/data/*_ga_manager >/dev/null 2>&1; then
+# Either data root counts: apps/data (Supervisor 2026.10+) or addons/data (older field releases).
+# `ls -d A B` is NOT an either-test: it exits 2 as soon as ONE path is missing, which is
+# always the case on a device with only one tree (SLOT-34 ran and failed on every rc4 device).
+SUPD="${GA_SLOT_SUPERVISOR_DIR:-/mnt/data/supervisor}"   # relocatable for the host selftest only
+_slot_ga_manager_dirs() {   # prints every installed ga_manager data dir, either tree
+  for _sd in "$SUPD"/addons/data/*_ga_manager "$SUPD"/apps/data/*_ga_manager; do
+    [ -d "$_sd" ] && printf '%s\n' "$_sd"
+  done
+}
+if [ -n "$(_slot_ga_manager_dirs)" ]; then
   skip_test "SLOT-34" "no-add-on-dir behaviour" "ga_manager IS installed here — the not-yet-installed case cannot be constructed on a live device"
 elif command -v jq >/dev/null 2>&1; then
   NODIR="$(mktemp -d 2>/dev/null || echo /tmp/rslots_nodir_$$)"
@@ -491,20 +500,29 @@ fi
 # =========================================================================
 # Device-side wiring (skipped off-device)
 # =========================================================================
-if [ ! -d /mnt/data/supervisor ]; then
+if [ ! -d "$SUPD" ]; then
   skip_test "SLOT-40..SLOT-45" "on-device collector wiring" "not running on a GA device"
 else
   run_test "SLOT-40" "ga-rauc-slots.timer enabled" \
     "systemctl is-enabled ga-rauc-slots.timer"
 
   # Slug carries a repo hash, so resolve by glob (ga-bootstrap 1.2.5 form).
-  SHARE_JSON="$(ls -1 /mnt/data/supervisor/addons/data/*_ga_manager/ga-rauc-slots.json 2>/dev/null | head -1)"
+  # Data root: apps/data (2026.10+) or addons/data (older field releases). With the resolver on
+  # the device the running Supervisor decides (a stale file in the other tree must not pass);
+  # without it (older release) the newest snapshot of either tree.
+  SHARE_JSON=
+  if [ -f /usr/libexec/ga-data-root.sh ]; then
+    _dr="$(. /usr/libexec/ga-data-root.sh; ga_data_root 2>/dev/null)"
+    [ -n "$_dr" ] && SHARE_JSON="$(ls -1 "$_dr"/*_ga_manager/ga-rauc-slots.json 2>/dev/null | head -1)"
+  else
+    SHARE_JSON="$(ls -1t "$SUPD"/apps/data/*_ga_manager/ga-rauc-slots.json "$SUPD"/addons/data/*_ga_manager/ga-rauc-slots.json 2>/dev/null | head -1)"
+  fi
   [ -n "$SHARE_JSON" ] || SHARE_JSON=/nonexistent
   run_test "SLOT-41" "slot snapshot published to the add-on-private data dir" \
     "test -s '$SHARE_JSON'"
 
   run_test "SLOT-45" "slot snapshot is NOT in the add-on-writable /share" \
-    "[ ! -e /mnt/data/supervisor/share/ga-rauc-slots.json ]"
+    "[ ! -e '$SUPD'/share/ga-rauc-slots.json ]"
 
   if [ -s "$SHARE_JSON" ] && command -v jq >/dev/null 2>&1; then
     # The addon treats anything older than 3 missed 10min ticks as stale and

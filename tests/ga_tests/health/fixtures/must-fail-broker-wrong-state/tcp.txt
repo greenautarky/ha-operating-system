@@ -1,0 +1,2 @@
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   3: 00211EAC:075B 05211EAC:BDB0 01 00000000:00000000 00:00000000 00000000     0        0 90513 1 5eff72b9 20 3 31 10 -1
