@@ -11,10 +11,9 @@ ConditionPathExists=/run/ga-telemetry/lte-saver/tier0-urgent.conf
 
 [Service]
 Type=simple
-ExecStartPre=/usr/libexec/ga-fluent-bit-env
-Environment=GA_ENV=unknown DEVICE_UUID=unknown DEVICE_LABEL=unknown
-Environment=LOKI_HOST=loki.greenautarky.com LOKI_PORT=3100 LOKI_USER=anonymous LOKI_PASSWORD=anonymous LOKI_TENANT=anonymous
-EnvironmentFile=-/mnt/data/fluent-bit/env
+# Written by fluent-bit-tier0.service (ordered before this unit). No fallback: without
+# it this lane fails and retries, and the batched lane ships the errors.
+EnvironmentFile=/mnt/data/fluent-bit/env
 ExecStart=/usr/bin/fluent-bit -c /run/ga-telemetry/lte-saver/tier0-urgent.conf
 Restart=on-failure
 RestartSec=60
