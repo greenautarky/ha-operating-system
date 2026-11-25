@@ -25,8 +25,8 @@
 # Exit: 0 all hold · 1 a check failed · 2 cannot check (never a pass).
 set -uo pipefail
 
-MIN_DOCKER_ENGINE=29.8.2
-MIN_DOCKER_CLI=29.8.2
+MIN_DOCKER_ENGINE=29.9.3
+MIN_DOCKER_CLI=29.9.3
 MIN_CONTAINERD=2.3.7
 MIN_EXPAT=2.10.0
 

@@ -53,16 +53,16 @@ printf 'include $(call qstrip,$(BR2_EXTERNAL_GA_HAOS_PATH))/container-floor.mk\n
 # --- must-pass
 mkbr "$tmp/br183" 29.7.2 29.7.2 2.3.3; mkext "$tmp/ext1"
 case_ "must-pass/haos-18.3-versions-floor-active" 0 "container-floor: OK (4 packages inspected)" "$tmp/ext1" "$tmp/br183" "$good_local"
-EXV=2.10.1 mkbr "$tmp/brnew" 29.9.0 29.9.0 2.4.0 hash
+EXV=2.10.1 mkbr "$tmp/brnew" 29.10.0 29.10.0 2.4.0 hash
 case_ "must-pass/submodule-newer-floor-off" 0 "the GA carry is obsolete" "$tmp/ext1" "$tmp/brnew" "$good_local"
-EXV=2.10.0 mkbr "$tmp/breq" 29.8.2 29.8.2 2.3.7
+EXV=2.10.0 mkbr "$tmp/breq" 29.9.3 29.9.3 2.3.7
 case_ "must-pass/submodule-at-floor" 0 "container-floor: OK" "$tmp/ext1" "$tmp/breq" "$good_local"
 
 # --- must-fail
-mkext "$tmp/ext2"; sed -i 's/DOCKER_ENGINE:docker-engine:29.8.2/DOCKER_ENGINE:docker-engine:29.7.2/' "$tmp/ext2/container-floor.mk"
+mkext "$tmp/ext2"; sed -i 's/DOCKER_ENGINE:docker-engine:29.9.3/DOCKER_ENGINE:docker-engine:29.7.2/' "$tmp/ext2/container-floor.mk"
 case_ "must-fail/floor-lowered" 1 "docker-engine effective version 29.7.2 is below the pinned minimum" "$tmp/ext2" "$tmp/br183" "$good_local"
 mkext "$tmp/ext3"; rm "$tmp/ext3/patches/docker-cli/docker-cli.hash"
-case_ "must-fail/hash-file-missing" 1 "docker-cli 29.8.2: no sha256 entry" "$tmp/ext3" "$tmp/br183" "$good_local"
+case_ "must-fail/hash-file-missing" 1 "docker-cli 29.9.3: no sha256 entry" "$tmp/ext3" "$tmp/br183" "$good_local"
 mkext "$tmp/ext4"; sed -i 's/containerd-2.3.7-go2/containerd-2.3.3-go2/' "$tmp/ext4/patches/containerd/containerd.hash"
 case_ "must-fail/hash-names-other-version" 1 "containerd 2.3.7: no sha256 entry" "$tmp/ext4" "$tmp/br183" "$good_local"
 mkext "$tmp/ext5"; sed -i -E 's/^(sha256  )[0-9a-f]{64}(  docker-engine-)/\1deadbeef\2/' "$tmp/ext5/patches/docker-engine/docker-engine.hash"
@@ -70,7 +70,7 @@ mkext "$tmp/ext6"; sed -i 's/EXPAT:expat:2.10.0/EXPAT:expat:2.9.0/' "$tmp/ext6/c
 case_ "must-fail/expat-floor-lowered" 1 "expat effective version 2.9.0 is below the pinned minimum" "$tmp/ext6" "$tmp/br183" "$good_local"
 mkext "$tmp/ext7"; rm "$tmp/ext7/patches/expat/expat.hash"
 case_ "must-fail/expat-hash-file-missing" 1 "expat 2.10.0: no sha256 entry" "$tmp/ext7" "$tmp/br183" "$good_local"
-case_ "must-fail/hash-value-not-sha256" 1 "docker-engine 29.8.2: no sha256 entry" "$tmp/ext5" "$tmp/br183" "$good_local"
+case_ "must-fail/hash-value-not-sha256" 1 "docker-engine 29.9.3: no sha256 entry" "$tmp/ext5" "$tmp/br183" "$good_local"
 : >"$tmp/local-none.mk"
 case_ "must-fail/local-mk-without-include" 1 "does not include container-floor.mk" "$tmp/ext1" "$tmp/br183" "$tmp/local-none.mk"
 printf '#include $(call qstrip,$(BR2_EXTERNAL_GA_HAOS_PATH))/container-floor.mk\n' >"$tmp/local-commented.mk"

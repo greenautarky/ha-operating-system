@@ -2,7 +2,8 @@
 #
 # HAOS 18.3's buildroot shipped docker-engine 29.7.2, docker-cli 29.7.2 and
 # containerd 2.3.3. Security releases are out for all three:
-#   docker-engine / docker-cli 29.8.2   https://github.com/moby/moby/releases/tag/docker-v29.8.2
+#   docker-engine / docker-cli 29.9.3   https://github.com/moby/moby/releases/tag/docker-v29.9.3
+#     (CVE-2026-115538, -115539, -116587, -116591; Odoo #1270)
 #   containerd 2.3.7                    https://github.com/containerd/containerd/releases/tag/v2.3.7
 # expat (not a Go package, same mechanism): the buildroot submodule pins 2.9.0, inside
 # four published advisories fixed in 2.10.0 (CVE-2026-113351, -115506, -117610, -118370;
@@ -22,6 +23,7 @@
 # NOT apply to 29.8.2 without fuzz, and buildroot applies patches with none:
 # buildroot-ihost/patches-haos/docker-engine/ carries the same patch rebased
 # onto 29.8.2 (scripts/ihost/check-haos-patch-mirror.sh pins the upstream one).
+# The same patch applies to 29.9.3 without fuzz (line offsets only, 2026-11-25).
 #
 # It is a FLOOR, not a pin: when the submodule moves to a version >= the floor
 # the override switches itself off (sort -V), so a submodule bump can never
@@ -31,8 +33,8 @@
 #
 # Format: <MAKE_PREFIX>:<buildroot package dir>:<floor version>
 GA_CONTAINER_FLOORS = \
-	DOCKER_ENGINE:docker-engine:29.8.2 \
-	DOCKER_CLI:docker-cli:29.8.2 \
+	DOCKER_ENGINE:docker-engine:29.9.3 \
+	DOCKER_CLI:docker-cli:29.9.3 \
 	CONTAINERD:containerd:2.3.7 \
 	EXPAT:expat:2.10.0
 
