@@ -65,8 +65,11 @@ show_verdict "GMGD-03" "the timer has a next elapse scheduled" "$_rc" "next elap
 guard_ran() { _t=$(systemctl show -p ExecMainExitTimestampMonotonic --value ga-manager-guard.service 2>/dev/null); [ -n "$_t" ] && [ "$_t" != 0 ]; }
 if ! wait_for "${GA_DEVT_WAIT_S:-240}" guard_ran; then printf '  (GMGD-04: the first guard run did not appear within %s s - asserting anyway)\n' "${GA_DEVT_WAIT_S:-240}"; fi
 T=$(systemctl show -p ExecMainExitTimestampMonotonic --value ga-manager-guard.service 2>/dev/null)
-if [ -n "$T" ] && [ "$T" -gt 0 ] 2>/dev/null; then
-  AGE=$(( $(uptime_s) - T / 1000000 ))
+# T is in microseconds: > 2^31 after ~36 min of uptime, so 32-bit shell arithmetic wraps.
+# Cut the last six digits textually (microseconds -> seconds) before any arithmetic.
+case "$T" in ""|*[!0-9]*|0) T_S= ;; *) if [ "${#T}" -le 6 ]; then T_S=0; else T_S=${T%??????}; fi ;; esac
+if [ -n "$T_S" ]; then
+  AGE=$(( $(uptime_s) - T_S ))
   if [ "$AGE" -ge 0 ] && [ "$AGE" -le "$MAX_AGE_S" ]; then _rc=0; else _rc=1; fi
   show_verdict "GMGD-04" "the guard ran within the last ${MAX_AGE_S}s (the timer is really firing)" "$_rc" "last run ${AGE}s ago"
 else

@@ -15,7 +15,7 @@
 #   IOD-03  PMUGRF 0x144 (retention) == pinned 0xFFFF
 #   IOD-04  GRF 0x70 bit6 set, bit4 clear (RMII interface select)
 #   IOD-05  regulator_summary: io-domains-vccio5 under vcc_1v8, vccio3/4/6 under vcc_3v3
-#   IOD-06  pinconf: gpio2 pins 83/84/86 = 12 mA, pin 82 = 2 mA (both modes, REAL captures)
+#   IOD-06  pinconf: gpio2 pins 83/84/86 = 12 mA (both modes, REAL captures); pin 82 not judged (#2007)
 #   IOD-07  kernel log of the WHOLE boot (journal; captured before IOD-06) free of io-domain errors
 #           Known limit (Odoo #1961): run it after a FRESH boot. On a long uptime with a
 #           volatile journal, vacuuming can drop the boot lines; IOD-07 then FAILS loudly
@@ -73,7 +73,7 @@ else
   _pc="$IOD_PINCONF"
   [ -n "$_pc" ] || _pc=$(ls /sys/kernel/debug/pinctrl/*/pinconf-pins 2>/dev/null | head -n1)
   _msg=$(iod_pinconf_verdict "${_pc:-/nonexistent}"); _rc=$?
-  show_verdict "IOD-06" "pinconf: pins 83/84/86 = 12 mA, pin 82 = 2 mA" "$_rc" "$_msg"
+  show_verdict "IOD-06" "pinconf: pins 83/84/86 = 12 mA (pin 82 not judged, #2007)" "$_rc" "$_msg"
 
   _msg=$(iod_dmesg_verdict "$_dm"); _rc=$?; rm -f "$_dm"
   show_verdict "IOD-07" "kernel log ($_dmsrc) reaches back to the boot and has no io-domain error strings" "$_rc" "$_msg"

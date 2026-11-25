@@ -131,7 +131,8 @@ if command -v curl >/dev/null 2>&1; then
   # The GA broker is ga_mosquitto. No fallback to "a container named *mosquitto exists":
   # that passed without anything listening. A resolver error stays visible (stderr).
   MQTT_LISTEN=
-  _mq=$(ga_ctr_of ga_mosquitto) && MQTT_LISTEN=$(docker exec "$_mq" netstat -tlnp 2>/dev/null | grep ':1883')
+  # The container has no netstat/ss: read its own /proc/net/tcp{,6}; 1883 = 075B, state 0A = LISTEN.
+  _mq=$(ga_ctr_of ga_mosquitto) && MQTT_LISTEN=$(docker exec "$_mq" cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | awk '$2 ~ /:075B$/ && $4 == "0A" {print "1883 listening"; exit}')
   run_test "HLTH-13" "MQTT broker listening (port 1883)" \
     "[ -n \"$MQTT_LISTEN\" ]"
 else

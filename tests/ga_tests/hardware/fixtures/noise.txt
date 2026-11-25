@@ -1,0 +1,2 @@
+Nov 24 23:29:19 KiBu kernel: warning: `grep' uses wireless extensions which will stop working for Wi-Fi 7 hardware; use nl80211
+Nov 24 22:55:38 KiBu kernel: hassio: port 11(veth515a1cd) entered disabled state

@@ -171,7 +171,15 @@ flag ISO-57 "3v3: REAL 1v8 regulator_summary flagged" "$RC" "$OUT"
 OUT=$(iod_pinconf_verdict "$FX/pinconf-real-3v3-ihostA.txt"); RC=$?
 show_verdict ISO-58 "3v3: REAL pinconf (pin 82 = 2 mA) passes" "$RC" "$OUT"
 OUT=$(iod_pinconf_verdict "$FX/pinconf-ok.txt"); RC=$?
-flag ISO-59 "MODELLED pinconf with pin 82 = 4 mA is flagged (the old expectation)" "$RC" "$OUT"
+show_verdict ISO-59 "MODELLED pinconf with pin 82 = 4 mA passes (pin 82 is not judged, #2007)" "$RC" "$OUT"
+OUT=$(iod_pinconf_verdict "$FX/pinconf-real-k31-rc4.txt"); RC=$?
+show_verdict ISO-85 "REAL K31 rc4 pinconf (pin 82 = 4 mA, 83/84/86 = 12 mA) passes" "$RC" "$OUT"
+sed 's/^pin 84 (gpio2-20): output drive strength (12 mA)/pin 84 (gpio2-20): output drive strength (4 mA)/' "$FX/pinconf-real-k31-rc4.txt" > "$T/p84"
+OUT=$(iod_pinconf_verdict "$T/p84"); RC=$?
+flagr ISO-86 "K31 capture with pin 84 at 4 mA is flagged, naming pin 84" "$RC" "$OUT" "pin 84"
+grep -v '^pin 82 ' "$FX/pinconf-real-k31-rc4.txt" > "$T/no82"
+OUT=$(iod_pinconf_verdict "$T/no82"); RC=$?
+show_verdict ISO-87 "capture without a pin 82 line passes (not judged)" "$RC" "$OUT"
 iod_set_mode 1v8
 x=$(iod_readreg "$FX/regs-real-pmugrf-3v3-ihostA.txt" 140); OUT=$(iod_verdict "$x"); RC=$?
 flag ISO-60 "1v8: REAL 3v3 capture 0x86 flagged" "$RC" "$OUT"
