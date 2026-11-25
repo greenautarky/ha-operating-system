@@ -1,0 +1,15 @@
+[Unit]
+Description=Count new inbound flows on the mesh interface (no filtering)
+# Independent of ga-firewall.service on purpose: neither needs the other, and a
+# failure here must not touch the firewall. Rules match the interface by name,
+# so wt0 may appear later.
+After=ga-firewall.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/ga-mesh-audit start
+ExecStop=/usr/libexec/ga-mesh-audit stop
+
+[Install]
+WantedBy=multi-user.target

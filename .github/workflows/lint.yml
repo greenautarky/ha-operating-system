@@ -745,6 +745,16 @@ jobs:
         # pass with the first-brace sed). Red on the pre-change gate and the pre-change suite.
         run: bash tests/gates/fw_forward_dnat/selftest.sh
 
+      - name: mesh audit counters - real traffic, nothing dropped
+        # tests/gates/mesh_audit: the live ga-mesh-audit next to the live firewall gate in network
+        # namespaces; the same flows with and without it, exact counts, and mutants that drop or
+        # miscount. The second script proves mesh_probe.sh (FW-41/FW-43) and FW-60/61.
+        timeout-minutes: 10
+        run: |
+          command -v nft >/dev/null 2>&1 || [ -x /usr/sbin/nft ] || sudo apt-get install -y -qq nftables
+          bash tests/gates/mesh_audit/selftest.sh
+          python3 -I tests/gates/mesh_audit/probe_selftest.py
+
       - name: build tests - board matrix (ALL build tests on fixture outputs of EVERY board)
         # Runs the live tests/ga_tests/run_build_tests.sh on fixture build outputs captured from
         # the real bakes (iHost BOSv1.6.0-rc3, DSGW-210 BOSv1.6.0-dev4), for every board in
