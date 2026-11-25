@@ -56,11 +56,18 @@ mk 'cat x'; out="$(python3 "$GATE" --board ihost --repo "$W/r" --target "$W/t" 2
 
 echo "== the LIVE scripts against the recorded targets"
 for b in ihost dsgw210; do
-  T="$(bash "$ROOT/tests/gates/build_tests_board_matrix/make-fixture.sh" "$b" "$W/fx-$b" 2>/dev/null | tail -1)/target"
+  # only the recorded target is needed: unpacked as make-fixture.sh does, without the rest of the bake
+  FX="$ROOT/tests/gates/build_tests_board_matrix/fixtures/$b"; mkdir -p "$W/fx-$b"
+  tar -xJf "$FX/ga_output.tar.xz" -C "$W/fx-$b" || { echo "FATAL: cannot unpack the $b recording"; exit 2; }
+  [ ! -f "$FX/reconstruct.sh" ] || bash "$FX/reconstruct.sh" "$W/fx-$b/ga_output" || { echo "FATAL: reconstruct.sh failed for $b"; exit 2; }
+  T="$W/fx-$b/ga_output/target"
   # the recordings predate CONFIG_LOGGER; the command counts only while the fragment really sets it
   plus=(); grep -qx 'CONFIG_LOGGER=y' "$ROOT/buildroot-external/busybox-ga.fragment" && [ ! -e "$T/usr/bin/logger" ] && plus=(--plus logger)
   out="$(python3 "$GATE" --board "$b" --target "$T" "${plus[@]}" 2>&1)"; rc=$?
-  [ "$rc" = 0 ]; check "$b: every command exists ($(tail -1 <<<"$out"))" $? "$out"
+  echo "        $(tail -1 <<<"$out")"
+  # the status goes through a variable: a $(...) in the message would replace $? before it is read
+  { [ "$rc" = 0 ] && grep -qE "$b: [0-9]{2,} scripts, [0-9]{3,} calls, .* 0 missing" <<<"$out"; }; st=$?
+  check "$b: every command exists" "$st" "$out"
   if [ "${#plus[@]}" -gt 0 ]; then
     out="$(python3 "$GATE" --board "$b" --target "$T" 2>&1)"; rc=$?
     { [ "$rc" = 1 ] && grep -q 'MISSING   logger' <<<"$out" && [ "$(grep -c MISSING <<<"$out")" = 1 ]; }; check "$b: RED without logger, and only for logger" $? "$out"
@@ -73,7 +80,8 @@ sed -n '/^# 11d) /,/^# Post-build integrity checks/p' "$ROOT/scripts/ga_build.sh
 for want in 0 1 2; do
   mkdir -p "$W/s" "$W/o/images/reports"; printf 'import sys\nsys.exit(%s)\n' "$want" > "$W/s/check-rootfs-commands.py"
   ( set -euo pipefail; SCRIPT_DIR="$W/s" OUT="$W/o" BOARD=ihost; . "$W/11d.sh" ) >/dev/null 2>&1; rc=$?
-  if [ "$want" = 0 ]; then [ "$rc" = 0 ]; else [ "$rc" != 0 ]; fi; check "gate exit $want -> build $([ "$want" = 0 ] && echo goes on || echo stops)" $?
+  if [ "$want" = 0 ]; then [ "$rc" = 0 ]; else [ "$rc" != 0 ]; fi; st=$?
+  check "gate exit $want -> build $([ "$want" = 0 ] && echo goes on || echo stops)" "$st"
 done
 echo "rootfs_commands selftest: $ran checks, $fails failed"
 [ "$ran" -ge 34 ] || { echo "FATAL: only $ran checks ran"; exit 2; }
