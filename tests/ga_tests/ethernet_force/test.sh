@@ -21,6 +21,8 @@
 # Runs ON the device.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
+. "$SCRIPT_DIR/../lib/board_pins.sh"
+bp_load "$(ga_board)" || true   # unknown board: no pins, the checks that need one are red
 
 suite_start "Ethernet force-marker (shipping gate)"
 
@@ -82,9 +84,11 @@ fi
 
 # --- the link, as the kernel sees it ----------------------------------------
 # Last resort, independent of both files above.
-OPER=$(cat /sys/class/net/eth0/operstate 2>/dev/null)
+OPER=""
+[ -z "$BP_ETH" ] || OPER=$(cat "${GA_ETHF_NETDIR:-/sys/class/net}/$BP_ETH/operstate" 2>/dev/null)
+GAENV="${GA_ETHF_GAENV:-/mnt/data/ga-env.conf}"
 if [ -n "$OPER" ]; then
-    printf '        eth0 operstate=%s\n' "$OPER"
+    printf '        %s operstate=%s\n' "$BP_ETH" "$OPER"
     if [ -e "$FORCE_BOOT" ]; then
         # My own test double-reported: with the marker present, eth0 being up is
         # the EXPECTED consequence, and ETHF-01/03 above already fail for it with
@@ -92,7 +96,7 @@ if [ -n "$OPER" ]; then
         # and pads the failure count, which is how a run stops being read.
         # Measured on K31 2026-07-30: three reds for one cause.
         skip_test "ETHF-04" "link state — the boot marker is present, ETHF-01/03 already report it"
-    elif grep -q '^GA_ETHERNET_ENABLED=true' /mnt/data/ga-env.conf 2>/dev/null; then
+    elif grep -q '^GA_ETHERNET_ENABLED=true' "$GAENV" 2>/dev/null; then
         skip_test "ETHF-04" "link state — consent is granted, up is correct"
     elif [ "$SRC" = force-config ]; then
         # The fleet-manager's ethernet.force_enabled is the third legitimate
@@ -101,10 +105,12 @@ if [ -n "$OPER" ]; then
         # as a defect on every device that carries it — K55 2026-09-14.
         skip_test "ETHF-04" "link state — remote override (force-config) is active, up is correct"
     else
-        run_test "ETHF-04" "eth0 down while consent is absent" "[ \"$OPER\" = down ]"
+        run_test "ETHF-04" "$BP_ETH down while consent is absent" "[ \"$OPER\" = down ]"
     fi
+elif [ -z "$BP_ETH" ]; then
+    run_test "ETHF-04" "link state — the board pins a wired interface" "false"
 else
-    skip_test "ETHF-04" "link state — no eth0 on this device"
+    skip_test "ETHF-04" "link state" "not judged: the board's wired interface $BP_ETH does not exist (HW-05 judges its presence)"
 fi
 
 # --- the retire mechanism ---------------------------------------------------

@@ -18,6 +18,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=../lib/board_pins.sh
+. "$SCRIPT_DIR/../lib/board_pins.sh"
 
 # Defaults
 SSH_PORT="${SSH_PORT:-22222}"
@@ -187,21 +189,30 @@ verify_recovery() {
         _f "${test_prefix}-07: /mnt/data not writable"
     fi
 
-    # Ethernet guard applied correctly
-    local eth_disabled
-    eth_disabled=$(ssh_cmd "grep -q '^GA_ETHERNET_DISABLED=true' /mnt/data/ga-env.conf 2>/dev/null && echo yes || echo no")
-    local eth_state
-    eth_state=$(ssh_cmd "nmcli -t -f DEVICE,STATE device status 2>/dev/null | grep '^eth0:' | cut -d: -f2" || echo "unknown")
-    if [[ "$eth_disabled" == "yes" ]]; then
-        if [[ "$eth_state" != "connected" ]]; then
-            _p "${test_prefix}-08: Ethernet guard applied (disabled + eth0 not connected)"
-        else
-            _f "${test_prefix}-08: Ethernet guard NOT applied (flag=true but eth0 connected)"
-        fi
-    else
-        _p "${test_prefix}-08: Ethernet enabled (no guard needed)"
-    fi
+    check_eth_guard "$test_prefix"
 }
+
+# BEGIN eth-guard (run by tests/gates/device_board_pins/selftest.sh -- keep the markers)
+# Ethernet guard applied correctly. Every answer must come back: an ssh that says nothing is red.
+check_eth_guard() {
+    local test_prefix="$1" eth_disabled board msg rc
+    board=$(ssh_cmd "sed -n 's/^VARIANT_ID=//p' /etc/os-release" | head -n 1 | tr -d "\"' ") || true
+    bp_load "$board" || true
+    eth_disabled=$(ssh_cmd "grep -q '^GA_ETHERNET_DISABLED=true' /mnt/data/ga-env.conf 2>/dev/null && echo yes || echo no") || true
+    case "$eth_disabled" in
+        yes)
+            rc=0
+            msg=$(ssh_cmd "nmcli -t -f DEVICE,STATE device status 2>/dev/null" | bp_eth_off) || rc=$?
+            if [[ "$rc" -eq 0 ]]; then
+                _p "${test_prefix}-08: Ethernet guard applied (disabled + $BP_ETH not connected)"
+            else
+                _f "${test_prefix}-08: Ethernet guard NOT proven (flag=true, board '${board:-unknown}'): $msg"
+            fi ;;
+        no) _s "${test_prefix}-08: not reached: Ethernet is not disabled by flag" ;;
+        *)  _f "${test_prefix}-08: cannot read the Ethernet flag over ssh" ;;
+    esac
+}
+# END eth-guard
 
 # === Clean Reboot Test ===
 run_reboot_test() {

@@ -12,6 +12,8 @@
 # before it was written down. Nothing here is aspirational.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
+. "$SCRIPT_DIR/../lib/board_pins.sh"
+bp_load "$(ga_board)" || true   # unknown board: no pins, the checks that need one are red
 
 suite_start "Device Features (built, shipped, and actually doing something)"
 
@@ -33,7 +35,7 @@ run_test_show "FEAT-01" "influx /share secret is 0600, not world-readable" \
 # it on eth0/wlan0 while the mesh still works — an on-site-only breakage, i.e.
 # invisible to every remote check we have.
 run_test_show "FEAT-02" "firewall admits :80 AND :8123 on the LAN interfaces" \
-  'nft list table inet ga_firewall 2>/dev/null | grep -qE "iifname \{ \"eth0\", \"wlan0\" \} tcp dport \{[^}]*\<80\>[^}]*\<8123\>[^}]*\}"'
+  'nft list table inet ga_firewall 2>/dev/null | bp_fw_lan_ui'
 
 # The comma in CONTAINER_ALLOW_TCP is load-bearing: a space produces a set nft
 # rejects, and ga-firewall-gate DELETES the table on a failed load — so the

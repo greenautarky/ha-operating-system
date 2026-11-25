@@ -785,6 +785,10 @@ jobs:
         # pre-change script.
         run: bash tests/gates/check_images_board/selftest.sh
 
+      # NET-11, reboot -08, FW-27, FEAT-02, ETHF-04, hw_iodomain on an iHost- and a DSGW-shaped fixture.
+      - name: Device suites take the network names from the board's pins (both boards)
+        run: ./tests/gates/device_board_pins/selftest.sh
+
       - name: ga-manager-guard (watchdog toggle + revive a dead ga_manager, Odoo #2166)
         # Drives the LIVE script against a stateful stub of `docker exec hassio_cli ha addons`:
         # must-flag = crash -> started, toggle off -> on, the Supervisor's 5-attempt give-up ->

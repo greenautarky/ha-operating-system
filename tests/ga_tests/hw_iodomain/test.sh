@@ -32,9 +32,16 @@ suite_start "iHost I/O-domain voltages (PMUGRF 0x140)"
 iod_set_mode "$(iod_mode "$IOD_BOOTCFG")"
 echo "  mode: $IOD_MODE (from $IOD_BOOTCFG; expect 0x140=$IOD_EXPECT_HEX, vccio5 -> $IOD_V5_SUPPLY)"
 
-if ! iod_is_ihost "$IOD_DTBASE/compatible"; then
-  skip_test "IOD-01" "PMUGRF 0x140 == $IOD_EXPECT_HEX" "not a Sonoff iHost ($(tr '\0' ' ' < "$IOD_DTBASE/compatible" 2>/dev/null))"
-  skip_test "IOD-02" "vccio5-supply is $IOD_V5_SUPPLY" "not a Sonoff iHost"
+# The board the IMAGE was built for decides whether the suite applies, not the device tree it judges: an
+# iHost image whose running tree does not say iHost is RED (it used to be a silent skip).
+_board="$(ga_board)"; _dt="$(tr '\0' ' ' < "$IOD_DTBASE/compatible" 2>/dev/null)"
+if iod_is_ihost "$IOD_DTBASE/compatible"; then _is=1; else _is=0; fi
+if [ "$_is" = 0 ] && [ "$_board" = dsgw210 ]; then
+  # not applicable here: asserted absent, then every check counted as not applicable
+  run_test "IOD-09" "dsgw210: the RV1126 power-domain register map is absent (the suite does not apply)" "[ ! -e '$IOD_REGMAP' ]"
+  for _n in 00 01 02 03 04 05 06 07 08; do skip_test "IOD-$_n" "iHost I/O-domain check" "not applicable on dsgw210 (RV1126 only; running tree: $_dt)"; done
+elif [ "$_is" = 0 ]; then
+  show_verdict "IOD-09" "the running device tree is the board's (image board: ${_board:-unknown})" 1 "compatible is '$_dt', not itead,sonoff-ihost - the voltages were NOT checked"
 else
   _ld=$(iod_loaded "${IOD_CMDLINE:-/proc/cmdline}")
   _msg=$(iod_loaded_verdict "$IOD_MODE" "$_ld"); _rc=$?
