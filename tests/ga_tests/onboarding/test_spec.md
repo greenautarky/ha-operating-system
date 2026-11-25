@@ -80,3 +80,13 @@ fork (iHost hardware + GA version-URL); Core and the frontend are stock.
 - **Command**: `GA_ENV_FILE=… GA_FORCE_BOOT=… GA_GM_DATA_DIR=… GA_LABEL_FILE=…` (all pointing at a nonexistent path) `/usr/sbin/ga-manage-ethernet status`
 - **Expected**: `ethernet_enabled=false` and `ethernet_source=default`. `status` is read-only.
 - **Catches**: A decision rule that turns Ethernet on when nobody consented (the old `GA_ETHERNET_DISABLED` scheme, where an absent key meant ON). The running link against this device's consent is the ethernet_force suite.
+
+### OB-ST-01: Anonymous status answers exactly the pinned key set
+- **Command**: `GET /api/greenautarky_site/status` without a token; HTTP status and sorted JSON keys
+- **Expected**: 200 and exactly `completed gdpr_accepted pin_provisioned pin_required pin_verified steps_done tenant_mode`
+- **Catches**: A field added to, or lost from, the anonymous answer. Read-only.
+
+### CON-03: Console login refuses a wrong signature
+- **Command**: `GET /api/ga_remote_login` with a well-formed, current token and a random signature
+- **Expected**: exactly 403 `Invalid signature`. No secret is read and nobody is signed in.
+- **Catches**: A token accepted without a valid signature. 400/404/503 are red: the signature check was not reached.
