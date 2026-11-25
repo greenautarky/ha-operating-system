@@ -236,4 +236,33 @@ run_test "PW-02" "Password reset API refuses a wrong PIN: 403 password_reset_dis
 run_test "PW-03" "Password reset API refuses empty fields: 403 password_reset_disabled" \
   "pw_disabled $HA_BASE/api/greenautarky_site/password_reset '{\"pin\": \"000000\", \"username\": \"\", \"new_password\": \"\"}'"
 
+# --- Public endpoints: what an anonymous caller gets ---
+# OB-ST-01: the key set of the anonymous status answer, pinned here (not derived from the
+# component). EXACT: a key too many and a key too few are both red, and so is any answer that
+# is not HTTP 200 with a JSON object.
+_st_want='completed gdpr_accepted pin_provisioned pin_required pin_verified steps_done tenant_mode'
+status_keys_exact() {
+  _r=$(curl -s --connect-timeout 5 -w '\n%{http_code}' "$HA_BASE/api/greenautarky_site/status" 2>/dev/null)
+  [ "$(printf '%s\n' "$_r" | tail -n 1)" = 200 ] || { echo "HTTP $(printf '%s\n' "$_r" | tail -n 1)"; return 1; }
+  _st_got=$(printf '%s\n' "$_r" | sed '$d' | jq -r 'if type=="object" then keys|join(" ") else "not an object" end' 2>/dev/null)
+  [ "$_st_got" = "$_st_want" ] || { echo "keys: ${_st_got:-unreadable}"; return 1; }
+}
+run_test "OB-ST-01" "anonymous status answers exactly the pinned key set" "status_keys_exact"
+
+# CON-03: a well-formed, current console-login token with a random signature gets exactly
+# 403 "Invalid signature". Needs no secret and signs nobody in. 503 (no secret provisioned),
+# 404 (view not registered) and 400 (malformed) never reach the signature check, so they are
+# red too: they prove nothing about it.
+con_b64url() { base64 | tr -d '\n=' | tr '+/' '-_'; }
+forged_token_refused() {
+  _t=$(printf '{"nonce":"con-03-%s","exp":%s}' "$$" "$(( $(date +%s) + 120 ))" | con_b64url)
+  _s=$(head -c 32 /dev/urandom | con_b64url)
+  [ -n "$_t" ] && [ -n "$_s" ] || { echo "could not build the token"; return 1; }
+  _r=$(curl -s --connect-timeout 5 -w '\n%{http_code}' "$HA_BASE/api/ga_remote_login?t=${_t}&s=${_s}" 2>/dev/null)
+  _c=$(printf '%s\n' "$_r" | tail -n 1)
+  [ "$_c" = 403 ] && printf '%s\n' "$_r" | grep -q 'Invalid signature' && return 0
+  echo "HTTP $_c"; return 1   # never the body: on 200 it would hold a session
+}
+run_test "CON-03" "console login refuses a token with a wrong signature: 403" "forged_token_refused"
+
 suite_end
