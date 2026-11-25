@@ -2,8 +2,8 @@
 import http.server, os, re, socket, subprocess, sys, tempfile, threading
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 PROBE, SUITE = ROOT + "/tests/ga_tests/firewall/mesh_probe.sh", ROOT + "/tests/ga_tests/firewall/test.sh"
-TOKEN = "probe-selftest-token"
-W = tempfile.mkdtemp(); open(W + "/tok", "w").write(TOKEN + "\n")
+MARK = os.urandom(12).hex()
+W = tempfile.mkdtemp(); open(W + "/tok", "w").write(MARK + "\n")
 ran = bad = 0
 def check(n, c, why=""):
     global ran, bad
@@ -21,7 +21,7 @@ def ssh(banner):
 def closed():
     s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
 def fm(dev=200, ctl=404):
-    return web(lambda p, h: 401 if h.get("Authorization") != "Bearer " + TOKEN else dev if "/KIB-TEST/" in p else ctl)
+    return web(lambda p, h: 401 if h.get("Authorization") != "Bearer " + MARK else dev if "/KIB-TEST/" in p else ctl)
 def run(sshp, gm, ha, fmp, dev="KIB-TEST", tok=W + "/tok"):
     e = {**os.environ, "GA_P_SSH": str(sshp), "GA_P_GM": str(gm), "GA_P_HA": ha, "GA_FM_URL": f"http://127.0.0.1:{fmp}", "GA_FM_TOKEN_FILE": tok}
     r = subprocess.run(["sh", PROBE, "127.0.0.1"] + ([dev] if dev else []), env=e, capture_output=True, text=True, timeout=120)
@@ -40,7 +40,7 @@ for name, args, rc, red in (
     ("no device id given", (S, G, str(H), fm(), ""), 2, None),
     ("no token file", (S, G, str(H), fm(), "KIB-TEST", W + "/none"), 2, None)):
     c, o = run(*args); fails = re.findall(r"FAIL  (FW-\w+)", o)
-    check(f"probe: {name} -> rc {rc}", c == rc and fails == ([red] if red else []) and TOKEN not in o, (c, fails, o[-200:]))
+    check(f"probe: {name} -> rc {rc}", c == rc and fails == ([red] if red else []) and MARK not in o, (c, fails, o[-200:]))
 
 # FW-60/61: the block is cut out of the live suite and run against recorded tables
 t = open(SUITE).read(); m = re.search(r'^MA_TABLE=.*?^run_test "FW-61".*?$', t, re.S | re.M); assert m
