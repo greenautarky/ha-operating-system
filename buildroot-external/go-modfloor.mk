@@ -34,7 +34,7 @@ GA_GO_MODFLOOR += go.opentelemetry.io/otel@v1.41.0
 GA_GO_MODFLOOR += github.com/go-jose/go-jose/v4@v4.1.6
 
 # runc IS hooked, but as a PRE_PATCH hook, not POST_PATCH like the others (Odoo #1270).
-# runc 1.4.3 carries the HAOS device patches (buildroot/package/runc/0001..0006), and
+# runc carries the HAOS device patches (runc-floor/0001..0006), and
 # 0001 edits a VENDORED file (vendor/github.com/opencontainers/cgroups/devices/config/
 # device.go, adds IsDefault). go-modbump ends in `go mod vendor`, which rewrites vendor/
 # from the module cache: run AFTER the patches it wiped that edit, and the build failed

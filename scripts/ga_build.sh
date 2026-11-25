@@ -2880,6 +2880,22 @@ else
     | tee "$_tc_report"
 fi
 
+# 11d) Every external command our target scripts call exists in THIS rootfs
+# (scripts/check-rootfs-commands.py; `logger` was called by 14 scripts and absent).
+# rc 2 = could not judge, as fatal as a missing command.
+# Self-test: tests/gates/rootfs_commands/selftest.sh (lint.yml).
+echo ""
+echo "Checking that every command our scripts call is in the rootfs..."
+set +e
+python3 "${SCRIPT_DIR:-/build/scripts}/check-rootfs-commands.py" --board "$BOARD" --target "${OUT}/target" 2>&1 \
+  | tee "${OUT}/images/reports/rootfs-commands.txt"
+_rc_rc=${PIPESTATUS[0]}
+set -e
+if [[ "$_rc_rc" -ne 0 ]]; then
+  echo "ERROR: rootfs command gate exit ${_rc_rc}: add the command to the image, or allow it with a reason in buildroot-external/rootfs-commands.allow"
+  exit 1
+fi
+
 # Post-build integrity checks
 log_build_step "Build integrity checks"
 verify_build_integrity

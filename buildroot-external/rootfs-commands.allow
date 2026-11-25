@@ -1,0 +1,8 @@
+# Commands our target scripts call that the rootfs deliberately does not have.
+# Read by scripts/check-rootfs-commands.py. An entry that excuses nothing fails the gate.
+# command<TAB>script glob<TAB>reason
+amixer	buildroot-ihost/rootfs-overlay/usr/libexec/set-audio.sh	audio is off on the iHost: audio-setup.service is masked (AUD-08), the script never runs
+hciconfig	buildroot-ihost/rootfs-overlay/usr/libexec/ga-bluetooth-gate	extra safety only: hci0 is DOWN after modprobe anyway; the call is written to tolerate the absent tool
+getent	buildroot-external/rootfs-overlay/usr/libexec/ga-enroll	falls back to /etc/hosts in the next line; adding getent changes what enrollment resolves (decision open, not for an rc)
+getent	buildroot-external/rootfs-overlay/usr/sbin/ga-update-hosts	log line only (the verification always prints the warning); same open decision as above
+hostname	buildroot-external/rootfs-overlay/usr/libexec/ga-enroll	NB_HOSTNAME from the NetBird env is used instead; adding it changes the enrollment payload (decision open)
