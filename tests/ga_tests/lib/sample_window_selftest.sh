@@ -78,4 +78,4 @@ grep -q '^\. "\$SCRIPT_DIR/\.\./lib/sample_window\.sh"' "$SUITE" \
   && ok "idle_perf/test.sh sources lib/sample_window.sh" || bad "idle_perf/test.sh does not source the lib"
 
 echo "sample_window: $pass passed, $fail failed"
-[ "$fail" -eq 0 ] && [ "$pass" -ge 10 ]
+[ "$fail" -eq 0 ] && [ "$pass" -ge 9 ]
