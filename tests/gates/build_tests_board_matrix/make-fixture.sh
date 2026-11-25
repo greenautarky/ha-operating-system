@@ -51,6 +51,10 @@ while IFS= read -r _f; do
   case "$_f" in ''|'#'*) continue ;; esac
   case "$_f" in new:*)  # a file the fixture's bake does not have: add it from the live overlay
     _f="${_f#new:}"; [ -f "$_ovl/$_f" ] || { echo "make-fixture: new-file entry '$_f' missing in overlay" >&2; exit 2; }
+    if [ -L "$_ovl/$_f" ]; then  # an enablement symlink stays a symlink
+      mkdir -p "$(dirname "$_tgt/$_f")" && cp -P "$_ovl/$_f" "$_tgt/$_f" && touch -h -r "$_tgt/usr/libexec/ga-services-conf.sh" "$_tgt/$_f" || exit 2
+      _n=$((_n+1)); continue
+    fi
     mkdir -p "$(dirname "$_tgt/$_f")" && cp "$_ovl/$_f" "$_tgt/$_f" && chmod 0644 "$_tgt/$_f" && touch -r "$_tgt/usr/libexec/ga-services-conf.sh" "$_tgt/$_f" || exit 2;  # old mtime: SRC-19 flags files newer than the sealed rootfs
      _n=$((_n+1)); continue ;;
   esac
