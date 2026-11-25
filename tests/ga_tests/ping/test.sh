@@ -37,7 +37,7 @@ if ping -c 1 -W 2 127.0.0.1 >/dev/null 2>&1; then
   run_test "PING-03" "Gateway is pingable" \
     "GW=\$(grep GATEWAY_IP /mnt/data/telegraf/env 2>/dev/null | cut -d= -f2); [ -n \"\$GW\" ] && [ \"\$GW\" != 'unknown' ] && ping -c 1 -W 3 \$GW >/dev/null 2>&1"
   else
-    GW=$(ip route 2>/dev/null | awk \'/^default/ {print $3; exit}\')
+    GW=$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}')
     run_test "PING-03" "Gateway is pingable (from ip route: ${GW:-none})" \
       "[ -n \"$GW\" ] && ping -c 1 -W 3 $GW >/dev/null 2>&1"
   fi

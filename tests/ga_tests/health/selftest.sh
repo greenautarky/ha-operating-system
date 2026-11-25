@@ -21,5 +21,11 @@ done
 expect must-fail-mosquitto-missing HLTH-REQ-ga_mosquitto FAIL
 expect must-fail-mosquitto-missing HLTH-REQ-ga_manager PASS
 expect must-fail-influx-missing HLTH-REQ-ga_influxdbv1 FAIL
+# HLTH-13: the broker's own socket table, 1883 (075B) in LISTEN (0A)
+expect base HLTH-13 PASS
+expect must-pass-addon-prefix HLTH-13 PASS
+expect must-fail-broker-dead HLTH-13 FAIL            # container up, nothing listening
+expect must-fail-broker-wrong-state HLTH-13 FAIL     # port 1883 only ESTABLISHED/TIME_WAIT, not LISTEN
+expect must-fail-broker-wrong-port HLTH-13 FAIL      # another port listening (1884 = 075C)
 [[ "$ran" -gt 0 ]] || { echo "FATAL: nothing inspected"; exit 2; }
 if [[ "$fails" -eq 0 ]]; then echo "health selftest: $ran/$ran as expected"; else echo "health selftest: $fails of $ran FAILED"; exit 1; fi

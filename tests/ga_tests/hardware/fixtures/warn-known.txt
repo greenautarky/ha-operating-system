@@ -1,0 +1,7 @@
+Nov 24 21:58:02 KiBu kernel: ------------[ cut here ]------------
+Nov 24 21:58:02 KiBu kernel: WARNING: CPU: 0 PID: 1 at drivers/clk/clk.c:1234 clk_put+0x40/0x60
+Nov 24 21:58:02 KiBu kernel: Modules linked in:
+Nov 24 21:58:02 KiBu kernel:  clk_put from clk_bulk_put+0x24/0x40
+Nov 24 21:58:02 KiBu kernel:  clk_bulk_put from rockchip_pm_domain_probe+0x3c0/0x6f0
+Nov 24 21:58:02 KiBu kernel:  rockchip_pm_domain_probe from platform_probe+0x5c/0xb0
+Nov 24 21:58:02 KiBu kernel: ---[ end trace 0000000000000000 ]---

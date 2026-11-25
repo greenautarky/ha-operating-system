@@ -1,0 +1,367 @@
+#!/bin/sh
+# ga-rauc-install — download + RAUC-install + reboot for an HAOS version.
+#
+# Invoked by the ga-rauc-install.service systemd unit (= triggered in
+# turn by ga-rauc-install.path watching the request file), or manually
+# by an operator on the host. The request file lives in ga_manager's OWN
+# data directory, under its pinned slug (ADR-0041):
+#
+#   <supervisor data root>/99f1cad4_ga_manager/ga-rauc-install-request
+#
+# (the add-on writes /data/ga-rauc-install-request). Only ga_manager mounts
+# that directory; no other add-on is given a path to it. The path is static on
+# purpose — no glob over *_ga_manager, which would match any add-on whose slug
+# merely ends that way. A request file in /share is NOT read: that directory is
+# mounted into every add-on that declares `share:rw`.
+#
+# Argument modes:
+#   ga-rauc-install                    — no arg: read version from the request
+#                                        file + optional ga_release from its
+#                                        .rc sidecar (delete-first to re-trigger).
+#   ga-rauc-install <version> [<rc>]   — explicit args: skip the request file,
+#                                        use the passed version + optional
+#                                        ga_release. For operator debug.
+#
+# Either path validates the version regex, then downloads the OTA bundle. With
+# a ga_release it pulls the per-rc canary slot
+# releases/<version>/<ga_release>/haos_<board>-<version>.raucb (falling back to
+# the version-only prod slot on 404); without one it pulls the prod slot
+# releases/<version>/haos_<board>-<version>.raucb. Then `rauc info` +
+# `rauc install` + a 5-second-delayed reboot.
+#
+# Every download connects to the OTA endpoint ga-resolve-ota pinned in
+# /run/ga-resolve-ota.active, via `curl --resolve`. Name resolution is not
+# consulted for the OTA host: on the host, nsswitch asks systemd-resolved
+# before /etc/hosts, so the /etc/hosts entry ga-update-hosts writes is not
+# what reliably decides where a plain `curl https://ota...` connects. The
+# URL keeps the host name, so TLS still verifies the certificate against it.
+# No pinned endpoint (after one resolver run) = no download.
+#
+# Background — why the path-watcher pattern instead of the original
+# BOSv1.2.17 systemd template @.service: Supervisor's REST API
+# (verified in 2025.11.4.6 source) exposes /host/services as GET-only;
+# there is no /start. The 0.41.0 worker that called
+# /host/services/ga-rauc-install@VERSION.service/start always 404'd.
+# The request travels as a file because the add-on has no other way to ask the
+# host for anything. Until BOSv1.4.0-rc3 it travelled through /share; from then
+# on only through ga_manager's own data directory (ADR-0041).
+
+set -eu
+
+# GA_GM_DATA_DIR relocates ga_manager's data directory (host tests only;
+# nothing on a device sets it).
+if [ -n "${GA_GM_DATA_DIR:-}" ]; then
+	GM_DATA_DIR="$GA_GM_DATA_DIR"
+else
+	# Lenient: with a VERSION argument no request file is read at all; without one
+	# the unresolved path makes "request absent" the loud FATAL below, next to the
+	# resolver's own ERROR on stderr.
+	. "${GA_DATA_ROOT_LIB:-/usr/libexec/ga-data-root.sh}"
+	GM_DATA_DIR="$(ga_data_root_or_unresolved)/99f1cad4_ga_manager"
+fi
+# GA_RESOLVE_OTA_BIN and GA_OTA_ACTIVE_FILE relocate the resolver and its pick
+# (host tests only; nothing on a device sets them).
+RESOLVE_OTA_BIN="${GA_RESOLVE_OTA_BIN:-/usr/sbin/ga-resolve-ota}"
+OTA_ACTIVE_FILE="${GA_OTA_ACTIVE_FILE:-/run/ga-resolve-ota.active}"
+OTA_HOST="ota.greenautarky.com"
+REQUEST_FILE="$GM_DATA_DIR/ga-rauc-install-request"
+# Optional sidecar carrying the GA release label (e.g. BOSv1.2.21-rc19). When
+# present, the bundle is pulled from the per-rc CANARY slot
+# releases/<version>/<ga_release>/… instead of the shared per-HAOS-version
+# PROD slot releases/<version>/… — so a canary build never occupies the
+# production slot. The version request file itself stays byte-identical, so
+# pre-per-rc hosts (which never read this sidecar) behave exactly as before.
+REQUEST_RC_FILE="${REQUEST_FILE}.rc"
+VERSION="${1:-}"
+GA_RELEASE="${2:-}"
+
+# regular_file <path> — true for a plain file, never for a symlink, directory,
+# device or FIFO. A symlink would let the writer point the read elsewhere.
+regular_file() { [ -f "$1" ] && [ ! -L "$1" ]; }
+
+if [ -z "$VERSION" ]; then
+    if [ ! -e "$REQUEST_FILE" ] && [ ! -L "$REQUEST_FILE" ]; then
+        echo "[ga-rauc-install] FATAL: no VERSION arg and $REQUEST_FILE absent" >&2
+        exit 2
+    fi
+    if ! regular_file "$REQUEST_FILE"; then
+        # rm removes the link itself, never its target.
+        rm -f "$REQUEST_FILE" "$REQUEST_RC_FILE"
+        echo "[ga-rauc-install] FATAL: $REQUEST_FILE is not a regular file — request refused and removed" >&2
+        exit 2
+    fi
+    if { [ -e "$REQUEST_RC_FILE" ] || [ -L "$REQUEST_RC_FILE" ]; } && ! regular_file "$REQUEST_RC_FILE"; then
+        rm -f "$REQUEST_FILE" "$REQUEST_RC_FILE"
+        echo "[ga-rauc-install] FATAL: $REQUEST_RC_FILE is not a regular file — request refused and removed" >&2
+        exit 2
+    fi
+    # Read THEN delete — the delete is the dedupe gate. If install fails,
+    # the file is gone and a re-trigger requires a fresh write (which is
+    # the desired behaviour: don't retry a known-bad version on every
+    # path event).
+    VERSION="$(head -c 64 "$REQUEST_FILE" | tr -d '[:space:]')"
+    # Read the optional ga_release sidecar BEFORE removing the request file.
+    if [ -z "$GA_RELEASE" ] && [ -f "$REQUEST_RC_FILE" ]; then
+        GA_RELEASE="$(head -c 64 "$REQUEST_RC_FILE" | tr -d '[:space:]')"
+    fi
+    rm -f "$REQUEST_FILE" "$REQUEST_RC_FILE"
+    echo "[ga-rauc-install] read VERSION='$VERSION' GA_RELEASE='${GA_RELEASE}' from $REQUEST_FILE (files removed)"
+fi
+
+# Validate version format — refuse anything that isn't N.N.N.N digits-
+# and-dots. Defence in depth: the ga_manager worker validates too.
+case "$VERSION" in
+    *[!0-9.]* | "" | *..* | .* | *. )
+        echo "[ga-rauc-install] FATAL: refusing malformed version '$VERSION'" >&2
+        exit 2
+        ;;
+esac
+
+# Validate the optional ga_release label (defence in depth — the worker
+# validates it too). Empty means the version-only PROD
+# slot. Otherwise it must be a GA release label, BOSvX.Y.Z, BOSvX.Y.Z-rcN or BOSvX.Y.Z-devN (dev
+# builds such as the DSGW's BOSv1.6.0-dev4 carry a -devN label, #1641) —
+# the only names a release slot on the OTA server has. Anything else is
+# REFUSED: silently substituting the prod slot for a label we could not read
+# would install something nobody asked for. (Which releases may be installed
+# at all is decided by the RAUC pre-install handler /usr/lib/rauc/ga-release-floor,
+# not here.)
+if [ -n "$GA_RELEASE" ]; then
+    case "$GA_RELEASE" in
+        *[!A-Za-z0-9.-]* ) GA_RELEASE_OK=no ;;
+        * ) if printf '%s\n' "$GA_RELEASE" | grep -Eq '^BOSv[0-9]+\.[0-9]+\.[0-9]+(-(rc|dev)[0-9]+)?$'; then
+                GA_RELEASE_OK=yes
+            else
+                GA_RELEASE_OK=no
+            fi ;;
+    esac
+    if [ "$GA_RELEASE_OK" != yes ]; then
+        echo "[ga-rauc-install] FATAL: refusing ga_release '$GA_RELEASE' — not BOSvX.Y.Z[-rcN|-devN]" >&2
+        exit 2
+    fi
+fi
+
+# Per-rc slot when a ga_release is given, else the version-only prod slot.
+# With a ga_release we FALL BACK to the prod slot on a 404 - and only on a 404 -
+# so a device is never stranded if the per-rc bundle wasn't staged (e.g.
+# transitional roll).
+# The endpoint every download below connects to. Read it from the resolver's
+# pick; if there is none yet (boot race, /run cleared), run the resolver once.
+# Only a dotted IPv4 address in the mesh's CGNAT range (first octet 100,
+# second 64..127) is accepted — the same rule ga-resolve-ota applies to its
+# candidates. Anything else is treated as no pick at all.
+in_mesh() {
+    case "$1" in
+        "" | *[!0-9.]* | *..* | .* | *. | *.*.*.*.* ) return 1 ;;
+        *.*.*.* ) ;;
+        * ) return 1 ;;
+    esac
+    _o1=${1%%.*}; _r=${1#*.}; _o2=${_r%%.*}
+    [ "$_o1" = 100 ] && [ "$_o2" -ge 64 ] 2>/dev/null && [ "$_o2" -le 127 ]
+}
+read_pinned_ip() {
+    _ip=""
+    if regular_file "$OTA_ACTIVE_FILE"; then
+        _ip="$(head -c 64 "$OTA_ACTIVE_FILE" | tr -d '[:space:]')"
+    fi
+    if [ -n "$_ip" ] && ! in_mesh "$_ip"; then
+        echo "[ga-rauc-install] $OTA_ACTIVE_FILE holds '$_ip', not a mesh address — ignored" >&2
+        _ip=""
+    fi
+    printf '%s' "$_ip"
+}
+OTA_IP="$(read_pinned_ip)"
+if [ -z "$OTA_IP" ]; then
+    echo "[ga-rauc-install] no pinned OTA endpoint in $OTA_ACTIVE_FILE — running $RESOLVE_OTA_BIN" >&2
+    "$RESOLVE_OTA_BIN" >&2 || true
+    OTA_IP="$(read_pinned_ip)"
+fi
+if [ -z "$OTA_IP" ]; then
+    echo "[ga-rauc-install] FATAL: no pinned OTA endpoint — $OTA_ACTIVE_FILE is missing or invalid after running $RESOLVE_OTA_BIN; refusing to download via name resolution" >&2
+    exit 3
+fi
+OTA_RESOLVE="${OTA_HOST}:443:${OTA_IP}"
+echo "[ga-rauc-install] OTA endpoint: ${OTA_HOST} pinned to ${OTA_IP} (from $OTA_ACTIVE_FILE)"
+
+# The bundle name carries the board: haos_<BOARD_ID>-<version>.raucb, the name
+# Buildroot gives the bundle (VARIANT_ID in /etc/os-release is the board's
+# meta BOARD_ID, one source for both). A DSGW-210 asking for haos_ihost-* would
+# 404 on every slot. Unreadable = loud fallback to ihost (the only board the
+# name was ever hard-coded for), never silent.
+# GA_OS_RELEASE relocates the file (host tests only).
+OS_RELEASE="${GA_OS_RELEASE:-/etc/os-release}"
+# /etc/os-release is a SYMLINK on HAOS (-> ../usr/lib/os-release). regular_file
+# refuses symlinks, so every DSGW read no board and fell back to ihost: its OTA
+# 404'd on both slots (DUT2, dev12 -> dev13, 2026-11-18). A symlink is followed
+# only when it resolves into the read-only /usr/lib (nothing can be planted
+# there); any other symlink stays refused.
+OS_RELEASE_TRUSTED_DIR="${GA_OS_RELEASE_TRUSTED_DIR:-/usr/lib}"
+_osr="$OS_RELEASE"
+if [ -L "$_osr" ]; then
+    _t="$(readlink -f "$_osr" 2>/dev/null)"
+    case "$_t" in
+        "$OS_RELEASE_TRUSTED_DIR"/*) _osr="$_t" ;;
+        *) echo "[ga-rauc-install] WARNING: $OS_RELEASE is a symlink to '${_t:-?}', outside $OS_RELEASE_TRUSTED_DIR — not followed" >&2 ;;
+    esac
+fi
+BOARD=""
+if regular_file "$_osr"; then
+    BOARD="$(sed -n 's/^VARIANT_ID=//p' "$_osr" | head -n 1 | tr -d '"'"'"'[:space:]')"
+fi
+case "$BOARD" in
+    "" | *[!a-z0-9]* )
+        echo "[ga-rauc-install] WARNING: no usable VARIANT_ID ('$BOARD') in $OS_RELEASE — assuming board 'ihost'; a non-iHost board will fail to download" >&2
+        BOARD=ihost ;;
+esac
+
+# ── Device identity (OTA hardening, stage 1 — Odoo #2160) ───────────────────
+# Every download below carries the device's own fleet-manager identity: the
+# per-device `role=device` token ga_manager already holds (the `fleet:` block of
+# its unified credentials bundle, ADR-0003 Amendment 2026-07-09b), sent as
+# `Authorization: Bearer <token>` plus the non-secret `X-GA-Device-Id`. Stage 1
+# only SENDS it; the OTA store stays open, so a device with no identity (fresh,
+# not yet enrolled, token not delivered) still downloads exactly as before.
+# Stage 2 — the store REQUIRING it — is a separate, later change, gated on the
+# access log showing no active device without it.
+#
+# The token never appears on a command line: it goes into a 0600 curl --config
+# file under /run that is removed on exit. Absence of an identity is announced
+# at WARNING level (never a quiet substitution) and never blocks the download.
+CREDS_FILE="$GM_DATA_DIR/ga-fleet-credentials.yaml"
+IDENT_CONF=""
+cleanup_ident() { [ -z "$IDENT_CONF" ] || rm -f "$IDENT_CONF"; }
+trap cleanup_ident EXIT
+
+# yaml_scalar <file> <fleet|top> <key> — the value of <key> from the `fleet:`
+# block (or from the top level), quotes stripped. The bundle is `yaml.safe_dump`
+# output: two-space nested keys, one scalar per line.
+yaml_scalar() {
+    awk -v scope="$2" -v key="$3" -v sq="'" '
+        /^[^ #]/ { infleet = ($0 ~ /^fleet:[ ]*$/) }
+        {
+            if (scope == "fleet") {
+                if (!infleet || $0 !~ /^[ ]+/) next
+                line = $0; sub(/^[ ]+/, "", line)
+            } else {
+                if ($0 ~ /^[ ]/) next
+                line = $0
+            }
+            n = length(key) + 1
+            if (substr(line, 1, n) != key ":") next
+            v = substr(line, n + 1); sub(/^[ ]+/, "", v); sub(/[ ]+$/, "", v)
+            c1 = substr(v, 1, 1)
+            if ((c1 == "\"" || c1 == sq) && length(v) >= 2 && substr(v, length(v), 1) == c1) v = substr(v, 2, length(v) - 2)
+            print v; exit
+        }' "$1" 2>/dev/null
+}
+
+build_identity() {
+    _why=""
+    _tok=""
+    _id=""
+    if ! regular_file "$CREDS_FILE"; then
+        _why="$CREDS_FILE absent (device not enrolled yet, or credentials not delivered)"
+    else
+        _tok="$(yaml_scalar "$CREDS_FILE" fleet token | head -c 200)"
+        _id="$(yaml_scalar "$CREDS_FILE" top device_id | head -c 80)"
+        if [ -z "$_tok" ]; then
+            _why="no fleet token in $CREDS_FILE"
+        elif ! printf '%s' "$_tok" | grep -Eq '^[A-Za-z0-9_-]{16,128}$'; then
+            _why="fleet token in $CREDS_FILE is malformed"
+        elif ! printf '%s' "$_id" | grep -Eq '^[A-Za-z0-9._-]{1,64}$'; then
+            _why="device_id in $CREDS_FILE is missing or malformed"
+        fi
+    fi
+    if [ -n "$_why" ]; then
+        echo "[ga-rauc-install] WARNING: no device identity ($_why) - downloading ANONYMOUSLY. Allowed while the OTA store is open (stage 1); once it requires an identity (stage 2) this device cannot download." >&2
+        return 0
+    fi
+    IDENT_CONF="${GA_OTA_IDENT_DIR:-/run}/ga-rauc-install-ident.$$"
+    if ! ( umask 077
+           printf 'header = "Authorization: Bearer %s"\nheader = "X-GA-Device-Id: %s"\n' "$_tok" "$_id" > "$IDENT_CONF" ); then
+        IDENT_CONF=""
+        echo "[ga-rauc-install] WARNING: could not write the identity config - downloading ANONYMOUSLY" >&2
+        return 0
+    fi
+    echo "[ga-rauc-install] sending device identity ${_id} (token from $CREDS_FILE, never logged)"
+}
+build_identity
+
+# ota_curl <args...> — the download curl, with the identity when there is one.
+ota_curl() {
+    if [ -n "$IDENT_CONF" ]; then
+        curl --config "$IDENT_CONF" "$@"
+    else
+        curl "$@"
+    fi
+}
+
+BASE_URL="https://${OTA_HOST}/releases/${VERSION}"
+if [ -n "$GA_RELEASE" ]; then
+    PRIMARY_URL="${BASE_URL}/${GA_RELEASE}/haos_${BOARD}-${VERSION}.raucb"
+    FALLBACK_URL="${BASE_URL}/haos_${BOARD}-${VERSION}.raucb"
+else
+    PRIMARY_URL="${BASE_URL}/haos_${BOARD}-${VERSION}.raucb"
+    FALLBACK_URL=""
+fi
+# Staging directory: /mnt/data/tmp/ — our canonical "scratch space for
+# anything larger than a few MB". /tmp/ on HAOS is a 15 MB zram tmpfs
+# (see device:/etc/fstab) — a 230 MB raucb bundle does not fit there,
+# curl returns error 23 mid-download. /mnt/data/tmp/ is created by
+# /usr/lib/tmpfiles.d/ga-mnt-data-tmp.conf and aged out at 7 days by
+# systemd-tmpfiles-clean.timer.
+STAGING_DIR="${GA_STAGING_DIR:-/mnt/data/tmp}"  # GA_STAGING_DIR: host tests only
+mkdir -p "$STAGING_DIR"
+BUNDLE="$STAGING_DIR/ga-rauc-install-${VERSION}.raucb"
+
+echo "[ga-rauc-install] downloading $PRIMARY_URL"
+# The prod-slot fallback is for a per-rc slot that is NOT STAGED - HTTP 404 -
+# only. Any other failure (no connection, timeout, 5xx, 403, ...) ends the run:
+# falling back on it would install the PROD bundle on a canary that merely lost
+# its link or met a server error (Odoo #2136).
+_rc=0
+_code="$(ota_curl --fail --silent --show-error --location --resolve "$OTA_RESOLVE" \
+    --write-out '%{http_code}' --output "$BUNDLE" "$PRIMARY_URL")" || _rc=$?
+if [ "$_rc" != 0 ]; then
+    if [ -n "$FALLBACK_URL" ] && [ "$_rc" = 22 ] && [ "$_code" = 404 ]; then
+        echo "[ga-rauc-install] per-rc slot miss (404) — falling back to $FALLBACK_URL" >&2
+        if ! ota_curl --fail --silent --show-error --location --resolve "$OTA_RESOLVE" --output "$BUNDLE" "$FALLBACK_URL"; then
+            echo "[ga-rauc-install] FATAL: download failed for $PRIMARY_URL and $FALLBACK_URL via the pinned endpoint ${OTA_IP}" >&2
+            exit 3
+        fi
+    else
+        echo "[ga-rauc-install] FATAL: download failed for $PRIMARY_URL via the pinned endpoint ${OTA_IP} (curl exit $_rc, HTTP ${_code:-none})${FALLBACK_URL:+ — no prod-slot fallback: only a 404 means the per-rc slot is not staged}" >&2
+        exit 3
+    fi
+fi
+echo "[ga-rauc-install] downloaded $(stat -c %s "$BUNDLE" 2>/dev/null || wc -c < "$BUNDLE") bytes"
+
+echo "[ga-rauc-install] verifying RAUC bundle"
+if ! rauc info "$BUNDLE" >/dev/null 2>&1; then
+    echo "[ga-rauc-install] FATAL: rauc info refuses the bundle (truncated? wrong signature?)" >&2
+    rm -f "$BUNDLE"
+    exit 4
+fi
+
+# The journal is RAM-only (Storage=volatile): persist a bounded failure trail
+# BEFORE the install, so a failed or rolled-back update leaves evidence on the
+# data partition. Never blocks or fails the install (the script exits 0).
+JOURNAL_DUMP_BIN="${GA_JOURNAL_DUMP_BIN:-/usr/libexec/ga-journal-dump}"
+if [ -x "$JOURNAL_DUMP_BIN" ]; then
+    "$JOURNAL_DUMP_BIN" rauc-install || true
+fi
+
+echo "[ga-rauc-install] installing $BUNDLE"
+if ! rauc install "$BUNDLE"; then
+    echo "[ga-rauc-install] FATAL: rauc install failed" >&2
+    rm -f "$BUNDLE"
+    exit 5
+fi
+
+echo "[ga-rauc-install] install OK — scheduling reboot in 5s"
+rm -f "$BUNDLE"
+sync
+# Detach so the systemd unit can exit cleanly before reboot — otherwise
+# the path-unit's triggered .service appears hung until reboot fires.
+( sleep 5 && systemctl reboot ) &
+exit 0

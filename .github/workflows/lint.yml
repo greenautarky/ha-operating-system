@@ -463,11 +463,14 @@ jobs:
         # the destructive steps must SKIP without GA_TEST_DESTRUCTIVE, DSGW rows must SKIP with
         # their reason. Both dash and busybox sh (the device's shell).
         run: |
-          for s in ga_manager_guard_device ga_manager_stop uplink_device ota_identity_device resident_info_device baked_boot_device storage_watchdog_device uplink_lte_builtin_device; do
+          for s in ga_manager_guard_device ga_manager_stop uplink_device ota_identity_device resident_info_device baked_boot_device storage_watchdog_device uplink_lte_builtin_device rauc_slots ota_update onboarding ethernet_force hardware; do
             echo "=== $s"
             sh tests/ga_tests/$s/selftest.sh || exit 1
             GA_T_SHELL="busybox sh" sh tests/ga_tests/$s/selftest.sh || exit 1
           done
+
+      - name: PING-03 selftest (gateway from the routing table; dash only - busybox ash runs its own ip/ping applets, so the stubs would not be used)
+        run: sh tests/ga_tests/ping/selftest.sh
 
       - name: Supervisor cli-install watchdog (Odoo #1706 — one restart per boot, only on the install-retry signature)
         # Drives the LIVE ga-supervisor-cli-watchdog with a fake docker and
