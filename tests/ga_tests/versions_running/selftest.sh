@@ -19,6 +19,7 @@ good() { # good BOARD: the pinned state
   echo "ghcr.io/x/core:$VR_CORE" > "$ST.core"; echo "$VR_SUPERVISOR" > "$ST.sup"
   fv="$(echo "$VR_ADDONS" | tr ' ' '\n' | sed -n 's/^sonoff_dongle_flasher=.*://p')"
   printf '{"user":{"99f1cad4_sonoff_dongle_flasher_for_ihost":{"version":"%s"}}}' "$fv" > "$W/apps.json"
+  [ -n "$fv" ] || echo '{"user":{}}' > "$W/apps.json"
 }
 t() { # t NAME want(0/1) TEST-ID
   ran=$((ran+1)); out="$(PATH="$W:$PATH" VR_FORCE_BOARD="$B" VR_WAIT=1 VR_APPS_JSON="$W/apps.json" sh "$HERE/test.sh" 2>&1)"
@@ -38,5 +39,10 @@ for b in ihost dsgw210; do
   good $b; : > "$ST.sup"; t "MUST-FLAG $b: Supervisor unreadable" 1 VRUN-02
 done
 good ihost; echo '{"user":{}}' > "$W/apps.json"; t "MUST-FLAG ihost: the install-only flasher is not installed" 1 "$(id sonoff_dongle_flasher)"
+good dsgw210; ran=$((ran+1)); [ "${VR_NOT_RUN%%=*}" = sonoff_dongle_flasher ] && ! echo "$VR_ADDONS" | grep -q dongle && echo "  ok    dsgw210: the flasher is expected absent (DUT2 dev18, VRUN-16)" || { fails=$((fails+1)); echo "  FAIL  dsgw210 NOT_RUN"; }
+good dsgw210; echo "app_99f1cad4_flasher ${VR_NOT_RUN#*=}:1.3.8" >> "$ST"; t "MUST-FLAG dsgw210: the excluded flasher has a container" 1 VRUN-80 # ga-ctr-ok
+good dsgw210; echo '{"user":{"99f1cad4_sonoff_dongle_flasher_for_ihost":{"version":"1.3.8"}}}' > "$W/apps.json"; t "MUST-FLAG dsgw210: the excluded flasher is installed" 1 VRUN-80
+good dsgw210; rm -f "$W/apps.json"; t "MUST-FLAG dsgw210: store data unreadable is not 'absent'" 1 VRUN-80
+good ihost; ran=$((ran+1)); [ -z "$VR_NOT_RUN" ] && echo "$VR_ADDONS" | grep -q sonoff_dongle_flasher= && echo "  ok    ihost: the flasher stays expected" || { fails=$((fails+1)); echo "  FAIL  ihost lost the flasher"; }
 good ihost; B=riscv; ran=$((ran+1)); PATH="$W:$PATH" VR_FORCE_BOARD=riscv sh "$HERE/test.sh" 2>&1 | grep -q 'FAIL' && echo "  ok    MUST-FLAG unknown board" || { fails=$((fails+1)); echo "  FAIL  unknown board"; }
-echo "versions_running selftest: $ran checks, $fails failed"; [ "$ran" -ge 18 ] && [ "$fails" = 0 ]
+echo "versions_running selftest: $ran checks, $fails failed"; [ "$ran" -ge 23 ] && [ "$fails" = 0 ]

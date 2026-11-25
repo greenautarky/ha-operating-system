@@ -18,7 +18,8 @@ regressions from kernel updates, device tree changes, and firmware issues.
 | HW-02 | WiFi driver loaded cleanly | `dmesg` has `rtw_8723ds` without `failed to dump efuse` |
 | HW-03 | No SDIO/MMC errors | No `error`, `failed`, `timeout` on `mmc1` in dmesg |
 | HW-04 | WiFi can scan | `nmcli dev wifi list` returns results (skipped if wlan0 absent) |
-| HW-05 | Ethernet interface present | `ip link show eth0` |
+| HW-00 | Board expectations known | `board_expect.sh` knows the CPU arch |
+| HW-05 | Ethernet interface present | eth0 (iHost) / end0 (DSGW-210) |
 | HW-06 | Ethernet link state | Reports `operstate` (up/down) |
 | HW-07 | USB subsystem functional | `/sys/bus/usb/devices/` is populated |
 | HW-08 | USB devices enumerated | Lists USB devices via `lsusb` or sysfs fallback |
