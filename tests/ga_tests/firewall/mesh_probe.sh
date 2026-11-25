@@ -1,5 +1,5 @@
 #!/bin/sh
-# FW-41 / FW-43: is the device still reachable over the mesh, as its users reach it?
+# FW-41 / FW-43: the device answers over the mesh, asked the way its users ask it.
 # Runs on a MESH PEER, not on the device. Read-only: one ssh banner and three GET requests.
 #
 #   mesh_probe.sh <device mesh address> [<device id>]

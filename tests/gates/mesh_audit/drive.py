@@ -68,9 +68,9 @@ def setup():
     for n in ("dev", "peer", "lan"): sh(f"ip netns add {n}"); sh("ip link set lo up", n)
     sh("ip link add wt0 netns dev type veth peer name p0 netns peer")
     sh("ip link add eth0 netns dev type veth peer name l0 netns lan")
-    sh("ip addr add 10.1.0.1/24 dev wt0; ip link set wt0 up; ip addr add 10.2.0.1/24 dev eth0; ip link set eth0 up; echo 1 > /proc/sys/net/ipv4/ip_forward", "dev")
-    sh("ip addr add 10.1.0.2/24 dev p0; ip link set p0 up; ip route add default via 10.1.0.1", "peer")
-    sh("ip addr add 10.2.0.2/24 dev l0; ip link set l0 up; ip route add default via 10.2.0.1", "lan")
+    sh("ip addr add 192.0.2.1/24 dev wt0; ip link set wt0 up; ip addr add 198.51.100.1/24 dev eth0; ip link set eth0 up; echo 1 > /proc/sys/net/ipv4/ip_forward", "dev")
+    sh("ip addr add 192.0.2.2/24 dev p0; ip link set p0 up; ip route add default via 192.0.2.1", "peer")
+    sh("ip addr add 198.51.100.2/24 dev l0; ip link set l0 up; ip route add default via 198.51.100.1", "lan")
     sh(["nft", "-f", "-"], "dev", inp="table ip nat {\n chain pre { type nat hook prerouting priority dstnat; tcp dport 8099 redirect to :9099; }\n}\n")
     P = []
     for ns, t, u in (("dev", ",".join(map(str, [p for p in TCP if p != 8099] + [9099])), "5353"), ("lan", "7000", "")):
@@ -85,10 +85,10 @@ def setup():
     sh("nft list table inet ga_firewall", "dev")
     return P
 
-SPECS = [f"tcp:10.1.0.1:{p}" for p in TCP] + [f"udp:10.1.0.1:{p}" for p in UDP] + ["tcp:10.2.0.2:7000"]
+SPECS = [f"tcp:192.0.2.1:{p}" for p in TCP] + [f"udp:192.0.2.1:{p}" for p in UDP] + ["tcp:198.51.100.2:7000"]
 def flows(n=N):
     r = json.loads(sh([sys.executable, "-I", "-c", CLIENT, str(n)] + SPECS, "peer").stdout)
-    r["ping"] = sh("ping -c1 -W1 10.1.0.1 >/dev/null", "peer", ok=False).returncode == 0
+    r["ping"] = sh("ping -c1 -W1 192.0.2.1 >/dev/null", "peer", ok=False).returncode == 0
     return r
 def counts():
     r = sh("nft -j list table inet ga_mesh_audit", "dev", ok=False)
@@ -105,7 +105,7 @@ WANT = {**{f"tcp/{p}": N for p in TCP}, "udp/5353": N, "tcp/7000": N, "routed_to
 def case(script):
     """-> (flows that failed, counts wrong, connection held across start died)"""
     sh(f"sh {AUDIT} stop", "dev")
-    h = subprocess.Popen(["ip", "netns", "exec", "peer", sys.executable, "-I", "-c", HOLD, "10.1.0.1", "1883"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    h = subprocess.Popen(["ip", "netns", "exec", "peer", sys.executable, "-I", "-c", HOLD, "192.0.2.1", "1883"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     assert h.stdout.readline().strip() == "up"
     rc = sh(f"sh {script} start", "dev", ok=False).returncode
     dead = [k for k, v in flows().items() if not v]
@@ -127,7 +127,7 @@ try:
     check("the firewall table is untouched", r["fw"])
     # more ports than the set holds: counting stops growing, traffic does not stop
     sh(f"sh {AUDIT} start", "dev")
-    many = [f"tcp:10.1.0.1:{p}" for p in range(20000, 20700)]
+    many = [f"tcp:192.0.2.1:{p}" for p in range(20000, 20700)]
     sh([sys.executable, "-I", "-c", CLIENT, "1"] + many, "peer")
     full = len([k for k in counts() if k.startswith("tcp/")])
     check("set full after a 700-port scan: bounded at 512", full == 512, full)
