@@ -8,3 +8,7 @@ CONFIG_GETTY=y
 # busybox without the gzip applet (zcat only), and the image has no other gzip;
 # without it every dump was empty (tests/gates/journal_dump).
 CONFIG_GZIP=y
+# logger: 14 target scripts report through it (syslog socket of journald). The
+# image had no logger at all, so those messages never reached the journal
+# (found by scripts/check-rootfs-commands.py).
+CONFIG_LOGGER=y
