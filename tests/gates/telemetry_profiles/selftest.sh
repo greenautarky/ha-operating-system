@@ -99,7 +99,7 @@ cp "$PKG_FB/fluent-bit.conf" "$PKG_FB/parsers.conf" "$ETC/"
 REN="$W/rendered"
 GA_FB_T0_ENTRY="$ETC/$ENTRY" GA_FB_T1="$ETC/fluent-bit.conf" GA_TG_CONF="$TG_CONF" \
   sh "$APPLY" render lte_saver "$REN" || die2 "render lte_saver failed"
-for f in tier0.conf tier1.conf telegraf.conf; do [ -s "$REN/$f" ] || die2 "render produced no $f"; done
+for f in tier0.conf tier0-urgent.conf tier1.conf telegraf.conf; do [ -s "$REN/$f" ] || die2 "render produced no $f"; done
 GA_FB_T0_ENTRY="$ETC/$ENTRY" GA_FB_T1="$ETC/fluent-bit.conf" GA_TG_CONF="$TG_CONF" \
   sh "$APPLY" render minimal "$W/rendered-minimal" || die2 "render minimal failed"
 [ ! -e "$W/rendered-minimal/tier0.conf" ] && ok "minimal renders nothing (base units, as normal)" || bad "minimal rendered configs"
@@ -111,6 +111,13 @@ svc_flush() { awk '/^[[:space:]]*\[/{s=toupper($1)} s=="[SERVICE]" && tolower($1
 gz="$(awk '/^[[:space:]]*\[/{o=(toupper($1)=="[OUTPUT]"); l=0} o&&tolower($1)=="name"&&$2=="loki"{l=1} o&&l&&tolower($1)=="compress"{print $2}' "$REN/tier0.conf")"
 [ "$gz" = gzip ] && ok "tier0 Loki output gzip" || bad "tier0 Loki output compress='$gz'"
 grep -q '^@INCLUDE' "$REN/tier0.conf" && bad "tier0 rendering still has an @INCLUDE (it lives in /run)" || ok "tier0 rendering is self-contained"
+uf="$REN/tier0-urgent.conf"
+[ "$(svc_flush "$uf")" = 30 ] && ok "urgent Flush 30" || bad "urgent Flush is '$(svc_flush "$uf")'"
+grep -qE '^[[:space:]]*Labels .*, lane=urgent$' "$uf" && ! grep -q 'lane=urgent' "$REN/tier0.conf" && ok "urgent has its own Loki stream" || bad "urgent shares the batched lane's Loki stream (backlog would be refused)"
+if grep -vE '^[[:space:]]*#' "$uf" | grep -qiE '^[[:space:]]*(db|storage\.path)'; then bad "urgent uses a cursor DB or storage path of the batched lane"; else ok "urgent: no cursor DB, no storage path"; fi
+ni="$(grep -ciE '^[[:space:]]*name[[:space:]]+systemd' "$uf")"; nt="$(grep -ciE '^[[:space:]]*read_from_tail[[:space:]]+on' "$uf")"
+[ "$ni" -ge 5 ] && [ "$ni" = "$nt" ] && ok "urgent: all $ni inputs read from the tail" || bad "urgent: $nt of $ni inputs read from the tail"
+grep -qE '^[[:space:]]*Match[[:space:]]+ihost' "$uf" && bad "urgent carries tier-1 (consent-gated) data" || ok "urgent carries tier-0 only"
 inputs="$(grep -oE '^\[\[inputs\.[a-z_]+\]\]' "$REN/telegraf.conf" | sed 's/\[\[inputs\.//; s/\]\]//' | sort | tr '\n' ' ')"
 [ "$inputs" = "disk mem temp " ] && ok "telegraf inputs: $inputs" || bad "telegraf inputs: '$inputs' (want disk mem temp)"
 grep -qE '^[[:space:]]*interval = "1800s"' "$REN/telegraf.conf" && grep -qE '^[[:space:]]*flush_interval = "1800s"' "$REN/telegraf.conf" \
@@ -137,6 +144,8 @@ rec E5 "OTA download failed" _SYSTEMD_UNIT=ga-rauc-install.service PRIORITY=3 SY
 rec L1 "rauc: installation started" _SYSTEMD_UNIT=rauc.service PRIORITY=6 SYSLOG_IDENTIFIER=rauc
 rec L2 "Bad password attempt for root" _SYSTEMD_UNIT=dropbear.service PRIORITY=4 SYSLOG_IDENTIFIER=dropbear
 rec N1 '{"logger": "ga_manager.workers.converge", "level": "INFO", "msg": "step 3/9 ok"}' CONTAINER_NAME=$GM _SYSTEMD_UNIT=docker.service PRIORITY=3
+rec K1 "rockchip-pinctrl pinctrl: unsupported pinctrl type" _TRANSPORT=kernel PRIORITY=3 SYSLOG_IDENTIFIER=kernel
+rec K2 "Kernel panic - not syncing" _TRANSPORT=kernel PRIORITY=0 SYSLOG_IDENTIFIER=kernel
 # tier-1 sources
 rec E6 "netbird: management connection lost" _SYSTEMD_UNIT=netbird.service PRIORITY=3 SYSLOG_IDENTIFIER=netbird
 rec E7 '{"logger": "ga_manager.health", "level": "ERROR", "msg": "check crashed"}' CONTAINER_NAME=$GM _SYSTEMD_UNIT=docker.service PRIORITY=3
@@ -221,10 +230,11 @@ case_() {  # case_ NAME SHIP DROP CONF MATCH [EXTRA]
   [ -z "$FAILED" ] && pass=$((pass + 1)) || { rc=1; echo "  FAIL  $name: [$FAILED]"; }
 }
 
-T0_ERR="E1 E2 E3 E4 E5 L1 L2"
+T0_ERR="E1 E2 E3 E4 E5 L1 L2 K1 K2"
 echo "part A — real fluent-bit over the fixture journal:"
 case_ tier0-normal "$T0_ERR N1" "E6 N2"      "$ETC/$ENTRY" "tier0.*" "$ETC/fluent-bit-tier0.conf"
 case_ tier0-lte    "$T0_ERR"    "N1 E6 N2"   "$REN/tier0.conf" "tier0.*"
+case_ tier0-urgent "E1 E2 E3 E4 E5 K2" "L1 L2 K1 N1 E6 E7 N2" "$REN/tier0-urgent.conf" "tier0.*"
 case_ tier1-normal "E6 E7 N2 N3" ""          "$ETC/fluent-bit.conf" "ihost.*"
 case_ tier1-lte    "E6 E7"      "N2 N3"      "$REN/tier1.conf" "ihost.*"
 
@@ -240,6 +250,14 @@ grep -q '"(CRITICAL)"' "$W/mut-strict.conf" || die2 "strict mutant: the converge
 mutant strict "E3" "$W/mut-strict.conf" "$T0_ERR" "N1"
 awk '/^# --- lte_saver/{exit} {print}' "$REN/tier0.conf" > "$W/mut-nofilter.conf"
 mutant nofilter "N1" "$W/mut-nofilter.conf" "$T0_ERR" "N1"
+sed 's/PRIORITY ^\[0-2\]\$/PRIORITY ^[0-3]$/' "$REN/tier0-urgent.conf" > "$W/mut-noise.conf"
+cmp -s "$REN/tier0-urgent.conf" "$W/mut-noise.conf" && die2 "noise mutant: kernel filter not found"
+mutant noise "K1" "$W/mut-noise.conf" "E1 E2 E3 E4 E5 K2" "L1 L2 K1 N1"
+sed 's/(Out of memory|oom-kill|/(/' "$REN/tier0-urgent.conf" > "$W/mut-oom.conf"
+cmp -s "$REN/tier0-urgent.conf" "$W/mut-oom.conf" && die2 "oom mutant: pattern not found"
+mutant oom "E1" "$W/mut-oom.conf" "E1 E2 E3 E4 E5 K2" "L1 L2 K1 N1"
+awk '/^# --- urgent lane/{exit} {print}' "$REN/tier0-urgent.conf" > "$W/mut-all.conf"
+mutant allurgent "L1 L2 K1" "$W/mut-all.conf" "E1 E2 E3 E4 E5 K2" "L1 L2 K1 N1"
 
 # --- PART B: apply logic --------------------------------------------------------
 echo "part B — apply logic (live script, systemctl stubbed):"
@@ -322,11 +340,25 @@ rm -f "$B/gm/ga-telemetry-profile.json"; req lte_saver lte; mv "$B/gm/ga-telemet
 chk "symlinked request: refused, base units" '[ "$(rb .valid)" = false ] && [ -z "$(dropins)" ]'
 rm -f "$B/gm/ga-telemetry-profile.json"
 
+# Urgent lane: started only with lte_saver applied AND active_path lte.
+U_=fluent-bit-tier0-urgent.service
+urg() { grep -E "^(--no-block )?(start|stop) $U_$" "$B/sysctl" | tr '\n' ';'; }
+req lte_saver lte; apply "$ALL";     chk "urgent: lte_saver on lte starts it" '[ "$(urg)" = "start $U_;" ]'
+req lte_saver unknown; apply "$ALL"; chk "urgent: unknown path stops it (#2099)" '[ "$(urg)" = "stop $U_;" ]'
+req lte_saver lan; apply "$ALL";     chk "urgent: lte_saver on lan (override/hysteresis) stops it" '[ "$(urg)" = "stop $U_;" ]'
+req normal lte; apply "$ALL";        chk "urgent: normal on lte stops it (tier-0 is immediate there)" '[ "$(urg)" = "stop $U_;" ]'
+echo '{"schema":1,"profile":"lte_saver"}' > "$B/gm/ga-telemetry-profile.json"; apply "$ALL"
+chk "urgent: no active_path = unknown, stopped" '[ "$(urg)" = "stop $U_;" ]'
+req lte_saver lte; apply "fluent-bit-tier0.service"
+chk "urgent: consent-gated shippers never started (tier-1/2 off)" '[ "$(urg)" = "start $U_;" ] && ! grep -E "^(--no-block )?(start|restart) (fluent-bit|telegraf)\.service" "$B/sysctl"'
+rm -f "$B/gm/ga-telemetry-profile.json"; apply "$ALL"; chk "urgent: no request stops it" '[ "$(urg)" = "stop $U_;" ]'
+
 # 2026-10-12, canary: the runtime switch deadlocked; a re-run then found the drop-ins
 # on disk and read back lte_saver while the old processes ran on.
 req normal lan; apply "$ALL"
 req lte_saver lte; apply "$ALL" --boot
 chk "--boot: restarts only ever --no-block (ordered Before= the shippers)" '[ "$(grep -c try-restart "$B/sysctl")" = 3 ] && [ "$(grep -c -- "--no-block try-restart" "$B/sysctl")" = 3 ]'
+chk "--boot: the urgent lane is only queued, never waited for" '[ "$(urg)" = "--no-block start $U_;" ]'
 chk "--boot: the processes still run the base config (restart only queued)" 'runs fluent-bit-tier0.service | grep -q /etc/base/'
 FROZEN=1 apply "$ALL"   # the interrupted run: drop-ins on disk, the restarts did not take
 chk "a restart that did not take is reported stale, never restarted" '[ "$(rb ".units[\"fluent-bit-tier0.service\"]")" = stale ] && [ "$(rb .applied)" = normal ]'
@@ -338,6 +370,10 @@ req normal lan; FROZEN=1 apply "$ALL"
 chk "a restart that does not take: stale + err, applied names what RUNS" '[ "$(rb ".units[\"fluent-bit-tier0.service\"]")" = stale ] && grep -q "^<3>.*does not run" "$B/out" && [ "$(rb .applied)" = lte_saver ]'
 apply "$ALL"
 chk "the next run heals it: restarted, applied=normal" '[ "$(rb .applied)" = normal ] && runs fluent-bit-tier0.service | grep -q /etc/base/'
+
+UU="$ROOT/buildroot-external/rootfs-overlay/etc/systemd/system/$U_"
+grep -q '^PartOf=fluent-bit-tier0.service$' "$UU" && ok "urgent unit restarts with tier-0 (credential, backend IP)" || bad "urgent unit lacks PartOf=fluent-bit-tier0.service"
+grep -qE '^(WantedBy|RequiredBy)=' "$UU" && bad "urgent unit is enabled by itself" || ok "urgent unit is not enabled by itself"
 
 # --- units: the .path must start a unit NOT ordered before a shipper, and a unit
 # that IS ordered before one must run the script with --boot.

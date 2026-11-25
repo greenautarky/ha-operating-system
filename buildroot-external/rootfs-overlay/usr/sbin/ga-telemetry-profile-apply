@@ -79,6 +79,7 @@ VERIFY_S="${GA_PROFILE_VERIFY_S:-15}"   # how long a restarted shipper may take 
 MODE=runtime
 JQ="${JQ:-jq}"
 
+URGENT_FLUSH=30        # seconds; the tier-0 error lane on a KNOWN LTE path (Odoo #2136)
 LTE_FLUSH=900          # seconds; tier-0 and tier-1 batch for 15 min on LTE
 LTE_METRICS="1800s"    # telegraf interval and flush on LTE
 LTE_INPUTS="mem disk temp"
@@ -137,6 +138,41 @@ EOF
     mv -f "$1.tmp" "$1"
 }
 
+# The urgent lane: tier-0 errors within URGENT_FLUSH on a KNOWN LTE path. It is
+# ADDITIVE - the batched tier-0 lane still ships the same lines, so a dead lane
+# loses nothing. Own Loki stream (lane=urgent): in one stream the newer urgent
+# line makes Loki refuse an older batched backlog ("entry too far behind").
+# No cursor DB and tail-only: history is the batched lane's job. kernel stays at
+# PRIORITY 0-2 plus named faults - priority 3 is >99 % driver noise (measured
+# 2026-11-25), and the OOM killer logs at 3.
+render_urgent() {  # $1 rendered tier-0 (lte_saver) file, $2 out file
+    awk -v flush="$URGENT_FLUSH" '
+        /^[[:space:]]*\[/ { sect = toupper($1) }
+        sect == "[SERVICE]" && tolower($1) == "flush" { print "    Flush               " flush; next }
+        sect == "[SERVICE]" && tolower($1) ~ /^storage[.]/ { next }
+        sect == "[INPUT]" && tolower($1) ~ /^(db|db[.]sync|storage[.]type|read_from_tail)$/ { next }
+        { print }
+        sect == "[INPUT]" && tolower($1) == "name" && tolower($2) == "systemd" { print "    Read_From_Tail      On" }
+    ' "$1" | sed -E '/^[[:space:]]*[Ll]abels[[:space:]]/ s/[[:space:]]*$/, lane=urgent/' > "$2.tmp" || return 1
+    grep -q 'lane=urgent$' "$2.tmp" || { err "render: no Labels line in the tier-0 Loki output"; return 1; }
+    cat >> "$2.tmp" <<'EOF'
+
+# --- urgent lane: errors only. tier0.supervisor is ERROR|CRITICAL|FATAL and
+# tier0.converge ERROR|CRITICAL already (filters above).
+[FILTER]
+    Name                grep
+    Match               tier0.kernel
+    Logical_Op          or
+    Regex               PRIORITY ^[0-2]$
+    Regex               MESSAGE (Out of memory|oom-kill|EXT4-fs error|I/O error)
+
+[FILTER]
+    Name                grep
+    Match_Regex         ^tier0\.(rauc|ota|auth|mesh)$
+    Regex               PRIORITY ^[0-3]$
+EOF
+    mv -f "$2.tmp" "$2"
+}
 render_tier1() {  # $1 out file
     expand_includes "$FB_T1" | fb_batch "$(dirname "$FB_T1")" > "$1.tmp" || return 1
     cat >> "$1.tmp" <<'EOF'
@@ -183,12 +219,12 @@ render() {
         *) err "render: unknown profile '$1'"; return 1 ;;
     esac
     mkdir -p "$2" || return 1
-    render_tier0 "$2/tier0.conf" && render_tier1 "$2/tier1.conf" && render_telegraf "$2/telegraf.conf"
+    render_tier0 "$2/tier0.conf" && render_urgent "$2/tier0.conf" "$2/tier0-urgent.conf" && render_tier1 "$2/tier1.conf" && render_telegraf "$2/telegraf.conf"
 }
 
 # --- the request ---------------------------------------------------------------
 
-PROFILE=normal; VALID=true; WHY=""
+PROFILE=normal; VALID=true; WHY=""; ACTIVE_PATH=unknown
 read_request() {
     if [ ! -e "$REQ" ] && [ ! -L "$REQ" ]; then
         WHY="no request (ga_manager without telemetry profiles)"; say "$WHY — normal"; return
@@ -202,7 +238,8 @@ read_request() {
     fi
     _p="$("$JQ" -r 'if (.schema == 1) and (.profile | type == "string") then .profile else "" end' "$REQ" 2>/dev/null)"
     case "$_p" in
-        normal|minimal|lte_saver) PROFILE="$_p"; WHY="requested by ga_manager" ;;
+        normal|minimal|lte_saver) PROFILE="$_p"; WHY="requested by ga_manager"
+           ACTIVE_PATH="$("$JQ" -r '.active_path | if type == "string" then . else "unknown" end' "$REQ" 2>/dev/null)" ;;
         *) VALID=false; WHY="request is not schema 1 with a known profile"
            err "$WHY — falling back to normal" ;;
     esac
@@ -277,6 +314,20 @@ dry_run_ok() {  # $1 rendered fluent-bit config
     "$FLUENT_BIT" --dry-run -c "$1" >/dev/null 2>&1
 }
 
+# The urgent lane runs only with lte_saver applied AND a known LTE path; every other
+# state (unknown path, fm override on LAN, invalid request) stops it. It never
+# touches the consent-gated tier-1/tier-2 units.
+URGENT_UNIT=fluent-bit-tier0-urgent.service
+apply_urgent() {
+    _uc="$RUN_DIR/lte-saver/tier0-urgent.conf"
+    _verb=stop
+    if [ "$PROFILE" = lte_saver ] && [ "$ACTIVE_PATH" = lte ] && [ -n "$T0_BODY" ]; then
+        if dry_run_ok "$_uc"; then _verb=start
+        else err "fluent-bit --dry-run rejects $_uc — no urgent lane, errors ship with the batch"; fi
+    fi
+    if [ "$MODE" = boot ]; then "$SYSTEMCTL" --no-block "$_verb" "$URGENT_UNIT"
+    else "$SYSTEMCTL" "$_verb" "$URGENT_UNIT"; fi || err "$_verb $URGENT_UNIT failed"
+}
 apply() {
     read_request
     _dir="$RUN_DIR/lte-saver"
@@ -333,6 +384,7 @@ apply() {
         RESULT="$RESULT\"$_u\":\"$_st\","
     done
     # What the always-on stream actually RUNS is the profile in effect.
+    apply_urgent
     _applied="$PROFILE"
     [ "$PROFILE" = lte_saver ] && [ -z "$T0_BODY" ] && _applied=normal
     if [ "$MODE" != boot ] && "$SYSTEMCTL" is-active --quiet fluent-bit-tier0.service; then

@@ -12,6 +12,12 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## Unreleased (feat/1.6-haos18, BOSv1.6.2)
+
+### Tier-0 errors within 30 s on LTE (Odoo #2136, ADR-0045)
+
+`lte_saver` holds every log line for 15 min. On a known LTE path (`active_path` = `lte`) a second fluent-bit, `fluent-bit-tier0-urgent.service`, now sends tier-0 ERROR/CRITICAL lines within 30 s, in its own Loki stream (`lane=urgent`). The 15-min lane still carries the same lines, so they appear twice. Tier-1 and metrics stay consent-gated and batched; an unknown path, LAN or a manual override on LAN does not start the lane.
+
 ## BOSv1.6.0-dev11 (DSGW-210 dev, feat/1.6-haos18)
 
 dev10 plus ga-bootstrap 1.2.17 (Odoo #2132, #2066), the F5 updater.json seed (Odoo #2065), ga_manager 0.277.6 (the DSGW pin moves from 0.277.3, the 1.6.0 final freeze hold removed; the store serves 0.277.6) and the storage watchdog (reboot step off). Marker only: `gaos_release_dsgw210`.
