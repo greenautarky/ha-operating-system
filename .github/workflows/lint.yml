@@ -1484,6 +1484,14 @@ jobs:
           git submodule update --init --depth 1 haos
           git -C haos submodule update --init --depth 1 buildroot
           XZ_FLOOR_REQUIRE_LIVE=1 ./tests/gates/xz_floor/selftest.sh
+      # runc 1.4.3 (buildroot pin) is below 1.4.4; runc-floor/ carries HAOS's six device
+      # patches with one hunk rebased. Effective version via make, upstream patches pinned.
+      - name: runc floor (>= 1.4.4, HAOS device patches intact)
+        run: |
+          set -eu
+          git submodule update --init --depth 1 haos
+          git -C haos submodule update --init --depth 1 buildroot
+          RUNC_FLOOR_REQUIRE_LIVE=1 ./tests/gates/runc_floor/selftest.sh
       # The signing certificate must chain to the pinned OTA root. A cert that
       # does not used to be appended to the device keyring as a second anchor
       # and left to the end-of-build audit; patch 0110 now stops the build at

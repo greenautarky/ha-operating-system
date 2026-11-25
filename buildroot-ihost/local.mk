@@ -8,3 +8,5 @@ include $(call qstrip,$(BR2_EXTERNAL_GA_HAOS_PATH))/go-floor.mk
 include $(call qstrip,$(BR2_EXTERNAL_GA_HAOS_PATH))/container-floor.mk
 # xz floor (host-xz and xz): see buildroot-external/xz-floor.mk. Same include point as the Go floor.
 include $(call qstrip,$(BR2_EXTERNAL_GA_HAOS_PATH))/xz-floor.mk
+# runc floor: see buildroot-external/runc-floor.mk. Same include point as the Go floor.
+include $(call qstrip,$(BR2_EXTERNAL_GA_HAOS_PATH))/runc-floor.mk
