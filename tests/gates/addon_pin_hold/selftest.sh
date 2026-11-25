@@ -73,7 +73,7 @@ make_store() { # store in lockstep with the pin, so only the drift verdict varie
 }
 run_case() { # run_case <label> <pin> <tags> <hold-json> <expect-exit> <expect-regex>
     local label="$1" pin="$2" tags="$3" hold="$4" want_rc="$5" expect="$6" out rc
-    make_pin "$pin" "$hold"; make_store "$pin"
+    make_pin "$pin" "$hold"; make_store "${STORE:-$pin}"
     ran=$((ran + 1))
     out="$(PATH="$WORK/bin:$PATH" STUB_TAGS="$tags" GA_TODAY="$TODAY" GA_SOURCE_DRIFT_STRICT=1 \
            REPO_ROOT="$WORK/repo" VIBE_ADDONS_REPO_URL="$WORK/store" VIBE_ADDONS_REPO_REF=main \
@@ -134,6 +134,21 @@ run_case "rc3: gm 0.277.11 held while 0.277.12 is published -> HOLD, bake passes
     "0.277.11" "$G" '{"reason":"rc3 freezes gm 0.277.11; 0.277.12 goes to dev17/DUT2 first","until":"2026-11-05"}' 0 'HOLD.*ga_manager.*held until 2026-11-05'
 run_case "rc3: the same pin WITHOUT the hold -> DRIFT, bake fails" \
     "0.277.11" "$G" "" 1 'DRIFT.*ga_manager pinned 0.277.11 but 0.277.12'
+
+# BOSv1.6.2-dev18 (2026-11-25): the pin is AHEAD of the store and BEHIND the newest publish, both on purpose.
+D='"0.277.11","0.277.14","0.278.0","0.279.0"'
+H='{"reason":"one proof at a time","until":"2026-11-05"}'
+A='{"reason":"DUT2 proof","until":"2026-11-05"}'
+STORE=0.277.11 run_case "dev18: store_ahead AND hold -> HOLD, bake passes" \
+    "0.277.14" "$D" "$H, \"store_ahead\": $A" 0 'HOLD.*ga_manager pinned 0.277.14, 0.279.0'
+STORE=0.277.11 run_case "dev18: both -> the store deviation is declared too" \
+    "0.277.14" "$D" "$H, \"store_ahead\": $A" 0 'AHEAD-OF-STORE.*ga_manager pinned 0.277.14'
+STORE=0.277.11 run_case "dev18: hold only -> the store deviation fails" \
+    "0.277.14" "$D" "$H" 1 'FAIL.*ga_manager version mismatch'
+STORE=0.277.11 run_case "dev18: store_ahead only -> DRIFT fails" \
+    "0.277.14" "$D" "{}, \"store_ahead\": $A" 1 'DRIFT.*ga_manager pinned 0.277.14 but 0.279.0'
+STORE=0.277.11 run_case "dev18: both, hold expired -> fails" \
+    "0.277.14" "$D" "{\"reason\":\"r\",\"until\":\"2026-10-10\"}, \"store_ahead\": $A" 1 'HOLD INVALID.*expired'
 
 echo
 echo "ran $ran, failed $fails"

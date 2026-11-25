@@ -22,6 +22,10 @@
       "store_ahead": {
         "reason": "DUT2 proves 0.277.14 (Odoo #1877 MQTT identity binding, influx_freshness) before any store sync; the field store stays at 0.277.11 (Manager 2026-11-25, BOSv1.6.2-dev18). Seed from the bench store.",
         "until": "2026-12-18"
+      },
+      "hold": {
+        "reason": "dev18 proves 0.277.14 alone (Odoo #1877, influx_freshness); 0.278.0 (#415) and 0.279.0 (#414) come after it, one proof at a time (Manager 2026-11-25).",
+        "until": "2026-12-18"
       }
     },
     "ga_default_addon": {
