@@ -6,6 +6,7 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
 . "$SCRIPT_DIR/../lib/sample_window.sh"
+. "$SCRIPT_DIR/../lib/time_share.sh"
 
 suite_start "Idle Performance"
 
@@ -174,22 +175,23 @@ if command -v docker >/dev/null 2>&1; then
     run_test_show "IDLE-10a" "HA Core container CPU < 15% (got ${HA_CPU:-0}%)" \
       "[ \"${HA_CPU:-0}\" -lt 15 ]"
 
-    # Supervisor container < 5%, over a window. One `docker stats` sample used
-    # to decide this and failed idle devices (BOSv1.5.0-rc5/-rc6): the Supervisor answers
-    # ga_manager's health tick, a short burst about every 65 s. 12 samples
-    # (~5 s apart, `docker stats` itself takes ~2 s) judged on the p90 keep
-    # that burst from failing an idle device; a Supervisor that stays busy
-    # still fails. A container that is absent yields no samples -> FAIL, not 0.
-    sup_cpu_sample() {
-      docker stats --no-stream --format '{{.Name}} {{.CPUPerc}}' 2>/dev/null \
-        | awk '$1 == "hassio_supervisor" {gsub(/%/,"",$2); print $2}'
-    }
-    echo "        -> Sampling Supervisor CPU: ${IDLE_WINDOW_N} samples, 3s apart..."
-    SUP_SAMPLES=$(sample_window "$IDLE_WINDOW_N" 3 sup_cpu_sample)
-    SUP_CPU=$(window_p90 "$SUP_SAMPLES")
-    SUP_SUMMARY=$(printf '%s\n' "$SUP_SAMPLES" | window_summary)
-    run_test_show "IDLE-10b" "Supervisor container CPU p90 < 5% over ${IDLE_WINDOW_N} samples (${SUP_SUMMARY})" \
-      "[ -n \"$SUP_CPU\" ] && [ \"$SUP_CPU\" -lt 5 ]"
+    # Supervisor container: below 5 % for at least 90 % of the time, over >= 3 periods of the
+    # ga_manager health tick (lib/time_share.sh says why a p90 of 12 points could not judge this).
+    # Measured from the container's cgroup CPU counter, once per second. No counter = FAIL, not 0.
+    _sup_id=$(docker inspect -f '{{.Id}}' hassio_supervisor 2>/dev/null)
+    _sup_cg=""
+    for _c in "/sys/fs/cgroup/system.slice/docker-${_sup_id}.scope/cpu.stat" "/sys/fs/cgroup/docker/${_sup_id}/cpu.stat"; do
+      [ -n "$_sup_id" ] && [ -r "$_c" ] && { _sup_cg="$_c"; break; }
+    done
+    if [ -z "$_sup_cg" ]; then
+      show_verdict "IDLE-10b" "Supervisor CPU: time above ${TS_LIMIT} % < ${TS_MAX_SHARE} % over ${TS_MIN_WINDOW_S} s" 1 \
+        "no cgroup cpu.stat for hassio_supervisor (id '${_sup_id:-none}'): nothing measured, NOT a pass"
+    else
+      _w="${IDLE10B_WINDOW_S:-$TS_MIN_WINDOW_S}"
+      echo "        -> Sampling Supervisor CPU: ${_w} s from ${_sup_cg}..."
+      _msg=$(ts_cpu_series "$_sup_cg" "$_w" | ts_verdict "$TS_LIMIT" "$TS_MAX_SHARE" "$TS_MIN_WINDOW_S"); _rc=$?
+      show_verdict "IDLE-10b" "Supervisor CPU: time above ${TS_LIMIT} % < ${TS_MAX_SHARE} % over >= ${TS_MIN_WINDOW_S} s" "$_rc" "$_msg"
+    fi
 
     # Show all container stats
     run_test_show "IDLE-10c" "Docker container summary" \

@@ -389,6 +389,9 @@ jobs:
         # fails the wiring checks.
         run: sh tests/ga_tests/lib/sample_window_selftest.sh
 
+      - name: idle_perf IDLE-10b judged on the share of time above 5 % over >= 3 health-tick periods (real K31 series)
+        run: sh tests/ga_tests/lib/time_share_selftest.sh
+
       - name: CFG-32..34 judge the HTTP config Core RUNS, not the YAML it ignores
         # Core 2026.8 imports a YAML `http:` block once and then ignores it, so
         # the old YAML greps were green while Core refused every proxied request.
