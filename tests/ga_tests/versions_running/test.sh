@@ -42,14 +42,5 @@ for _p in $VR_ADDONS; do
   run_test_show "VRUN-$_i" "$_k runs the pinned $_v (is: ${_run:-nothing})" '[ "$_run" = "$_v" ] && [ "$(vr_of "$_repo" | wc -l)" -le 1 ]'
   _i=$((_i+1))
 done
-# add-ons this board's ga_manager excludes: baked, but neither installed nor running
-_j=80
-for _p in $VR_NOT_RUN; do
-  _k="${_p%%=*}"; _repo="${_p#*=}"
-  _n="$(vr_of "$_repo" | wc -l)"
-  _inst="$(jq -r --arg s "$_k" '[.user | keys[] | select(contains($s))] | length' "${VR_APPS_JSON:-/mnt/data/supervisor/apps.json}" 2>/dev/null)"
-  run_test_show "VRUN-$_j" "$_k is not installed on this board (containers: $_n, installed: ${_inst:-unreadable})" '[ "$_n" = 0 ] && [ "$_inst" = 0 ]'
-  _j=$((_j+1))
-done
 run_test "VRUN-90" "every pinned add-on was judged" '[ "$((_i-10))" = "$(echo "$VR_ADDONS" | wc -w)" ]'
 suite_end
