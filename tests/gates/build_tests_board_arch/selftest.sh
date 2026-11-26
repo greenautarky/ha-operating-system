@@ -118,10 +118,11 @@ mkfix ihost armv7 2026.8.2.2 stable "$D2"
 o="$(run ihost BOSv1.6.0-rc2)"
 has "$o" '^  PASS  XVER-07: .*matches rc.json' && ok "ihost rc label: XVER-07 compares against rc.json and passes" || bad "ihost rc label: XVER-07 not against rc.json"
 has "$o" '^  PASS  XVER-06: .*matches rc.json' && ok "ihost rc label: XVER-06 compares against rc.json and passes" || bad "ihost rc label: XVER-06 not against rc.json"
-# a final label still bakes from stable.json: the same build is then compared against stable
+# a 1.6 final bakes from rc.json too (decision 2026-11-26): the same build is compared against rc.json and passes
 o="$(run ihost BOSv1.6.0)"
-has "$o" '^  FAIL  XVER-07: .*stable.json' && ok "ihost final label: compared against stable.json (Supervisor 2026.10.5.1 != stable)" || bad "ihost final label: XVER-07 not against stable.json"
-has "$o" '^  PASS  XVER-06: .*matches stable.json' && ok "ihost final label: XVER-06 matches stable.json" || bad "ihost final label: XVER-06 not against stable.json"
+has "$o" '^  PASS  XVER-07: .*matches rc.json' && ok "ihost final label: XVER-07 compares against rc.json and passes" || bad "ihost final label: XVER-07 not against rc.json"
+has "$o" '^  PASS  XVER-06: .*matches rc.json' && ok "ihost final label: XVER-06 compares against rc.json and passes" || bad "ihost final label: XVER-06 not against rc.json"
+has "$o" 'XVER-0[67]: .*stable.json' && bad "ihost final label: still compared against stable.json" || ok "ihost final label: never compared against stable.json"
 o="$(run ihost BOSv1.6.0-rc2)"
 has "$o" '^  PASS  XVER-03: stable.json core image is the GA armv7 build' && ok "ihost: XVER-03 still expects the armv7 Core image" || bad "ihost: XVER-03 not green"
 
