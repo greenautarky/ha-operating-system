@@ -12,6 +12,10 @@ Earlier release history (pre-2026-05-27) is in the git log + the
 
 ---
 
+## BOSv1.6.1 (iHost, release/1.6.1)
+
+Final of BOSv1.6.1-rc5 (gated on K31, 2026-11-26). The image equals rc5 plus the release markers and one bake rule: a 1.6 final reads `line/1.6/rc.json`, the file its rc was baked from, instead of the device-facing `stable.json` (decision 2026-11-26, option 1a). `stable.json` is not promoted, so no device in the field is offered a new Supervisor by this release. Gate A carries this rule as its only accepted change since rc5.
+
 ## BOSv1.6.0-dev11 (DSGW-210 dev, feat/1.6-haos18)
 
 dev10 plus ga-bootstrap 1.2.17 (Odoo #2132, #2066), the F5 updater.json seed (Odoo #2065), ga_manager 0.277.6 (the DSGW pin moves from 0.277.3, the 1.6.0 final freeze hold removed; the store serves 0.277.6) and the storage watchdog (reboot step off). Marker only: `gaos_release_dsgw210`.
