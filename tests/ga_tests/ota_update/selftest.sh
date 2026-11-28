@@ -2,7 +2,7 @@
 # Host-side selftest of the OTA seam checks in ota_update/test.sh (OTA-12..16, OTA-18):
 # the LIVE suite against a curl stub that answers per URL, and OTA-18 against the LIVE
 # shipped ga-rauc-install plus one-defect mutants of it. Known-good PASS, each defect FAIL,
-# and the "not promoted" SKIP only for a pre-release label on an affirmative 404.
+# and the "not promoted" SKIP on an affirmative 404 only (any label: KB #381 promotes a final after its gate).
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/devsuite_selftest.sh"
 ds_init
@@ -52,10 +52,17 @@ ds_expect OTA-16 PASS "rc slot staged"
 codes 404 404 404 404; run BOSv1.6.1-rc9
 ds_expect OTA-16 FAIL "rc slot not staged / pruned stays red"
 echo "== the skip must not hide a failure"
+echo "== not promoted yet: FINAL label, server answers 404 (gate runs before promotion, KB #381)"
 codes 404 404 404 200; run BOSv1.6.1
-ds_expect OTA-12 FAIL "FINAL label, PROMOTED.json 404"
-ds_expect OTA-13 FAIL "FINAL label, no prod slot"
-ds_expect OTA-14 FAIL "FINAL label, no prod bundle"
+ds_expect OTA-12 PASS "FINAL label, host answered 404 = not promoted yet"
+for i in 13 14 15; do ds_expect "OTA-$i" SKIP "FINAL + PROMOTED.json 404: explicit skip, never a pass"; done
+codes 000 000 000 200; run BOSv1.6.1
+ds_expect OTA-12 FAIL "FINAL label, host does not answer: no skip"
+ds_expect OTA-13 FAIL "FINAL label, no answer: no skip"
+codes 403 403 403 200; run BOSv1.6.1
+ds_expect OTA-14 FAIL "FINAL label, 403 is not 'not promoted'"
+codes 200 404 200 200; run BOSv1.6.1
+ds_expect OTA-14 FAIL "promoted FINAL, prod bundle 404 = a real failure"
 codes 000 000 000 000; run BOSv1.6.1-rc9
 ds_expect OTA-12 FAIL "pre-release, host does not answer (connect failure)"
 ds_expect OTA-13 FAIL "pre-release, no answer: no skip"

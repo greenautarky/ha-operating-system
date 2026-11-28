@@ -192,6 +192,11 @@ if [ -z "$_OTA_VER" ]; then
   skip_test "NET-16c" "OTA bundle fetch" "cannot read VERSION_ID from /etc/os-release"
 elif ! ota_prod_slot_required "$_OTA_LABEL"; then
   skip_test "NET-16c" "OTA prod-slot bundle fetch" "pre-release build ($_OTA_LABEL): prod slot is staged for final releases only"
+elif _np=$(ota_not_promoted_reason "$_OTA_LABEL" \
+    "$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 10 -m 20 "https://ota.greenautarky.com/releases/${_OTA_VER}/PROMOTED.json" 2>/dev/null)"); then
+  # A final is promoted only after its gate (KB #381); strict TLS (no -k) on this probe
+  # too, so a broken certificate is a non-answer and NET-16c below runs and fails.
+  skip_test "NET-16c" "OTA prod-slot bundle fetch" "$_np"
 else
   run_test "NET-16c" "OTA bundle for $_OTA_VER fetchable with STRICT TLS (as ga-rauc-install does)" \
     "curl -sf -I --connect-timeout 10 -m 25 -o /dev/null \
