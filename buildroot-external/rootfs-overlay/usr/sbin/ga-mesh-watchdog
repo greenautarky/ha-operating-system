@@ -36,6 +36,13 @@
 #   2a. LAYERS BELOW. NetworkManager connectivity not "full" (link down, no
 #      internet): hold — that is ga-wifi-watchdog's and the carrier's domain.
 #
+#   2c. THE HOLDS IN 2/2a ARE BOUNDED (Odoo #2201, K181). A path dead for more
+#      than $WAN_HOLD_MAX_S (NM not full) or $CLOUD_HOLD_MAX_S (cloud probe
+#      failing) WHILE held stops being held: the ladder continues (one warning
+#      on the transition). K181 sat behind NM 'limited' with a dead mesh and
+#      nothing ever acted; the hold had no end. The ladder's own limits (cooldowns,
+#      reboot OFF by default, REBOOT_MIN_DEAD_S, the shared 24 h ledger) still apply.
+#
 #   3. GUARDS. An OS install in progress (ga-rauc-install activating, or RAUC
 #      reporting an operation), a shutdown/reboot already queued, or a
 #      ga-wifi-watchdog action in the last $WIFI_QUIET_S: hold.
@@ -114,6 +121,9 @@ PROBE_TIMEOUT_S="${GA_MESH_PROBE_TIMEOUT_S:-5}"
 # act) is visible BEFORE the day the path dies — not on it.
 CLOUD_RECHECK_S="${GA_MESH_CLOUD_RECHECK_S:-3600}"
 UNIT="${GA_MESH_RESTART_UNIT:-netbird}"
+# 2c: how long a dead path may be held for the layers below / the cloud
+WAN_HOLD_MAX_S="${GA_MESH_WAN_HOLD_MAX_S:-1800}"
+CLOUD_HOLD_MAX_S="${GA_MESH_CLOUD_HOLD_MAX_S:-1800}"
 
 NOW="$(date +%s 2>/dev/null || echo 0)"
 case "$NOW" in ''|*[!0-9]*) NOW=0 ;; esac
@@ -131,6 +141,7 @@ read_state() {
 }
 consecutive="$(num "$(read_state CONSECUTIVE_DEAD)")"
 first_dead="$(num "$(read_state FIRST_DEAD_TS)")"
+hold_since="$(num "$(read_state HOLD_SINCE_TS)")"   # first dead tick held by 2/2a, 0 = not held
 stage="$(num "$(read_state STAGE)")"            # 0 none, 1 downup, 2 restart, 3 reboot
 last_action="$(read_state LAST_ACTION)"
 last_action_ts="$(num "$(read_state LAST_ACTION_TS)")"
@@ -165,6 +176,7 @@ save_state() {
     {
         printf 'CONSECUTIVE_DEAD=%s\n' "$consecutive"
         printf 'FIRST_DEAD_TS=%s\n' "$first_dead"
+        printf 'HOLD_SINCE_TS=%s\n' "$hold_since"
         printf 'STAGE=%s\n' "$stage"
         printf 'LAST_ACTION=%s\n' "$last_action"
         printf 'LAST_ACTION_TS=%s\n' "$last_action_ts"
@@ -189,7 +201,7 @@ publish() {
     # outage / unknown); the finer verdict travels next to it.
     case "$1" in
         alive|dead|unknown) _gm="$1" ;;
-        reboot_capped|reboot_disabled|fallback_alive) _gm=dead ;;
+        reboot_capped|reboot_disabled|fallback_alive|hold_bound) _gm=dead ;;
         *) _gm=outage ;;   # cloud_down, wan_down, held: not acting, on purpose
     esac
     _json="$(printf '{"schema_version":1,"ts":%s,"state":"%s","verdict":"%s","detail":"%s",' "$NOW" "$_gm" "$1" "$_d"
@@ -325,14 +337,23 @@ if [ "$mesh_alive" = 1 ]; then
         fi
     fi
     if [ "$stage" -gt 0 ]; then
-        logw "RECOVERED by $last_action — ga-tools answers over $MESH_IFACE again ($(( NOW - last_action_ts ))s after the $last_action, $(( NOW - first_dead ))s after the first dead tick)"
+        # F5 (Odoo #2201): a missing first-dead tick is unknown, never NOW-0
+        if [ "$first_dead" -gt 0 ] && [ "$first_dead" -le "$NOW" ]; then _fd="$(( NOW - first_dead ))s after the first dead tick"; else _fd="first dead tick unknown"; fi
+        logw "RECOVERED by $last_action — ga-tools answers over $MESH_IFACE again ($(( NOW - last_action_ts ))s after the $last_action, $_fd)"
     else
         log "alive: ga-tools answered over $MESH_IFACE"
     fi
-    consecutive=0; first_dead=0; stage=0
+    consecutive=0; first_dead=0; stage=0; hold_since=0
     publish alive "ga-tools answered over $MESH_IFACE"
     exit 0
 fi
+
+# held_past_bound MAX — rc 0 when the dead path has been held for more than MAX
+# seconds (2c). Starts the hold clock on the first held tick.
+held_past_bound() {
+    [ "$hold_since" -gt 0 ] && [ "$hold_since" -le "$NOW" ] || hold_since="$NOW"
+    [ $(( NOW - hold_since )) -gt "$1" ]
+}
 
 # --------------------------------------- 2a. the layers below are not ours
 # Link and internet are ga-wifi-watchdog's and the carrier's domain, and
@@ -340,7 +361,9 @@ fi
 # connectivity). Without full connectivity a mesh action cannot help.
 command -v nmcli >/dev/null 2>&1 || bail_unknown "nmcli not available — internet connectivity is unmeasured"
 nm_conn="$(nmcli -t -f CONNECTIVITY general status 2>/dev/null | head -1)"
-if [ "$nm_conn" != full ]; then
+if [ "$nm_conn" != full ] && held_past_bound "$WAN_HOLD_MAX_S"; then
+    hold_log hold_bound "hold_bound: $dead_why for $(( NOW - hold_since ))s while NetworkManager connectivity is '${nm_conn:-unknown}' — longer than the ${WAN_HOLD_MAX_S}s bound, the ladder continues"
+elif [ "$nm_conn" != full ]; then
     consecutive=0; first_dead=0
     hold_log wan_down "wan_down: $dead_why, and NetworkManager connectivity is '${nm_conn:-unknown}', not full — the link/WAN layer, not the mesh; no action"
     publish wan_down "$dead_why; NetworkManager connectivity ${nm_conn:-unknown}"
@@ -349,12 +372,17 @@ fi
 
 # ------------------------------------------- 2b. is the NetBird cloud reachable
 cloud_probe
-if [ "$cloud" = false ]; then
+if [ "$cloud" = false ] && held_past_bound "$CLOUD_HOLD_MAX_S"; then
+    hold_log hold_bound "hold_bound: $dead_why for $(( NOW - hold_since ))s while the NetBird cloud probe fails — longer than the ${CLOUD_HOLD_MAX_S}s bound, the ladder continues"
+elif [ "$cloud" = false ]; then
     consecutive=0; first_dead=0
     hold_log cloud_down "cloud_down: $dead_why, and the NetBird cloud is unreachable (management $(host_of "$mgmt_url") / signal $(host_of "$signal_url")) — no action: a restart now would discard a tunnel that may still work and could not build a new one"
     publish cloud_down "$dead_why; NetBird management/signal unreachable — holding"
     exit 0
 fi
+
+# neither hold applies (or both are past the bound): the hold clock only runs while held
+[ "$nm_conn" = full ] && [ "$cloud" = true ] && hold_since=0
 
 # --------------------------------------------------------------- 3. guards
 guard=""
@@ -391,7 +419,13 @@ fi
 
 # ------------------------------------------------------------- 4. escalate
 consecutive=$(( consecutive + 1 ))
-[ "$first_dead" -gt 0 ] || first_dead="$NOW"
+# F5 (Odoo #2201): a ladder already under way with no (or an impossible) first
+# dead tick has no measured dead time. Fail closed: the dead clock starts NOW,
+# so no reboot decision is ever taken on a value that was not measured.
+if [ "$first_dead" -le 0 ] || [ "$first_dead" -gt "$NOW" ]; then
+    [ "$stage" -gt 0 ] && logw "the first dead tick is missing from the state (stage $stage) — dead time restarts now; no reboot decision on an unmeasured value"
+    first_dead="$NOW"
+fi
 dead_for=$(( NOW - first_dead ))
 since=$(( NOW - last_action_ts ))
 detail="$dead_why while the NetBird cloud is reachable (tick $consecutive, dead ${dead_for}s)"
