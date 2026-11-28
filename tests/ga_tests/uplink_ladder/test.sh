@@ -88,7 +88,7 @@ run() {   # run <cached> <forced> <profiles-file> [now]
     GA_SHARE_PUBLISH="$ROOT/buildroot-external/rootfs-overlay/usr/libexec/ga-share-publish" \
     GA_SHARE_STAGE_DIR="$WORK/stage" \
     GA_UPLINK_PATH_PROBE="$WORK/path-probe" GA_UPLINK_PATHS_DIR="$WORK/paths" NM_CONN="${NM_CONN:-}" \
-    PROBE_VERDICT="${PROBE_VERDICT:-clean}" PROBE_LOG="$WORK/probe.log" GA_UPLINK_STRIKE_GAP_S=0 PROBE_DIR="$WORK" GA_UPLINK_FAILOVER="${GA_UPLINK_FAILOVER:-1}" \
+    PROBE_VERDICT="${PROBE_VERDICT:-clean}" PROBE_LOG="$WORK/probe.log" GA_UPLINK_STRIKE_GAP_S=0 PROBE_DIR="$WORK" GA_UPLINK_FAILOVER="${GA_UPLINK_FAILOVER:-1}" GA_UPLINK_HIST_DIR="$WORK/hist" GA_UPLINK_SWITCH_KEEP="${GA_UPLINK_SWITCH_KEEP:-20}" \
     GA_LADDER_NOW="${4:-1000000}" GA_LADDER_COOLDOWN_S=900 \
       sh "$LADDER" >/dev/null 2>&1
 }
@@ -483,7 +483,7 @@ grep -q '"connection":"GA-4392"' "$WORK/status.json" && PASS "D2: each path name
 
 # ── D1+D3 failover eth0 > Wi-Fi by path probe, route metric only (Odoo #2201) ─
 echo "--- failover: Ethernet + dongle Wi-Fi both up (K181 layout) ---"
-fo_reset() { rm -rf "$WORK/paths" "$WORK/parked" "$WORK"/state* "$WORK"/pv.*; : > "$WORK/nm.all"
+fo_reset() { rm -rf "$WORK/paths" "$WORK/parked" "$WORK"/state* "$WORK"/pv.* "$WORK/hist"; : > "$WORK/nm.all"
   printf 'default via 192.0.2.1 dev eth0 proto dhcp metric 100\ndefault via 192.0.2.65 dev wlan0 proto dhcp metric 600\n' > "$WORK/route"
   printf 'Wired connection 1:eth0\nGA-4392:wlan0\n' > "$WORK/active"; printf '1\n' > "$WORK/sys/eth0/carrier"
   printf 'Wired connection 1:802-3-ethernet:yes\nGA-4392:802-11-wireless:yes\n' > "$WORK/fo-profiles"; }
@@ -499,7 +499,7 @@ for t in 1000000 1000120 1000240 1000360 1000480 1000600; do fotick $t; done
 
 fo_reset; pv eth0 dead; pv wlan0 clean; fotick 1000000
 demoted && nodown && PASS "FO-02 eth0 link up + internet dead, Wi-Fi clean: eth0 DEMOTED by metric (2 strikes), never taken down" || FAIL "FO-02" "$(tr '\n' ';' < "$WORK/nm.all")"
-grep -q '"last_switch":{"from":"eth0","to":"wlan0"' "$WORK/status.json" && grep -q '"eth_demoted":true' "$WORK/status.json" \
+grep -q '"last_switch":{"seq":[0-9]*,"from":"eth0","to":"wlan0"' "$WORK/status.json" && grep -q '"eth_demoted":true' "$WORK/status.json" \
   && PASS "FO-03 the switch is published (last_switch from/to/reason/probes, eth_demoted)" || FAIL "FO-03" "$(cat "$WORK/status.json")"
 
 fo_reset; pv eth0 dead; pv wlan0 dead; fotick 1000000
@@ -517,7 +517,7 @@ fotick 1000240
 pv eth0 dead; fotick 1000360; pv eth0 clean; fotick 1000480; pv eth0 dead; fotick 1000600; pv eth0 clean; fotick 1000720
 ! restored && PASS "FO-08 flapping eth0 (clean/dead alternating) never returns: clean count resets on every miss" || FAIL "FO-08" "ping-pong"
 fotick 1000840
-restored && grep -q '"last_switch":{"from":"wlan0","to":"eth0"' "$WORK/status.json" && PASS "FO-09 two clean in a row after >= 600 s: back to eth0 (device reapply), switch published" || FAIL "FO-09" "$(tr '\n' ';' < "$WORK/nm.all")"
+restored && grep -q '"last_switch":{"seq":[0-9]*,"from":"wlan0","to":"eth0"' "$WORK/status.json" && PASS "FO-09 two clean in a row after >= 600 s: back to eth0 (device reapply), switch published" || FAIL "FO-09" "$(tr '\n' ';' < "$WORK/nm.all")"
 
 fo_reset; pv eth0 dead; pv wlan0 clean; fotick 1000000
 printf 'default via 192.0.2.65 dev wlan0 proto dhcp metric 600\ndefault via 192.0.2.1 dev eth0 proto dhcp metric 20000\n' > "$WORK/route"
@@ -538,6 +538,32 @@ printf 'default dev wlan0 scope link\n' > "$WORK/route"; printf 'home-wifi:wlan0
 for t in 1000120 1000240 1000360; do tick limited "$WORK/two-rungs" $t; done
 ! grep -q "device modify" "$WORK/nm.all" && grep -q "connection up openstick-auto" "$WORK/nm.all" && [ -f "$WORK/parked/home-wifi" ] \
   && PASS "FO-13 one radio: customer Wi-Fi dead -> parked + reconnect to the dongle, no metric change" || FAIL "FO-13" "$(tr '\n' ';' < "$WORK/nm.all")"
+grep -q '"switches":\[{"seq":1,"from":"home-wifi","to":"openstick-auto","reason":"reconnect:' "$WORK/status.json" \
+  && PASS "SW-02 the one-radio reconnect is a recorded switch too (switches[], seq 1)" || FAIL "SW-02" "$(cat "$WORK/status.json")"
+# NetworkManager moves the route on its own between two ticks (no switch by us)
+fo_reset; printf '0\n' > "$WORK/sys/eth0/carrier"; printf 'default dev wlan0 scope link\n' > "$WORK/route"
+printf 'openstick-auto:wlan0\n' > "$WORK/active"; pv wlan0 clean; tick full "$WORK/two-rungs" 1000000
+printf 'home-wifi:wlan0\n' > "$WORK/active"; tick full "$WORK/two-rungs" 1000120
+grep -q '"switches":\[{"seq":1,"from":"openstick-auto","to":"home-wifi","reason":"observed:' "$WORK/status.json" \
+  && PASS "SW-04 a switch NetworkManager made between ticks is recorded as observed" || FAIL "SW-04" "$(cat "$WORK/status.json")"
+tick full "$WORK/two-rungs" 1000240
+[ "$(grep -c . "$WORK/hist/switches")" = 1 ] && PASS "SW-04b no change -> no new record" || FAIL "SW-04b" "$(cat "$WORK/hist/switches")"
+
+echo "--- switch history (gm #433 reads switches[]) ---"
+fo_reset; pv eth0 dead; pv wlan0 clean; fotick 1000000
+printf 'default via 192.0.2.65 dev wlan0 proto dhcp metric 600\ndefault via 192.0.2.1 dev eth0 proto dhcp metric 20000\n' > "$WORK/route"
+pv wlan0 dead; printf '{"iface":"wlan0","verdict":"dead"}\n' > "$WORK/paths/wlan0.json"; pv eth0 clean; fotick 1000120
+n=$(grep -o '"seq":[0-9]*' "$WORK/hist/switches" | wc -l | tr -d ' ')
+grep -q '"switches":\[{"seq":1,"from":"eth0","to":"wlan0".*{"seq":2,"from":"wlan0","to":"eth0"' "$WORK/status.json" && [ "$n" = 2 ] \
+  && PASS "SW-01 A->B->A between two polls: BOTH switches in switches[] with growing seq (last_switch alone loses one)" || FAIL "SW-01" "$(cat "$WORK/status.json")"
+grep -q '"last_switch":{"seq":2' "$WORK/status.json" && PASS "SW-01b last_switch kept for compatibility (= newest)" || FAIL "SW-01b" "$(cat "$WORK/status.json")"
+fo_reset; t=1000000
+for i in 1 2 3; do pv eth0 dead; pv wlan0 clean
+  printf 'default via 192.0.2.1 dev eth0 proto dhcp metric 100\ndefault via 192.0.2.65 dev wlan0 proto dhcp metric 600\n' > "$WORK/route"; GA_UPLINK_SWITCH_KEEP=3 fotick $t; t=$((t+120))
+  printf 'default via 192.0.2.65 dev wlan0 proto dhcp metric 600\ndefault via 192.0.2.1 dev eth0 proto dhcp metric 20000\n' > "$WORK/route"
+  pv wlan0 dead; printf '{"iface":"wlan0","verdict":"dead"}\n' > "$WORK/paths/wlan0.json"; pv eth0 clean; GA_UPLINK_SWITCH_KEEP=3 fotick $t; t=$((t+120)); done
+seqs=$(grep -o '"seq":[0-9]*' "$WORK/hist/switches" | cut -d: -f2 | tr '\n' ' ')
+[ "$seqs" = "4 5 6 " ] && PASS "SW-03 history bounded (keep 3 of 6), seq never reused (4 5 6)" || FAIL "SW-03" "seqs=[$seqs]"
 
 echo ""
 echo "Results: $pass passed, $fail failed"

@@ -157,7 +157,12 @@ STRIKE_GAP_S="${GA_UPLINK_STRIKE_GAP_S:-30}"
 RETURN_CLEAN="${GA_UPLINK_RETURN_CLEAN:-2}"
 MIN_DWELL_S="${GA_UPLINK_MIN_DWELL_S:-600}"
 FO_REC="$STATE.failover"          # "<demoted_at> <clean_eth_probes_in_a_row>"
-SWITCH_LOG="$STATE.lastswitch"    # last_switch JSON object
+SWITCH_LOG="$STATE.lastswitch"    # last_switch JSON object (kept for compatibility)
+# Bounded switch history (gm #433 reads "switches"): the last SWITCH_KEEP events,
+# each with a seq that only ever grows - kept on /mnt/data so it survives a
+# reboot, so a reader that missed polls (A->B->A between two) still sees both.
+HIST_DIR="${GA_UPLINK_HIST_DIR:-/mnt/data/ga-uplink.d}"
+SWITCH_KEEP="${GA_UPLINK_SWITCH_KEEP:-20}"
 LAST_SWITCH_JSON=null
 RESCAN_REC="$STATE.rescan"
 # per-tick facts published in the status file
@@ -418,6 +423,7 @@ release_expired() {
             if [ "$BUILTIN_MODEM" = 1 ] && [ -n "${_ACTIVE_NOW:-}" ] && ! is_modem_profile "$_r" \
                && is_modem_profile "$_ACTIVE_NOW" && [ ! -f "$SWITCH_REC" ]; then
                 log notice "modem fallback in use - trying '$_r' again, the modem is restored if it is not full"
+                SW_REASON="cooldown of '$_r' expired, trying it again from the modem"
                 switch_to "$_ACTIVE_NOW" "$_r"
             fi
         fi
@@ -458,10 +464,17 @@ probe_now() {
 default_dev() { $IP_BIN -4 route show default 2>/dev/null | head -1 | sed -n 's/.* dev \([^ ]*\).*/\1/p'; }
 has_default() { $IP_BIN -4 route show default dev "$1" 2>/dev/null | grep -q .; }
 other_default_dev() { $IP_BIN -4 route show default 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | grep -vx "$ETH_IF" | head -1; }
-record_switch() {   # FROM TO REASON PROBES_TEXT
-    log warning "SWITCH from=$1 to=$2 reason=$3 probes=$4"
-    printf '{"from":"%s","to":"%s","reason":"%s","at":"%s","probes":"%s"}\n' \
-        "$(json_str "$1")" "$(json_str "$2")" "$(json_str "$3")" "$(iso_now)" "$(json_str "$4")" > "$SWITCH_LOG"
+record_switch() {   # FROM TO REASON PROBES_TEXT  - EVERY switch goes through here
+    mkdir -p "$HIST_DIR" 2>/dev/null
+    _seq=$(cat "$HIST_DIR/seq" 2>/dev/null); case "$_seq" in ''|*[!0-9]*) _seq=0 ;; esac
+    _seq=$((_seq + 1)); echo "$_seq" > "$HIST_DIR/seq.tmp" && mv -f "$HIST_DIR/seq.tmp" "$HIST_DIR/seq"
+    log warning "SWITCH seq=$_seq from=$1 to=$2 reason=$3 probes=$4"
+    _ev=$(printf '{"seq":%s,"from":"%s","to":"%s","reason":"%s","at":"%s","probes":"%s"}' \
+        "$_seq" "$(json_str "$1")" "$(json_str "$2")" "$(json_str "$3")" "$(iso_now)" "$(json_str "$4")")
+    printf '%s\n' "$_ev" > "$SWITCH_LOG"
+    : > "$HIST_DIR/ours"   # the route change that follows is this switch, not an observed one
+    { cat "$HIST_DIR/switches" 2>/dev/null; printf '%s\n' "$_ev"; } | tail -n "$SWITCH_KEEP" > "$HIST_DIR/switches.tmp" \
+        && mv -f "$HIST_DIR/switches.tmp" "$HIST_DIR/switches"
 }
 eth_restore() {   # REASON PROBES
     rm -f "$FO_REC"
@@ -531,7 +544,8 @@ failover_tick() {
 write_status() {
     _mj=""; [ -z "$MODEM_JSON" ] || _mj=",\"modem\":$MODEM_JSON"
     [ -s "$SWITCH_LOG" ] && LAST_SWITCH_JSON=$(head -1 "$SWITCH_LOG")
-    _mj=",\"failover\":{\"enabled\":$([ "$FAILOVER" = 1 ] && echo true || echo false),\"eth_demoted\":$([ -f "$FO_REC" ] && echo true || echo false)},\"last_switch\":$LAST_SWITCH_JSON$_mj"
+    _sw="[$(paste -sd, "$HIST_DIR/switches" 2>/dev/null)]"
+    _mj=",\"failover\":{\"enabled\":$([ "$FAILOVER" = 1 ] && echo true || echo false),\"eth_demoted\":$([ -f "$FO_REC" ] && echo true || echo false)},\"last_switch\":$LAST_SWITCH_JSON,\"switches\":$_sw$_mj"
     printf '{"rung":"%s","verdict":"%s","strikes":%s,"parked":"%s","spare":"%s","last_rung":%s,"searching":%s,"last_rescan":"%s","updated_at":"%s","paths":%s%s}\n' \
         "$1" "$2" "$3" "$(ls "$PARK_DIR" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')" \
         "$SPARE" "$LAST_RUNG" "$SEARCHING" "$LAST_RESCAN" "$(iso_now)" "$PATHS_JSON" "$_mj" \
@@ -544,6 +558,7 @@ switch_to() {
     $NMCLI -w "$UP_TIMEOUT_S" connection up "$_cand" >/dev/null 2>&1 \
         || log warning "'connection up $_cand' did not complete within ${UP_TIMEOUT_S}s — NM may still bring it up"
     echo "$_prev|$_cand|$NOW" > "$SWITCH_REC"
+    record_switch "${_prev:-none}" "$_cand" "reconnect: ${SW_REASON:-uplink not full}" "nm=${SW_VERDICT:-?}"
     log warning "switched '${_prev:-none}' -> '$_cand' — verifying on the next tick, falling back if it is not full either"
 }
 
@@ -567,6 +582,7 @@ check_switch() {
         is_modem_profile "$_p" && ! is_modem_profile "$_cand" \
             && park "$_cand" "returning from the modem failed ('$1')" "$MODEM_BACK_S"
         $NMCLI -w "$UP_TIMEOUT_S" connection up "$_p" >/dev/null 2>&1
+        record_switch "$_cand" "$_p" "fell back: candidate '$_cand' not full ('$1') after ${SETTLE_S}s" "nm=$1"
         log warning "candidate '$_cand' is not full either ('$1') — fell back to previous '$_p'; '$_cand' barred for ${TRIED_COOLDOWN_S}s"
     else
         log warning "candidate '$_cand' is not full ('$1') — barred for ${TRIED_COOLDOWN_S}s, still searching"
@@ -574,7 +590,34 @@ check_switch() {
     return 0
 }
 
+# A switch NetworkManager made on its own between two ticks (an unparked rung
+# autoconnecting back, a cable plugged in) is a switch too: compare the active
+# connection with the one this script saw at the end of the previous tick.
+observe_start() {
+    mkdir -p "$HIST_DIR" 2>/dev/null
+    _seen=$(cat "$HIST_DIR/active" 2>/dev/null)
+    _cur=$(active_connection)
+    if [ -f "$HIST_DIR/ours" ]; then
+        # our own switch of the previous tick may only show up now (NM settles
+        # after the tick); it is already recorded - do not record it twice
+        rm -f "$HIST_DIR/ours"
+    elif [ -n "$_seen" ] && [ "${_cur:-none}" != "$_seen" ]; then
+        record_switch "$_seen" "${_cur:-none}" "observed: the default route moved between ticks (NetworkManager)" "nm=$(cached_verdict)"
+    fi
+}
+# Known gap: an NM-made switch in the one tick right after our own is not
+# recorded separately (the marker cannot tell the two apart).
+observe_end() { _c=$(active_connection); echo "${_c:-none}" > "$HIST_DIR/active" 2>/dev/null; }
+
 main() {
+    observe_start
+    main_body "$@"
+    _rc=$?
+    observe_end
+    return "$_rc"
+}
+
+main_body() {
     unpark_all_on_boot
     _ACTIVE_NOW=$(active_connection)
     # A switch recorded by an EARLIER tick is verified on this one (built-in modem
@@ -649,7 +692,9 @@ main() {
         write_status "${_active:-none}" "$_verdict" "$_strikes"
         return 0
     fi
+    SW_VERDICT="$_verdict"; SW_REASON="'${_active:-none}' not full after $_strikes checks ($_verdict)"
     if [ -z "$_active" ]; then
+        SW_REASON="no default route; bringing up '$SPARE'"
         switch_to "" "$SPARE"
         echo 0 > "$STATE"
         write_status "switching" "$_verdict" 0
