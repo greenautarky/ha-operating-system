@@ -144,11 +144,45 @@ reset_all; echo refused > "$W/mesh"; ticks 0 3600
 run_test "MWD-03" "'connection refused' from ga-tools = packets crossed = alive, no action" \
   "[ -z \"\$(actions)\" ] && [ \"\$(st verdict)\" = alive ]"
 
-reset_all; echo dead > "$W/mesh"; echo down > "$W/cloud"; ticks 0 86400 1200
-run_test "MWD-04" "path dead 24 h while the NetBird cloud is unreachable: NO action at all" \
+# Odoo #2201 (K181): the cloud/WAN holds are BOUNDED (default 1800 s each).
+# Held tick 0 starts the hold clock; past the bound (tick 1920) the streak builds
+# again and the ladder acts at the third dead tick (2160) — and NOT before.
+# cloud hold: 21600 s default + a per-device jitter. MWD-04..04c pin the bound to
+# 1800 s / no jitter to test the mechanism; MWD-04d..g test the defaults.
+export GA_MESH_CLOUD_HOLD_MAX_S=1800 GA_MESH_CLOUD_JITTER_MAX_S=0
+reset_all; echo dead > "$W/mesh"; echo down > "$W/cloud"; ticks 0 1800
+run_test "MWD-04" "path dead 30 min while the NetBird cloud is unreachable: no action inside the hold bound" \
   "[ -z \"\$(actions)\" ] && [ \"\$(st verdict)\" = cloud_down ] && [ \"\$(st cloud_reachable)\" = false ]"
 run_test "MWD-05" "…reported once at warning (on the transition), not every tick" \
   "[ \"\$(grep -c '^<4>ga-mesh-watchdog: cloud_down' '$W/out.all')\" = 1 ]"
+ticks 1920 2040
+run_test "MWD-04b" "cloud hold past its bound: the streak builds, still no action before tick 3" \
+  "[ -z \"\$(actions)\" ] && grep -q '^<4>ga-mesh-watchdog: hold_bound' '$W/out.all'"
+ticks 2160 2160
+run_test "MWD-04c" "…and the ladder acts (downup) at the third dead tick past the bound" \
+  "[ \"\$(actions)\" = 'netbird down|netbird up|' ]"
+unset GA_MESH_CLOUD_HOLD_MAX_S GA_MESH_CLOUD_JITTER_MAX_S
+# defaults: 6 h + jitter. machine-id 0000000... -> jitter 0; ffffff... -> 0xfffffff % 1801
+printf '0000000aaaaaaaaaaaaaaaaaaaaaaaaa\n' > "$W/mid0"; export GA_MESH_MACHINE_ID_FILE="$W/mid0"
+reset_all; echo dead > "$W/mesh"; echo down > "$W/cloud"; ticks 0 21600 1200
+run_test "MWD-04d" "default cloud hold: 6 h dead with the cloud down -> still NO action (a NetBird outage does not restart the fleet)" \
+  "[ -z \"\$(actions)\" ] && [ \"\$(st verdict)\" = cloud_down ]"
+ticks 21720 21960
+run_test "MWD-04e" "…past 6 h + this device's jitter (0 s here) the ladder continues" \
+  "[ \"\$(actions)\" = 'netbird down|netbird up|' ]"
+printf '1000257aaaaaaaaaaaaaaaaaaaaaaaaa\n' > "$W/midj"; export GA_MESH_MACHINE_ID_FILE="$W/midj"
+J=$(( 0x1000257 % 1801 ))   # = 1500: a device with a large jitter
+reset_all; echo dead > "$W/mesh"; echo down > "$W/cloud"; ticks 0 21600 1200; ticks 21720 $(( 21600 + J )) 120
+run_test "MWD-04f" "a device with jitter ${J}s: no action up to 6 h + ${J}s (where the 0-jitter device already acted)" \
+  "[ -z \"\$(actions)\" ] && [ $J = 1500 ]"
+ticks $(( 21600 + J + 120 )) $(( 21600 + J + 360 )) 120
+run_test "MWD-04g" "…and acts within 3 ticks after its own, later bound" \
+  "[ \"\$(actions)\" = 'netbird down|netbird up|' ]"
+export GA_MESH_MACHINE_ID_FILE="$W/no-such-id"
+reset_all; echo dead > "$W/mesh"; echo down > "$W/cloud"; ticks 0 21600 1200; ticks 21720 $(( 21600 + 1800 )) 120
+run_test "MWD-04h" "unreadable machine-id takes the FULL jitter (later, never earlier): no action until 6 h 30 min" \
+  "[ -z \"\$(actions)\" ]"
+unset GA_MESH_MACHINE_ID_FILE
 
 reset_all; echo dead > "$W/mesh"; ticks 0 120; echo down > "$W/cloud"; at 240; tick; echo up > "$W/cloud"; ticks 360 480
 run_test "MWD-06" "a cloud outage resets the streak: 2 dead + cloud down + 2 dead does not act" \
@@ -179,12 +213,37 @@ run_test "MWD-11" "ga-tools routes outside wt0: unknown, no action (fail closed)
   "[ -z \"\$(actions)\" ] && [ \"\$(st verdict)\" = unknown ]"
 
 # ── interaction with the layers below / the other watchdogs
-reset_all; echo dead > "$W/mesh"; echo none > "$W/nm"; ticks 0 14400 600
-run_test "MWD-12" "link/WAN down (NM connectivity none): no action — ga-wifi-watchdog's domain" \
+reset_all; echo dead > "$W/mesh"; echo none > "$W/nm"; ticks 0 1800
+run_test "MWD-12" "link/WAN down (NM connectivity none) for 30 min: no action — inside the hold bound" \
   "[ -z \"\$(actions)\" ] && [ \"\$(st verdict)\" = wan_down ] && [ \"\$(st state)\" = outage ]"
-reset_all; echo dead > "$W/mesh"; echo limited > "$W/nm"; ticks 0 14400 600
-run_test "MWD-13" "NM connectivity limited (not full): no action" \
-  "[ -z \"\$(actions)\" ] && [ \"\$(st verdict)\" = wan_down ]"
+# The K181 case (Odoo #2201): NM 'limited' + a dead mesh path. Before: held forever.
+reset_all; echo dead > "$W/mesh"; echo limited > "$W/nm"; ticks 0 2040
+run_test "MWD-13" "NM 'limited' + dead path: NO action before the bound + 3 dead ticks (0..2040 s)" \
+  "[ -z \"\$(actions)\" ]"
+ticks 2160 2160
+run_test "MWD-13b" "NM 'limited' + dead path: the ladder climbs after the bound (downup at 2160 s)" \
+  "[ \"\$(actions)\" = 'netbird down|netbird up|' ] && grep -q '^<4>ga-mesh-watchdog: hold_bound' '$W/out.all'"
+ticks 2280 3000
+run_test "MWD-13c" "…and keeps climbing: restart after the downup cooldown" \
+  "[ \"\$(actions)\" = 'netbird down|netbird up|systemctl restart netbird|' ]"
+reset_all; echo dead > "$W/mesh"; echo limited > "$W/nm"; ticks 0 1200; echo ok > "$W/mesh"; at 1320; tick; echo dead > "$W/mesh"; ticks 1440 3240
+run_test "MWD-13d" "a working path in between resets the hold clock (no action 1440..3240 s)" \
+  "[ -z \"\$(actions)\" ]"
+# F5: a ladder under way without a first dead tick never takes a reboot decision on it
+reset_all; enable_reboot; echo dead > "$W/mesh"
+printf 'CONSECUTIVE_DEAD=10\nSTAGE=2\nLAST_ACTION=restart\nLAST_ACTION_TS=%s\nLAST_STATE=dead\n' $((T0 - 7200)) > "$W/state/wd.state"
+at 0; tick
+run_test "MWD-13e" "stage 2, FIRST_DEAD_TS missing: no reboot (dead time unmeasured), warned" \
+  "[ \"\$(grep -c reboot '$W/actions.log' 2>/dev/null || echo 0)\" = 0 ] && grep -q 'first dead tick is missing' '$W/out'"
+reset_all; enable_reboot; echo dead > "$W/mesh"
+printf 'CONSECUTIVE_DEAD=10\nFIRST_DEAD_TS=%s\nSTAGE=2\nLAST_ACTION=restart\nLAST_ACTION_TS=%s\nLAST_STATE=dead\n' $((T0 - 8000)) $((T0 - 7200)) > "$W/state/wd.state"
+at 0; tick
+run_test "MWD-13f" "same state WITH a measured first dead tick 8000 s ago: reboots (the check can go green)" \
+  "[ \"\$(grep -c 'systemctl reboot' '$W/actions.log' 2>/dev/null)\" = 1 ]"
+reset_all; printf 'CONSECUTIVE_DEAD=3\nSTAGE=1\nLAST_ACTION=downup\nLAST_ACTION_TS=%s\nLAST_STATE=dead\n' $((T0 - 300)) > "$W/state/wd.state"
+at 0; tick
+run_test "MWD-13g" "RECOVERED with no first dead tick says 'unknown', never NOW-0 seconds" \
+  "grep -q 'RECOVERED by downup.*first dead tick unknown' '$W/out' && ! grep -qE '[0-9]{9,}s after the first dead tick' '$W/out'"
 reset_all; echo dead > "$W/mesh"; echo "reload $((T0 + 300))" > "$W/wifi_last"; ticks 0 1080
 run_test "MWD-14" "ga-wifi-watchdog reloaded the radio 5 min before: the mesh ladder stays out for 15 min" \
   "[ -z \"\$(actions)\" ] && [ \"\$(st verdict)\" = held ]"
