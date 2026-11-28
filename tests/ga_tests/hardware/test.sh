@@ -6,6 +6,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 suite_start "Hardware"
 
+. "$SCRIPT_DIR/board_expect.sh"
+hw_board_expect "${HW_FORCE_ARCH:-$(uname -m)}"; _hw_known=$?
+run_test "HW-00" "board expectations known ($(uname -m))" "[ $_hw_known -eq 0 ]"
+
 # --- WiFi (RTL8723DS via SDIO) ---
 
 run_test "HW-01" "WiFi interface wlan0 present" \
@@ -16,8 +20,8 @@ run_test "HW-01" "WiFi interface wlan0 present" \
 # the K31 measurement behind the split, and the log-selection defect it fixes.
 . "$SCRIPT_DIR/wifi_probe.sh"
 
-run_test "HW-02" "rtw88_8723ds driver loaded" \
-  "[ -d /sys/module/rtw88_8723ds ]"
+run_test "HW-02" "${HW_WIFI_MOD:-WiFi} driver loaded" \
+  "[ -n \"$HW_WIFI_MOD\" ] && [ -d /sys/module/$HW_WIFI_MOD ]"
 
 _hw_verdict=$(wifi_kernel_log | wifi_probe_verdict)
 if [ "$_hw_verdict" = uncovered ]; then
@@ -41,11 +45,11 @@ fi
 
 # --- Ethernet ---
 
-run_test "HW-05" "Ethernet interface eth0 present" \
-  "ip link show eth0 >/dev/null 2>&1"
+run_test "HW-05" "Ethernet interface ${HW_ETH:-?} present" \
+  "[ -n \"$HW_ETH\" ] && ip link show $HW_ETH >/dev/null 2>&1"
 
 run_test_show "HW-06" "Ethernet link state" \
-  "cat /sys/class/net/eth0/operstate 2>/dev/null"
+  "cat /sys/class/net/${HW_ETH:-none}/operstate 2>/dev/null"
 
 # --- USB ---
 
@@ -157,7 +161,10 @@ run_test_show "HW-11" "Root filesystem type" \
 . "$SCRIPT_DIR/taint.sh"
 _hw_taint=$(cat /proc/sys/kernel/tainted 2>/dev/null)
 _hw_taint_msg=$(wifi_kernel_log | hw_taint_verdict "$_hw_taint"); _hw_taint_rc=$?
-show_verdict "HW-12" "Kernel not tainted (or only the known boot WARN)" "$_hw_taint_rc" "$_hw_taint_msg"
+if [ "$_hw_taint_rc" -ne 0 ] && [ -n "$HW_OOT" ]; then
+  _hw_taint_msg=$(hw_taint_oot_verdict "$_hw_taint" "$HW_OOT"); _hw_taint_rc=$?
+fi
+show_verdict "HW-12" "Kernel not tainted (or only the board's known cause)" "$_hw_taint_rc" "$_hw_taint_msg"
 
 run_test "HW-13" "No critical driver errors in dmesg" \
   "! dmesg | grep -iE 'probe.*failed|driver.*error|firmware.*failed' | grep -v 'rtw_8723ds' | grep -qi 'fail\|error'"

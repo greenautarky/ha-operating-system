@@ -3,7 +3,7 @@
 # patched hassio.mk (scripts/apply-haos-patches.sh --cat), never a copy of either.
 #   must-rc / must-stable: the rule table
 #   make-level: an rc label bakes rc.json while /etc/ga-version-url and the updater channel still
-#               name the STABLE line; a final bakes stable.json
+#               name the STABLE line; a 1.6 final bakes rc.json too (decision 2026-11-26)
 # Zero cases is a failure.
 set -u
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
@@ -18,7 +18,12 @@ expect() { # release channel want
 }
 expect BOSv1.6.0-rc3  stable rc
 expect BOSv1.6.12-rc10 stable rc
-expect BOSv1.6.0      stable stable      # final bakes the proven set
+expect BOSv1.6.0      stable rc          # a 1.6 final bakes the same file as its gated rc
+expect BOSv1.6.12     stable rc
+expect BOSv1.6.0      dev    dev         # a dev-channel board never reads rc.json, final or not
+expect BOSv1.5.3      stable stable      # the 1.5 line has no rc.json
+expect BOSv1.6.0x     stable stable
+expect BOSv1.7.0      stable stable      # another line: not this rule
 expect BOSv1.6.0-dev2 stable stable
 expect BOSv1.6.0-dev2 dev    dev
 expect BOSv1.6.0-rc3  dev    dev         # a dev-channel board never reads rc.json
@@ -59,11 +64,11 @@ MK
 run() { GA_RELEASE="$1" make -s -f "$mk/Makefile" show 2>&1; }
 STABLE_URL='https://raw.githubusercontent.com/greenautarky/haos-version/main/line/1.6/'
 for rel in BOSv1.6.0-rc3 BOSv1.6.0; do
-  out=$(run "$rel"); want=stable; [ "$rel" = BOSv1.6.0-rc3 ] && want=rc
+  out=$(run "$rel"); want=rc
   echo "$out" | grep -qE "^BAKE_URL=.*line/1\.6/.*$want\"?\.json" && ok || bad "$rel: bake url not $want: $out"
   echo "$out" | grep -qE "^DEVICE_URL=.*line/1.6/.*stable" && ok || bad "$rel: device url is not the stable line: $out"
   echo "$out" | grep -qxF "ETC_GA_VERSION_URL=$STABLE_URL" && ok || bad "$rel: /etc/ga-version-url is not the stable line URL: $out"
-  [ "$want" = rc ] && { echo "$out" | grep -q 'BAKE_URL=.*stable' && bad "$rel: rc bake still reads stable"; }
+  echo "$out" | grep -q 'BAKE_URL=.*stable' && bad "$rel: the bake still reads stable"
 done
 [ "$n" -ge 15 ] || { echo "FAIL: only $n cases ran"; exit 1; }
 echo "rc-bake-source self-test: $n case(s), $fails failure(s)"

@@ -1,8 +1,10 @@
 # Linux 6.18.54 (the DSGW-210 kernel and its headers). The hash files of the
 # pinned Buildroot carry the license-file hashes of an older release family:
 # the GPL-2.0 text changed since, so legal-info stops on "wrong sha256".
-# This versioned file is used only when the package version is exactly 6.18.54,
-# so the iHost (6.12.x) keeps Buildroot's own hash file.
+# NOT in a <version>/ subdirectory: Buildroot then reads patches from that
+# directory only and skips every *.patch in this one, without a message
+# (scripts/check-patch-version-dirs.sh). Only this board's BR2_GLOBAL_PATCH_DIR
+# names this directory, so the iHost (6.12.x) keeps Buildroot's own hash file.
 # Tarball hash: kernel.org sha256sums.asc for v6.x.
 sha256  9df30b02dd8102bbd0be52556288ef6889ddbe7f1ddb96fbf847d0becf3eacac  linux-6.18.54.tar.xz
 # Licenses hashes (computed from the extracted 6.18.54 tree)
