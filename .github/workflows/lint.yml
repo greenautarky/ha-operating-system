@@ -788,6 +788,10 @@ jobs:
         # pre-change script.
         run: bash tests/gates/check_images_board/selftest.sh
 
+      # NET-11, reboot -08, FW-27, FEAT-02, ETHF-04, hw_iodomain on an iHost- and a DSGW-shaped fixture.
+      - name: Device suites take the network names from the board's pins (both boards)
+        run: ./tests/gates/device_board_pins/selftest.sh
+
       # Buildroot silently skips a package's patches when a <version>/ directory sits beside them.
       - name: Patch directories - a version directory beside .patch files must go red
         run: ./tests/gates/patch_version_dirs/selftest.sh

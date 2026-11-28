@@ -16,6 +16,8 @@
 #      skip_test here and driven by the E2E harness, not self-contained.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
+. "$SCRIPT_DIR/../lib/board_pins.sh"
+bp_load "$(ga_board)" || true   # unknown board: no pins, the checks that need one are red
 
 suite_start "Host Firewall"
 
@@ -117,7 +119,7 @@ else
 
   # --- default-deny -------------------------------------------------------
   run_test "FW-27" "LAN ingress otherwise dropped (input)" \
-    "fw_chain input | grep -Eq 'eth0.*drop|drop.*eth0'"
+    "fw_chain input | bp_fw_input_drop"
 
   run_test "FW-28" "LAN ingress to container ports otherwise dropped (forward)" \
     "fw_chain forward | grep -Eq 'dnat.*drop'"
