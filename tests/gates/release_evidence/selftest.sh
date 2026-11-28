@@ -159,6 +159,16 @@ for r in BOSv1.6.2-rc1 BOSv1.6.2 BOSv1.6.10 BOSv1.7.0 BOSv2.0.0; do
   [[ $rc -ne 0 && "$out" == *"auto_gate is missing"* && "$out" == *"soak_k7 is missing"* ]] && ok "$r iHost without auto fields -> refused" || bad "$r: rc=$rc $out"
 done
 
+echo "== ga_gate_auto_check as the release train calls it (staged bundle sha given)"
+grep -q '^ga_gate_auto_check()' "$LIB" || bad "ga_gate_auto_check() not defined in the live lib (the train sources it)"
+ISHA=$(sed -n 's/^image_sha256=//p' "$AUTO"); BSHA=$(sed -n 's/^bundle_sha256=//p' "$AUTO")
+out="$(ga_gate_auto_check "$AUTO" "$ISHA" "$BSHA")"; rc=$?
+[[ $rc -eq 0 ]] && ok "train: staged bundle == evidence bundle -> pass" || bad "train same bundle refused: $out"
+out="$(ga_gate_auto_check "$AUTO" "$ISHA" "$OTHER")"; rc=$?
+[[ $rc -ne 0 && "$out" == *"bundle_sha256 mismatch"* ]] && ok "train: another staged bundle -> refused (bundle_sha256 mismatch)" || bad "train other bundle: rc=$rc $out"
+out="$(ga_gate_auto_check "$AUTO" "" "$BSHA")"; rc=$?
+[[ $rc -ne 0 && "$out" == *"auto_gate does not name"* ]] && ok "train: no image sha in evidence -> refused" || bad "train no image sha: rc=$rc $out"
+
 echo "== create-release.sh end to end (live script, fake image)"
 BUILD="$T/build"; mkdir -p "$BUILD/images"
 cp "$IMG" "$BUILD/images/$IMGNAME"

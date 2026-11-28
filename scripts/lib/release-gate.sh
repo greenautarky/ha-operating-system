@@ -100,6 +100,36 @@ ga_gate_get() {
 	esac
 }
 
+# ga_gate_auto_check EVIDENCE_FILE IMAGE_SHA [STAGED_BUNDLE_SHA]
+# The weekly-sprint part of the gate, ONE definition for both callers:
+# create-release.sh (via ga_release_gate_check, knows the image) and the
+# release train's canary guard (ga-ops release-train.yml, knows the bundle it
+# staged; it passes the evidence's own image_sha256 as IMAGE_SHA). Scope
+# (ga_gate_needs_auto) is the caller's decision. Prints every reason, one per
+# line; rc 0 = auto_gate, bundle_sha256 and soak_k7 all hold.
+ga_gate_auto_check() {
+	local ev="$1" isha="$2" want_b="${3:-}" k v rc bsha="" bad=0
+	for k in $GA_GATE_AUTO_FIELDS; do
+		rc=0; v="$(ga_gate_get "$ev" "$k")" || rc=$?
+		if [ "$rc" -eq 2 ]; then echo "  - $k appears more than once in $ev (ambiguous)"; bad=1; continue; fi
+		if [ "$rc" -ne 0 ] || [ -z "$v" ]; then echo "  - $k is missing or empty (iHost >= BOSv${GA_GATE_AUTO_FROM} needs it: automated K31 gate + K7 soak)"; bad=1; continue; fi
+		case "$k" in
+			bundle_sha256)
+				if [[ "$v" =~ ^[0-9a-f]{64}$ ]]; then bsha="$v"; else echo "  - bundle_sha256 is '$v' (want 64 lowercase hex)"; bad=1; fi
+				if [ -n "$want_b" ] && [ -n "$bsha" ] && [ "$bsha" != "$want_b" ]; then
+					echo "  - bundle_sha256 mismatch: evidence says ${bsha}, the bundle being rolled is ${want_b}"; bad=1
+				fi ;;
+			auto_gate)
+				if ! printf '%s' "$v" | grep -Eq "$GA_GATE_PASSED_RE"; then echo "  - auto_gate is '$v' (want 'PASS <date> ... sha256=<image sha>')"; bad=1
+				elif ! [[ "$isha" =~ ^[0-9a-f]{64}$ ]] || [[ " $v " != *" sha256=$isha "* ]]; then echo "  - auto_gate does not name sha256=${isha:-<no image sha>} (it passed for another image, or names none)"; bad=1; fi ;;
+			soak_k7)
+				if ! printf '%s' "$v" | grep -Eq "$GA_GATE_PASSED_RE"; then echo "  - soak_k7 is '$v' (want 'PASS <date> ... bundle_sha256=<bundle sha>')"; bad=1
+				elif [ -z "$bsha" ] || [[ " $v " != *" bundle_sha256=$bsha "* ]]; then echo "  - soak_k7 does not name bundle_sha256=${bsha:-<none recorded>} (it soaked another bundle, or names none)"; bad=1; fi ;;
+		esac
+	done
+	return "$bad"
+}
+
 # ga_release_gate_check EVIDENCE_FILE RELEASE IMAGE_FILE
 # Prints every reason the release is blocked, one per line, on stdout.
 # rc 0 = complete evidence for this exact image; rc 1 = blocked.
@@ -149,23 +179,8 @@ ga_release_gate_check() {
 	fi
 	# Weekly sprint (KB #381): automated K31 gate + K7 soak, each bound to its sha.
 	if ga_gate_needs_auto "$rel" "$img"; then
-		local bsha=""
-		for k in $GA_GATE_AUTO_FIELDS; do
-			n=$((n + 1))
-			rc=0; v="$(ga_gate_get "$ev" "$k")" || rc=$?
-			if [ "$rc" -eq 2 ]; then echo "  - $k appears more than once in $ev (ambiguous)"; bad=1; continue; fi
-			if [ "$rc" -ne 0 ] || [ -z "$v" ]; then echo "  - $k is missing or empty (iHost >= BOSv${GA_GATE_AUTO_FROM} needs it: automated K31 gate + K7 soak)"; bad=1; continue; fi
-			case "$k" in
-				bundle_sha256)
-					if [[ "$v" =~ ^[0-9a-f]{64}$ ]]; then bsha="$v"; else echo "  - bundle_sha256 is '$v' (want 64 lowercase hex)"; bad=1; fi ;;
-				auto_gate)
-					if ! printf '%s' "$v" | grep -Eq "$GA_GATE_PASSED_RE"; then echo "  - auto_gate is '$v' (want 'PASS <date> ... sha256=<image sha>')"; bad=1
-					elif [[ " $v " != *" sha256=$actual "* ]]; then echo "  - auto_gate does not name sha256=$actual (it passed for another image, or names none)"; bad=1; fi ;;
-				soak_k7)
-					if ! printf '%s' "$v" | grep -Eq "$GA_GATE_PASSED_RE"; then echo "  - soak_k7 is '$v' (want 'PASS <date> ... bundle_sha256=<bundle sha>')"; bad=1
-					elif [ -z "$bsha" ] || [[ " $v " != *" bundle_sha256=$bsha "* ]]; then echo "  - soak_k7 does not name bundle_sha256=${bsha:-<none recorded>} (it soaked another bundle, or names none)"; bad=1; fi ;;
-			esac
-		done
+		n=$((n + 3))
+		ga_gate_auto_check "$ev" "$actual" "" || bad=1
 	fi
 	# Fail closed on a gate that inspected nothing.
 	if [ "$n" -eq 0 ]; then echo "  - internal: zero required keys were checked"; return 1; fi
