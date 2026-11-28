@@ -14,4 +14,9 @@ t NET-22-product "$(nm_effective wifi.scan-rand-mac-address "$W/main.conf" "$G")
 t missing-key "$(nm_effective nope "$W/main.conf" "$G")" ""
 for l in BOSv1.6.0 BOSv1.5.3 ""; do ota_prod_slot_required "$l"; t "slot-required[$l]" $? 0; done
 for l in BOSv1.6.0-dev1 BOSv1.6.0-rc2; do ota_prod_slot_required "$l"; t "slot-skipped[$l]" $? 1; done
+# not-promoted skip (KB #381): an ANSWERED 404 on any label; nothing else
+for l in BOSv1.6.2 BOSv1.6.2-rc1; do ota_not_promoted_reason "$l" 404 >/dev/null; t "not-promoted-skip[$l,404]" $? 0; done
+for c in 200 000 403 500 ""; do ota_not_promoted_reason BOSv1.6.2 "$c" >/dev/null; t "no-skip[final,$c]" $? 1; done
+ota_not_promoted_reason "" 404 >/dev/null; t "no-skip[empty label]" $? 1
+case "$(ota_not_promoted_reason BOSv1.6.2 404)" in *"final BOSv1.6.2"*"after the gate"*) r=ok ;; *) r=bad ;; esac; t not-promoted-reason-final "$r" ok
 exit $fail

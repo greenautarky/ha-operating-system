@@ -249,21 +249,21 @@ OTA_PIN=$(head -c 64 "${GA_OTA_PIN_FILE:-/run/ga-resolve-ota.active}" 2>/dev/nul
 OTA_CURL="curl --resolve ota.greenautarky.com:443:${OTA_PIN:-unpinned}"
 
 # Promotion state, asked the server (not assumed). The prod slot (PROMOTED.json, the
-# version-only bundle) exists for promoted FINAL releases only. A pre-release label
-# (ota_prod_slot_required, same predicate as NET-16c) on a server that ANSWERS 404 for
-# PROMOTED.json = "not promoted yet": OTA-13..15 are an explicit SKIP and OTA-12 accepts
-# the 404 as "the host answered". Anything else is strict: a FINAL label, a promoted
-# release (200) on any label, and any non-answer (000, 403, 5xx) are judged as before.
+# version-only bundle) exists for promoted releases only, and a final is promoted only
+# AFTER its gate (KB #381), so the gate meets every label unpromoted. A server that
+# ANSWERS 404 for PROMOTED.json = "not promoted yet" (ota_not_promoted_reason, shared with
+# NET-16c): OTA-13..15 are an explicit SKIP with that reason, never a pass, and OTA-12
+# accepts the 404 as "the host answered". Strict otherwise: a promoted release (200) is
+# judged fully, and any non-answer (000, 403, 5xx) fails.
 . "$SCRIPT_DIR/../network/checks.sh"
 PROMO_CODE=$($OTA_CURL -s -o /dev/null -w '%{http_code}' --max-time 20 "$OTA_BASE/PROMOTED.json" 2>/dev/null)
 NOT_PROMOTED=0
-if ! ota_prod_slot_required "$DEV_RELEASE" && [ "$PROMO_CODE" = 404 ]; then NOT_PROMOTED=1; fi
+if _np=$(ota_not_promoted_reason "$DEV_RELEASE" "$PROMO_CODE"); then NOT_PROMOTED=1; fi
 
 run_test "OTA-12" "the OTA host answers via the pinned endpoint (PROMOTED.json HTTP ${PROMO_CODE:-none})" \
   "[ '$PROMO_CODE' = 200 ] || [ '$NOT_PROMOTED' = 1 ]"
 
 if [ "$NOT_PROMOTED" = 1 ]; then
-  _np="not promoted: pre-release build ($DEV_RELEASE), PROMOTED.json answers 404"
   skip_test "OTA-13" "the production slot names the release it serves" "$_np"
   skip_test "OTA-14" "the production bundle is downloadable" "$_np"
   skip_test "OTA-15" "the production bundle ships its checksum" "$_np"

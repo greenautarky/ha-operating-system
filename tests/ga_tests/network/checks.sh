@@ -23,3 +23,19 @@ ota_prod_slot_required() {
     *) return 0 ;;
   esac
 }
+
+# ota_not_promoted_reason LABEL PROMOTED_HTTP_CODE — rc 0 (and the skip reason on
+# stdout) when the prod slot is not promoted YET: the OTA server ANSWERED 404 for
+# PROMOTED.json. Any label: an rc is never promoted, and a FINAL is promoted only
+# after its gate (weekly sprint, KB #381: bake -> gate -> sign-off -> tag ->
+# promote), so the gate always meets it unpromoted. A skip, never a pass. Every
+# other answer (200 = promoted, judged strictly; 000/403/5xx/empty = no answer)
+# is rc 1 and the checks run. An empty label is rc 1 (fail closed).
+ota_not_promoted_reason() {
+  [ -n "$1" ] && [ "$2" = 404 ] || return 1
+  if ota_prod_slot_required "$1"; then
+    echo "not promoted yet: final $1, PROMOTED.json answers 404 (the prod slot is filled at promotion, after the gate)"
+  else
+    echo "not promoted: pre-release build ($1), PROMOTED.json answers 404"
+  fi
+}
