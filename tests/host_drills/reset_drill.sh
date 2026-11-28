@@ -19,6 +19,13 @@
 #   clean    `systemctl reboot`. (a)-(c) and the unclean-dump must NOT fire
 #            (must-not-flag counterpart: a drill that always says "unclean"
 #            would be a decoration).
+#   ota      the OTA/RAUC path (Odoo #2201, K181 F6): `rauc install <bundle>`
+#            on the device, then the reboot exactly as ga-rauc-install does it
+#            (a detached `sleep 5 && systemctl reboot`, here in a transient unit
+#            so it outlives the ssh session). Does ga-crash-marker see an OTA
+#            reboot as CLEAN? (a)-(d) are judged as for clean, plus
+#   g        the device booted the OTHER slot (else this was not the OTA path).
+#            Needs --bundle <path ON THE DEVICE> (a bundle of the same line).
 #
 # ASSERTIONS (each is its own PASS/FAIL/SKIP line)
 #   a  /mnt/data/crash_history.log gained an entry (clean: unchanged)
@@ -42,8 +49,8 @@
 #
 # USAGE
 #   tests/host_drills/reset_drill.sh --ssh root@<device> [--port 22222] \
-#       [--key PATH] --mode unclean|clean --i-know-this-reboots-the-device \
-#       [--require-consent]
+#       [--key PATH] --mode unclean|clean|ota [--bundle /path/on/device.raucb] \
+#       --i-know-this-reboots-the-device [--require-consent]
 #   --require-consent  for the run that must PROVE (e) and (f): a missing consent
 #                      marker, an unset LOKI_QUERY_URL or an inactive shipper is
 #                      a FAIL instead of a SKIP. (e) is gated by
@@ -53,7 +60,8 @@ set -uo pipefail
 
 SSH_PORT="${SSH_PORT:-22222}"
 SSH_KEY="${SSH_KEY:-}"
-TARGET="" MODE="" CONFIRM=0
+TARGET="" MODE="" CONFIRM=0 BUNDLE=""
+OTA_INSTALL_TIMEOUT="${OTA_INSTALL_TIMEOUT:-900}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-300}"
 SETTLE_TIMEOUT="${SETTLE_TIMEOUT:-180}"
 LOKI_WAIT_MIN="${LOKI_WAIT_MIN:-10}"
@@ -72,6 +80,7 @@ while [ $# -gt 0 ]; do
         --port) SSH_PORT="$2"; shift 2 ;;
         --key) SSH_KEY="$2"; shift 2 ;;
         --mode) MODE="$2"; shift 2 ;;
+        --bundle) BUNDLE="$2"; shift 2 ;;
         --i-know-this-reboots-the-device) CONFIRM=1; shift ;;
         --require-consent) REQUIRE_CONSENT=1; shift ;;
         -h|--help) sed -n '2,50p' "$0"; exit 0 ;;
@@ -79,7 +88,10 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ -n "$TARGET" ] || { echo "ERROR: --ssh user@host required" >&2; exit 2; }
-case "$MODE" in unclean|clean) ;; *) echo "ERROR: --mode unclean|clean required" >&2; exit 2 ;; esac
+case "$MODE" in unclean|clean|ota) ;; *) echo "ERROR: --mode unclean|clean|ota required" >&2; exit 2 ;; esac
+if [ "$MODE" = ota ]; then
+    case "$BUNDLE" in /*.raucb) ;; *) echo "ERROR: --mode ota needs --bundle /absolute/path/on/the/device.raucb" >&2; exit 2 ;; esac
+fi
 [ "$CONFIRM" = 1 ] || { echo "ERROR: this drill REBOOTS the device; pass --i-know-this-reboots-the-device" >&2; exit 2; }
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o BatchMode=yes -o LogLevel=ERROR -o Port=$SSH_PORT"
@@ -118,9 +130,22 @@ LABEL="$(rsh label "sed -n 's/^DEVICE_LABEL=//p' $LABEL_FILE 2>/dev/null | head 
 HAS_DUMP="$(rsh has_dump 'test -x /usr/libexec/ga-journal-dump && echo yes || echo no' | tr -d '[:space:]')"
 T1_ACTIVE="$(rsh tier1 'systemctl is-active fluent-bit.service 2>/dev/null' | tr -d '[:space:]')"
 echo "  before: boot_id=${BOOT_BEFORE:0:8} crash_log_lines=$CRASH_BEFORE journal_dump_in_image=$HAS_DUMP tier1_shipper=${T1_ACTIVE:-unknown}"
+SLOT_Q='rauc status --output-format=json 2>/dev/null | jq -r .booted 2>/dev/null'
+if [ "$MODE" = ota ]; then
+    SLOT_BEFORE="$(rsh slot "$SLOT_Q" | tr -d '[:space:]')"
+    case "$SLOT_BEFORE" in ''|null) abort "cannot read the booted RAUC slot - an OTA drill could not tell the OTA path from a plain reboot" ;; esac
+    rsh bundle "test -s '$BUNDLE' && echo BUNDLE" | grep -q BUNDLE || abort "bundle $BUNDLE not on the device"
+fi
 
 # --- the reset ---------------------------------------------------------------
-if [ "$MODE" = unclean ]; then
+if [ "$MODE" = ota ]; then
+    # Synchronous: the install must finish (and say so) before the reboot is armed.
+    echo "  triggering the OTA path (rauc install $BUNDLE, then ga-rauc-install's delayed reboot)..."
+    out="$(timeout "$OTA_INSTALL_TIMEOUT" ssh $SSH_OPTS "$TARGET" "# trigger_ota
+rauc install '$BUNDLE' >/tmp/ga-reset-drill-ota.log 2>&1 && systemd-run --quiet --no-block --unit=ga-reset-drill-ota sh -c 'sleep 5 && systemctl reboot' && echo OTA-TRIGGER-OK" 2>/dev/null)"
+    printf '%s' "$out" | grep -q OTA-TRIGGER-OK || abort "rauc install / reboot arming failed on the device (see /tmp/ga-reset-drill-ota.log there) - no OTA reboot happened"
+    sleep 1 &
+elif [ "$MODE" = unclean ]; then
     echo "  triggering UNCLEAN reset (sysrq b: no sync, no unmount)..."
     rsh trigger_unclean 'echo 1 > /proc/sys/kernel/sysrq; echo b > /proc/sysrq-trigger' >/dev/null &
 else
@@ -199,6 +224,16 @@ else
     else
         [ -z "$DUMP" ] && ok "(d) clean reboot: no bootcheck-unclean dump" || bad "(d) clean reboot WRONGLY wrote a bootcheck-unclean dump: ${DUMP##*/}"
     fi
+fi
+
+# --- g: the OTA path really switched slot ----------------------------------------
+if [ "$MODE" = ota ]; then
+    SLOT_AFTER="$(rsh slot "$SLOT_Q" | tr -d '[:space:]')"
+    case "$SLOT_AFTER" in
+        ''|null) bad "(g) cannot read the booted slot after the OTA reboot" ;;
+        "$SLOT_BEFORE") bad "(g) the device booted the SAME slot ($SLOT_AFTER) - this was not the OTA path (install did not take, or RAUC fell back)" ;;
+        *) ok "(g) OTA reboot booted the other slot ($SLOT_BEFORE -> $SLOT_AFTER)" ;;
+    esac
 fi
 
 # --- e: telegraf (owner: telegraf WAL stream) ---------------------------------------
