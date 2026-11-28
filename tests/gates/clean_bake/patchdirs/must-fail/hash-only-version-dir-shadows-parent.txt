@@ -1,0 +1,4 @@
+# DSGW shape: linux/6.18.54/linux.hash exists, 0005.. live in linux/
+file linux/0005-x.patch
+file linux/0006-y.patch
+file linux/6.18.54/linux.hash
