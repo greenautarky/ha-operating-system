@@ -1,0 +1,2 @@
+# linux-headers shape: only a hash, nothing to shadow
+file linux-headers/6.18.54/linux-headers.hash

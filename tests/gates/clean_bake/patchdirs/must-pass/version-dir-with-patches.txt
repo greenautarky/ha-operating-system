@@ -1,0 +1,2 @@
+file linux/6.12.115/0001-a.patch
+file linux/6.12.115/linux.hash
