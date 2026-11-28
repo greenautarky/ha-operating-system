@@ -53,7 +53,10 @@ esac
 STUB
 cat > "$WORK/ip" <<'STUB'
 #!/bin/sh
-cat "$IP_ROUTE"
+# `ip -4 route show default [dev X]`: filtered by dev when one is named
+d=""; while [ $# -gt 0 ]; do [ "$1" = dev ] && d="$2"; shift; done
+if [ -n "$d" ]; then grep " dev $d\( \|$\)" "$IP_ROUTE"; else cat "$IP_ROUTE"; fi
+exit 0
 STUB
 cat > "$WORK/mmcli" <<'STUB'
 #!/bin/sh
@@ -65,7 +68,7 @@ STUB
 # (tests/ga_tests/uplink_path_probe); here it is a stub that records the call
 cat > "$WORK/path-probe" <<'STUB'
 #!/bin/sh
-for i; do echo "$i" >> "$PROBE_LOG"; printf '{"iface":"%s","verdict":"%s","ok":0,"of":3,"ms_median":null,"reason":"stub"}\n' "$i" "$PROBE_VERDICT"; done
+for i; do echo "$i" >> "$PROBE_LOG"; v=$(cat "$PROBE_DIR/pv.$i" 2>/dev/null || echo "$PROBE_VERDICT"); printf '{"iface":"%s","verdict":"%s","ok":0,"of":3,"ms_median":null,"reason":"stub"}\n' "$i" "$v"; done
 STUB
 chmod +x "$WORK/nmcli" "$WORK/ip" "$WORK/mmcli" "$WORK/path-probe"
 
@@ -85,7 +88,7 @@ run() {   # run <cached> <forced> <profiles-file> [now]
     GA_SHARE_PUBLISH="$ROOT/buildroot-external/rootfs-overlay/usr/libexec/ga-share-publish" \
     GA_SHARE_STAGE_DIR="$WORK/stage" \
     GA_UPLINK_PATH_PROBE="$WORK/path-probe" GA_UPLINK_PATHS_DIR="$WORK/paths" NM_CONN="${NM_CONN:-}" \
-    PROBE_VERDICT="${PROBE_VERDICT:-clean}" PROBE_LOG="$WORK/probe.log" \
+    PROBE_VERDICT="${PROBE_VERDICT:-clean}" PROBE_LOG="$WORK/probe.log" GA_UPLINK_STRIKE_GAP_S=0 PROBE_DIR="$WORK" GA_UPLINK_FAILOVER="${GA_UPLINK_FAILOVER:-1}" \
     GA_LADDER_NOW="${4:-1000000}" GA_LADDER_COOLDOWN_S=900 \
       sh "$LADDER" >/dev/null 2>&1
 }
@@ -402,7 +405,8 @@ echo "--- iHost: a gsm profile is still a rung, nothing modem-related runs (must
 reset_state; dsgw_off
 printf 'Wired connection 1:eth0\n' > "$WORK/active"; printf 'default dev eth0 scope link\n' > "$WORK/route"
 printf '1\n' > "$WORK/sys/eth0/carrier"
-for t in 1000120 1000240 1000360; do NM_DEVICES="$WORK/dev-no-modem" MM_OUT="$WORK/mm-reg" tick limited "$WORK/dsgw-profiles" $t; done
+# eth0 is the only path with a default route, its probe is dead too (D1+D3 hands over to the rung logic)
+for t in 1000120 1000240 1000360; do PROBE_VERDICT=dead NM_DEVICES="$WORK/dev-no-modem" MM_OUT="$WORK/mm-reg" tick limited "$WORK/dsgw-profiles" $t; done
 [ -f "$WORK/parked/Wired connection 1" ] && [ "$(parkfile 'Wired connection 1')" = "1001260" ] && grep -q "connection up $LTE" "$WORK/nm.all" \
     && PASS "iHost: the gsm profile is a spare as before, the park uses the normal 900 s cooldown" || FAIL "iHost unchanged" "parked=$(ls "$WORK/parked" 2>/dev/null) until=$(parkfile 'Wired connection 1')"
 ! grep -q "^mmcli" "$WORK/nm.all" && ! grep -qE "gsm.apn|DEVICE,TYPE,STATE" "$WORK/nm.all" && ! grep -q '"modem"' "$WORK/status.json" \
@@ -475,6 +479,65 @@ NM_CONN=GA-4392 run full full "$WORK/two-rungs" 2001200
 NM_CONN=GA-4392 run full full "$WORK/two-rungs" 2001800
 [ "$(grep -c . "$WORK/probe.log")" = 2 ] && PASS "D2: ...and again after 1800 s" || FAIL "D2 metered re-probe" "$(grep -c . "$WORK/probe.log") probes"
 grep -q '"connection":"GA-4392"' "$WORK/status.json" && PASS "D2: each path names its connection" || FAIL "D2 connection name" "$(cat "$WORK/status.json")"
+
+
+# ── D1+D3 failover eth0 > Wi-Fi by path probe, route metric only (Odoo #2201) ─
+echo "--- failover: Ethernet + dongle Wi-Fi both up (K181 layout) ---"
+fo_reset() { rm -rf "$WORK/paths" "$WORK/parked" "$WORK"/state* "$WORK"/pv.*; : > "$WORK/nm.all"
+  printf 'default via 192.0.2.1 dev eth0 proto dhcp metric 100\ndefault via 192.0.2.65 dev wlan0 proto dhcp metric 600\n' > "$WORK/route"
+  printf 'Wired connection 1:eth0\nGA-4392:wlan0\n' > "$WORK/active"; printf '1\n' > "$WORK/sys/eth0/carrier"
+  printf 'Wired connection 1:802-3-ethernet:yes\nGA-4392:802-11-wireless:yes\n' > "$WORK/fo-profiles"; }
+fotick() { tick full "$WORK/fo-profiles" "$1"; }
+pv() { echo "$2" > "$WORK/pv.$1"; }
+demoted() { grep -q "device modify eth0 ipv4.route-metric 20000" "$WORK/nm.all"; }
+restored() { grep -q "device reapply eth0" "$WORK/nm.all"; }
+nodown() { ! grep -q "connection down\|autoconnect no" "$WORK/nm.all"; }
+
+fo_reset; pv eth0 clean; pv wlan0 clean
+for t in 1000000 1000120 1000240 1000360 1000480 1000600; do fotick $t; done
+! demoted && ! restored && nodown && PASS "FO-01 two healthy paths, 6 ticks: no switch, nothing down (green)" || FAIL "FO-01" "$(tr '\n' ';' < "$WORK/nm.all")"
+
+fo_reset; pv eth0 dead; pv wlan0 clean; fotick 1000000
+demoted && nodown && PASS "FO-02 eth0 link up + internet dead, Wi-Fi clean: eth0 DEMOTED by metric (2 strikes), never taken down" || FAIL "FO-02" "$(tr '\n' ';' < "$WORK/nm.all")"
+grep -q '"last_switch":{"from":"eth0","to":"wlan0"' "$WORK/status.json" && grep -q '"eth_demoted":true' "$WORK/status.json" \
+  && PASS "FO-03 the switch is published (last_switch from/to/reason/probes, eth_demoted)" || FAIL "FO-03" "$(cat "$WORK/status.json")"
+
+fo_reset; pv eth0 dead; pv wlan0 dead; fotick 1000000
+! demoted && PASS "FO-04 eth0 dead and Wi-Fi dead too: stay on eth0 (never switch to a path that is not clean)" || FAIL "FO-04" "$(tr '\n' ';' < "$WORK/nm.all")"
+fo_reset; pv eth0 unclean; pv wlan0 clean; fotick 1000000
+demoted && PASS "FO-05 'unclean' (loss/slow/portal) counts like dead: switch to the clean path" || FAIL "FO-05" "$(tr '\n' ';' < "$WORK/nm.all")"
+
+echo "--- failover: return to eth0 with hysteresis, no ping-pong ---"
+fo_reset; pv eth0 dead; pv wlan0 clean; fotick 1000000
+printf 'default via 192.0.2.65 dev wlan0 proto dhcp metric 600\ndefault via 192.0.2.1 dev eth0 proto dhcp metric 20000\n' > "$WORK/route"
+pv eth0 clean; fotick 1000120
+! restored && PASS "FO-06 one clean eth0 probe: NOT yet back (hysteresis)" || FAIL "FO-06" "restored after 1 probe"
+fotick 1000240
+! restored && PASS "FO-07 two clean probes but only 240 s on the fallback (< 600 s dwell): NOT yet back" || FAIL "FO-07" "restored before dwell"
+pv eth0 dead; fotick 1000360; pv eth0 clean; fotick 1000480; pv eth0 dead; fotick 1000600; pv eth0 clean; fotick 1000720
+! restored && PASS "FO-08 flapping eth0 (clean/dead alternating) never returns: clean count resets on every miss" || FAIL "FO-08" "ping-pong"
+fotick 1000840
+restored && grep -q '"last_switch":{"from":"wlan0","to":"eth0"' "$WORK/status.json" && PASS "FO-09 two clean in a row after >= 600 s: back to eth0 (device reapply), switch published" || FAIL "FO-09" "$(tr '\n' ';' < "$WORK/nm.all")"
+
+fo_reset; pv eth0 dead; pv wlan0 clean; fotick 1000000
+printf 'default via 192.0.2.65 dev wlan0 proto dhcp metric 600\ndefault via 192.0.2.1 dev eth0 proto dhcp metric 20000\n' > "$WORK/route"
+pv wlan0 dead; printf '{"iface":"wlan0","verdict":"dead"}\n' > "$WORK/paths/wlan0.json"; pv eth0 clean; fotick 1000120
+restored && PASS "FO-10 fallback goes bad while eth0 is clean again: back at once (never stay on the worse path)" || FAIL "FO-10" "$(tr '\n' ';' < "$WORK/nm.all")"
+
+fo_reset; pv eth0 dead; pv wlan0 clean; fotick 1000000; printf '0\n' > "$WORK/sys/eth0/carrier"
+printf 'default via 192.0.2.65 dev wlan0 proto dhcp metric 600\n' > "$WORK/route"; fotick 1000120
+[ ! -f "$WORK/state.failover" ] && PASS "FO-11 cable pulled while demoted: the demotion is forgotten (NM ranks the rest)" || FAIL "FO-11" "demotion kept"
+printf '1\n' > "$WORK/sys/eth0/carrier"
+
+fo_reset; pv eth0 dead; pv wlan0 clean; GA_UPLINK_FAILOVER=0 fotick 1000000
+! demoted && PASS "FO-12 GA_UPLINK_FAILOVER=0: no metric switch (kill switch)" || FAIL "FO-12" "demoted with failover off"
+
+echo "--- one radio: customer Wi-Fi and dongle Wi-Fi share wlan0 (reconnect, never a metric change) ---"
+fo_reset; printf '0\n' > "$WORK/sys/eth0/carrier"
+printf 'default dev wlan0 scope link\n' > "$WORK/route"; printf 'home-wifi:wlan0\n' > "$WORK/active"; pv wlan0 dead
+for t in 1000120 1000240 1000360; do tick limited "$WORK/two-rungs" $t; done
+! grep -q "device modify" "$WORK/nm.all" && grep -q "connection up openstick-auto" "$WORK/nm.all" && [ -f "$WORK/parked/home-wifi" ] \
+  && PASS "FO-13 one radio: customer Wi-Fi dead -> parked + reconnect to the dongle, no metric change" || FAIL "FO-13" "$(tr '\n' ';' < "$WORK/nm.all")"
 
 echo ""
 echo "Results: $pass passed, $fail failed"
