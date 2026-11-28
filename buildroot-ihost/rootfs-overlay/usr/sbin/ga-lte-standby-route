@@ -26,6 +26,16 @@
 # the correct shape — and it re-asserts the route each tick, so a route added or
 # dropped out-of-band is reconciled.
 #
+# PATH PROBE + TRACE (Odoo #2201, K181 verification 2026-11-28). The modem's
+# registration is not throughput: K181's standby was "usable" at RSSI -115 dBm.
+# So once the route is in place, the SIM path itself is asked, bound to $IFACE
+# (ga-uplink-path-probe, one attempt every GA_STANDBY_PROBE_EVERY_S - it is
+# metered). A `dead` path withdraws the route and bars it for GA_STANDBY_BAR_S,
+# whatever the registration says; `unclean` keeps it and reports it (the uplink
+# ladder decides whether to use it). Every route add / withdraw is logged at
+# WARNING with its reason (a route change used to leave no trace), and every
+# tick publishes /share/ga-lte-standby-route.json like the ladder does.
+#
 # POSIX /bin/sh. Test hook: `GA_ROUTE_TEST=1 . ga-lte-standby-route` sources the
 # functions without touching real routes; the ip/logger commands and all paths
 # are env-overridable so the decision logic runs host-side.
@@ -46,6 +56,14 @@ METRIC="${GA_STANDBY_METRIC:-20500}"
 STALE_S="${GA_STANDBY_STALE_S:-600}"     # 10 min — matches ADR-0025 D1
 IP_BIN="${GA_STANDBY_IP:-ip}"
 LOG_TAG="ga-lte-standby-route"
+PATH_PROBE="${GA_STANDBY_PATH_PROBE:-/usr/libexec/ga-uplink-path-probe}"
+PROBE_ON="${GA_STANDBY_PROBE:-1}"
+PROBE_EVERY_S="${GA_STANDBY_PROBE_EVERY_S:-900}"
+BAR_S="${GA_STANDBY_BAR_S:-900}"
+SDIR="${GA_STANDBY_STATE_DIR:-/run/ga-lte-standby-route}"
+STATUS_FILE="${GA_STANDBY_STATUS:-/mnt/data/supervisor/share/ga-lte-standby-route.json}"
+PUBLISH="${GA_SHARE_PUBLISH:-/usr/libexec/ga-share-publish}"
+LAST_REASON=""
 
 _log()  { logger -t "$LOG_TAG" -p "daemon.$1" "$2" 2>/dev/null || echo "$LOG_TAG: $2" >&2; }
 _now_epoch() { date -u +%s; }
@@ -96,13 +114,47 @@ del_route() {
 # Decide + act once. Echoes the decision word (added|present|withdrawn|absent).
 # The WARNING side (rule 44) fires whenever the route is withdrawn because the
 # verdict is missing or stale — the loud substitution announcement.
+_sget() { cat "$SDIR/$1" 2>/dev/null; }
+_sset() { mkdir -p "$SDIR" 2>/dev/null; echo "$2" > "$SDIR/$1" 2>/dev/null; }
+_num() { case "${1:-}" in ''|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
+
+# probe the SIM path over $IFACE when due; echoes the verdict (or the last one)
+path_verdict_due() {
+    [ "$PROBE_ON" = 1 ] && [ -x "$PATH_PROBE" ] || { echo unprobed; return; }
+    _n="$(_now_epoch)"; _last="$(_num "$(_sget probe_at)")"
+    if [ $((_n - _last)) -ge "$PROBE_EVERY_S" ]; then
+        _v="$(GA_UPLINK_PROBE_ATTEMPTS=1 "$PATH_PROBE" "$IFACE" 2>/dev/null | head -1 | sed -n 's/.*"verdict":"\([a-z_]*\)".*/\1/p')"
+        _sset probe_at "$_n"; _sset probe_verdict "${_v:-dead}"
+    fi
+    _sget probe_verdict || echo unprobed
+}
+
 reconcile_once() {
     _usable="$(verdict_usable)"
     _age="$(verdict_age_s)"
     if [ "$_usable" = "true" ] && [ "$_age" -le "$STALE_S" ]; then
-        if add_route; then
-            route_present && { echo added; return; }
+        _bar="$(_num "$(_sget barred_until)")"
+        if [ "$_bar" -gt "$(_now_epoch)" ]; then
+            LAST_REASON="barred: the SIM path over $IFACE probed dead; until $_bar"
+            del_route && ! route_present && { echo barred; return; }
+            echo barred; return
         fi
+        _was=0; route_present && _was=1
+        if add_route; then
+            [ "$_was" = 0 ] && route_present && _log warning "ROUTE ADD default via $GW dev $IFACE metric $METRIC - standby verdict usable (age ${_age}s)"
+        else
+            _log warning "ROUTE ADD default via $GW dev $IFACE metric $METRIC FAILED"
+        fi
+        _pv="$(path_verdict_due)"
+        if [ "$_pv" = dead ]; then
+            _sset barred_until "$(( $(_now_epoch) + BAR_S ))"
+            del_route
+            _log warning "ROUTE DEL default via $GW dev $IFACE metric $METRIC - the modem says usable but the SIM path probe over $IFACE is DEAD (registration is not throughput); barred for ${BAR_S}s"
+            LAST_REASON="withdrawn: SIM path probe dead"
+            echo withdrawn; return
+        fi
+        LAST_REASON="usable, SIM path probe ${_pv}"
+        [ "$_was" = 0 ] && route_present && { echo added; return; }
         echo present
         return
     fi
@@ -119,14 +171,32 @@ reconcile_once() {
     elif [ "$_age" -gt "$STALE_S" ]; then
         _log warning "standby verdict $VERDICT is STALE (${_age}s old, limit ${STALE_S}s) — ga_manager stopped publishing it; withdrawing the $IFACE default route"
     fi
+    _was=0; route_present && _was=1
     if del_route; then
-        route_present || { echo withdrawn; return; }
+        if ! route_present; then
+            [ "$_was" = 1 ] && _log warning "ROUTE DEL default via $GW dev $IFACE metric $METRIC - standby verdict usable=$_usable (age ${_age}s)"
+            LAST_REASON="not usable ($_usable, age ${_age}s)"
+            echo withdrawn; return
+        fi
     fi
+    LAST_REASON="not usable ($_usable, age ${_age}s)"
     echo absent
 }
 
+# publish what this tick decided, like the ladder's ga-uplink.json
+publish_status() {   # DECISION
+    [ -x "$PUBLISH" ] || return 0
+    _rp=false; route_present && _rp=true
+    printf '{"decision":"%s","route":%s,"iface":"%s","metric":%s,"verdict_usable":"%s","verdict_age_s":%s,"path_verdict":"%s","path_probed_at":%s,"barred_until":%s,"reason":"%s","at":%s}\n' \
+        "$1" "$_rp" "$IFACE" "$METRIC" "$(verdict_usable)" "$(verdict_age_s)" "$(_sget probe_verdict || echo unprobed)" \
+        "$(_num "$(_sget probe_at)")" "$(_num "$(_sget barred_until)")" "$(printf '%s' "$LAST_REASON" | tr -d '"\\')" "$(_now_epoch)" \
+        | "$PUBLISH" "$STATUS_FILE" 0644 2>/dev/null || _log warning "could not publish $STATUS_FILE"
+}
+
 main() {
-    reconcile_once
+    _d="$(reconcile_once)"
+    echo "$_d"
+    publish_status "$_d"
 }
 
 [ -n "${GA_ROUTE_TEST:-}" ] || main
