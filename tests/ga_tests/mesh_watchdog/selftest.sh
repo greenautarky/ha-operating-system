@@ -147,6 +147,9 @@ run_test "MWD-03" "'connection refused' from ga-tools = packets crossed = alive,
 # Odoo #2201 (K181): the cloud/WAN holds are BOUNDED (default 1800 s each).
 # Held tick 0 starts the hold clock; past the bound (tick 1920) the streak builds
 # again and the ladder acts at the third dead tick (2160) — and NOT before.
+# cloud hold: 21600 s default + a per-device jitter. MWD-04..04c pin the bound to
+# 1800 s / no jitter to test the mechanism; MWD-04d..g test the defaults.
+export GA_MESH_CLOUD_HOLD_MAX_S=1800 GA_MESH_CLOUD_JITTER_MAX_S=0
 reset_all; echo dead > "$W/mesh"; echo down > "$W/cloud"; ticks 0 1800
 run_test "MWD-04" "path dead 30 min while the NetBird cloud is unreachable: no action inside the hold bound" \
   "[ -z \"\$(actions)\" ] && [ \"\$(st verdict)\" = cloud_down ] && [ \"\$(st cloud_reachable)\" = false ]"
@@ -158,6 +161,28 @@ run_test "MWD-04b" "cloud hold past its bound: the streak builds, still no actio
 ticks 2160 2160
 run_test "MWD-04c" "…and the ladder acts (downup) at the third dead tick past the bound" \
   "[ \"\$(actions)\" = 'netbird down|netbird up|' ]"
+unset GA_MESH_CLOUD_HOLD_MAX_S GA_MESH_CLOUD_JITTER_MAX_S
+# defaults: 6 h + jitter. machine-id 0000000... -> jitter 0; ffffff... -> 0xfffffff % 1801
+printf '0000000aaaaaaaaaaaaaaaaaaaaaaaaa\n' > "$W/mid0"; export GA_MESH_MACHINE_ID_FILE="$W/mid0"
+reset_all; echo dead > "$W/mesh"; echo down > "$W/cloud"; ticks 0 21600 1200
+run_test "MWD-04d" "default cloud hold: 6 h dead with the cloud down -> still NO action (a NetBird outage does not restart the fleet)" \
+  "[ -z \"\$(actions)\" ] && [ \"\$(st verdict)\" = cloud_down ]"
+ticks 21720 21960
+run_test "MWD-04e" "…past 6 h + this device's jitter (0 s here) the ladder continues" \
+  "[ \"\$(actions)\" = 'netbird down|netbird up|' ]"
+printf '1000257aaaaaaaaaaaaaaaaaaaaaaaaa\n' > "$W/midj"; export GA_MESH_MACHINE_ID_FILE="$W/midj"
+J=$(( 0x1000257 % 1801 ))   # = 1500: a device with a large jitter
+reset_all; echo dead > "$W/mesh"; echo down > "$W/cloud"; ticks 0 21600 1200; ticks 21720 $(( 21600 + J )) 120
+run_test "MWD-04f" "a device with jitter ${J}s: no action up to 6 h + ${J}s (where the 0-jitter device already acted)" \
+  "[ -z \"\$(actions)\" ] && [ $J = 1500 ]"
+ticks $(( 21600 + J + 120 )) $(( 21600 + J + 360 )) 120
+run_test "MWD-04g" "…and acts within 3 ticks after its own, later bound" \
+  "[ \"\$(actions)\" = 'netbird down|netbird up|' ]"
+export GA_MESH_MACHINE_ID_FILE="$W/no-such-id"
+reset_all; echo dead > "$W/mesh"; echo down > "$W/cloud"; ticks 0 21600 1200; ticks 21720 $(( 21600 + 1800 )) 120
+run_test "MWD-04h" "unreadable machine-id takes the FULL jitter (later, never earlier): no action until 6 h 30 min" \
+  "[ -z \"\$(actions)\" ]"
+unset GA_MESH_MACHINE_ID_FILE
 
 reset_all; echo dead > "$W/mesh"; ticks 0 120; echo down > "$W/cloud"; at 240; tick; echo up > "$W/cloud"; ticks 360 480
 run_test "MWD-06" "a cloud outage resets the streak: 2 dead + cloud down + 2 dead does not act" \

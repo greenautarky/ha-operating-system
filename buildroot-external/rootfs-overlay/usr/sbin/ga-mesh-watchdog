@@ -123,7 +123,14 @@ CLOUD_RECHECK_S="${GA_MESH_CLOUD_RECHECK_S:-3600}"
 UNIT="${GA_MESH_RESTART_UNIT:-netbird}"
 # 2c: how long a dead path may be held for the layers below / the cloud
 WAN_HOLD_MAX_S="${GA_MESH_WAN_HOLD_MAX_S:-1800}"
-CLOUD_HOLD_MAX_S="${GA_MESH_CLOUD_HOLD_MAX_S:-1800}"
+# The cloud hold is long and JITTERED (Manager/Thomas 2026-11-28): a NetBird
+# cloud outage holds every device at once, so a short shared bound would restart
+# the whole fleet in the same minute. Each device adds its own fixed offset
+# (0..JITTER_MAX_S, from /etc/machine-id: stable across ticks, different per
+# device); an unreadable id takes the full jitter (later, never earlier).
+CLOUD_HOLD_MAX_S="${GA_MESH_CLOUD_HOLD_MAX_S:-21600}"
+CLOUD_JITTER_MAX_S="${GA_MESH_CLOUD_JITTER_MAX_S:-1800}"
+MACHINE_ID_FILE="${GA_MESH_MACHINE_ID_FILE:-/etc/machine-id}"
 
 NOW="$(date +%s 2>/dev/null || echo 0)"
 case "$NOW" in ''|*[!0-9]*) NOW=0 ;; esac
@@ -348,6 +355,14 @@ if [ "$mesh_alive" = 1 ]; then
     exit 0
 fi
 
+# cloud_jitter_s -> this device's fixed offset in [0, CLOUD_JITTER_MAX_S]
+cloud_jitter_s() {
+    [ "$CLOUD_JITTER_MAX_S" -gt 0 ] 2>/dev/null || { echo 0; return; }
+    _mid="$(head -c 32 "$MACHINE_ID_FILE" 2>/dev/null | tr -cd '0-9a-f' | cut -c1-7)"
+    if [ -z "$_mid" ]; then echo "$CLOUD_JITTER_MAX_S"; return; fi
+    echo $(( 0x$_mid % (CLOUD_JITTER_MAX_S + 1) ))
+}
+
 # held_past_bound MAX — rc 0 when the dead path has been held for more than MAX
 # seconds (2c). Starts the hold clock on the first held tick.
 held_past_bound() {
@@ -372,8 +387,9 @@ fi
 
 # ------------------------------------------- 2b. is the NetBird cloud reachable
 cloud_probe
-if [ "$cloud" = false ] && held_past_bound "$CLOUD_HOLD_MAX_S"; then
-    hold_log hold_bound "hold_bound: $dead_why for $(( NOW - hold_since ))s while the NetBird cloud probe fails — longer than the ${CLOUD_HOLD_MAX_S}s bound, the ladder continues"
+_cloud_bound=$(( CLOUD_HOLD_MAX_S + $(cloud_jitter_s) ))
+if [ "$cloud" = false ] && held_past_bound "$_cloud_bound"; then
+    hold_log hold_bound "hold_bound: $dead_why for $(( NOW - hold_since ))s while the NetBird cloud probe fails — longer than this device's ${_cloud_bound}s bound (${CLOUD_HOLD_MAX_S}s + its jitter), the ladder continues"
 elif [ "$cloud" = false ]; then
     consecutive=0; first_dead=0
     hold_log cloud_down "cloud_down: $dead_why, and the NetBird cloud is unreachable (management $(host_of "$mgmt_url") / signal $(host_of "$signal_url")) — no action: a restart now would discard a tunnel that may still work and could not build a new one"
