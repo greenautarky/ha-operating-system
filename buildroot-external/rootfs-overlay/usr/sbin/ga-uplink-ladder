@@ -63,6 +63,16 @@
 # NM ranks the modem profile last (route-metric 700), so Ethernet and WLAN win
 # whenever they are up, and a cable pulled fails over with no ladder tick.
 #
+# PER-PATH PROBE (Odoo #2201 D2; REPORT ONLY - it decides nothing yet)
+# ------------------------------------------------------------------------
+# NM's verdict is one flag for the whole device. Every GA_UPLINK_PATHS_EVERY_S
+# the ladder also asks EACH interface that carries a default route, bound to it
+# (ga-uplink-path-probe: clean | unclean | dead | no_route), and publishes the
+# result as "paths" in ga-uplink.json. A path on the SIM dongle's Wi-Fi (its
+# connection named GA-<digits>, the dongle SSID) is probed only every
+# GA_UPLINK_PATHS_METERED_S, so the SIM is not billed for every tick. A change
+# of a path's verdict is logged at warning. Nothing here changes a route.
+#
 # It writes /mnt/data/supervisor/share/ga-uplink.json on every change, so the
 # fleet can see which rung a device stands on and why it moved. An uplink that
 # switches silently is how we end up debugging a site instead of reading it.
@@ -112,6 +122,12 @@ UP_TIMEOUT_S="${GA_LADDER_UP_TIMEOUT_S:-25}"
 SETTLE_S="${GA_LADDER_SETTLE_S:-90}"
 TRIED_COOLDOWN_S="${GA_LADDER_TRIED_COOLDOWN_S:-600}"
 SWITCH_REC="$STATE.switch"
+PATH_PROBE="${GA_UPLINK_PATH_PROBE:-/usr/libexec/ga-uplink-path-probe}"
+PATHS_EVERY_S="${GA_UPLINK_PATHS_EVERY_S:-600}"
+PATHS_METERED_S="${GA_UPLINK_PATHS_METERED_S:-1800}"
+METERED_RE="${GA_UPLINK_METERED_RE:-^GA-[0-9]+$}"
+PATHS_DIR="${GA_UPLINK_PATHS_DIR:-$STATE.paths.d}"
+PATHS_JSON="[]"
 RESCAN_REC="$STATE.rescan"
 # per-tick facts published in the status file
 SPARE=""; LAST_RUNG=false; SEARCHING=false
@@ -377,11 +393,33 @@ release_expired() {
     done
 }
 
+# D2: probe each default-route interface when it is due; keep the last result
+# per interface in PATHS_DIR (<iface>.json + <iface>.ts) and build PATHS_JSON.
+path_probe_tick() {
+    mkdir -p "$PATHS_DIR" 2>/dev/null || return 0
+    for _if in $($IP_BIN -4 route show default 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | sort -u); do
+        _conn=$($NMCLI -t -f GENERAL.CONNECTION device show "$_if" 2>/dev/null | cut -d: -f2-)
+        _every="$PATHS_EVERY_S"
+        printf '%s' "$_conn" | grep -Eq "$METERED_RE" && _every="$PATHS_METERED_S"
+        _last=$(cat "$PATHS_DIR/$_if.ts" 2>/dev/null || echo 0)
+        case "$_last" in ''|*[!0-9]*) _last=0 ;; esac
+        [ $((NOW - _last)) -ge "$_every" ] || continue
+        _res=$("$PATH_PROBE" "$_if" 2>/dev/null | head -1)
+        [ -n "$_res" ] || _res="{\"iface\":\"$_if\",\"verdict\":\"dead\",\"ok\":0,\"of\":0,\"ms_median\":null,\"reason\":\"probe helper gave no answer\"}"
+        _old=$(sed -n 's/.*"verdict":"\([a-z_]*\)".*/\1/p' "$PATHS_DIR/$_if.json" 2>/dev/null)
+        _new=$(printf '%s' "$_res" | sed -n 's/.*"verdict":"\([a-z_]*\)".*/\1/p')
+        [ "$_old" = "$_new" ] || log warning "path $_if (${_conn:-?}): ${_old:-unmeasured} -> $_new ($(printf '%s' "$_res" | sed -n 's/.*"reason":"\([^"]*\)".*/\1/p'))"
+        printf '%s\n' "$_res" | sed "s/}\$/,\"connection\":\"$(json_str "$_conn")\",\"at\":$NOW}/" > "$PATHS_DIR/$_if.json"
+        echo "$NOW" > "$PATHS_DIR/$_if.ts"
+    done
+    PATHS_JSON="[$(cat "$PATHS_DIR"/*.json 2>/dev/null | paste -sd, -)]"
+}
+
 write_status() {
     _mj=""; [ -z "$MODEM_JSON" ] || _mj=",\"modem\":$MODEM_JSON"
-    printf '{"rung":"%s","verdict":"%s","strikes":%s,"parked":"%s","spare":"%s","last_rung":%s,"searching":%s,"last_rescan":"%s","updated_at":"%s"%s}\n' \
+    printf '{"rung":"%s","verdict":"%s","strikes":%s,"parked":"%s","spare":"%s","last_rung":%s,"searching":%s,"last_rescan":"%s","updated_at":"%s","paths":%s%s}\n' \
         "$1" "$2" "$3" "$(ls "$PARK_DIR" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')" \
-        "$SPARE" "$LAST_RUNG" "$SEARCHING" "$LAST_RESCAN" "$(iso_now)" "$_mj" \
+        "$SPARE" "$LAST_RUNG" "$SEARCHING" "$LAST_RESCAN" "$(iso_now)" "$PATHS_JSON" "$_mj" \
         | "$PUBLISH" "$STATUS" 0644 || log warning "could not publish $STATUS"
 }
 
@@ -430,6 +468,7 @@ main() {
     _had_switch=0
     [ "$BUILTIN_MODEM" = 1 ] && [ -f "$SWITCH_REC" ] && _had_switch=1
     release_expired
+    path_probe_tick
     if [ "$BUILTIN_MODEM" = 1 ]; then
         apply_apn
         sim_missing_recover

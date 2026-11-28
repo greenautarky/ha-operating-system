@@ -45,6 +45,7 @@ case "$*" in
       # the ssid of the profile named last on the command line
       for _a in $*; do :; done; echo "802-11-wireless.ssid:${_a}" ;;
   *"-f SSID device wifi list")          cat "${NM_SCAN:-/dev/null}" ;;
+  *"-f GENERAL.CONNECTION device show "*) echo "GENERAL.CONNECTION:${NM_CONN:-home-wifi}" ;;
   "device wifi rescan")                 # a rescan refreshes the scan cache
       [ -n "${NM_SCAN_AFTER:-}" ] && cp "$NM_SCAN_AFTER" "$NM_SCAN" ;;
   *) : ;;
@@ -60,7 +61,13 @@ echo "mmcli $*" >> "$NM_LOG"
 [ -s "$MM_OUT" ] || exit 1
 cat "$MM_OUT"
 STUB
-chmod +x "$WORK/nmcli" "$WORK/ip" "$WORK/mmcli"
+# the per-path probe (D2) is its own helper with its own selftest
+# (tests/ga_tests/uplink_path_probe); here it is a stub that records the call
+cat > "$WORK/path-probe" <<'STUB'
+#!/bin/sh
+for i; do echo "$i" >> "$PROBE_LOG"; printf '{"iface":"%s","verdict":"%s","ok":0,"of":3,"ms_median":null,"reason":"stub"}\n' "$i" "$PROBE_VERDICT"; done
+STUB
+chmod +x "$WORK/nmcli" "$WORK/ip" "$WORK/mmcli" "$WORK/path-probe"
 
 run() {   # run <cached> <forced> <profiles-file> [now]
     : > "$WORK/nm.log"
@@ -77,6 +84,8 @@ run() {   # run <cached> <forced> <profiles-file> [now]
     GA_LADDER_PARK_DIR="$WORK/parked" GA_LADDER_STATUS="$WORK/status.json" \
     GA_SHARE_PUBLISH="$ROOT/buildroot-external/rootfs-overlay/usr/libexec/ga-share-publish" \
     GA_SHARE_STAGE_DIR="$WORK/stage" \
+    GA_UPLINK_PATH_PROBE="$WORK/path-probe" GA_UPLINK_PATHS_DIR="$WORK/paths" NM_CONN="${NM_CONN:-}" \
+    PROBE_VERDICT="${PROBE_VERDICT:-clean}" PROBE_LOG="$WORK/probe.log" \
     GA_LADDER_NOW="${4:-1000000}" GA_LADDER_COOLDOWN_S=900 \
       sh "$LADDER" >/dev/null 2>&1
 }
@@ -444,6 +453,28 @@ export GA_MODEM_RESET_PORT="$WORK/at-port"; rm -f "$WORK/state.simmissing"; dsgw
 stick 2020000; stick 2020200; ! wrote && [ ! -e "$WORK/state.simmissing" ] && PASS "iHost (no built-in modem): never resets" || FAIL "iHost inert" "$(cat "$WORK/at-port" 2>&1)"
 unset GA_MODEM_RESET_PORT GA_LADDER_SIM_GRACE_S GA_LADDER_SIM_RESET_EVERY_S GA_LADDER_SIM_RESET_MAX
 grep -q 'GA_MODEM_RESET_PORT:=/dev/lte-ppp' "$BCONF" && PASS "the DSGW board file names the reset port (/dev/lte-ppp = USB interface 03)" || FAIL "board reset port" "missing in $BCONF"
+
+
+# ── D2 per-path probe (Odoo #2201): REPORT ONLY ─────────────────────────────
+rm -rf "$WORK/paths" "$WORK/parked" "$WORK/state"*; : > "$WORK/probe.log"
+printf 'default dev wlan0 scope link\n' > "$WORK/route"; printf 'home-wifi:wlan0\n' > "$WORK/active"
+PROBE_VERDICT=dead run full full "$WORK/two-rungs" 1000000
+if grep -q '"paths":\[{"iface":"wlan0","verdict":"dead"' "$WORK/status.json"; then PASS "D2: ga-uplink.json carries the per-path result (paths[])"; else FAIL "D2 paths in status" "$(cat "$WORK/status.json")"; fi
+if [ "$(parked_count)" = 0 ] && ! grep -q "connection up\|connection down\|autoconnect no" "$WORK/nm.log"; then PASS "D2 is report-only: a dead path probe with NM 'full' parks and switches NOTHING"; else FAIL "D2 report-only" "$(cat "$WORK/nm.log")"; fi
+[ "$(probed)" = 0 ] && PASS "D2 does not add an NM connectivity probe on a healthy device" || FAIL "D2 extra NM probe" "$(probed)"
+: > "$WORK/probe.log"; run full full "$WORK/two-rungs" 1000300
+[ ! -s "$WORK/probe.log" ] && PASS "D2: not due again 300 s later (every 600 s)" || FAIL "D2 cadence" "$(cat "$WORK/probe.log")"
+run full full "$WORK/two-rungs" 1000600
+grep -qx wlan0 "$WORK/probe.log" && PASS "D2: probed again after 600 s" || FAIL "D2 re-probe" "$(cat "$WORK/probe.log")"
+# metered: the SIM dongle's Wi-Fi (connection named GA-<digits>) only every 1800 s
+rm -rf "$WORK/paths"; : > "$WORK/probe.log"
+NM_CONN=GA-4392 run full full "$WORK/two-rungs" 2000000
+NM_CONN=GA-4392 run full full "$WORK/two-rungs" 2000600
+NM_CONN=GA-4392 run full full "$WORK/two-rungs" 2001200
+[ "$(grep -c . "$WORK/probe.log")" = 1 ] && PASS "D2: the SIM dongle path is probed once in 1200 s (not every 600 s)" || FAIL "D2 metered cadence" "$(grep -c . "$WORK/probe.log") probes"
+NM_CONN=GA-4392 run full full "$WORK/two-rungs" 2001800
+[ "$(grep -c . "$WORK/probe.log")" = 2 ] && PASS "D2: ...and again after 1800 s" || FAIL "D2 metered re-probe" "$(grep -c . "$WORK/probe.log") probes"
+grep -q '"connection":"GA-4392"' "$WORK/status.json" && PASS "D2: each path names its connection" || FAIL "D2 connection name" "$(cat "$WORK/status.json")"
 
 echo ""
 echo "Results: $pass passed, $fail failed"

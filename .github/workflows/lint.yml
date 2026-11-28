@@ -805,6 +805,8 @@ jobs:
         # park. Mutation-proven — each rule has a check that fires when the
         # rule is removed.
         run: sh tests/ga_tests/uplink_ladder/test.sh
+      - name: Per-path uplink probe (Odoo #2201 D2) - live helper, stub transport, real 50-ga.conf
+        run: sh tests/ga_tests/uplink_path_probe/selftest.sh
 
       - name: Wi-Fi regulatory domain (site file > board default > nothing; DSGW default DE)
         # Drives the real ga-wifi-regdom against a stub iw and the REAL DSGW board
