@@ -1,0 +1,3 @@
+# the 2026-11 incident shape: an empty linux/<version> shadows the parent patches
+file linux/0001-a.patch
+mkdir linux/6.12.115

@@ -389,6 +389,9 @@ jobs:
         # fails the wiring checks.
         run: sh tests/ga_tests/lib/sample_window_selftest.sh
 
+      - name: idle_perf IDLE-10b judged on the share of time above 5 % over >= 3 health-tick periods (real K31 series)
+        run: sh tests/ga_tests/lib/time_share_selftest.sh
+
       - name: CFG-32..34 judge the HTTP config Core RUNS, not the YAML it ignores
         # Core 2026.8 imports a YAML `http:` block once and then ignores it, so
         # the old YAML greps were green while Core refused every proxied request.
@@ -784,6 +787,10 @@ jobs:
         # out of lockstep with the store red, an unknown board an error; red-proven against the
         # pre-change script.
         run: bash tests/gates/check_images_board/selftest.sh
+
+      # Buildroot silently skips a package's patches when a <version>/ directory sits beside them.
+      - name: Patch directories - a version directory beside .patch files must go red
+        run: ./tests/gates/patch_version_dirs/selftest.sh
 
       - name: ga-manager-guard (watchdog toggle + revive a dead ga_manager, Odoo #2166)
         # Drives the LIVE script against a stateful stub of `docker exec hassio_cli ha addons`:
@@ -1335,6 +1342,14 @@ jobs:
       # (green), the floor is read from the live script. No haos checkout needed.
       - name: Baked snapshots (an empty containerd snapshot store must go red)
         run: ./tests/gates/baked_snapshots/selftest.sh
+
+      # A reused output tree (update/partial/kernel bake) shipped a boot.scr generated before the VCCIO5
+      # change and a legal-info of an earlier bake; a patches/<pkg>/<version>/ directory without a patch makes
+      # Buildroot skip the parent directory's patches. scripts/check-clean-bake.sh compares the text embedded
+      # in boot.scr with uboot-boot.ush and scans the global patch dirs. Fixtures: a boot.scr written by the
+      # real mkimage (pinned pair), the stale pre-optionB script, tree specs for the patch dirs. No haos needed.
+      - name: Clean-bake guards (a stale boot.scr / a shadowing patch dir must go red)
+        run: ./tests/gates/clean_bake/selftest.sh
 
       # The BUILT updater.json (data.ext4) must carry every version + image of version.json; a source grep
       # (SRC-06) passed on rc1 while the real seed was Core-only. Fixtures: the real rc13 Core-only seed,
