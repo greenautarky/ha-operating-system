@@ -1,0 +1,85 @@
+#!/bin/sh
+# ga-uplink-path-probe — is the internet CLEAN on each uplink path, measured
+# per interface? (Odoo #2201 D2, Thomas 2026-11-28.)
+#
+# WHY. NetworkManager's connectivity verdict is ONE global flag for the whole
+# device. On K181 (2026-11-28) it said `limited` while a provisioned SIM dongle
+# sat associated on wlan0, and nothing could tell which path was broken, or
+# whether the other one would have worked. This asks each path separately, with
+# the request bound to the interface (`curl --interface`), against the endpoint
+# NM itself uses (50-ga.conf [connectivity], read from there, never re-declared).
+#
+# REPORT ONLY. This helper measures and prints; it changes no route, no
+# connection, nothing. The uplink ladder publishes its result in ga-uplink.json.
+#
+# VERDICTS per path (thresholds below, all overridable):
+#   clean    every attempt answered 200 with the exact body, median time <= MAX_MS
+#   unclean  answered at least once, but lost attempts, a wrong body (portal /
+#            "limited"), or median time > MAX_MS
+#   dead     no attempt answered
+#   no_route the interface carries no default route (a bound probe cannot leave)
+#
+# Usage: ga-uplink-path-probe IFACE...   -> one JSON object per line:
+#   {"iface":"eth0","verdict":"clean","ok":3,"of":3,"ms_median":142,"reason":"..."}
+set -u
+
+NM_CONF="${GA_UPLINK_NM_CONF:-/etc/NetworkManager/conf.d/50-ga.conf}"
+ATTEMPTS="${GA_UPLINK_PROBE_ATTEMPTS:-3}"
+TIMEOUT_S="${GA_UPLINK_PROBE_TIMEOUT_S:-8}"
+MAX_MS="${GA_UPLINK_PROBE_MAX_MS:-1500}"
+IP_BIN="${GA_IP:-ip}"
+CURL="${GA_CURL:-curl}"
+
+conf_get() { sed -n "/^\[connectivity\]/,/^\[/{s/^$1=//p}" "$NM_CONF" 2>/dev/null | head -1; }
+URL="${GA_UPLINK_PROBE_URL:-$(conf_get uri)}"
+WANT="${GA_UPLINK_PROBE_RESPONSE:-$(conf_get response)}"
+
+js() { printf '%s' "$1" | tr -d '"\\' | tr -d '\000-\037'; }
+emit() { printf '{"iface":"%s","verdict":"%s","ok":%s,"of":%s,"ms_median":%s,"reason":"%s"}\n' \
+    "$(js "$1")" "$2" "$3" "$4" "$5" "$(js "$6")"; }
+
+if [ -z "$URL" ] || [ -z "$WANT" ]; then
+    # Fail closed and loud: without the endpoint nothing is measured.
+    for _i in "$@"; do emit "$_i" dead 0 0 null "no probe endpoint: [connectivity] uri/response missing in $NM_CONF"; done
+    echo "ga-uplink-path-probe: no [connectivity] uri/response in $NM_CONF - nothing measured" >&2
+    exit 2
+fi
+
+for IFACE in "$@"; do
+    if ! $IP_BIN -4 route show default dev "$IFACE" 2>/dev/null | grep -q .; then
+        emit "$IFACE" no_route 0 0 null "no default route via $IFACE"
+        continue
+    fi
+    ok=0; bad_body=0; times=""; n=0
+    while [ "$n" -lt "$ATTEMPTS" ]; do
+        n=$((n + 1))
+        out="$($CURL -sS --interface "$IFACE" --max-time "$TIMEOUT_S" -w '\n%{http_code} %{time_total}' "$URL" 2>/dev/null)"
+        meta="$(printf '%s' "$out" | tail -n 1)"
+        body="$(printf '%s' "$out" | sed '$d')"
+        code="${meta%% *}"; t="${meta##* }"
+        if [ "$code" = 200 ] && [ "$body" = "$WANT" ]; then
+            ok=$((ok + 1))
+            # seconds with fraction -> integer ms
+            ms="$(printf '%s' "$t" | awk '{printf "%d", $1 * 1000}')"
+            times="$times $ms"
+        elif [ -n "$code" ] && [ "$code" != 000 ]; then
+            bad_body=$((bad_body + 1))
+        fi
+    done
+    med=null
+    if [ "$ok" -gt 0 ]; then
+        med="$(printf '%s\n' $times | sort -n | awk '{a[NR]=$1} END {print a[int((NR + 1) / 2)]}')"
+    fi
+    if [ "$ok" -eq 0 ] && [ "$bad_body" -eq 0 ]; then
+        emit "$IFACE" dead 0 "$ATTEMPTS" null "no answer to $ATTEMPTS attempts"
+    elif [ "$ok" -eq "$ATTEMPTS" ] && [ "$med" -le "$MAX_MS" ]; then
+        emit "$IFACE" clean "$ok" "$ATTEMPTS" "$med" "all $ATTEMPTS answered, median ${med} ms"
+    else
+        why=""
+        [ "$ok" -lt "$ATTEMPTS" ] && why="$((ATTEMPTS - ok)) of $ATTEMPTS lost or wrong"
+        [ "$bad_body" -gt 0 ] && why="${why:+$why, }$bad_body answered with a wrong status/body (portal or limited)"
+        [ "$med" != null ] && [ "$med" -gt "$MAX_MS" ] && why="${why:+$why, }median ${med} ms > ${MAX_MS} ms"
+        emit "$IFACE" unclean "$ok" "$ATTEMPTS" "$med" "$why"
+    fi
+done
+exit 0
