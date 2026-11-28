@@ -788,6 +788,10 @@ jobs:
         # pre-change script.
         run: bash tests/gates/check_images_board/selftest.sh
 
+      # Buildroot silently skips a package's patches when a <version>/ directory sits beside them.
+      - name: Patch directories - a version directory beside .patch files must go red
+        run: ./tests/gates/patch_version_dirs/selftest.sh
+
       - name: ga-manager-guard (watchdog toggle + revive a dead ga_manager, Odoo #2166)
         # Drives the LIVE script against a stateful stub of `docker exec hassio_cli ha addons`:
         # must-flag = crash -> started, toggle off -> on, the Supervisor's 5-attempt give-up ->

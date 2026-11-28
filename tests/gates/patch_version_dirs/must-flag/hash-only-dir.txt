@@ -1,0 +1,3 @@
+buildroot-dsgw210/board/dusun/dsgw210/patches/linux/0005-a.patch
+buildroot-dsgw210/board/dusun/dsgw210/patches/linux/0006-b.patch
+buildroot-dsgw210/board/dusun/dsgw210/patches/linux/6.18.54/linux.hash
