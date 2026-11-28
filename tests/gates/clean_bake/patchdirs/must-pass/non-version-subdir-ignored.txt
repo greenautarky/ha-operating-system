@@ -1,0 +1,2 @@
+file linux/0001-a.patch
+mkdir linux/series.d
