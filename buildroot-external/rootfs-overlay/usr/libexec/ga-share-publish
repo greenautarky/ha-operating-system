@@ -61,6 +61,17 @@ fi
 # would itself follow a planted symlink, the ga-enroll:147 bug this replaces).
 chmod "$mode" "$tmp" 2>/dev/null || true
 
+# Durability (Odoo #2201, K181 F8): fsync the staged file BEFORE the rename, or
+# a power cut right after it can leave the published name pointing at an empty
+# or torn file (the rename reaches the journal before the data does). BusyBox
+# and coreutils `sync FILE` fsync that file. A failed fsync is loud and the old
+# copy stays in place: publishing bytes that may not survive is not a success.
+if ! sync "$tmp" 2>/dev/null; then
+	echo "ga-share-publish: fsync of the staged file for $target FAILED - not publishing (the previous copy stays)" >&2
+	rm -f "$tmp"
+	exit 1
+fi
+
 # The target's parent (the /share dir itself) is host-created, not container-
 # plantable; ensure it exists.
 mkdir -p "$(dirname "$target")" 2>/dev/null || true
@@ -81,3 +92,7 @@ if ! mv -f -T "$tmp" "$target"; then
 	rm -f "$tmp"
 	exit 1
 fi
+# ...and fsync the directory, so the rename itself is on disk. The new bytes are
+# already in place and durable; a failure here is reported, not undone.
+sync "$(dirname "$target")" 2>/dev/null \
+	|| echo "ga-share-publish: WARNING fsync of $(dirname "$target") failed - the rename of $target may not survive a power cut" >&2
