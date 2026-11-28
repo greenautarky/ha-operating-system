@@ -93,4 +93,25 @@ fi
 
 rm -rf "$WORK" 2>/dev/null
 
+# --- durability (Odoo #2201 F8): staged file and target dir are fsync'd -----
+# `sync` is a recording stub on a private PATH (the dependency, not the subject);
+# the subject is the live helper. Order matters: the file before the rename.
+SB="$WORK/syncbin"; mkdir -p "$SB"
+cat > "$SB/sync" <<STUB
+#!/bin/sh
+for a; do if [ -d "\$a" ]; then echo "dir \$a"; elif [ -e "\$a" ]; then echo "file \$a"; else echo "missing \$a"; fi; done >> "$WORK/sync.log"
+exit \$(cat "$WORK/sync_rc" 2>/dev/null || echo 0)
+STUB
+chmod +x "$SB/sync"; : > "$WORK/sync.log"
+printf 'durable\n' | PATH="$SB:$PATH" GA_SHARE_STAGE_DIR="$STAGE" "$PUB" "$SHARE/durable.json" 2>/dev/null
+run_test "GSP-20" "the staged file is fsync'd before the rename (a file inside the staging dir)" \
+  "grep -q '^file $STAGE/' '$WORK/sync.log'"
+run_test "GSP-21" "the target directory is fsync'd after the rename" \
+  "grep -q '^dir $SHARE\$' '$WORK/sync.log' && [ \"\$(sed -n 1p '$WORK/sync.log' | cut -c1-4)\" = file ]"
+printf 'old\n' > "$SHARE/keep.json"; echo 1 > "$WORK/sync_rc"
+printf 'new\n' | PATH="$SB:$PATH" GA_SHARE_STAGE_DIR="$STAGE" "$PUB" "$SHARE/keep.json" 2>"$WORK/err"; _rc=$?
+rm -f "$WORK/sync_rc"
+run_test "GSP-22" "fsync failure: non-zero, loud, the previous copy stays, no staged leftover" \
+  "[ $_rc -ne 0 ] && grep -q 'fsync of the staged file' '$WORK/err' && [ \"\$(cat '$SHARE/keep.json')\" = old ] && [ -z \"\$(ls -A '$STAGE')\" ]"
+
 suite_end
