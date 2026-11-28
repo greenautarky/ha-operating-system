@@ -22,6 +22,7 @@ no() { ran=$((ran+1)); bad=$((bad+1)); echo "  FAIL  $1"; }
 
 # nft shim: `nft list table X` prints the fixture named in $NFT_FIXTURE
 mkdir -p "$W/bin"
+printf 'VARIANT_ID=ihost\n' > "$W/os-release"   # the recorded rulesets are an iHost's (FW-27 takes the interface from the board)
 cat > "$W/bin/nft" <<'S'
 #!/bin/sh
 case "$1" in list) cat "$NFT_FIXTURE" ;; *) exit 1 ;; esac
@@ -30,7 +31,7 @@ chmod +x "$W/bin/nft"
 
 # run the LIVE suite section B against a fixture; echo "<ID> PASS|FAIL" lines
 suite() {
-  NFT_FIXTURE="$1" GA_FW_ENFORCE_TEST=1 PATH="$W/bin:$PATH" sh "$SUITE" 2>&1 \
+  NFT_FIXTURE="$1" GA_FW_ENFORCE_TEST=1 GA_T_OS_RELEASE="$W/os-release" PATH="$W/bin:$PATH" sh "$SUITE" 2>&1 \
     | sed 's/\x1b\[[0-9;]*m//g' | awk '$1=="PASS"||$1=="FAIL"{id=$2; sub(":","",id); print id, $1}'
 }
 verdict_of() { grep -E "^$2 " <<<"$1" | head -n1 | cut -d' ' -f2; }

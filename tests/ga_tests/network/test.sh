@@ -2,6 +2,8 @@
 # Network configuration test suite - runs ON the device
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/../lib/test_helpers.sh"
+. "$SCRIPT_DIR/../lib/board_pins.sh"
+bp_load "$(ga_board)" || true   # unknown board: no pins, the checks that need one are red
 . "$SCRIPT_DIR/checks.sh"
 # Effective NM config = main file + conf.d, last definition wins (see checks.sh).
 _NM_FILES="/etc/NetworkManager/NetworkManager.conf /etc/NetworkManager/conf.d/*.conf /run/NetworkManager/conf.d/*.conf"
@@ -108,20 +110,23 @@ run_test "NET-09" "checkonline.greenautarky.com reachable" \
 run_test "NET-13" "ga-manage-ethernet script available" \
   "test -x /usr/sbin/ga-manage-ethernet"
 
-if [ -f /mnt/data/ga-env.conf ] && grep -q '^GA_ETHERNET_DISABLED=true' /mnt/data/ga-env.conf 2>/dev/null; then
+# BEGIN eth-off (run by tests/gates/device_board_pins/selftest.sh -- keep the markers)
+_GAENV="${GA_NET_GAENV:-/mnt/data/ga-env.conf}"
+if [ -f "$_GAENV" ] && grep -q '^GA_ETHERNET_DISABLED=true' "$_GAENV" 2>/dev/null; then
   # Ethernet is disabled — verify the state is correct
   run_test "NET-10" "Ethernet disabled flag set" "true"
 
-  run_test "NET-11" "eth0 is down when disabled" \
-    "! nmcli -t -f DEVICE,STATE device status 2>/dev/null | grep -q '^eth0:connected'"
+  _msg=$(nmcli -t -f DEVICE,STATE device status 2>/dev/null | bp_eth_off); _rc=$?
+  show_verdict "NET-11" "${BP_ETH:-wired interface} is down when disabled" "$_rc" "$_msg"
 
   run_test "NET-12" "WiFi active when Ethernet disabled" \
     "nmcli -t -f DEVICE,STATE device status 2>/dev/null | grep -q '^wlan0:connected'"
 else
-  skip_test "NET-10" "Ethernet disabled flag set (not disabled)"
-  skip_test "NET-11" "eth0 down when disabled (not disabled)"
-  skip_test "NET-12" "WiFi active when disabled (not disabled)"
+  skip_test "NET-10" "Ethernet disabled flag set" "not reached: Ethernet is not disabled by flag"
+  skip_test "NET-11" "${BP_ETH:-wired interface} is down when disabled" "not reached: Ethernet is not disabled by flag"
+  skip_test "NET-12" "WiFi active when Ethernet disabled" "not reached: Ethernet is not disabled by flag"
 fi
+# END eth-off
 
 # --- Supervisor DNS (GA entries in CoreDNS, written by Supervisor fork) ---
 
