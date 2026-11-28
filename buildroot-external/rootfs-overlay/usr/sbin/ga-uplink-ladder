@@ -73,6 +73,28 @@
 # GA_UPLINK_PATHS_METERED_S, so the SIM is not billed for every tick. A change
 # of a path's verdict is logged at warning. Nothing here changes a route.
 #
+# FAILOVER ETH > WI-FI BY PATH PROBE (Odoo #2201 D1+D3, Thomas 2026-11-28)
+# -------------------------------------------------------------------------
+# Priority: Ethernet > customer Wi-Fi > SIM via the dongle's Wi-Fi. When eth0
+# has carrier and a default route, Ethernet is NEVER taken down: the decision is
+# taken on the per-path probe, and a switch is a ROUTE METRIC change
+# (`nmcli device modify eth0 ipv4.route-metric $GA_UPLINK_DEMOTE_METRIC`,
+# runtime only - a reboot or `device reapply` restores the profile). So eth0
+# keeps its address and its route, and can be probed while it is demoted.
+#   leave eth0   2 strikes: the active eth0 probe is not clean, and again after
+#                $GA_UPLINK_STRIKE_GAP_S (30 s) - AND the Wi-Fi path probes
+#                clean. No clean alternative = stay (never leave the last
+#                working path), loudly.
+#   back to eth0 hysteresis: $GA_UPLINK_RETURN_CLEAN clean eth0 probes in a row
+#                AND $GA_UPLINK_MIN_DWELL_S on the fallback (no ping-pong); at
+#                once if the fallback itself stops being clean while eth0 is.
+#   every switch is logged at warning as "SWITCH from=.. to=.. reason=.." and
+#                published as last_switch {from,to,reason,at,probes} in
+#                ga-uplink.json (ga_manager turns it into an event).
+# The Wi-Fi rungs themselves (customer Wi-Fi <-> dongle Wi-Fi) share ONE radio:
+# there a switch is a reconnect, verified and rolled back (rules above), never
+# a metric change. GA_UPLINK_FAILOVER=0 turns the eth0 part off.
+#
 # It writes /mnt/data/supervisor/share/ga-uplink.json on every change, so the
 # fleet can see which rung a device stands on and why it moved. An uplink that
 # switches silently is how we end up debugging a site instead of reading it.
@@ -128,6 +150,20 @@ PATHS_METERED_S="${GA_UPLINK_PATHS_METERED_S:-1800}"
 METERED_RE="${GA_UPLINK_METERED_RE:-^GA-[0-9]+$}"
 PATHS_DIR="${GA_UPLINK_PATHS_DIR:-$STATE.paths.d}"
 PATHS_JSON="[]"
+FAILOVER="${GA_UPLINK_FAILOVER:-1}"
+ETH_IF="${GA_UPLINK_ETH_IF:-eth0}"
+DEMOTE_METRIC="${GA_UPLINK_DEMOTE_METRIC:-20000}"
+STRIKE_GAP_S="${GA_UPLINK_STRIKE_GAP_S:-30}"
+RETURN_CLEAN="${GA_UPLINK_RETURN_CLEAN:-2}"
+MIN_DWELL_S="${GA_UPLINK_MIN_DWELL_S:-600}"
+FO_REC="$STATE.failover"          # "<demoted_at> <clean_eth_probes_in_a_row>"
+SWITCH_LOG="$STATE.lastswitch"    # last_switch JSON object (kept for compatibility)
+# Bounded switch history (gm #433 reads "switches"): the last SWITCH_KEEP events,
+# each with a seq that only ever grows - kept on /mnt/data so it survives a
+# reboot, so a reader that missed polls (A->B->A between two) still sees both.
+HIST_DIR="${GA_UPLINK_HIST_DIR:-/mnt/data/ga-uplink.d}"
+SWITCH_KEEP="${GA_UPLINK_SWITCH_KEEP:-20}"
+LAST_SWITCH_JSON=null
 RESCAN_REC="$STATE.rescan"
 # per-tick facts published in the status file
 SPARE=""; LAST_RUNG=false; SEARCHING=false
@@ -387,6 +423,7 @@ release_expired() {
             if [ "$BUILTIN_MODEM" = 1 ] && [ -n "${_ACTIVE_NOW:-}" ] && ! is_modem_profile "$_r" \
                && is_modem_profile "$_ACTIVE_NOW" && [ ! -f "$SWITCH_REC" ]; then
                 log notice "modem fallback in use - trying '$_r' again, the modem is restored if it is not full"
+                SW_REASON="cooldown of '$_r' expired, trying it again from the modem"
                 switch_to "$_ACTIVE_NOW" "$_r"
             fi
         fi
@@ -415,8 +452,100 @@ path_probe_tick() {
     PATHS_JSON="[$(cat "$PATHS_DIR"/*.json 2>/dev/null | paste -sd, -)]"
 }
 
+# --- D1+D3: eth0 failover by path probe, route metric only ------------------
+# probe_now IFACE [ATTEMPTS] -> verdict; also refreshes that path in PATHS_DIR
+probe_now() {
+    _r=$(GA_UPLINK_PROBE_ATTEMPTS="${2:-3}" "$PATH_PROBE" "$1" 2>/dev/null | head -1)
+    [ -n "$_r" ] || _r="{\"iface\":\"$1\",\"verdict\":\"dead\",\"ok\":0,\"of\":0,\"ms_median\":null,\"reason\":\"probe helper gave no answer\"}"
+    mkdir -p "$PATHS_DIR" 2>/dev/null
+    printf '%s\n' "$_r" | sed "s/}\$/,\"at\":$NOW}/" > "$PATHS_DIR/$1.json"; echo "$NOW" > "$PATHS_DIR/$1.ts"
+    printf '%s' "$_r" | sed -n 's/.*"verdict":"\([a-z_]*\)".*/\1/p'
+}
+default_dev() { $IP_BIN -4 route show default 2>/dev/null | head -1 | sed -n 's/.* dev \([^ ]*\).*/\1/p'; }
+has_default() { $IP_BIN -4 route show default dev "$1" 2>/dev/null | grep -q .; }
+other_default_dev() { $IP_BIN -4 route show default 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | grep -vx "$ETH_IF" | head -1; }
+record_switch() {   # FROM TO REASON PROBES_TEXT  - EVERY switch goes through here
+    mkdir -p "$HIST_DIR" 2>/dev/null
+    _seq=$(cat "$HIST_DIR/seq" 2>/dev/null); case "$_seq" in ''|*[!0-9]*) _seq=0 ;; esac
+    _seq=$((_seq + 1)); echo "$_seq" > "$HIST_DIR/seq.tmp" && mv -f "$HIST_DIR/seq.tmp" "$HIST_DIR/seq"
+    log warning "SWITCH seq=$_seq from=$1 to=$2 reason=$3 probes=$4"
+    _ev=$(printf '{"seq":%s,"from":"%s","to":"%s","reason":"%s","at":"%s","probes":"%s"}' \
+        "$_seq" "$(json_str "$1")" "$(json_str "$2")" "$(json_str "$3")" "$(iso_now)" "$(json_str "$4")")
+    printf '%s\n' "$_ev" > "$SWITCH_LOG"
+    : > "$HIST_DIR/ours"   # the route change that follows is this switch, not an observed one
+    { cat "$HIST_DIR/switches" 2>/dev/null; printf '%s\n' "$_ev"; } | tail -n "$SWITCH_KEEP" > "$HIST_DIR/switches.tmp" \
+        && mv -f "$HIST_DIR/switches.tmp" "$HIST_DIR/switches"
+}
+eth_restore() {   # REASON PROBES
+    rm -f "$FO_REC"
+    $NMCLI device reapply "$ETH_IF" >/dev/null 2>&1 \
+        || log warning "'device reapply $ETH_IF' failed - the demoted route metric may persist until NetworkManager restarts"
+    record_switch "$(other_default_dev)" "$ETH_IF" "$1" "$2"
+}
+
+# rc 0 = this tick is decided here (eth0 present); 1 = leave it to the rung logic
+failover_tick() {
+    [ "$FAILOVER" = 1 ] || return 1
+    if [ "$(cat "$SYS_NET/$ETH_IF/carrier" 2>/dev/null)" != 1 ] || ! has_default "$ETH_IF"; then
+        # no cable / no lease: NM already ranks the other path; forget a demotion
+        [ -f "$FO_REC" ] && { rm -f "$FO_REC"; log notice "$ETH_IF lost carrier/route while demoted - demotion forgotten"; }
+        return 1
+    fi
+    _alt=$(other_default_dev)
+    if [ -f "$FO_REC" ]; then
+        read -r _since _good < "$FO_REC" 2>/dev/null || { _since=$NOW; _good=0; }
+        _ve=$(probe_now "$ETH_IF" 3)
+        # the fallback now CARRIES the device: re-probe it at least every
+        # $GA_UPLINK_ACTIVE_ALT_S (one attempt; it may be the metered SIM path)
+        if [ -n "$_alt" ]; then
+            _at=$(cat "$PATHS_DIR/$_alt.ts" 2>/dev/null || echo 0); case "$_at" in ''|*[!0-9]*) _at=0 ;; esac
+            [ $((NOW - _at)) -ge "${GA_UPLINK_ACTIVE_ALT_S:-300}" ] && probe_now "$_alt" 1 >/dev/null
+        fi
+        _va=dead; [ -n "$_alt" ] && _va=$(sed -n 's/.*"verdict":"\([a-z_]*\)".*/\1/p' "$PATHS_DIR/$_alt.json" 2>/dev/null)
+        if [ "$_ve" = clean ]; then _good=$((_good + 1)); else _good=0; fi
+        echo "$_since $_good" > "$FO_REC"
+        if [ "$_ve" = clean ] && [ "${_va:-dead}" != clean ]; then
+            eth_restore "fallback ${_alt:-none} is ${_va:-unmeasured}, $ETH_IF clean - never stay on the worse path" "$ETH_IF=$_ve ${_alt:-none}=${_va:-?}"
+        elif [ "$_good" -ge "$RETURN_CLEAN" ] && [ $((NOW - _since)) -ge "$MIN_DWELL_S" ]; then
+            eth_restore "$ETH_IF clean on $_good probes in a row after $((NOW - _since))s on ${_alt:-none}" "$ETH_IF=$_ve ${_alt:-none}=${_va:-?}"
+        else
+            log notice "$ETH_IF demoted since $((NOW - _since))s: $ETH_IF=$_ve ($_good/$RETURN_CLEAN clean), ${_alt:-none}=${_va:-?}"
+        fi
+        return 0
+    fi
+    [ "$(default_dev)" = "$ETH_IF" ] || return 1
+    _ve=$(probe_now "$ETH_IF" 1)
+    [ "$_ve" = clean ] && return 0
+    log warning "$ETH_IF probe '$_ve' (strike 1/2) - probing again in ${STRIKE_GAP_S}s"
+    sleep "$STRIKE_GAP_S"
+    _ve=$(probe_now "$ETH_IF" 3)
+    if [ "$_ve" = clean ]; then log notice "$ETH_IF clean again on the second probe - no switch"; return 0; fi
+    if [ -z "$_alt" ]; then
+        # No second path is up: nothing to switch to by metric. The rung logic
+        # below may bring a spare UP (dongle Wi-Fi, modem) - with its own rules,
+        # incl. never parking the last rung.
+        log warning "$ETH_IF is '$_ve' on 2 strikes and no other path has a default route - handing over to the rung logic"
+        return 1
+    fi
+    _va=$(probe_now "$_alt" 3)
+    if [ "$_va" != clean ]; then
+        log warning "$ETH_IF is '$_ve' on 2 strikes, but the alternative $_alt is '$_va' - keeping $ETH_IF (no clean path to switch to)"
+        return 0
+    fi
+    if ! $NMCLI device modify "$ETH_IF" ipv4.route-metric "$DEMOTE_METRIC" >/dev/null 2>&1; then
+        log warning "could not demote $ETH_IF (nmcli device modify failed) - staying"
+        return 0
+    fi
+    echo "$NOW 0" > "$FO_REC"
+    record_switch "$ETH_IF" "$_alt" "$ETH_IF $_ve on 2 probes ${STRIKE_GAP_S}s apart, $_alt clean" "$ETH_IF=$_ve $_alt=$_va"
+    return 0
+}
+
 write_status() {
     _mj=""; [ -z "$MODEM_JSON" ] || _mj=",\"modem\":$MODEM_JSON"
+    [ -s "$SWITCH_LOG" ] && LAST_SWITCH_JSON=$(head -1 "$SWITCH_LOG")
+    _sw="[$(paste -sd, "$HIST_DIR/switches" 2>/dev/null)]"
+    _mj=",\"failover\":{\"enabled\":$([ "$FAILOVER" = 1 ] && echo true || echo false),\"eth_demoted\":$([ -f "$FO_REC" ] && echo true || echo false)},\"last_switch\":$LAST_SWITCH_JSON,\"switches\":$_sw$_mj"
     printf '{"rung":"%s","verdict":"%s","strikes":%s,"parked":"%s","spare":"%s","last_rung":%s,"searching":%s,"last_rescan":"%s","updated_at":"%s","paths":%s%s}\n' \
         "$1" "$2" "$3" "$(ls "$PARK_DIR" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')" \
         "$SPARE" "$LAST_RUNG" "$SEARCHING" "$LAST_RESCAN" "$(iso_now)" "$PATHS_JSON" "$_mj" \
@@ -429,6 +558,7 @@ switch_to() {
     $NMCLI -w "$UP_TIMEOUT_S" connection up "$_cand" >/dev/null 2>&1 \
         || log warning "'connection up $_cand' did not complete within ${UP_TIMEOUT_S}s — NM may still bring it up"
     echo "$_prev|$_cand|$NOW" > "$SWITCH_REC"
+    record_switch "${_prev:-none}" "$_cand" "reconnect: ${SW_REASON:-uplink not full}" "nm=${SW_VERDICT:-?}"
     log warning "switched '${_prev:-none}' -> '$_cand' — verifying on the next tick, falling back if it is not full either"
 }
 
@@ -452,6 +582,7 @@ check_switch() {
         is_modem_profile "$_p" && ! is_modem_profile "$_cand" \
             && park "$_cand" "returning from the modem failed ('$1')" "$MODEM_BACK_S"
         $NMCLI -w "$UP_TIMEOUT_S" connection up "$_p" >/dev/null 2>&1
+        record_switch "$_cand" "$_p" "fell back: candidate '$_cand' not full ('$1') after ${SETTLE_S}s" "nm=$1"
         log warning "candidate '$_cand' is not full either ('$1') — fell back to previous '$_p'; '$_cand' barred for ${TRIED_COOLDOWN_S}s"
     else
         log warning "candidate '$_cand' is not full ('$1') — barred for ${TRIED_COOLDOWN_S}s, still searching"
@@ -459,7 +590,34 @@ check_switch() {
     return 0
 }
 
+# A switch NetworkManager made on its own between two ticks (an unparked rung
+# autoconnecting back, a cable plugged in) is a switch too: compare the active
+# connection with the one this script saw at the end of the previous tick.
+observe_start() {
+    mkdir -p "$HIST_DIR" 2>/dev/null
+    _seen=$(cat "$HIST_DIR/active" 2>/dev/null)
+    _cur=$(active_connection)
+    if [ -f "$HIST_DIR/ours" ]; then
+        # our own switch of the previous tick may only show up now (NM settles
+        # after the tick); it is already recorded - do not record it twice
+        rm -f "$HIST_DIR/ours"
+    elif [ -n "$_seen" ] && [ "${_cur:-none}" != "$_seen" ]; then
+        record_switch "$_seen" "${_cur:-none}" "observed: the default route moved between ticks (NetworkManager)" "nm=$(cached_verdict)"
+    fi
+}
+# Known gap: an NM-made switch in the one tick right after our own is not
+# recorded separately (the marker cannot tell the two apart).
+observe_end() { _c=$(active_connection); echo "${_c:-none}" > "$HIST_DIR/active" 2>/dev/null; }
+
 main() {
+    observe_start
+    main_body "$@"
+    _rc=$?
+    observe_end
+    return "$_rc"
+}
+
+main_body() {
     unpark_all_on_boot
     _ACTIVE_NOW=$(active_connection)
     # A switch recorded by an EARLIER tick is verified on this one (built-in modem
@@ -473,6 +631,13 @@ main() {
         apply_apn
         sim_missing_recover
         MODEM_JSON=$(modem_status)
+    fi
+
+    if failover_tick; then
+        PATHS_JSON="[$(cat "$PATHS_DIR"/*.json 2>/dev/null | paste -sd, -)]"
+        _a=$(active_connection)
+        write_status "${_a:-none}" "$(cached_verdict)" 0
+        return 0
     fi
 
     _active=$(active_connection)
@@ -527,7 +692,9 @@ main() {
         write_status "${_active:-none}" "$_verdict" "$_strikes"
         return 0
     fi
+    SW_VERDICT="$_verdict"; SW_REASON="'${_active:-none}' not full after $_strikes checks ($_verdict)"
     if [ -z "$_active" ]; then
+        SW_REASON="no default route; bringing up '$SPARE'"
         switch_to "" "$SPARE"
         echo 0 > "$STATE"
         write_status "switching" "$_verdict" 0

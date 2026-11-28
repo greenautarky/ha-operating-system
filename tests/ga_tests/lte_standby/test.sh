@@ -205,6 +205,40 @@ run_test "LSB-26" "MUST-PASS: usable again -> route re-added at the high standby
 run_test "LSB-27" "MUST-PASS: the standby route metric is high (primary always wins)" \
   "grep -q 'METRIC=.*20500\|METRIC:-20500' '$ROUTE'"
 
+# ── SIM path probe + trace + status (Odoo #2201, K181: "usable" at -115 dBm) ──
+PP="$TMPD/pathprobe"; cat > "$PP" <<PPEOF
+#!/bin/sh
+echo "\$@" >> "$TMPD/probe.calls"
+printf '{"iface":"%s","verdict":"%s"}\n' "\$1" "\$(cat "$TMPD/pp.verdict")"
+PPEOF
+chmod +x "$PP"
+_r2() {  # route tick with probe + state + status, logger captured
+  ( export GA_ROUTE_TEST=1 GA_STANDBY_VERDICT="$VERDICT" GA_STANDBY_IP="$FAKEIP" GA_STANDBY_STALE_S=600 \
+           GA_STANDBY_PATH_PROBE="$PP" GA_STANDBY_STATE_DIR="$TMPD/sst" GA_STANDBY_STATUS="$TMPD/share/ga-lte-standby-route.json" \
+           GA_SHARE_PUBLISH="$PUB" GA_SHARE_STAGE_DIR="$TMPD/stage" PATH="$FAKEBIN:$PATH"
+    . "$ROUTE"; main ) 2>/dev/null | tail -1; }
+mkdir -p "$TMPD/share"; rm -rf "$TMPD/sst"; : > "$TMPD/probe.calls"; : > "$FAKE_STATE"
+printf '{"usable":true,"updated_at":"y"}\n' > "$VERDICT"; touch "$VERDICT"
+echo dead > "$TMPD/pp.verdict"; : > "$TMPD/logcap"
+D4="$(_r2)"; L4="$(cat "$TMPD/logcap")"
+run_test "LSB-40" "modem usable but the SIM path probe over wlan0 is DEAD -> route withdrawn (registration is not throughput)" \
+  "test '$D4' = withdrawn && ! grep -q present '$FAKE_STATE'"
+run_test "LSB-41" "...logged at WARNING: ROUTE ADD then ROUTE DEL with the reason" \
+  "echo \"\$L4\" | grep -q 'ROUTE ADD' && echo \"\$L4\" | grep -q 'ROUTE DEL.*SIM path probe over wlan0 is DEAD'"
+D5="$(_r2)"
+run_test "LSB-42" "barred after a dead probe: usable again within the bar -> no route" \
+  "test '$D5' = barred && ! grep -q present '$FAKE_STATE'"
+run_test "LSB-43" "status file published: decision, route, path verdict, barred_until" \
+  "grep -q '\"decision\":\"barred\"' '$TMPD/share/ga-lte-standby-route.json' && grep -q '\"path_verdict\":\"dead\"' '$TMPD/share/ga-lte-standby-route.json' && grep -q '\"route\":false' '$TMPD/share/ga-lte-standby-route.json'"
+rm -rf "$TMPD/sst"; : > "$TMPD/probe.calls"; echo clean > "$TMPD/pp.verdict"; : > "$TMPD/logcap"
+D6="$(_r2)"; D7="$(_r2)"
+run_test "LSB-44" "usable + SIM path clean -> route added and kept" "test '$D6' = added && test '$D7' = present && grep -q present '$FAKE_STATE'"
+run_test "LSB-45" "the metered SIM path is probed once per 900 s, not every 30 s tick" "test \"\$(grep -c . '$TMPD/probe.calls')\" = 1"
+printf '{"usable":false,"updated_at":"y"}\n' > "$VERDICT"; touch "$VERDICT"; : > "$TMPD/logcap"
+D8="$(_r2)"
+run_test "LSB-46" "usable:false -> withdrawn AND logged at WARNING (a route change leaves a trace)" \
+  "test '$D8' = withdrawn && grep -q 'ROUTE DEL' '$TMPD/logcap'"
+
 # ── powersave assertion ─────────────────────────────────────────────────────
 FAKENM="$TMPD/fakenmcli"
 cat > "$FAKENM" <<NMEOF
