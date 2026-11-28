@@ -107,6 +107,68 @@ for r in BOSv1.6.1 BOSv1.6.2-rc1 BOSv1.7.0 BOSv2.0.0; do
   [[ $rc -ne 0 && "$out" == *"vccio5_fresh_sd is missing"* ]] && ok "$r iHost without vccio5 fields -> refused" || bad "$r: rc=$rc $out"
 done
 
+echo "== weekly sprint (KB #381): auto_gate / bundle_sha256 / soak_k7, driven by the LIVE field list"
+# Pinned constants (rule 7), never read back from the lib they guard.
+[[ "${GA_GATE_AUTO_FIELDS:-}" == "auto_gate bundle_sha256 soak_k7" ]] \
+  && ok "live auto field list is exactly the pinned triple" || bad "live auto field list is '${GA_GATE_AUTO_FIELDS:-<unset>}'"
+[[ "${GA_GATE_AUTO_FROM:-}" == "1.6.2" ]] && ok "switch point is pinned BOSv1.6.2" || bad "switch point is '${GA_GATE_AUTO_FROM:-<unset>}'"
+AUTO="$HERE/auto/complete-162.gate.txt"; AREL=BOSv1.6.2-rc1
+out="$(ga_release_gate_check "$AUTO" "$AREL" "$IMG")"; rc=$?
+[[ $rc -eq 0 ]] && ok "complete BOSv1.6.2-rc1 evidence -> released" || bad "complete 1.6.2 evidence refused: $out"
+OTHER=0000000000000000000000000000000000000000000000000000000000000000
+na=0
+for k in ${GA_GATE_AUTO_FIELDS:-}; do
+  na=$((na + 1))
+  grep -q "^$k=" "$AUTO" || { bad "auto fixture lacks live key $k"; continue; }
+  for mut in missing fail bare-pass pending empty dup other-sha no-sha; do
+    case "$mut" in
+      missing)   sed "/^$k=/d" "$AUTO" ;;
+      fail)      sed "s/^$k=PASS/$k=FAIL/" "$AUTO" ;;
+      bare-pass) sed "s/^$k=.*/$k=PASS/" "$AUTO" ;;
+      pending)   sed "s/^$k=.*/$k=PENDING/" "$AUTO" ;;
+      empty)     sed "s/^$k=.*/$k=/" "$AUTO" ;;
+      dup)       sed "/^$k=/p" "$AUTO" ;;
+      other-sha) sed -E "/^$k=/s/[0-9a-f]{64}/$OTHER/g" "$AUTO" ;;
+      no-sha)    sed -E "/^$k=/s/ (bundle_)?sha256=[0-9a-f]{64}//; /^bundle_sha256=/!b; /^$k=/s/=.*/=not-a-sha/" "$AUTO" ;;
+    esac > "$T/a.gate.txt"
+    # fail/bare-pass of bundle_sha256 are not meaningful mutations of a hash value
+    if [[ "$k" == bundle_sha256 && "$mut" == fail ]]; then continue; fi
+    out="$(ga_release_gate_check "$T/a.gate.txt" "$AREL" "$IMG")"; rc=$?
+    # the refusal must name THIS key (a different check catching it proves nothing about this one)
+    [[ $rc -ne 0 && "$out" == *"$k"* ]] && ok "$k $mut -> refused, names $k" || bad "$k $mut: rc=$rc out=$out"
+  done
+done
+[[ $na -ge 3 ]] || bad "only $na live auto keys inspected (zero-coverage guard)"
+# A changed bundle_sha256 (soak line untouched) means the soak was for another bundle.
+sed -E "s/^bundle_sha256=.*/bundle_sha256=$OTHER/" "$AUTO" > "$T/a.gate.txt"
+out="$(ga_release_gate_check "$T/a.gate.txt" "$AREL" "$IMG")"; rc=$?
+[[ $rc -ne 0 && "$out" == *"soak_k7 does not name bundle_sha256=$OTHER"* ]] && ok "soak for another bundle -> refused" || bad "soak/bundle mismatch: rc=$rc $out"
+# Scope: below 1.6.2 not required; non-iHost not required; 1.6.2 rc/final and later required.
+astrip() { sed -E '/^(auto_gate|bundle_sha256|soak_k7)=/d' "$AUTO"; }
+for r in BOSv1.6.1 BOSv1.6.1-rc5; do
+  astrip | sed "s/^release=.*/release=$r/" > "$T/s.gate.txt"
+  out="$(ga_release_gate_check "$T/s.gate.txt" "$r" "$IMG")"; rc=$?
+  [[ $rc -eq 0 ]] && ok "$r without auto fields -> released (before the switch point)" || bad "$r refused: $out"
+done
+astrip | sed "s/^image=.*/image=$(basename "$IMGD")/" > "$T/s.gate.txt"
+out="$(ga_release_gate_check "$T/s.gate.txt" "$AREL" "$IMGD")"; rc=$?
+[[ $rc -eq 0 ]] && ok "non-iHost $AREL without auto fields -> released (iHost only)" || bad "dsgw 1.6.2 refused: $out"
+for r in BOSv1.6.2-rc1 BOSv1.6.2 BOSv1.6.10 BOSv1.7.0 BOSv2.0.0; do
+  astrip | sed "s/^release=.*/release=$r/" > "$T/s.gate.txt"
+  out="$(ga_release_gate_check "$T/s.gate.txt" "$r" "$IMG")"; rc=$?
+  [[ $rc -ne 0 && "$out" == *"auto_gate is missing"* && "$out" == *"soak_k7 is missing"* ]] && ok "$r iHost without auto fields -> refused" || bad "$r: rc=$rc $out"
+done
+
+echo "== ga_gate_auto_check as the release train calls it (staged bundle sha given)"
+grep -q '^ga_gate_auto_check()' "$LIB" || bad "ga_gate_auto_check() not defined in the live lib (the train sources it)"
+ISHA=$(sed -n 's/^image_sha256=//p' "$AUTO"); BSHA=$(sed -n 's/^bundle_sha256=//p' "$AUTO")
+out="$(ga_gate_auto_check "$AUTO" "$ISHA" "$BSHA")"; rc=$?
+[[ $rc -eq 0 ]] && ok "train: staged bundle == evidence bundle -> pass" || bad "train same bundle refused: $out"
+out="$(ga_gate_auto_check "$AUTO" "$ISHA" "$OTHER")"; rc=$?
+[[ $rc -ne 0 && "$out" == *"bundle_sha256 mismatch"* ]] && ok "train: another staged bundle -> refused (bundle_sha256 mismatch)" || bad "train other bundle: rc=$rc $out"
+out="$(ga_gate_auto_check "$AUTO" "" "$BSHA")"; rc=$?
+[[ $rc -ne 0 && "$out" == *"auto_gate does not name"* ]] && ok "train: no image sha in evidence -> refused" || bad "train no image sha: rc=$rc $out"
+
 echo "== create-release.sh end to end (live script, fake image)"
 BUILD="$T/build"; mkdir -p "$BUILD/images"
 cp "$IMG" "$BUILD/images/$IMGNAME"
