@@ -1,0 +1,2 @@
+buildroot-external/patches/foo/0001-a.patch
+buildroot-external/patches/foo/v2/x/foo.hash

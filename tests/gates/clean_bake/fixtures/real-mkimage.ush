@@ -1,0 +1,177 @@
+echo "Home Assistant booting ......."
+part start mmc ${devnum} hassos-bootstate mmc_env
+mmc dev ${devnum}
+
+setenv loadbootstate " \
+    echo 'loading env...'; \
+    mmc read ${ramdisk_addr_r} ${mmc_env} 0x40; \
+    env import -c ${ramdisk_addr_r} 0x8000;"
+
+setenv storebootstate " \
+    echo 'storing env...'; \
+    env export -c -s 0x8000 ${ramdisk_addr_r} BOOT_ORDER BOOT_A_LEFT BOOT_B_LEFT MACHINE_ID; \
+    mmc write ${ramdisk_addr_r} ${mmc_env} 0x40;"
+
+run loadbootstate
+test -n "${BOOT_ORDER}" || setenv BOOT_ORDER "A B"
+test -n "${BOOT_A_LEFT}" || setenv BOOT_A_LEFT 3
+test -n "${BOOT_B_LEFT}" || setenv BOOT_B_LEFT 3
+
+# Allows ConditionFirstBoot=
+test -n "${MACHINE_ID}" || setenv BOOT_CONDITION "systemd.condition-first-boot=true"
+
+# HassOS bootargs
+setenv bootargs_hassos "zram.enabled=1 zram.num_devices=3 net.naming-scheme=v250 systemd.machine_id=${MACHINE_ID} fsck.repair=yes ${BOOT_CONDITION}"
+
+# HassOS system A/B
+setenv bootargs_a "root=PARTUUID=8d3d53e3-6d49-4c38-8349-aff6859e82fd rootfstype=erofs ro rootwait"
+setenv bootargs_b "root=PARTUUID=a3ec664e-32ce-4665-95ea-7ae90ce9aa20 rootfstype=erofs ro rootwait"
+
+part number mmc ${devnum} hassos-boot boot_partnum
+
+# Load environment from haos-config.txt
+if test -e mmc ${devnum}:${boot_partnum} haos-config.txt; then
+  fatload mmc ${devnum}:${boot_partnum} ${ramdisk_addr_r} haos-config.txt
+  env import -t ${ramdisk_addr_r} ${filesize}
+fi
+
+# Load extraargs
+fileenv mmc ${devnum}:${boot_partnum} ${ramdisk_addr_r} cmdline.txt cmdline
+
+# GA: the USB host port is closed by default (ADR-0029 D3). The flag is
+# appended AFTER ${cmdline} on every boot: cmdline.txt belongs to the device
+# (the RAUC boot hook restores the device's copy on an update), this script is
+# replaced by every update, and for a kernel parameter the last occurrence
+# wins. Devices on the allowlist (/usr/share/ga-usb-allowlist) are still
+# authorised by 80-ga-usb-authorize.rules. Set after haos-config.txt is
+# imported, so a device-side file cannot override it.
+setenv bootargs_ga "usbcore.authorized_default=0"
+
+# GA: give the USB serial gadget (built-in g_serial, the legacy gadget) an
+# iSerialNumber string descriptor = the SoC serial that U-Boot derives from the
+# OTP cpuid (env serial#, 16 hex; the kernel DT /serial-number is the same
+# value). Without it the host side (flasher station) sees an empty `serial`
+# and cannot identify the device from the USB descriptor. Guarded: an empty
+# serial# must not emit "g_serial.iSerialNumber=" (empty descriptor string).
+if test -n "${serial#}"; then
+  setenv bootargs_ga "${bootargs_ga} g_serial.iSerialNumber=${serial#}"
+fi
+
+# Load device tree
+echo "Detected SoC RV${cpucode#}"
+if test "x${cpucode#}" = "x1126"; then
+  setenv fdtfile rv1126-sonoff-ihost.dtb
+else
+  setenv fdtfile rv1109-sonoff-ihost.dtb
+fi
+
+# GA (Odoo #1900, #1981): vccio5 (Ethernet RMII/MDIO bank) is physically 3.3 V.
+# haos-config.txt (imported above, device-owned, kept across OTA) decides:
+#   no ga_vccio5 key   -> 3.3 V variant (option B, Thomas 2026-11-12: a NEW
+#                         device boots 3.3 V from the image alone)
+#   ga_vccio5=3v3      -> 3.3 V variant
+#   ga_vccio5=1v8      -> legacy 1.8 V DTB (field devices: the RAUC install-check
+#                         hook pins the running mode BEFORE an OTA writes this
+#                         boot.scr, so a field unit never meets the new fallback
+#                         without a key)
+#   any other value    -> legacy 1.8 V DTB, said out loud (an unexpected value must
+#                         never put a used unit on 3.3 V)
+# The loaded variant is handed to the kernel as ga.vccio5=<3v3|1v8>, so
+# hw_iodomain can tell a requested-but-missing 3v3 DTB (fallback) from a
+# legacy device: a fallback is loud, never silent. The argument is PREPENDED:
+# bootargs_ga must keep ending with the gadget serial
+# (tests/gates/ihost_gadget_serial), and the USB lock flag must stay after
+# ${cmdline} (tests/gates/ota_usb_lock).
+setenv ga_vccio5_loaded 1v8
+setenv ga_vccio5_want 1v8
+if test "x${ga_vccio5}" = "x1v8"; then
+  setenv ga_vccio5_want 1v8
+else
+  if test "x${ga_vccio5}" = "x3v3"; then
+    setenv ga_vccio5_want 3v3
+  else
+    if test "x${ga_vccio5}" = "x"; then
+      setenv ga_vccio5_want 3v3
+    else
+      echo "GA: ga_vccio5=${ga_vccio5} is not 3v3|1v8 - using the 1.8 V DTB ${fdtfile}"
+    fi
+  fi
+fi
+if test "x${ga_vccio5_want}" = "x3v3"; then
+  if test "x${cpucode#}" = "x1126"; then
+    setenv fdtfile_3v3 rv1126-sonoff-ihost-vccio5-3v3.dtb
+  else
+    setenv fdtfile_3v3 rv1109-sonoff-ihost-vccio5-3v3.dtb
+  fi
+  if test -e mmc ${devnum}:${boot_partnum} ${fdtfile_3v3}; then
+    setenv fdtfile ${fdtfile_3v3}
+    setenv ga_vccio5_loaded 3v3
+  else
+    echo "GA: vccio5 3v3 wanted but ${fdtfile_3v3} is missing - FALLING BACK to the 1.8 V DTB ${fdtfile}"
+  fi
+fi
+setenv bootargs_ga "ga.vccio5=${ga_vccio5_loaded} ${bootargs_ga}"
+
+echo "Loading device tree ${fdtfile} (vccio5 ${ga_vccio5_loaded})"
+fatload mmc ${devnum}:${boot_partnum} ${fdt_addr_r} ${fdtfile}
+fdt addr ${fdt_addr_r}
+
+# load dt overlays
+fdt resize 65536
+for overlay_file in ${overlays}; do
+  if fatload mmc ${devnum}:${boot_partnum} ${ramdisk_addr_r} overlays/${overlay_file}.dtbo; then
+    echo "Applying kernel provided DT overlay ${overlay_file}.dtbo"
+    fdt apply ${ramdisk_addr_r} || setenv overlay_error "true"
+  fi
+done
+if test "${overlay_error}" = "true"; then
+  echo "Error applying DT overlays, restoring original DT"
+  fatload mmc ${devnum}:${boot_partnum} ${fdt_addr_r} ${fdtfile}
+fi
+
+setenv bootargs
+for BOOT_SLOT in "${BOOT_ORDER}"; do
+  if test "x${bootargs}" != "x"; then
+    # skip remaining slots
+  elif test "x${BOOT_SLOT}" = "xA"; then
+    if test ${BOOT_A_LEFT} -gt 0; then
+      setexpr BOOT_A_LEFT ${BOOT_A_LEFT} - 1
+      echo "Trying to boot slot A, ${BOOT_A_LEFT} attempts remaining. Loading kernel ..."
+      part number mmc ${devnum} hassos-kernel0 kernel_partnum
+      if load mmc ${devnum}:${kernel_partnum} ${kernel_addr_r} zImage; then
+          setenv bootargs "${bootargs_hassos} ${bootargs_a} rauc.slot=A ${cmdline} ${bootargs_ga}"
+      fi
+    fi
+  elif test "x${BOOT_SLOT}" = "xB"; then
+    if test ${BOOT_B_LEFT} -gt 0; then
+      setexpr BOOT_B_LEFT ${BOOT_B_LEFT} - 1
+      echo "Trying to boot slot B, ${BOOT_B_LEFT} attempts remaining. Loading kernel ..."
+      part number mmc ${devnum} hassos-kernel1 kernel_partnum
+      if load mmc ${devnum}:${kernel_partnum} ${kernel_addr_r} zImage; then
+          setenv bootargs "${bootargs_hassos} ${bootargs_b} rauc.slot=B ${cmdline} ${bootargs_ga}"
+      fi
+    fi
+  fi
+done
+
+if test -n "${bootargs}"; then
+  run storebootstate
+else
+  # A failed kernel load must consume a boot attempt too, otherwise the counters
+  # never count down and we never fall back. Persist the decremented counters
+  # and only re-arm once both slots are exhausted, not on every failure
+  # (upstream HAOS b704298a, #4832).
+  if test ${BOOT_A_LEFT} -le 0 && test ${BOOT_B_LEFT} -le 0; then
+    echo "No valid slot found, resetting tries to 3"
+    setenv BOOT_A_LEFT 3
+    setenv BOOT_B_LEFT 3
+  fi
+  run storebootstate
+  reset
+fi
+
+echo "Starting kernel"
+bootz ${kernel_addr_r} - ${fdt_addr_r}
+
+echo "Boot failed, resetting..."
+reset

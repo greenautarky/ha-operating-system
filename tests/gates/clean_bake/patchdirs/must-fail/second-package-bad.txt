@@ -1,0 +1,3 @@
+file busybox/0001-ok.patch
+file linux/0001-a.patch
+file linux/6.12.1/linux.hash
