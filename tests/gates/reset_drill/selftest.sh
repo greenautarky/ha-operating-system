@@ -41,7 +41,7 @@ cat > "$W/bin/ssh" <<'EOF'
 # ssh stub: last argument is "# <name>\n<command>"; answer from $SCEN.
 cmd=""; for a in "$@"; do cmd="$a"; done
 name="$(printf '%s' "$cmd" | sed -n '1s/^# //p')"
-case "$name" in trigger_*) touch "$SCEN/.after"; exit 0 ;; esac
+case "$name" in trigger_*) touch "$SCEN/.after"; cat "$SCEN/trigger_out" 2>/dev/null; exit 0 ;; esac
 # The label lives ONLY in /mnt/data/fluent-bit/env on a real device: answer it
 # only if the drill reads that file (a drill reading another path gets nothing).
 if [ "$name" = label ]; then
@@ -110,9 +110,23 @@ run() {  # run <scenario> <mode> [extra env...] -> $W/out.<scenario>, rc in $W/r
 check() {  # check <scenario> <expected rc> <expected failing letters>
   local s="$1" erc="$2" want="$3" rc got
   rc="$(cat "$W/rc.$s")"
-  got="$(grep -E '^  FAIL  \(' "$W/out.$s" | sed -E 's/^  FAIL  \(([a-f])\).*/\1/' | tr -d '\n')"
+  got="$(grep -E '^  FAIL  \(' "$W/out.$s" | sed -E 's/^  FAIL  \(([a-g])\).*/\1/' | tr -d '\n')"
   if [ "$rc" = "$erc" ] && [ "$got" = "$want" ]; then okk "$s: rc=$rc failing=[${got}]"
   else bad "$s: rc=$rc (want $erc) failing=[${got}] (want [${want}])"; sed 's/^/        | /' "$W/out.$s" | tail -12; fi
+}
+
+# OTA mode (Odoo #2201 F6): a clean device that booted the other slot
+mkota() {  # mkota <name> -> a healthy OTA scenario
+  mkscen "$1" clean
+  echo A > "$W/$1/before/slot"; echo B > "$W/$1/after/slot"
+  echo BUNDLE > "$W/$1/before/bundle"; echo OTA-TRIGGER-OK > "$W/$1/trigger_out"
+}
+run_ota() {  # run_ota <scenario> [drill args...]
+  local s="$1"; shift
+  env -i PATH="$W/bin:/usr/bin:/bin" SCEN="$W/$s" POLL=1 TRIGGER_WAIT=1 BOOT_TIMEOUT=4 SETTLE_TIMEOUT=2 \
+      CLEAN_LOKI_WAIT=0 LOKI_WAIT_MIN=0 LOKI_QUERY_URL=http://loki.invalid OTA_INSTALL_TIMEOUT=5 \
+      bash "$DRILL" --ssh root@fixture --mode ota "$@" --i-know-this-reboots-the-device > "$W/out.$s" 2>&1
+  echo $? > "$W/rc.$s"
 }
 
 echo "scenarios (the LIVE drill, stubbed transport):"
@@ -188,6 +202,21 @@ else bad "unclean-no-loki: (f) not reported as NOT COVERED"; fi
 # the drill must refuse without the confirmation flag
 env -i PATH="$W/bin:/usr/bin:/bin" SCEN="$W/unclean-good" bash "$DRILL" --ssh root@fixture --mode unclean > "$W/out.noconfirm" 2>&1; rc=$?
 [ "$rc" = 2 ] && okk "refuses to reboot without --i-know-this-reboots-the-device (rc=2)" || bad "ran without the confirmation flag (rc=$rc)"
+
+echo "OTA mode (rauc install + ga-rauc-install's reboot):"
+mkota ota-good;                    run_ota ota-good --bundle /mnt/data/b.raucb;          check ota-good 0 ""
+grep -q '^  PASS  (g) OTA reboot booted the other slot (A -> B)' "$W/out.ota-good" && okk "(g) slot switch is asserted, not assumed" || bad "(g) no slot-switch PASS line"
+mkota ota-same-slot; echo A > "$W/ota-same-slot/after/slot"
+run_ota ota-same-slot --bundle /mnt/data/b.raucb;  check ota-same-slot 1 "g"
+mkota ota-false-unclean; echo 11 > "$W/ota-false-unclean/after/crash_count"; echo present > "$W/ota-false-unclean/after/verdict"
+echo "Nov 04 ga-boot-check[1]: <4>WARNING: UNCLEAN SHUTDOWN DETECTED" > "$W/ota-false-unclean/after/bootcheck_journal"
+echo /mnt/data/journal-dump/dump-20261104T100000-bbbbbbbb-bootcheck-unclean.log.gz > "$W/ota-false-unclean/after/dump_list"
+run_ota ota-false-unclean --bundle /mnt/data/b.raucb; check ota-false-unclean 1 "abcd"
+mkota ota-install-fails; rm -f "$W/ota-install-fails/trigger_out"
+run_ota ota-install-fails --bundle /mnt/data/b.raucb; check ota-install-fails 2 ""
+mkota ota-no-slot; : > "$W/ota-no-slot/before/slot"
+run_ota ota-no-slot --bundle /mnt/data/b.raucb;    check ota-no-slot 2 ""
+mkota ota-no-bundle-arg; run_ota ota-no-bundle-arg; check ota-no-bundle-arg 2 ""
 
 echo "pass=$PASS fail=$FAIL"
 [ "$FAIL" -eq 0 ] && { echo "PASS: the reset drill's assertions go red on each defect and green on a healthy device"; exit 0; }
