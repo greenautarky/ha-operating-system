@@ -29,6 +29,12 @@
 #                                         runs 1.8 V after the reboot. <pointer> = a short
 #                                         reference to the log/run that shows it (never
 #                                         empty: a bare PASS is refused)
+#   auto_gate=PASS <date> ... sha256=<image sha>   weekly sprint (KB #381), iHost releases
+#                                         >= BOSv1.6.2 ONLY: the automated K31 gate after the
+#                                         bake passed for THIS image (sha must equal image_sha256)
+#   bundle_sha256=<64 hex>                same scope: the RAUC bundle baked with this image
+#   soak_k7=PASS <date> ... bundle_sha256=<bundle sha>   same scope: the 24 h K7 soak passed
+#                                         on THIS bundle (sha must equal bundle_sha256)
 #   gate_override=<ts> by <user>: <reason>   (appended by --override-gate only)
 # Any other key is free-form evidence and is ignored by the gate.
 #
@@ -44,6 +50,30 @@ GA_GATE_REQUIRED_KEYS="release image image_sha256 k31_reflash_verdict k31_reflas
 # The value is "PASS" plus a non-empty evidence pointer.
 GA_GATE_VCCIO5_FIELDS="vccio5_fresh_sd vccio5_ota_keeps_1v8"
 GA_GATE_PASS_POINTER_RE='^PASS [^[:space:]]'
+# Weekly sprint (KB #381, Thomas 2026-11-26/28): automated K31 gate + 24 h K7 soak.
+# Switch point = the first release of the sprint, BOSv1.6.2 (rc included). Releases
+# below it (BOSv1.6.1 and its rcs) were gated by hand and stay valid without them.
+GA_GATE_AUTO_FROM="1.6.2"
+GA_GATE_AUTO_FIELDS="auto_gate bundle_sha256 soak_k7"
+
+# ga_gate_version_ge RELEASE X.Y.Z — rc 0 when the base version of RELEASE
+# (BOSvA.B.C[-rcN], rc ignored) is >= X.Y.Z. Unparsable = rc 1.
+ga_gate_version_ge() {
+	local a b
+	[[ "$1" =~ ^BOSv([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 1
+	a=$(printf '%05d%05d%05d' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
+	[[ "$2" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
+	b=$(printf '%05d%05d%05d' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
+	[[ "$a" > "$b" || "$a" == "$b" ]]
+}
+
+# ga_gate_needs_auto RELEASE IMAGE_FILE — rc 0 for an iHost image (bos_ihost*) of
+# base version >= GA_GATE_AUTO_FROM. iHost only: the automated gate runs on K31;
+# the DSGW line gets its own once DUT2 has an automated gate.
+ga_gate_needs_auto() {
+	case "$(basename -- "$2")" in bos_ihost*) ;; *) return 1 ;; esac
+	ga_gate_version_ge "$1" "$GA_GATE_AUTO_FROM"
+}
 
 # ga_gate_needs_vccio5 RELEASE IMAGE_FILE — rc 0 when the release is an iHost
 # image (file name bos_ihost*) of base version >= 1.6.1 (rc suffix ignored:
@@ -115,6 +145,26 @@ ga_release_gate_check() {
 			if [ "$rc" -eq 2 ]; then echo "  - $k appears more than once in $ev (ambiguous)"; bad=1; continue; fi
 			if [ "$rc" -ne 0 ] || [ -z "$v" ]; then echo "  - $k is missing or empty (iHost >= BOSv1.6.1 needs 'PASS <evidence pointer>')"; bad=1; continue; fi
 			printf '%s' "$v" | grep -Eq "$GA_GATE_PASS_POINTER_RE" || { echo "  - $k is '$v' (want 'PASS <evidence pointer>')"; bad=1; }
+		done
+	fi
+	# Weekly sprint (KB #381): automated K31 gate + K7 soak, each bound to its sha.
+	if ga_gate_needs_auto "$rel" "$img"; then
+		local bsha=""
+		for k in $GA_GATE_AUTO_FIELDS; do
+			n=$((n + 1))
+			rc=0; v="$(ga_gate_get "$ev" "$k")" || rc=$?
+			if [ "$rc" -eq 2 ]; then echo "  - $k appears more than once in $ev (ambiguous)"; bad=1; continue; fi
+			if [ "$rc" -ne 0 ] || [ -z "$v" ]; then echo "  - $k is missing or empty (iHost >= BOSv${GA_GATE_AUTO_FROM} needs it: automated K31 gate + K7 soak)"; bad=1; continue; fi
+			case "$k" in
+				bundle_sha256)
+					if [[ "$v" =~ ^[0-9a-f]{64}$ ]]; then bsha="$v"; else echo "  - bundle_sha256 is '$v' (want 64 lowercase hex)"; bad=1; fi ;;
+				auto_gate)
+					if ! printf '%s' "$v" | grep -Eq "$GA_GATE_PASSED_RE"; then echo "  - auto_gate is '$v' (want 'PASS <date> ... sha256=<image sha>')"; bad=1
+					elif [[ " $v " != *" sha256=$actual "* ]]; then echo "  - auto_gate does not name sha256=$actual (it passed for another image, or names none)"; bad=1; fi ;;
+				soak_k7)
+					if ! printf '%s' "$v" | grep -Eq "$GA_GATE_PASSED_RE"; then echo "  - soak_k7 is '$v' (want 'PASS <date> ... bundle_sha256=<bundle sha>')"; bad=1
+					elif [ -z "$bsha" ] || [[ " $v " != *" bundle_sha256=$bsha "* ]]; then echo "  - soak_k7 does not name bundle_sha256=${bsha:-<none recorded>} (it soaked another bundle, or names none)"; bad=1; fi ;;
+			esac
 		done
 	fi
 	# Fail closed on a gate that inspected nothing.
