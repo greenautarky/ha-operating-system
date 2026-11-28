@@ -264,7 +264,7 @@
 /*
  * SDIO bus for the RTL8821CS Wi-Fi. Matches the vendor DT with one addition,
  * `rockchip,clear-gmac-m1-routes`, the opt-in for the dw_mmc-rockchip patch
- * that clears stale GMAC-M1 route bits in the GRF (see patches/linux/0005).
+ * that clears stale GMAC-M1 route bits in the GRF (see patches/linux/6.18.54/0005).
  */
 &sdio {
 	bus-width = <4>;
@@ -288,7 +288,7 @@
 	/* Clear the GMAC-M1 route override bits in GRF_SOC_CON34 at probe time,
 	 * so the SDIO IOMUX controls PB6/PB3 instead of the GMAC-M1 path
 	 * driving them. Handled by the dw_mmc-rockchip patch, see
-	 * patches/linux/0005-...
+	 * patches/linux/6.18.54/0005-...
 	 */
 	rockchip,grf = <&grf>;
 	rockchip,clear-gmac-m1-routes;
@@ -511,7 +511,7 @@
  *
  * Pad configuration is the SoC default, as in the vendor DT. A stronger
  * 12 mA override is not needed once the GMAC-M1 route override is cleared
- * (patches/linux/0005).
+ * (patches/linux/6.18.54/0005).
  */
 &gpio1 {
 
